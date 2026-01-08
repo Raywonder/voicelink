@@ -1,0 +1,29 @@
+{
+  "version": "1.1.0",
+  "releaseDate": "2024-11-15",
+  "description": "New Features:\n• Enhanced 3D audio processing\n• Improved connection stability\n• New audio effects\n• Bug fixes and performance improvements",
+  "critical": false,
+  "releaseNotes": "https://devinecreations.net/voicelink-local/releases/v1.1.0",
+  "downloads": {
+    "macArm64": "https://devinecreations.net/downloads/voicelink-local/VoiceLink-Local-1.1.0-mac-arm64.dmg",
+    "macIntel": "https://devinecreations.net/downloads/voicelink-local/VoiceLink-Local-1.1.0-mac-x64.dmg",
+    "windowsX64": "https://devinecreations.net/downloads/voicelink-local/VoiceLink-Local-1.1.0-win-x64.zip",
+    "windowsX86": "https://devinecreations.net/downloads/voicelink-local/VoiceLink-Local-1.1.0-win-x86.zip",
+    "linuxX64": "https://devinecreations.net/downloads/voicelink-local/VoiceLink-Local-1.1.0-linux-x64.tar.gz",
+    "universal": "https://devinecreations.net/voicelink-local/download"
+  },
+  "minVersion": "1.0.0",
+  "changelog": [
+    {
+      "version": "1.1.0",
+      "date": "2024-11-15",
+      "changes": [
+        "Enhanced 3D audio processing engine",
+        "Improved WebRTC connection stability",
+        "Added 5 new professional audio effects",
+        "Fixed memory leak in spatial audio",
+        "Performance optimizations for large rooms"
+      ]
+    }
+  ]
+}

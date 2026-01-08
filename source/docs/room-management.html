@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Room Management - VoiceLink Local Documentation</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <!-- Navigation Header -->
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>🏠 Room Management Guide</h1>
+                <p class="subtitle">Complete guide to creating, managing, and using rooms</p>
+                <nav class="header-nav">
+                    <a href="index.html" class="nav-link">← Documentation Home</a>
+                    <a href="getting-started.html" class="nav-link">← Getting Started</a>
+                    <a href="../client/index.html" class="nav-link">← Back to App</a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content" id="main-content">
+            <!-- Room Types Overview -->
+            <section class="room-types-section">
+                <div class="content-wrapper">
+                    <h2>📋 Room Types and Capacities</h2>
+
+                    <div class="capacity-overview">
+                        <div class="capacity-card">
+                            <h3>👥 Room Capacity</h3>
+                            <ul>
+                                <li><strong>Minimum:</strong> 2 users per room</li>
+                                <li><strong>Maximum:</strong> 5,000 users per room</li>
+                                <li><strong>Recommended:</strong> 10-50 users for optimal performance</li>
+                            </ul>
+                        </div>
+
+                        <div class="capacity-card">
+                            <h3>🖥️ Server Capacity</h3>
+                            <ul>
+                                <li><strong>Total Users:</strong> Up to 1,000 concurrent users per server</li>
+                                <li><strong>Multiple Rooms:</strong> Users distributed across rooms</li>
+                                <li><strong>Load Balancing:</strong> Automatic optimization</li>
+                            </ul>
+                        </div>
+
+                        <div class="capacity-card">
+                            <h3>🔗 Connection Limits</h3>
+                            <ul>
+                                <li><strong>Per IP:</strong> 2-5 simultaneous connections</li>
+                                <li><strong>Configurable:</strong> Server admins can adjust limits</li>
+                                <li><strong>Abuse Prevention:</strong> Automatic rate limiting</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="room-types-grid">
+                        <div class="room-type-card">
+                            <h3>🌐 Public Rooms</h3>
+                            <p>Open to anyone with the room ID</p>
+                            <ul>
+                                <li>No password required</li>
+                                <li>Visible in server room list</li>
+                                <li>Easy to join and share</li>
+                                <li>Great for community gatherings</li>
+                            </ul>
+                        </div>
+
+                        <div class="room-type-card">
+                            <h3>🔒 Private Rooms</h3>
+                            <p>Password-protected for invited users only</p>
+                            <ul>
+                                <li>Requires password to join</li>
+                                <li>Hidden from public room lists</li>
+                                <li>Enhanced security</li>
+                                <li>Perfect for team meetings</li>
+                            </ul>
+                        </div>
+
+                        <div class="room-type-card">
+                            <h3>⏰ Timed Rooms</h3>
+                            <p>Automatically expire after set duration</p>
+                            <ul>
+                                <li>1 hour, 2 hours, 6 hours</li>
+                                <li>30 days, 69 days</li>
+                                <li>Lifetime (permanent)</li>
+                                <li>Auto-cleanup for temporary events</li>
+                            </ul>
+                        </div>
+
+                        <div class="room-type-card">
+                            <h3>🎭 Persistent Rooms</h3>
+                            <p>Rooms that users can return to later</p>
+                            <ul>
+                                <li>Retain room settings</li>
+                                <li>Remember user positions</li>
+                                <li>Bookmark for easy return</li>
+                                <li>Great for ongoing projects</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Creating Rooms -->
+            <section class="creating-rooms-section">
+                <div class="content-wrapper">
+                    <h2>✨ Creating Rooms</h2>
+
+                    <div class="creation-process">
+                        <div class="step-by-step">
+                            <h3>Step-by-Step Room Creation</h3>
+
+                            <div class="creation-step">
+                                <div class="step-number">1</div>
+                                <div class="step-content">
+                                    <h4>Access Creation Menu</h4>
+                                    <ul>
+                                        <li>Click <strong>"Create New Room"</strong> from main menu</li>
+                                        <li>Or use keyboard shortcut: <kbd>Ctrl+N</kbd> (<kbd>Cmd+N</kbd> on Mac)</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="creation-step">
+                                <div class="step-number">2</div>
+                                <div class="step-content">
+                                    <h4>Basic Room Information</h4>
+                                    <ul>
+                                        <li><strong>Room Name:</strong> Choose a descriptive name (max 50 characters)</li>
+                                        <li><strong>Description:</strong> Optional details about the room purpose</li>
+                                        <li><strong>Room ID:</strong> Automatically generated 6-character code</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="creation-step">
+                                <div class="step-number">3</div>
+                                <div class="step-content">
+                                    <h4>Privacy Settings</h4>
+                                    <div class="privacy-options">
+                                        <div class="privacy-option">
+                                            <h5>🌐 Public Room</h5>
+                                            <ul>
+                                                <li>Leave password field empty</li>
+                                                <li>Room appears in server listing</li>
+                                                <li>Anyone can join with room ID</li>
+                                            </ul>
+                                        </div>
+                                        <div class="privacy-option">
+                                            <h5>🔒 Private Room</h5>
+                                            <ul>
+                                                <li>Set a strong password (8+ characters)</li>
+                                                <li>Hidden from public listings</li>
+                                                <li>Share password with invited users</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="creation-step">
+                                <div class="step-number">4</div>
+                                <div class="step-content">
+                                    <h4>Capacity Configuration</h4>
+                                    <div class="capacity-selector">
+                                        <h5>Maximum Users</h5>
+                                        <table class="capacity-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Room Size</th>
+                                                    <th>Max Users</th>
+                                                    <th>Best For</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>Small</td>
+                                                    <td>2-10</td>
+                                                    <td>Private conversations, team meetings</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Medium</td>
+                                                    <td>11-50</td>
+                                                    <td>Group discussions, small events</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Large</td>
+                                                    <td>51-250</td>
+                                                    <td>Community gatherings, presentations</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Massive</td>
+                                                    <td>251-1000</td>
+                                                    <td>Conferences, large events</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Maximum</td>
+                                                    <td>1001-5000</td>
+                                                    <td>Major broadcasts, conventions</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="creation-step">
+                                <div class="step-number">5</div>
+                                <div class="step-content">
+                                    <h4>Duration Settings</h4>
+                                    <div class="duration-options">
+                                        <div class="duration-category">
+                                            <h5>⚡ Quick Sessions</h5>
+                                            <ul>
+                                                <li><strong>1 Hour:</strong> Short meetings, quick chats</li>
+                                                <li><strong>2 Hours:</strong> Extended discussions</li>
+                                                <li><strong>6 Hours:</strong> Workshops, study sessions</li>
+                                            </ul>
+                                        </div>
+                                        <div class="duration-category">
+                                            <h5>📅 Extended Periods</h5>
+                                            <ul>
+                                                <li><strong>30 Days:</strong> Monthly projects, events</li>
+                                                <li><strong>69 Days:</strong> Semester-long activities</li>
+                                                <li><strong>Lifetime:</strong> Permanent community spaces</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="creation-step">
+                                <div class="step-number">6</div>
+                                <div class="step-content">
+                                    <h4>Advanced Settings</h4>
+                                    <div class="advanced-options">
+                                        <h5>Audio Configuration</h5>
+                                        <ul>
+                                            <li><strong>3D Audio:</strong> Enable spatial positioning</li>
+                                            <li><strong>Audio Quality:</strong> Choose bitrate (64kbps - 320kbps)</li>
+                                            <li><strong>Noise Gate:</strong> Automatic background noise removal</li>
+                                            <li><strong>Echo Cancellation:</strong> Prevent audio feedback</li>
+                                        </ul>
+
+                                        <h5>Moderation Settings</h5>
+                                        <ul>
+                                            <li><strong>Host Privileges:</strong> Room creator gets admin rights</li>
+                                            <li><strong>Moderator Assignment:</strong> Delegate management to trusted users</li>
+                                            <li><strong>Auto-moderation:</strong> Enable spam and abuse filters</li>
+                                            <li><strong>Join Approval:</strong> Manually approve new participants</li>
+                                        </ul>
+
+                                        <h5>Media Features</h5>
+                                        <ul>
+                                            <li><strong>Media Sharing:</strong> Allow users to stream music</li>
+                                            <li><strong>Jellyfin Integration:</strong> Connect to media servers</li>
+                                            <li><strong>PA System:</strong> Enable announcements</li>
+                                            <li><strong>Recording:</strong> Allow session recording (if supported)</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="creation-tips">
+                        <h3>💡 Creation Tips</h3>
+                        <div class="tips-grid">
+                            <div class="tip-card">
+                                <h4>🎯 Choose Appropriate Capacity</h4>
+                                <p>Set max users based on expected attendance. Smaller limits improve performance.</p>
+                            </div>
+                            <div class="tip-card">
+                                <h4>🔐 Security Best Practices</h4>
+                                <p>Use strong passwords for private rooms. Consider who you share room IDs with.</p>
+                            </div>
+                            <div class="tip-card">
+                                <h4>⏰ Duration Planning</h4>
+                                <p>Choose duration based on room purpose. Use timed rooms for temporary events.</p>
+                            </div>
+                            <div class="tip-card">
+                                <h4>📝 Clear Naming</h4>
+                                <p>Use descriptive room names that indicate purpose and expected duration.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Joining Rooms -->
+            <section class="joining-rooms-section">
+                <div class="content-wrapper">
+                    <h2>🚪 Joining and Leaving Rooms</h2>
+
+                    <div class="joining-methods">
+                        <h3>Ways to Join Rooms</h3>
+
+                        <div class="join-method">
+                            <h4>🆔 Direct Room ID Entry</h4>
+                            <ol>
+                                <li>Click <strong>"Join Existing Room"</strong></li>
+                                <li>Enter the 6-character <strong>Room ID</strong></li>
+                                <li>Enter your <strong>display name</strong> for this room</li>
+                                <li>Enter <strong>password</strong> if required</li>
+                                <li>Click <strong>"Join Room"</strong></li>
+                            </ol>
+                            <div class="example">
+                                <strong>Example Room ID:</strong> ABC123
+                            </div>
+                        </div>
+
+                        <div class="join-method">
+                            <h4>📋 Room List Browser</h4>
+                            <ol>
+                                <li>View <strong>"Available Rooms"</strong> on main menu</li>
+                                <li>Browse public rooms on the server</li>
+                                <li>Click on a room to see details</li>
+                                <li>Click <strong>"Join"</strong> to enter</li>
+                            </ol>
+                        </div>
+
+                        <div class="join-method">
+                            <h4>🔗 Direct Links</h4>
+                            <p>Room creators can generate shareable links:</p>
+                            <div class="example">
+                                <code>https://your-server.com/join/ABC123</code><br>
+                                <code>voicelink://join/ABC123</code> (desktop app)
+                            </div>
+                        </div>
+
+                        <div class="join-method">
+                            <h4>🔖 Bookmarked Rooms</h4>
+                            <ol>
+                                <li>Save frequently visited rooms as bookmarks</li>
+                                <li>Access from <strong>"My Bookmarks"</strong> menu</li>
+                                <li>One-click rejoining</li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div class="room-states">
+                        <h3>Room States and Persistence</h3>
+
+                        <div class="state-grid">
+                            <div class="state-card">
+                                <h4>🟢 Active Rooms</h4>
+                                <ul>
+                                    <li>Currently has users present</li>
+                                    <li>All features fully available</li>
+                                    <li>Real-time communication active</li>
+                                </ul>
+                            </div>
+
+                            <div class="state-card">
+                                <h4>🟡 Dormant Rooms</h4>
+                                <ul>
+                                    <li>No users currently present</li>
+                                    <li>Settings and history preserved</li>
+                                    <li>Can be rejoined anytime</li>
+                                </ul>
+                            </div>
+
+                            <div class="state-card">
+                                <h4>🔴 Expired Rooms</h4>
+                                <ul>
+                                    <li>Duration limit reached</li>
+                                    <li>No longer accessible</li>
+                                    <li>Data automatically cleaned up</li>
+                                </ul>
+                            </div>
+
+                            <div class="state-card">
+                                <h4>💾 Persistent Rooms</h4>
+                                <ul>
+                                    <li>Permanent or very long duration</li>
+                                    <li>Maintain user preferences</li>
+                                    <li>Remember 3D positions</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="leaving-returning">
+                        <h3>Leaving and Returning to Rooms</h3>
+
+                        <div class="leaving-options">
+                            <h4>🚪 Ways to Leave</h4>
+                            <ul>
+                                <li><strong>Leave Button:</strong> Click door icon in room header</li>
+                                <li><strong>Keyboard Shortcut:</strong> <kbd>Ctrl+Q</kbd> or <kbd>Cmd+Q</kbd></li>
+                                <li><strong>Close App:</strong> Automatically leaves all rooms</li>
+                                <li><strong>Network Disconnect:</strong> Automatic graceful disconnect</li>
+                            </ul>
+                        </div>
+
+                        <div class="returning-info">
+                            <h4>🔄 Returning to Rooms</h4>
+                            <div class="return-scenarios">
+                                <div class="scenario">
+                                    <h5>Same Session Return</h5>
+                                    <ul>
+                                        <li>Room ID remains in recent history</li>
+                                        <li>Rejoin with saved settings</li>
+                                        <li>Restore previous 3D position</li>
+                                    </ul>
+                                </div>
+
+                                <div class="scenario">
+                                    <h5>Later Date Return</h5>
+                                    <ul>
+                                        <li>Use bookmarked rooms for easy access</li>
+                                        <li>Room must not have expired</li>
+                                        <li>Settings preserved for persistent rooms</li>
+                                    </ul>
+                                </div>
+
+                                <div class="scenario">
+                                    <h5>Different Device Return</h5>
+                                    <ul>
+                                        <li>Sign in with same account</li>
+                                        <li>Bookmarks sync across devices</li>
+                                        <li>User settings carried over</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Room Management -->
+            <section class="room-management-section">
+                <div class="content-wrapper">
+                    <h2>⚙️ Managing Your Rooms</h2>
+
+                    <div class="host-controls">
+                        <h3>🎩 Host Controls</h3>
+                        <p>As the room creator, you have additional management capabilities:</p>
+
+                        <div class="host-features">
+                            <div class="host-feature">
+                                <h4>👥 User Management</h4>
+                                <ul>
+                                    <li><strong>Kick Users:</strong> Remove disruptive participants</li>
+                                    <li><strong>Ban Users:</strong> Prevent rejoining</li>
+                                    <li><strong>Mute Users:</strong> Temporarily silence someone</li>
+                                    <li><strong>Assign Moderators:</strong> Delegate management tasks</li>
+                                    <li><strong>Transfer Host:</strong> Pass room ownership</li>
+                                </ul>
+                            </div>
+
+                            <div class="host-feature">
+                                <h4>🔧 Room Settings</h4>
+                                <ul>
+                                    <li><strong>Change Password:</strong> Update room security</li>
+                                    <li><strong>Modify Capacity:</strong> Increase or decrease max users</li>
+                                    <li><strong>Update Duration:</strong> Extend or shorten room lifetime</li>
+                                    <li><strong>Toggle Features:</strong> Enable/disable media sharing, etc.</li>
+                                </ul>
+                            </div>
+
+                            <div class="host-feature">
+                                <h4>📊 Room Statistics</h4>
+                                <ul>
+                                    <li><strong>User Count:</strong> Current and peak participants</li>
+                                    <li><strong>Connection Quality:</strong> Network performance metrics</li>
+                                    <li><strong>Duration Stats:</strong> Time remaining, uptime</li>
+                                    <li><strong>Activity Log:</strong> Join/leave events</li>
+                                </ul>
+                            </div>
+
+                            <div class="host-feature">
+                                <h4>🎵 Media Control</h4>
+                                <ul>
+                                    <li><strong>Global Audio:</strong> Control room-wide audio</li>
+                                    <li><strong>Stream Permissions:</strong> Who can share media</li>
+                                    <li><strong>Volume Limits:</strong> Set maximum volume levels</li>
+                                    <li><strong>Audio Quality:</strong> Adjust streaming bitrates</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="moderation-tools">
+                        <h3>🛡️ Moderation Tools</h3>
+
+                        <div class="moderation-actions">
+                            <div class="action-category">
+                                <h4>User Actions</h4>
+                                <table class="action-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Action</th>
+                                            <th>Effect</th>
+                                            <th>Duration</th>
+                                            <th>Access</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Warn</td>
+                                            <td>Send warning message</td>
+                                            <td>Instant</td>
+                                            <td>Host, Moderator</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Mute</td>
+                                            <td>Disable microphone</td>
+                                            <td>Temporary</td>
+                                            <td>Host, Moderator</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Kick</td>
+                                            <td>Remove from room</td>
+                                            <td>Can rejoin</td>
+                                            <td>Host, Moderator</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Ban</td>
+                                            <td>Permanent removal</td>
+                                            <td>Cannot rejoin</td>
+                                            <td>Host only</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="auto-moderation">
+                            <h4>🤖 Automated Moderation</h4>
+                            <ul>
+                                <li><strong>Spam Detection:</strong> Automatic filtering of repetitive messages</li>
+                                <li><strong>Volume Limiting:</strong> Prevent extremely loud audio</li>
+                                <li><strong>Connection Monitoring:</strong> Detect and handle poor connections</li>
+                                <li><strong>Abuse Prevention:</strong> Rate limiting and behavior analysis</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Best Practices -->
+            <section class="best-practices-section">
+                <div class="content-wrapper">
+                    <h2>🌟 Best Practices</h2>
+
+                    <div class="practices-grid">
+                        <div class="practice-category">
+                            <h3>🏗️ Room Planning</h3>
+                            <ul>
+                                <li><strong>Purpose-Driven Design:</strong> Set capacity and duration based on intended use</li>
+                                <li><strong>Clear Expectations:</strong> Communicate room rules and purpose to participants</li>
+                                <li><strong>Backup Plans:</strong> Have alternative rooms ready for large events</li>
+                                <li><strong>Testing:</strong> Test room settings before important meetings</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>🔐 Security Guidelines</h3>
+                            <ul>
+                                <li><strong>Strong Passwords:</strong> Use complex passwords for private rooms</li>
+                                <li><strong>Limited Sharing:</strong> Only share room details with intended participants</li>
+                                <li><strong>Regular Updates:</strong> Change passwords periodically for long-term rooms</li>
+                                <li><strong>Moderation:</strong> Assign trusted moderators for large rooms</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>⚡ Performance Tips</h3>
+                            <ul>
+                                <li><strong>Appropriate Sizing:</strong> Don't over-provision room capacity</li>
+                                <li><strong>Quality Settings:</strong> Balance audio quality with performance</li>
+                                <li><strong>Feature Management:</strong> Disable unused features for better performance</li>
+                                <li><strong>Network Considerations:</strong> Monitor bandwidth usage in large rooms</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>👥 Community Building</h3>
+                            <ul>
+                                <li><strong>Welcoming Environment:</strong> Greet new participants</li>
+                                <li><strong>Clear Communication:</strong> Establish speaking order and etiquette</li>
+                                <li><strong>Inclusive Design:</strong> Consider accessibility needs</li>
+                                <li><strong>Feedback Collection:</strong> Gather input on room improvements</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Troubleshooting -->
+            <section class="troubleshooting-section">
+                <div class="content-wrapper">
+                    <h2>🔧 Common Issues and Solutions</h2>
+
+                    <div class="issues-list">
+                        <div class="issue-card">
+                            <h3>❌ Cannot Create Room</h3>
+                            <div class="issue-content">
+                                <h4>Possible Causes:</h4>
+                                <ul>
+                                    <li>Server at capacity (1000 user limit reached)</li>
+                                    <li>IP connection limit exceeded</li>
+                                    <li>Insufficient permissions</li>
+                                    <li>Network connectivity issues</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Try again later when server load is lower</li>
+                                    <li>Check internet connection</li>
+                                    <li>Contact server administrator</li>
+                                    <li>Try a different server</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="issue-card">
+                            <h3>🚫 Room Not Found</h3>
+                            <div class="issue-content">
+                                <h4>Possible Causes:</h4>
+                                <ul>
+                                    <li>Incorrect room ID entered</li>
+                                    <li>Room has expired</li>
+                                    <li>Room is on different server</li>
+                                    <li>Private room with wrong password</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Double-check room ID spelling</li>
+                                    <li>Verify you're on correct server</li>
+                                    <li>Contact room creator for current details</li>
+                                    <li>Check if room duration has expired</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="issue-card">
+                            <h3>⏰ Room Expired Unexpectedly</h3>
+                            <div class="issue-content">
+                                <h4>Possible Causes:</h4>
+                                <ul>
+                                    <li>Duration limit reached</li>
+                                    <li>Server maintenance</li>
+                                    <li>Host deleted room</li>
+                                    <li>System cleanup performed</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Create new room with longer duration</li>
+                                    <li>Contact server administrator</li>
+                                    <li>Use lifetime rooms for permanent spaces</li>
+                                    <li>Set up automatic room recreation</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="help-resources">
+                        <h3>📚 Additional Resources</h3>
+                        <div class="resource-links">
+                            <a href="audio-troubleshooting.html" class="resource-link">🎙️ Audio Issues</a>
+                            <a href="connection-troubleshooting.html" class="resource-link">🌐 Connection Problems</a>
+                            <a href="user-management.html" class="resource-link">👥 User Management</a>
+                            <a href="server-deployment.html" class="resource-link">🖥️ Server Setup</a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="docs-footer">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Room Management</h4>
+                    <ul>
+                        <li><a href="#room-types">Room Types</a></li>
+                        <li><a href="#creating-rooms">Creating Rooms</a></li>
+                        <li><a href="#joining-rooms">Joining Rooms</a></li>
+                        <li><a href="#room-management">Managing Rooms</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Related Topics</h4>
+                    <ul>
+                        <li><a href="user-management.html">User Management</a></li>
+                        <li><a href="authentication.html">Authentication</a></li>
+                        <li><a href="spatial-audio.html">3D Audio</a></li>
+                        <li><a href="media-streaming.html">Media Streaming</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+                        <li><a href="faq.html">FAQ</a></li>
+                        <li><a href="contact.html">Contact Support</a></li>
+                        <li><a href="index.html">← Back to Docs Home</a></li>
+                    </ul>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <script src="scripts/docs.js"></script>
+</body>
+</html>
