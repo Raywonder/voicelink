@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connection Instructions - VoiceLink Local</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .method {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .method h3 {
+            margin: 0 0 15px 0;
+            color: #667eea;
+            font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .method h3::before {
+            content: '🌐';
+            margin-right: 10px;
+            font-size: 1.2rem;
+        }
+
+        .method.mobile h3::before {
+            content: '📱';
+        }
+
+        .method.desktop h3::before {
+            content: '💻';
+        }
+
+        .method.qr h3::before {
+            content: '📷';
+        }
+
+        .steps {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .steps li {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 10px;
+            position: relative;
+            padding-left: 50px;
+        }
+
+        .steps li::before {
+            content: counter(step-counter);
+            counter-increment: step-counter;
+            position: absolute;
+            left: 15px;
+            top: 15px;
+            background: #667eea;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+
+        .steps {
+            counter-reset: step-counter;
+        }
+
+        .url-example {
+            background: #e8f4fd;
+            border: 1px solid #b8e6ff;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: monospace;
+            margin: 10px 0;
+            word-break: break-all;
+        }
+
+        .requirements {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .requirements h4 {
+            margin: 0 0 10px 0;
+            color: #856404;
+        }
+
+        .requirements ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .troubleshooting {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 5px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        .troubleshooting h3 {
+            margin: 0 0 15px 0;
+            color: #721c24;
+        }
+
+        .supported-platforms {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .platform {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 5px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .platform.partial {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+
+        .back-link {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .back-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .back-link a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 0;
+                border-radius: 0;
+            }
+
+            .header, .content {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔗 Connection Instructions</h1>
+            <p>How to connect to this VoiceLink server</p>
+        </div>
+
+        <div class="content">
+            <!-- Web Browser Method -->
+            <div class="method">
+                <h3>Web Browser (Recommended)</h3>
+
+                <div class="requirements">
+                    <h4>Requirements:</h4>
+                    <ul>
+                        <li>Modern web browser (Chrome, Firefox, Safari, Edge)</li>
+                        <li>Same Wi-Fi network as the server</li>
+                        <li>JavaScript enabled</li>
+                    </ul>
+                </div>
+
+                <ol class="steps">
+                    <li>
+                        <strong>Get the server URL</strong> from the host or copy it from the server settings.
+                        The URL looks like this:
+                        <div class="url-example">http://192.168.1.100:3000</div>
+                    </li>
+                    <li>
+                        <strong>Open your web browser</strong> and paste the URL into the address bar.
+                    </li>
+                    <li>
+                        <strong>Allow microphone access</strong> when your browser asks for permission.
+                    </li>
+                    <li>
+                        <strong>Join or create a room</strong> by browsing available rooms or creating a new one.
+                    </li>
+                </ol>
+            </div>
+
+            <!-- Mobile Method -->
+            <div class="method mobile">
+                <h3>Mobile Devices (iOS/Android)</h3>
+
+                <ol class="steps">
+                    <li>
+                        <strong>Open Safari (iOS) or Chrome (Android)</strong> on your mobile device.
+                    </li>
+                    <li>
+                        <strong>Navigate to the server URL</strong> that the host provided.
+                    </li>
+                    <li>
+                        <strong>Add to Home Screen</strong> (optional):
+                        <ul>
+                            <li>iOS Safari: Tap Share → "Add to Home Screen"</li>
+                            <li>Android Chrome: Menu → "Add to Home Screen"</li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Enable microphone</strong> when prompted by the browser.
+                    </li>
+                    <li>
+                        <strong>For iOS users:</strong> Tap the screen to activate audio if needed.
+                    </li>
+                </ol>
+            </div>
+
+            <!-- Desktop App Method -->
+            <div class="method desktop">
+                <h3>VoiceLink Desktop App</h3>
+
+                <ol class="steps">
+                    <li>
+                        <strong>Launch VoiceLink</strong> on your computer.
+                    </li>
+                    <li>
+                        <strong>Connect to external server:</strong>
+                        <ul>
+                            <li>Go to Settings → Server Settings</li>
+                            <li>Set "Server Mode" to "Connect to External"</li>
+                            <li>Enter the server URL</li>
+                            <li>Click "Connect"</li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Join rooms</strong> normally through the app interface.
+                    </li>
+                </ol>
+            </div>
+
+            <!-- QR Code Method -->
+            <div class="method qr">
+                <h3>QR Code Connection</h3>
+
+                <ol class="steps">
+                    <li>
+                        <strong>Open camera app</strong> on your phone.
+                    </li>
+                    <li>
+                        <strong>Scan the QR code</strong> provided by the host.
+                    </li>
+                    <li>
+                        <strong>Tap the notification</strong> to open in your browser.
+                    </li>
+                    <li>
+                        <strong>Follow the web browser steps</strong> above.
+                    </li>
+                </ol>
+            </div>
+
+            <!-- Supported Platforms -->
+            <div style="margin-top: 30px;">
+                <h3>Supported Platforms</h3>
+                <div class="supported-platforms">
+                    <div class="platform">
+                        <strong>✅ Desktop Browsers</strong><br>
+                        Chrome, Firefox, Safari, Edge
+                    </div>
+                    <div class="platform">
+                        <strong>✅ Mobile Browsers</strong><br>
+                        iOS Safari, Android Chrome
+                    </div>
+                    <div class="platform">
+                        <strong>✅ Desktop Apps</strong><br>
+                        VoiceLink Local (Mac, Windows, Linux)
+                    </div>
+                </div>
+            </div>
+
+            <!-- Troubleshooting -->
+            <div class="troubleshooting">
+                <h3>🔧 Troubleshooting</h3>
+
+                <p><strong>Can't connect to server:</strong></p>
+                <ul>
+                    <li>Ensure you're on the same Wi-Fi network</li>
+                    <li>Check if the server is running (ask the host)</li>
+                    <li>Try refreshing the page</li>
+                    <li>Disable VPN if active</li>
+                </ul>
+
+                <p><strong>No audio/microphone issues:</strong></p>
+                <ul>
+                    <li>Check browser permissions (allow microphone)</li>
+                    <li>Try refreshing and re-allowing permissions</li>
+                    <li>On iOS: Tap screen to activate audio</li>
+                    <li>Check device volume and microphone settings</li>
+                </ul>
+
+                <p><strong>Poor audio quality:</strong></p>
+                <ul>
+                    <li>Move closer to Wi-Fi router</li>
+                    <li>Close other bandwidth-heavy applications</li>
+                    <li>Ask host to check server performance</li>
+                </ul>
+            </div>
+
+            <div class="back-link">
+                <a href="javascript:history.back()">← Back to VoiceLink</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

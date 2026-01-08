@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Preferences</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .section h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 10px 0;
+        }
+
+        .setting-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .setting-label {
+            flex: 1;
+            margin-right: 15px;
+        }
+
+        .setting-label .title {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 3px;
+        }
+
+        .setting-label .description {
+            font-size: 0.875rem;
+            color: #666;
+            line-height: 1.3;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 25px;
+            background: #ccc;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .toggle-switch.active {
+            background: #667eea;
+        }
+
+        .toggle-switch::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 21px;
+            height: 21px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+
+        .toggle-switch.active::before {
+            transform: translateX(25px);
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .input-group input,
+        .input-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
+
+        .input-group input:focus,
+        .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+
+        .server-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .server-info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+        }
+
+        .server-info-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .server-info-label {
+            font-weight: 500;
+            color: #666;
+        }
+
+        .server-info-value {
+            color: #333;
+            font-family: monospace;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .status-running {
+            background: #28a745;
+        }
+
+        .status-stopped {
+            background: #dc3545;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a67d8;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .copy-btn {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ VoiceLink Preferences</h1>
+        </div>
+
+        <div class="content">
+            <div class="loading" id="loading">Loading preferences...</div>
+
+            <div id="preferences-content" style="display: none;">
+                <!-- Server Information -->
+                <div class="section">
+                    <h3>Server Information</h3>
+                    <div class="server-info" id="server-info">
+                        <!-- Server info will be populated here -->
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="copyServerUrl()">📋 Copy Server URL</button>
+                        <button class="btn btn-primary" onclick="showQRCode()">📱 Show QR Code</button>
+                        <button class="btn btn-secondary" onclick="restartServer()">🔄 Restart Server</button>
+                    </div>
+                </div>
+
+                <!-- Startup & System -->
+                <div class="section">
+                    <h3>Startup & System</h3>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Launch at startup</div>
+                            <div class="description">Automatically start VoiceLink when your computer starts</div>
+                        </div>
+                        <div class="toggle-switch" id="auto-launch-toggle" onclick="toggleAutoLaunch()"></div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Start minimized</div>
+                            <div class="description">Start VoiceLink in the menubar without showing the main window</div>
+                        </div>
+                        <div class="toggle-switch" id="start-minimized-toggle" onclick="toggleSetting('startMinimized')"></div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Auto-minimize on startup</div>
+                            <div class="description">Automatically minimize to menubar when launching (perfect for web UI only users)</div>
+                        </div>
+                        <div class="toggle-switch" id="auto-minimize-on-start-toggle" onclick="toggleSetting('autoMinimizeOnStart')"></div>
+                    </div>
+                </div>
+
+                <!-- Window Behavior -->
+                <div class="section">
+                    <h3>Window Behavior</h3>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Hide to menubar on close</div>
+                            <div class="description">Keep VoiceLink running in menubar when closing the window</div>
+                        </div>
+                        <div class="toggle-switch" id="hide-to-tray-toggle" onclick="toggleSetting('hideToTrayOnClose')"></div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Keep in menubar</div>
+                            <div class="description">Stay in menubar even when all windows are closed</div>
+                        </div>
+                        <div class="toggle-switch" id="keep-in-menubar-toggle" onclick="toggleSetting('keepInMenubar')"></div>
+                    </div>
+                </div>
+
+                <!-- Server Settings -->
+                <div class="section">
+                    <h3>Server Settings</h3>
+
+                    <div class="input-group">
+                        <label for="server-port">Server Port</label>
+                        <input type="number" id="server-port" min="1024" max="65535" value="3000">
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-label">
+                            <div class="title">Allow external connections</div>
+                            <div class="description">Allow connections from other devices on your network</div>
+                        </div>
+                        <div class="toggle-switch" id="allow-external-toggle" onclick="toggleSetting('allowExternalConnections')"></div>
+                    </div>
+                </div>
+
+                <!-- Connection Instructions -->
+                <div class="section">
+                    <h3>Connection Instructions</h3>
+                    <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff;">
+                        <h4 style="margin: 0 0 10px 0; color: #007bff;">How others can connect to your server:</h4>
+                        <ol style="margin: 0; padding-left: 20px; color: #333;">
+                            <li><strong>Web Browser:</strong> Open any modern browser and go to <code id="connection-url">http://your-ip:3000</code></li>
+                            <li><strong>Mobile Device:</strong> Open Safari (iOS) or Chrome (Android) and visit the same URL</li>
+                            <li><strong>Room Access:</strong> Join existing rooms or create new ones directly in the browser</li>
+                            <li><strong>Network:</strong> All devices must be on the same Wi-Fi network</li>
+                        </ol>
+                        <div style="margin-top: 15px;">
+                            <strong>Share this URL:</strong>
+                            <span id="share-url" style="background: #fff; padding: 5px; border-radius: 3px; font-family: monospace;"></span>
+                            <button class="copy-btn" onclick="copyServerUrl()">Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let settings = {};
+        let serverInfo = {};
+
+        // Initialize preferences
+        async function initPreferences() {
+            try {
+                // Load current settings and server info
+                settings = await window.electronAPI.getAllSettings();
+                serverInfo = await window.electronAPI.getServerInfo();
+
+                // Update UI with current values
+                updateServerInfo();
+                updateSettingsUI();
+                updateConnectionInfo();
+
+                // Show content
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('preferences-content').style.display = 'block';
+
+            } catch (error) {
+                console.error('Failed to load preferences:', error);
+                document.getElementById('loading').textContent = 'Failed to load preferences';
+            }
+        }
+
+        function updateServerInfo() {
+            const serverInfoEl = document.getElementById('server-info');
+            const statusClass = serverInfo.isRunning ? 'status-running' : 'status-stopped';
+            const statusText = serverInfo.isRunning ? 'Running' : 'Stopped';
+
+            serverInfoEl.innerHTML = `
+                <div class="server-info-item">
+                    <span class="server-info-label">Status:</span>
+                    <span class="server-info-value">
+                        <span class="status-indicator ${statusClass}"></span>${statusText}
+                    </span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Server URL:</span>
+                    <span class="server-info-value">${serverInfo.url}</span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Local IP:</span>
+                    <span class="server-info-value">${serverInfo.localIP || 'Unknown'}</span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Port:</span>
+                    <span class="server-info-value">${serverInfo.port}</span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Uptime:</span>
+                    <span class="server-info-value">${serverInfo.uptime}</span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Active Rooms:</span>
+                    <span class="server-info-value">${serverInfo.roomCount}</span>
+                </div>
+                <div class="server-info-item">
+                    <span class="server-info-label">Connected Users:</span>
+                    <span class="server-info-value">${serverInfo.userCount}</span>
+                </div>
+            `;
+        }
+
+        async function updateSettingsUI() {
+            // Auto launch toggle
+            const autoLaunchEnabled = await window.electronAPI.getAutoLaunchEnabled();
+            const autoLaunchToggle = document.getElementById('auto-launch-toggle');
+            autoLaunchToggle.classList.toggle('active', autoLaunchEnabled);
+
+            // Other settings toggles
+            const toggles = [
+                { id: 'start-minimized-toggle', key: 'startMinimized', defaultValue: false },
+                { id: 'auto-minimize-on-start-toggle', key: 'autoMinimizeOnStart', defaultValue: false },
+                { id: 'hide-to-tray-toggle', key: 'hideToTrayOnClose', defaultValue: true },
+                { id: 'keep-in-menubar-toggle', key: 'keepInMenubar', defaultValue: true },
+                { id: 'allow-external-toggle', key: 'allowExternalConnections', defaultValue: true }
+            ];
+
+            toggles.forEach(toggle => {
+                const element = document.getElementById(toggle.id);
+                const value = settings[toggle.key] !== undefined ? settings[toggle.key] : toggle.defaultValue;
+                element.classList.toggle('active', value);
+            });
+
+            // Server port
+            document.getElementById('server-port').value = serverInfo.port || 3000;
+        }
+
+        function updateConnectionInfo() {
+            document.getElementById('connection-url').textContent = serverInfo.url;
+            document.getElementById('share-url').textContent = serverInfo.url;
+        }
+
+        async function toggleAutoLaunch() {
+            const toggle = document.getElementById('auto-launch-toggle');
+            const currentState = toggle.classList.contains('active');
+            const newState = !currentState;
+
+            try {
+                const success = await window.electronAPI.setAutoLaunchEnabled(newState);
+                if (success) {
+                    toggle.classList.toggle('active', newState);
+                } else {
+                    alert('Failed to update auto launch setting');
+                }
+            } catch (error) {
+                console.error('Failed to toggle auto launch:', error);
+                alert('Failed to update auto launch setting');
+            }
+        }
+
+        async function toggleSetting(settingKey) {
+            const toggle = document.getElementById(`${settingKey.replace(/([A-Z])/g, '-$1').toLowerCase()}-toggle`);
+            const currentState = toggle.classList.contains('active');
+            const newState = !currentState;
+
+            try {
+                await window.electronAPI.setSetting(settingKey, newState);
+                toggle.classList.toggle('active', newState);
+                settings[settingKey] = newState;
+            } catch (error) {
+                console.error(`Failed to toggle ${settingKey}:`, error);
+                alert(`Failed to update ${settingKey} setting`);
+            }
+        }
+
+        async function copyServerUrl() {
+            try {
+                const url = await window.electronAPI.copyServerUrl();
+                // Show temporary feedback
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            } catch (error) {
+                console.error('Failed to copy URL:', error);
+            }
+        }
+
+        async function showQRCode() {
+            try {
+                await window.electronAPI.showQRCode();
+            } catch (error) {
+                console.error('Failed to show QR code:', error);
+            }
+        }
+
+        async function restartServer() {
+            if (confirm('Are you sure you want to restart the server? This will disconnect all users.')) {
+                try {
+                    const btn = event.target;
+                    const originalText = btn.textContent;
+                    btn.textContent = '🔄 Restarting...';
+                    btn.disabled = true;
+
+                    const success = await window.electronAPI.restartServer();
+                    if (success) {
+                        // Refresh server info after restart
+                        setTimeout(async () => {
+                            serverInfo = await window.electronAPI.getServerInfo();
+                            updateServerInfo();
+                            updateConnectionInfo();
+                            btn.textContent = originalText;
+                            btn.disabled = false;
+                        }, 2000);
+                    } else {
+                        alert('Failed to restart server');
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }
+                } catch (error) {
+                    console.error('Failed to restart server:', error);
+                    alert('Failed to restart server');
+                }
+            }
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initPreferences);
+    </script>
+</body>
+</html>

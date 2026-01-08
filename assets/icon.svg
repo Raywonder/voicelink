@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#50E3C2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#4ECDC4;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#grad1)" stroke="#2c3e50" stroke-width="8"/>
+
+  <!-- Microphone body -->
+  <rect x="226" y="180" width="60" height="100" rx="30" ry="30" fill="url(#grad2)" stroke="#2c3e50" stroke-width="4"/>
+
+  <!-- Microphone grille lines -->
+  <line x1="240" y1="200" x2="272" y2="200" stroke="#2c3e50" stroke-width="2"/>
+  <line x1="240" y1="215" x2="272" y2="215" stroke="#2c3e50" stroke-width="2"/>
+  <line x1="240" y1="230" x2="272" y2="230" stroke="#2c3e50" stroke-width="2"/>
+  <line x1="240" y1="245" x2="272" y2="245" stroke="#2c3e50" stroke-width="2"/>
+  <line x1="240" y1="260" x2="272" y2="260" stroke="#2c3e50" stroke-width="2"/>
+
+  <!-- Microphone stand -->
+  <rect x="252" y="280" width="8" height="40" fill="#2c3e50"/>
+
+  <!-- Base -->
+  <rect x="230" y="320" width="52" height="8" rx="4" ry="4" fill="#2c3e50"/>
+
+  <!-- Sound waves -->
+  <path d="M 180 200 Q 150 230 180 260" stroke="#50E3C2" stroke-width="6" fill="none" opacity="0.8"/>
+  <path d="M 332 200 Q 362 230 332 260" stroke="#50E3C2" stroke-width="6" fill="none" opacity="0.8"/>
+
+  <path d="M 160 180 Q 120 230 160 280" stroke="#50E3C2" stroke-width="4" fill="none" opacity="0.6"/>
+  <path d="M 352 180 Q 392 230 352 280" stroke="#50E3C2" stroke-width="4" fill="none" opacity="0.6"/>
+
+  <path d="M 140 160 Q 90 230 140 300" stroke="#50E3C2" stroke-width="3" fill="none" opacity="0.4"/>
+  <path d="M 372 160 Q 422 230 372 300" stroke="#50E3C2" stroke-width="3" fill="none" opacity="0.4"/>
+
+  <!-- 3D Audio indicator -->
+  <text x="256" y="380" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#2c3e50">3D</text>
+
+  <!-- Connection dots -->
+  <circle cx="150" cy="150" r="8" fill="#50E3C2" opacity="0.8"/>
+  <circle cx="362" cy="150" r="8" fill="#50E3C2" opacity="0.8"/>
+  <circle cx="150" cy="362" r="8" fill="#50E3C2" opacity="0.8"/>
+  <circle cx="362" cy="362" r="8" fill="#50E3C2" opacity="0.8"/>
+
+  <!-- Connection lines -->
+  <line x1="150" y1="150" x2="220" y2="220" stroke="#50E3C2" stroke-width="2" opacity="0.5" stroke-dasharray="5,5"/>
+  <line x1="362" y1="150" x2="292" y2="220" stroke="#50E3C2" stroke-width="2" opacity="0.5" stroke-dasharray="5,5"/>
+  <line x1="150" y1="362" x2="220" y2="292" stroke="#50E3C2" stroke-width="2" opacity="0.5" stroke-dasharray="5,5"/>
+  <line x1="362" y1="362" x2="292" y2="292" stroke="#50E3C2" stroke-width="2" opacity="0.5" stroke-dasharray="5,5"/>
+</svg>
