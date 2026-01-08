@@ -303,7 +303,15 @@ Test P2P connections and network performance:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Copyright (C) 2024-2026 Devine Creations
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+## Links
+
+- **GitHub Repository**: [https://github.com/Raywonder/voicelink](https://github.com/Raywonder/voicelink)
+- **Download Page**: [https://devinecreations.net/voicelink-local](https://devinecreations.net/voicelink-local)
+- **OpenLink (Related Project)**: [https://github.com/Raywonder/openlink](https://github.com/Raywonder/openlink)
 
 ## Acknowledgments
 
