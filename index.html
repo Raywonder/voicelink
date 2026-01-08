@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Local - Download</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .tagline {
+            text-align: center;
+            color: #888;
+            margin-bottom: 40px;
+        }
+        .version {
+            text-align: center;
+            color: #00d4ff;
+            font-size: 0.9rem;
+            margin-bottom: 30px;
+        }
+        .platform-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+        .platform-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        .platform-icon { font-size: 1.8rem; }
+        .platform-name { font-size: 1.3rem; font-weight: 600; }
+        .downloads {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .download-btn {
+            display: block;
+            background: linear-gradient(135deg, #7b2cbf 0%, #00d4ff 100%);
+            color: #fff;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            text-align: center;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(123, 44, 191, 0.4);
+        }
+        .download-btn .format { font-weight: 600; }
+        .download-btn .arch { font-size: 0.8rem; opacity: 0.8; }
+        .features {
+            margin-top: 40px;
+            text-align: center;
+            color: #aaa;
+        }
+        .features h3 { color: #fff; margin-bottom: 15px; }
+        .feature-list {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 15px;
+        }
+        .feature {
+            background: rgba(255,255,255,0.05);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>VoiceLink Local</h1>
+        <p class="tagline">P2P Voice Chat with 3D Spatial Audio</p>
+        <p class="version">Version 1.0.0</p>
+
+        <div class="platform-section">
+            <div class="platform-header">
+                <span class="platform-icon">&#63743;</span>
+                <span class="platform-name">macOS</span>
+            </div>
+            <div class="downloads">
+                <a href="VoiceLink Local-1.0.0.dmg" class="download-btn">
+                    <div class="format">DMG Installer</div>
+                    <div class="arch">Intel (x64)</div>
+                </a>
+                <a href="VoiceLink Local-1.0.0-arm64.dmg" class="download-btn">
+                    <div class="format">DMG Installer</div>
+                    <div class="arch">Apple Silicon (arm64)</div>
+                </a>
+                <a href="VoiceLink Local-1.0.0-mac.zip" class="download-btn">
+                    <div class="format">ZIP Archive</div>
+                    <div class="arch">Intel (x64)</div>
+                </a>
+                <a href="VoiceLink Local-1.0.0-arm64-mac.zip" class="download-btn">
+                    <div class="format">ZIP Archive</div>
+                    <div class="arch">Apple Silicon (arm64)</div>
+                </a>
+            </div>
+        </div>
+
+        <div class="platform-section">
+            <div class="platform-header">
+                <span class="platform-icon">&#8862;</span>
+                <span class="platform-name">Windows</span>
+            </div>
+            <div class="downloads">
+                <a href="VoiceLink Local-1.0.0-portable.exe" class="download-btn">
+                    <div class="format">Portable EXE</div>
+                    <div class="arch">64-bit</div>
+                </a>
+                <a href="VoiceLink Local-1.0.0-win.zip" class="download-btn">
+                    <div class="format">ZIP Archive</div>
+                    <div class="arch">64-bit</div>
+                </a>
+                <a href="VoiceLink Local-1.0.0-ia32-win.zip" class="download-btn">
+                    <div class="format">ZIP Archive</div>
+                    <div class="arch">32-bit</div>
+                </a>
+            </div>
+        </div>
+
+        <div class="platform-section">
+            <div class="platform-header">
+                <span class="platform-icon">&#128039;</span>
+                <span class="platform-name">Linux</span>
+            </div>
+            <div class="downloads">
+                <a href="VoiceLink Local-1.0.0.AppImage" class="download-btn">
+                    <div class="format">AppImage</div>
+                    <div class="arch">64-bit</div>
+                </a>
+                <a href="voicelink-local-1.0.0.tar.gz" class="download-btn">
+                    <div class="format">Tarball</div>
+                    <div class="arch">64-bit</div>
+                </a>
+            </div>
+        </div>
+
+        <div class="features">
+            <h3>Features</h3>
+            <div class="feature-list">
+                <span class="feature">Peer-to-Peer Voice</span>
+                <span class="feature">3D Spatial Audio</span>
+                <span class="feature">No Server Required</span>
+                <span class="feature">Low Latency</span>
+                <span class="feature">Cross-Platform</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
