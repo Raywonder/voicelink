@@ -34,3 +34,8 @@ npm-debug.log*
 
 # Claude
 .claude/
+
+# Large audio files
+source/assets/sounds/ambience/*.wav
+source/assets/sounds/ambience/*.flac
+source/assets/sounds/ambience/*.mp3
