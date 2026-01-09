@@ -568,7 +568,11 @@ class AudioTestManager {
         });
     }
 
-    async playTestTone(frequency, duration) {
+    async playTestTone(frequency = 440, duration = 1000) {
+        // Validate parameters to prevent non-finite values
+        frequency = Number.isFinite(frequency) ? frequency : 440;
+        duration = Number.isFinite(duration) ? duration : 1000;
+
         if (!this.audioEngine || !this.audioEngine.audioContext) {
             console.warn('Audio context not available for test tone');
             return;

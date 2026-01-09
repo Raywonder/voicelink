@@ -80,7 +80,10 @@ class VoiceLinkLocalServer {
                 visibility: room.visibility,
                 accessType: room.accessType,
                 allowEmbed: room.allowEmbed,
-                visibleToGuests: room.visibleToGuests
+                visibleToGuests: room.visibleToGuests,
+                isGuestRoom: room.isGuestRoom || false,
+                expiresAt: room.expiresAt ? room.expiresAt.toISOString ? room.expiresAt.toISOString() : room.expiresAt : null,
+                creatorHandle: room.creatorHandle || null
             }));
             res.json(roomList);
         });
@@ -96,15 +99,28 @@ class VoiceLinkLocalServer {
                 duration,
                 privacyLevel,
                 encrypted,
-                creatorHandle
+                creatorHandle,
+                isAuthenticated = false  // Whether creator is logged in
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
 
-            // Calculate expiration if duration is set
+            // Guest room time limit: 10 minutes (600000ms)
+            const GUEST_ROOM_DURATION = 10 * 60 * 1000;
+
+            // Calculate expiration based on authentication status
             let expiresAt = null;
-            if (duration && typeof duration === 'number') {
+            let isGuestRoom = false;
+
+            if (!isAuthenticated && !creatorHandle) {
+                // Guest user - enforce 10-minute limit
+                expiresAt = new Date(Date.now() + GUEST_ROOM_DURATION);
+                isGuestRoom = true;
+                console.log(`Guest room created: ${roomId} - expires at ${expiresAt.toISOString()}`);
+            } else if (duration && typeof duration === 'number') {
+                // Authenticated user with explicit duration
                 expiresAt = new Date(Date.now() + duration);
             }
+            // Authenticated users without explicit duration get permanent rooms
 
             // Access type determines where the room is accessible:
             // - web-only: Only via direct URL/embed (not listed in app)
@@ -129,6 +145,7 @@ class VoiceLinkLocalServer {
                 creatorHandle,
                 createdAt: new Date(),
                 expiresAt,
+                isGuestRoom,  // Track if this is a guest (time-limited) room
                 audioSettings: {
                     spatialAudio: true,
                     quality: 'high',
@@ -143,7 +160,15 @@ class VoiceLinkLocalServer {
                 this.federation.broadcastRoomChange('created', room);
             }
 
-            res.json({ roomId, message: 'Room created successfully', accessType });
+            // Return room info including expiration for guest rooms
+            res.json({
+                roomId,
+                message: 'Room created successfully',
+                accessType,
+                isGuestRoom,
+                expiresAt: expiresAt ? expiresAt.toISOString() : null,
+                timeLimit: isGuestRoom ? GUEST_ROOM_DURATION : null
+            });
         });
 
         this.app.get('/api/audio/devices', async (req, res) => {
@@ -1440,11 +1465,111 @@ class VoiceLinkLocalServer {
 
     start() {
         const PORT = process.env.PORT || 3010;
+        // Start room expiration check interval (every 10 seconds)
+        this.startRoomExpirationChecker();
+
         this.server.listen(PORT, () => {
             console.log(`VoiceLink Local Server running on http://localhost:${PORT}`);
             console.log('Ready for P2P and server relay voice chat!');
             console.log('Connection modes: p2p (direct), relay (server), auto (fallback)');
         });
+    }
+
+    /**
+     * Start the room expiration checker
+     * Checks every 10 seconds for:
+     * - Rooms that need warning (2 min, 30 sec before expiration)
+     * - Rooms that have expired
+     */
+    startRoomExpirationChecker() {
+        const CHECK_INTERVAL = 10 * 1000; // 10 seconds
+        const WARNING_2MIN = 2 * 60 * 1000; // 2 minutes
+        const WARNING_30SEC = 30 * 1000; // 30 seconds
+
+        setInterval(() => {
+            const now = Date.now();
+
+            for (const [roomId, room] of this.rooms) {
+                if (!room.expiresAt || !room.isGuestRoom) continue;
+
+                const expiresAt = new Date(room.expiresAt).getTime();
+                const timeRemaining = expiresAt - now;
+
+                // Room has expired
+                if (timeRemaining <= 0) {
+                    console.log(`Guest room expired: ${roomId}`);
+                    this.expireRoom(roomId);
+                    continue;
+                }
+
+                // 2-minute warning (only send once)
+                if (timeRemaining <= WARNING_2MIN && !room.warned2Min) {
+                    room.warned2Min = true;
+                    this.sendRoomWarning(roomId, 'Room will expire in 2 minutes. Login to keep rooms permanently!', timeRemaining);
+                }
+
+                // 30-second warning (only send once)
+                if (timeRemaining <= WARNING_30SEC && !room.warned30Sec) {
+                    room.warned30Sec = true;
+                    this.sendRoomWarning(roomId, 'Room will expire in 30 seconds!', timeRemaining);
+                }
+            }
+        }, CHECK_INTERVAL);
+
+        console.log('Room expiration checker started');
+    }
+
+    /**
+     * Send a warning to all users in a room
+     */
+    sendRoomWarning(roomId, message, timeRemaining) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+
+        // Emit warning to all sockets in the room
+        this.io.to(roomId).emit('room-expiring', {
+            roomId,
+            message,
+            timeRemaining,
+            expiresAt: room.expiresAt
+        });
+
+        console.log(`Room warning sent to ${roomId}: ${message}`);
+    }
+
+    /**
+     * Expire a room - disconnect all users and remove the room
+     */
+    expireRoom(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+
+        // Notify all users in the room
+        this.io.to(roomId).emit('room-expired', {
+            roomId,
+            message: 'This guest room has expired. Login with Mastodon for unlimited room time!'
+        });
+
+        // Disconnect all sockets from the room
+        const socketsInRoom = this.io.sockets.adapter.rooms.get(roomId);
+        if (socketsInRoom) {
+            for (const socketId of socketsInRoom) {
+                const socket = this.io.sockets.sockets.get(socketId);
+                if (socket) {
+                    socket.leave(roomId);
+                    socket.emit('forced-leave', {
+                        reason: 'Room expired',
+                        roomId
+                    });
+                }
+            }
+        }
+
+        // Remove the room
+        this.rooms.delete(roomId);
+        this.federation.broadcastRoomChange('deleted', { id: roomId });
+
+        console.log(`Guest room ${roomId} has been expired and removed`);
     }
 }
 

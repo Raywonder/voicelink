@@ -65,19 +65,19 @@ class SettingsInterfaceManager {
                             <i class="icon-microphone"></i>
                             Audio Devices
                         </button>
-                        <button class="tab-button" data-tab="channel-matrix">
+                        <button class="tab-button auth-required" data-tab="channel-matrix">
                             <i class="icon-grid"></i>
                             Channel Matrix
                         </button>
-                        <button class="tab-button" data-tab="vst-plugins">
+                        <button class="tab-button auth-required" data-tab="vst-plugins">
                             <i class="icon-equalizer"></i>
                             VST Plugins
                         </button>
-                        <button class="tab-button" data-tab="security">
+                        <button class="tab-button auth-required" data-tab="security">
                             <i class="icon-shield"></i>
                             Security
                         </button>
-                        <button class="tab-button" data-tab="server">
+                        <button class="tab-button auth-required" data-tab="server">
                             <i class="icon-server"></i>
                             Server
                         </button>
@@ -110,8 +110,8 @@ class SettingsInterfaceManager {
             <div class="tab-content active" data-tab="audio-devices">
                 <div class="sub-tabs">
                     <button class="sub-tab-button active" data-subtab="devices">Input/Output Devices</button>
-                    <button class="sub-tab-button" data-subtab="advanced">Advanced Audio</button>
-                    <button class="sub-tab-button" data-subtab="monitoring">Monitoring</button>
+                    <button class="sub-tab-button auth-required" data-subtab="advanced">Advanced Audio</button>
+                    <button class="sub-tab-button auth-required" data-subtab="monitoring">Monitoring</button>
                 </div>
 
                 <div class="sub-tab-content active" data-subtab="devices">
@@ -968,8 +968,84 @@ class SettingsInterfaceManager {
                 border-radius: 8px;
                 margin-top: 20px;
             }
+
+            /* Auth-required elements hidden for guests */
+            .settings-interface.guest-mode .auth-required {
+                display: none !important;
+            }
+
+            .settings-interface .guest-notice {
+                background: rgba(255, 193, 7, 0.2);
+                border: 1px solid rgba(255, 193, 7, 0.5);
+                color: #ffc107;
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+                font-size: 14px;
+            }
+
+            .settings-interface .guest-notice a {
+                color: #ffc107;
+                text-decoration: underline;
+                cursor: pointer;
+            }
         `;
         document.head.appendChild(style);
+    }
+
+    /**
+     * Update settings visibility based on authentication state
+     * Hides advanced tabs for guest users
+     */
+    updateSettingsForAuthState() {
+        const settingsInterface = document.getElementById('settings-interface');
+        if (!settingsInterface) return;
+
+        const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
+
+        if (isAuthenticated) {
+            settingsInterface.classList.remove('guest-mode');
+            // Remove guest notice if present
+            const notice = settingsInterface.querySelector('.guest-notice');
+            if (notice) notice.remove();
+        } else {
+            settingsInterface.classList.add('guest-mode');
+
+            // Add guest notice if not already present
+            const existingNotice = settingsInterface.querySelector('.guest-notice');
+            if (!existingNotice) {
+                const settingsContent = settingsInterface.querySelector('.settings-content');
+                if (settingsContent) {
+                    const notice = document.createElement('div');
+                    notice.className = 'guest-notice';
+
+                    const strong = document.createElement('strong');
+                    strong.textContent = 'Guest Mode:';
+                    notice.appendChild(strong);
+
+                    notice.appendChild(document.createTextNode(' Some settings are only available to logged-in users. '));
+
+                    const link = document.createElement('a');
+                    link.id = 'settings-login-link';
+                    link.textContent = 'Sign in with Mastodon';
+                    link.addEventListener('click', () => {
+                        this.hideSettings();
+                        document.getElementById('login-button')?.click();
+                    });
+                    notice.appendChild(link);
+
+                    notice.appendChild(document.createTextNode(' to access all features.'));
+
+                    settingsContent.insertBefore(notice, settingsContent.firstChild);
+                }
+            }
+
+            // Ensure we're on a guest-allowed tab
+            const currentTab = settingsInterface.querySelector('.tab-button.active');
+            if (currentTab?.classList.contains('auth-required')) {
+                this.switchTab('audio-devices');
+            }
+        }
     }
 
     bindEvents() {
@@ -1073,6 +1149,7 @@ class SettingsInterfaceManager {
 
     showSettings() {
         document.getElementById('settings-interface').classList.remove('hidden');
+        this.updateSettingsForAuthState();
         this.populateAudioDevices();
         this.populateChannelMatrix();
     }

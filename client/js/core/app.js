@@ -33,6 +33,29 @@ class VoiceLinkApp {
         this.init();
     }
 
+    /**
+     * Get the API base URL for making HTTP requests
+     * Handles both nginx proxy (no port) and direct connections (with port)
+     */
+    getApiBaseUrl() {
+        const protocol = window.location.protocol;
+        const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
+        const socketPort = this.socket?.io?.opts?.port;
+        const locationPort = window.location.port;
+
+        // If we have a socket port (direct connection), use it
+        // If we have a location port (non-standard port), use it
+        // Otherwise, we're behind a proxy on standard ports, no port needed
+        if (socketPort) {
+            return `${protocol}//${host}:${socketPort}`;
+        } else if (locationPort) {
+            return `${protocol}//${host}:${locationPort}`;
+        } else {
+            // Standard port (80/443), no port needed in URL
+            return `${protocol}//${host}`;
+        }
+    }
+
     async init() {
         console.log('Initializing VoiceLink Local...');
 
@@ -296,9 +319,48 @@ class VoiceLinkApp {
             // Determine host - use page host for web access, localhost for Electron
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
+            const pageProtocol = window.location.protocol;
             const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-            const host = isElectron ? 'localhost' : pageHost;
+            const isWebProduction = !isElectron && (pageProtocol === 'https:' ||
+                pageHost.includes('voicelink.devinecreations.net') ||
+                pageHost.includes('voicelink.tappedin.fm'));
 
+            // For production web, connect via the same origin (nginx proxy)
+            if (isWebProduction) {
+                const url = `${pageProtocol}//${pageHost}`;
+                console.log(`Connecting via nginx proxy at ${url}`);
+                this.socket = io(url, {
+                    timeout: 10000,
+                    reconnection: true,
+                    reconnectionAttempts: 5,
+                    transports: ['websocket', 'polling']
+                });
+
+                this.socket.on('connect', () => {
+                    console.log('Connected to VoiceLink server via nginx proxy');
+                    this.updateServerStatus('online');
+                    if (window.serverEncryptionManager) {
+                        window.dispatchEvent(new CustomEvent('serverConnected', {
+                            detail: { serverId: 'production-server', isOwner: false }
+                        }));
+                        window.dispatchEvent(new CustomEvent('userAuthenticated', {
+                            detail: { userId: 'web-user-' + Date.now() }
+                        }));
+                    }
+                    this.setupSocketEventListeners();
+                    resolve();
+                });
+
+                this.socket.on('connect_error', (error) => {
+                    console.error('Failed to connect to server:', error.message);
+                    this.updateServerStatus('offline');
+                    reject(new Error('Server not available'));
+                });
+                return;
+            }
+
+            // For Electron/local dev, use port sequence
+            const host = isElectron ? 'localhost' : pageHost;
             // If page was loaded from a specific port, try that first
             // Port sequence: page port (if any), 3010, 4004 (Electron), etc.
             const portSequence = pagePort ? [parseInt(pagePort), 3010, 4004, 4005, 4006] : [3010, 4004, 4005, 4006, 3000, 3001];
@@ -407,6 +469,264 @@ class VoiceLinkApp {
         this.socket.on('error', (error) => {
             this.showError(error.message);
         });
+
+        // Room expiration events (for guest/non-logged-in users)
+        this.socket.on('room-expiring', (data) => {
+            this.handleRoomExpiring(data);
+        });
+
+        this.socket.on('room-expired', (data) => {
+            this.handleRoomExpired(data);
+        });
+
+        this.socket.on('forced-leave', (data) => {
+            this.handleForcedLeave(data);
+        });
+    }
+
+    /**
+     * Handle room expiring warning
+     */
+    handleRoomExpiring(data) {
+        const { message, timeRemaining, expiresAt } = data;
+        console.log('Room expiring warning:', message, 'Time remaining:', timeRemaining);
+
+        // Show notification
+        this.showNotification(message, 'warning', 10000);
+
+        // Start or update countdown timer display
+        this.startExpirationCountdown(expiresAt, timeRemaining);
+    }
+
+    /**
+     * Handle room expired event
+     */
+    handleRoomExpired(data) {
+        const { message } = data;
+        console.log('Room expired:', message);
+
+        // Stop countdown timer
+        this.stopExpirationCountdown();
+
+        // Show expiration modal
+        this.showRoomExpiredModal(message);
+    }
+
+    /**
+     * Handle forced leave from room
+     */
+    handleForcedLeave(data) {
+        const { reason, roomId } = data;
+        console.log('Forced to leave room:', reason);
+
+        // Clean up room state
+        this.currentRoomId = null;
+        this.stopExpirationCountdown();
+
+        // Return to main menu
+        this.showScreen('main-menu');
+        this.showNotification('You have been disconnected: ' + reason, 'info');
+    }
+
+    /**
+     * Start expiration countdown timer display
+     */
+    startExpirationCountdown(expiresAt, initialTimeRemaining) {
+        // Stop any existing countdown
+        this.stopExpirationCountdown();
+
+        const expirationTime = new Date(expiresAt).getTime();
+
+        // Create or update countdown display
+        let countdownEl = document.getElementById('room-expiration-countdown');
+        if (!countdownEl) {
+            countdownEl = document.createElement('div');
+            countdownEl.id = 'room-expiration-countdown';
+            countdownEl.className = 'room-expiration-countdown';
+
+            // Build countdown UI using DOM methods (safer than innerHTML)
+            const iconDiv = document.createElement('div');
+            iconDiv.className = 'countdown-icon';
+            iconDiv.textContent = '⏱️';
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'countdown-text';
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'countdown-label';
+            labelSpan.textContent = 'Guest Room Expires In:';
+
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'countdown-time';
+            timeSpan.textContent = '--:--';
+
+            textDiv.appendChild(labelSpan);
+            textDiv.appendChild(document.createElement('br'));
+            textDiv.appendChild(timeSpan);
+
+            const loginDiv = document.createElement('div');
+            loginDiv.className = 'countdown-login';
+
+            const loginBtn = document.createElement('button');
+            loginBtn.className = 'login-to-extend';
+            loginBtn.textContent = 'Login for Unlimited Time';
+            loginBtn.onclick = () => this.showMastodonLoginModal();
+            loginDiv.appendChild(loginBtn);
+
+            countdownEl.appendChild(iconDiv);
+            countdownEl.appendChild(textDiv);
+            countdownEl.appendChild(loginDiv);
+
+            // Add styles
+            countdownEl.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                box-shadow: 0 4px 20px rgba(238, 90, 36, 0.4);
+                z-index: 10000;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            `;
+            document.body.appendChild(countdownEl);
+        }
+
+        const timeDisplay = countdownEl.querySelector('.countdown-time');
+
+        // Update countdown every second
+        this.expirationCountdownInterval = setInterval(() => {
+            const now = Date.now();
+            const remaining = expirationTime - now;
+
+            if (remaining <= 0) {
+                this.stopExpirationCountdown();
+                return;
+            }
+
+            const minutes = Math.floor(remaining / 60000);
+            const seconds = Math.floor((remaining % 60000) / 1000);
+            timeDisplay.textContent = minutes + ':' + seconds.toString().padStart(2, '0');
+
+            // Pulse effect when under 1 minute
+            if (remaining < 60000) {
+                countdownEl.style.animation = 'pulse 0.5s ease-in-out infinite';
+            }
+        }, 1000);
+    }
+
+    /**
+     * Stop expiration countdown
+     */
+    stopExpirationCountdown() {
+        if (this.expirationCountdownInterval) {
+            clearInterval(this.expirationCountdownInterval);
+            this.expirationCountdownInterval = null;
+        }
+
+        const countdownEl = document.getElementById('room-expiration-countdown');
+        if (countdownEl) {
+            countdownEl.remove();
+        }
+    }
+
+    /**
+     * Show room expired modal using DOM methods
+     */
+    showRoomExpiredModal(message) {
+        const modal = document.createElement('div');
+        modal.className = 'room-expired-modal';
+
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 10001;';
+
+        // Create content container
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        content.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 30px;
+            border-radius: 16px;
+            text-align: center;
+            z-index: 10002;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        `;
+
+        // Icon
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size: 4rem; margin-bottom: 20px;';
+        icon.textContent = '⏰';
+
+        // Title
+        const title = document.createElement('h2');
+        title.style.cssText = 'color: #ff6b6b; margin-bottom: 15px;';
+        title.textContent = 'Room Expired';
+
+        // Message
+        const msgEl = document.createElement('p');
+        msgEl.style.cssText = 'color: #aaa; margin-bottom: 25px;';
+        msgEl.textContent = message;
+
+        // Button container
+        const btnContainer = document.createElement('div');
+        btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+
+        // Login button
+        const loginBtn = document.createElement('button');
+        loginBtn.style.cssText = `
+            background: linear-gradient(135deg, #7b2cbf, #00d4ff);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+        `;
+        loginBtn.textContent = '🐘 Login with Mastodon';
+        loginBtn.onclick = () => {
+            modal.remove();
+            this.showMastodonLoginModal();
+        };
+
+        // Return button
+        const returnBtn = document.createElement('button');
+        returnBtn.style.cssText = `
+            background: transparent;
+            color: #888;
+            border: 1px solid #444;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+        `;
+        returnBtn.textContent = 'Return to Menu';
+        returnBtn.onclick = () => {
+            modal.remove();
+            this.showScreen('main-menu');
+        };
+
+        btnContainer.appendChild(loginBtn);
+        btnContainer.appendChild(returnBtn);
+
+        content.appendChild(icon);
+        content.appendChild(title);
+        content.appendChild(msgEl);
+        content.appendChild(btnContainer);
+
+        modal.appendChild(overlay);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
     }
 
     setupUIEventListeners() {
@@ -852,10 +1172,8 @@ class VoiceLinkApp {
 
     async loadRooms() {
         try {
-            // Get host and port from socket connection or page location
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-            const response = await fetch(`http://${host}:${port}/api/rooms`);
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms`);
             if (!response.ok) {
                 throw new Error('Failed to fetch rooms');
             }
@@ -1121,10 +1439,12 @@ class VoiceLinkApp {
                 }
             }
 
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms', {
+            // Check if user is authenticated for room time limits
+            const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
+
+            const response = await fetch(`${apiBase}/api/rooms`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1140,7 +1460,8 @@ class VoiceLinkApp {
                     visibleToGuests,
                     privacyLevel,
                     encrypted: window.serverEncryptionManager?.isRoomEncrypted(roomId) || false,
-                    creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null
+                    creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null,
+                    isAuthenticated  // Pass auth status for room time limits
                 })
             });
 
@@ -2455,10 +2776,8 @@ class VoiceLinkApp {
 
     async shareRoom(roomId) {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/share/' + roomId);
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${roomId}`);
             const data = await response.json();
 
             if (data.shareUrls?.mastodon) {
@@ -2574,10 +2893,9 @@ class VoiceLinkApp {
             generateBtn.textContent = 'Generating...';
 
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+                const apiBase = this.getApiBaseUrl();
 
-                const response = await fetch(`http://${host}:${port}/api/embed/token`, {
+                const response = await fetch(`${apiBase}/api/embed/token`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -3103,10 +3421,8 @@ class VoiceLinkApp {
 
     async loadAdminServerStats() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/stats');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/stats`);
             const stats = await response.json();
 
             const statusEl = document.getElementById('admin-server-status');
@@ -3130,10 +3446,8 @@ class VoiceLinkApp {
 
     async loadAdminRooms() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms`);
             const rooms = await response.json();
 
             const roomsList = document.getElementById('admin-rooms-list');
@@ -3164,10 +3478,8 @@ class VoiceLinkApp {
 
     async loadAdminUsers() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/users');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/users`);
             const users = await response.json();
 
             const usersList = document.getElementById('admin-users-list');
@@ -3198,10 +3510,8 @@ class VoiceLinkApp {
 
     async loadAdminBots() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/bots');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/mastodon/bots`);
             const bots = await response.json();
 
             const botList = document.getElementById('admin-bot-list');
@@ -3232,10 +3542,8 @@ class VoiceLinkApp {
 
     async loadFederatedServers() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/federation/servers');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/federation/servers`);
             const servers = await response.json();
 
             const serverList = document.getElementById('admin-federation-list');
@@ -3302,10 +3610,8 @@ class VoiceLinkApp {
     async adminRestartServer() {
         if (confirm('Are you sure you want to restart the server?')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/restart', { method: 'POST' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/restart`, { method: 'POST' });
                 this.showNotification('Server restarting...', 'info');
             } catch (error) {
                 this.showNotification('Failed to restart server', 'error');
@@ -3316,10 +3622,8 @@ class VoiceLinkApp {
     async adminStopServer() {
         if (confirm('Are you sure you want to stop the server? All users will be disconnected.')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/stop', { method: 'POST' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/stop`, { method: 'POST' });
                 this.showNotification('Server stopping...', 'info');
             } catch (error) {
                 this.showNotification('Failed to stop server', 'error');
@@ -3329,10 +3633,8 @@ class VoiceLinkApp {
 
     async createDefaultRooms() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms/generate-defaults', { method: 'POST' });
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, { method: 'POST' });
             const result = await response.json();
 
             this.showNotification('Created ' + (result.count || 0) + ' default rooms', 'success');
@@ -3345,10 +3647,8 @@ class VoiceLinkApp {
 
     async cleanupExpiredRooms() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms/cleanup', { method: 'POST' });
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms/cleanup`, { method: 'POST' });
             const result = await response.json();
 
             this.showNotification('Cleaned up ' + (result.removed || 0) + ' expired rooms', 'success');
@@ -3362,10 +3662,8 @@ class VoiceLinkApp {
     async deleteRoom(roomId) {
         if (confirm('Delete this room? All users will be disconnected.')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/rooms/' + roomId, { method: 'DELETE' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/rooms/${roomId}`, { method: 'DELETE' });
                 this.showNotification('Room deleted', 'success');
                 this.loadAdminRooms();
                 this.loadRooms();
@@ -3385,10 +3683,9 @@ class VoiceLinkApp {
         }
 
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/bots', {
+            const response = await fetch(`${apiBase}/api/mastodon/bots`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3415,10 +3712,8 @@ class VoiceLinkApp {
     async removeBot(instance) {
         if (confirm('Remove this bot?')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/mastodon/bots/' + instance, { method: 'DELETE' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/mastodon/bots/${instance}`, { method: 'DELETE' });
                 this.showNotification('Bot removed', 'success');
                 this.loadAdminBots();
             } catch (error) {
@@ -3443,10 +3738,9 @@ class VoiceLinkApp {
         }
 
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/announce', {
+            const response = await fetch(`${apiBase}/api/mastodon/announce`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3471,15 +3765,13 @@ class VoiceLinkApp {
 
     async announceServerOnline() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-            const serverUrl = 'http://' + host + ':' + port;
+            const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/announce', {
+            const response = await fetch(`${apiBase}/api/mastodon/announce`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: 'VoiceLink Server is now online!\n\n' + serverUrl + '\n\n#VoiceLink #VoiceChat #P2P',
+                    message: `VoiceLink Server is now online!\n\n${apiBase}\n\n#VoiceLink #VoiceChat #P2P`,
                     visibility: 'public'
                 })
             });
@@ -3501,10 +3793,9 @@ class VoiceLinkApp {
         if (!message) return;
 
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
-            await fetch('http://' + host + ':' + port + '/api/admin/broadcast', {
+            await fetch(`${apiBase}/api/admin/broadcast`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -3519,10 +3810,8 @@ class VoiceLinkApp {
     async kickUser(userId) {
         if (confirm('Kick this user?')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/users/' + userId + '/kick', { method: 'POST' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/users/${userId}/kick`, { method: 'POST' });
                 this.showNotification('User kicked', 'success');
                 this.loadAdminUsers();
             } catch (error) {
@@ -3534,10 +3823,8 @@ class VoiceLinkApp {
     async banUser(userId) {
         if (confirm('Ban this user? They will not be able to reconnect.')) {
             try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/users/' + userId + '/ban', { method: 'POST' });
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/users/${userId}/ban`, { method: 'POST' });
                 this.showNotification('User banned', 'success');
                 this.loadAdminUsers();
             } catch (error) {
@@ -3554,10 +3841,9 @@ class VoiceLinkApp {
         }
 
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch('http://' + host + ':' + port + '/api/federation/connect', {
+            const response = await fetch(`${apiBase}/api/federation/connect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ serverUrl: serverInput.value })
@@ -3579,15 +3865,14 @@ class VoiceLinkApp {
 
     async saveServerSettings() {
         try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.getApiBaseUrl();
 
             const settings = {
                 maxRooms: document.getElementById('admin-max-rooms')?.value,
                 requireAuth: document.getElementById('admin-require-auth')?.checked
             };
 
-            await fetch('http://' + host + ':' + port + '/api/admin/settings', {
+            await fetch(`${apiBase}/api/admin/settings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(settings)
@@ -3718,10 +4003,8 @@ class JukeboxManager {
 
     async loadServers() {
         try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/servers`);
+            const apiBase = this.app.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/jellyfin/servers`);
             const data = await response.json();
 
             if (data.success && data.servers) {
@@ -3740,15 +4023,14 @@ class JukeboxManager {
         if (!this.currentServer) return;
 
         try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.app.getApiBaseUrl();
 
             const params = new URLSearchParams({
                 serverId: this.currentServer.id
             });
             if (parentId) params.append('parentId', parentId);
 
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/library?${params}`);
+            const response = await fetch(`${apiBase}/api/jellyfin/library?${params}`);
             const data = await response.json();
 
             if (data.success && data.items) {
@@ -3828,15 +4110,14 @@ class JukeboxManager {
         if (!query || !this.currentServer) return;
 
         try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.app.getApiBaseUrl();
 
             const params = new URLSearchParams({
                 serverId: this.currentServer.id,
                 query: query
             });
 
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/search?${params}`);
+            const response = await fetch(`${apiBase}/api/jellyfin/search?${params}`);
             const data = await response.json();
 
             if (data.success && data.items) {
@@ -3851,10 +4132,9 @@ class JukeboxManager {
         if (!this.currentServer || !item) return;
 
         try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
+            const apiBase = this.app.getApiBaseUrl();
 
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/stream-url`, {
+            const response = await fetch(`${apiBase}/api/jellyfin/stream-url`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
