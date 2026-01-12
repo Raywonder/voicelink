@@ -7,13 +7,13 @@ import SocketIO
 struct VoiceLinkApp: App {
     @StateObject private var appState = AppState()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var serverManager = ServerModeManager.shared
+    @StateObject private var localDiscovery = LocalServerDiscovery.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .environmentObject(serverManager)
+                .environmentObject(localDiscovery)
                 .frame(minWidth: 900, minHeight: 700)
                 .frame(width: 1000, height: 750)
         }
@@ -63,46 +63,99 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("d", modifiers: .command)
             }
 
-            CommandMenu("Hosting") {
-                // Server hosting controls
-                Section {
-                    if serverManager.isServerRunning {
-                        Button("Stop Hosting") {
-                            serverManager.stopServer()
-                        }
-                        .help("Stop the local VoiceLink server on this device")
+            CommandMenu("License") {
+                let licensing = LicensingManager.shared
+                Button("View License") {
+                    appState.currentScreen = .licensing
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
 
-                        Button("Restart Host Server") {
-                            serverManager.restartServer()
-                        }
-                        .help("Restart the local server to apply changes")
-                    } else {
-                        Button("Start Hosting") {
-                            serverManager.startServer()
-                        }
-                        .help("Start a local VoiceLink server for others to connect")
-                    }
+                if licensing.licenseStatus == .licensed {
+                    Text("Status: Licensed")
+                    Text("Devices: \(licensing.activatedDevices)/\(licensing.maxDevices)")
+                } else if licensing.licenseStatus == .pending {
+                    Text("Status: Pending (\(licensing.remainingMinutes) min)")
+                } else {
+                    Text("Status: Not Registered")
                 }
 
                 Divider()
 
+                Button("Refresh License") {
+                    Task {
+                        await licensing.checkStatus()
+                    }
+                }
+            }
+
+            CommandMenu("Connect") {
                 // Connection targets
-                Section {
-                    Button("Connect to My Server") {
+                Button("Federation (Main Node)") {
+                    appState.connectToMainServer()
+                }
+                .help("Connect to the main VoiceLink public server")
+                .keyboardShortcut("1", modifiers: [.command, .option])
+
+                Button("Local Server") {
+                    if let url = localDiscovery.localServerURL {
+                        localDiscovery.autoPairWithLocalServer { _ in }
+                    } else {
                         appState.connectToLocalServer()
                     }
-                    .help("Connect to your local hosted server")
-                    .disabled(!serverManager.isServerRunning)
+                }
+                .help("Connect to a local VoiceLink server")
+                .keyboardShortcut("2", modifiers: [.command, .option])
 
-                    Button("Connect to Public Server") {
-                        appState.connectToMainServer()
-                    }
-                    .help("Connect to the main VoiceLink public server")
+                Button("Auto-Connect (Remote First)") {
+                    appState.connectToServer()
+                }
+                .help("Try remote server first, fallback to local")
+                .keyboardShortcut("0", modifiers: [.command, .option])
 
-                    Button("Auto-Connect (Recommended)") {
-                        appState.connectToServer()
+                Divider()
+
+                if localDiscovery.localServerFound {
+                    Text("Local server found: \(localDiscovery.localServerName ?? "localhost")")
+                } else {
+                    Text("No local server detected")
+                        .foregroundColor(.secondary)
+                }
+
+                Button("Scan for Local Servers") {
+                    localDiscovery.scanForLocalServer()
+                }
+                .disabled(localDiscovery.isScanning)
+
+                Divider()
+
+                // Remote Server Controls
+                if ServerManager.shared.isConnected {
+                    Button("Disconnect") {
+                        ServerManager.shared.disconnect()
                     }
-                    .help("Automatically find and connect to the best available server")
+                    .help("Disconnect from current server")
+                }
+
+                if AdminServerManager.shared.isAdmin {
+                    Divider()
+
+                    Text("Remote Server Control")
+                        .font(.caption)
+
+                    Button("Start Remote Server") {
+                        RemoteServerControl.shared.startRemoteServer()
+                    }
+                    .help("Start the remote server via OpenLink, webserver, or direct connection")
+
+                    Button("Stop Remote Server") {
+                        RemoteServerControl.shared.stopRemoteServer()
+                    }
+                    .help("Stop the remote server gracefully")
+
+                    Button("Restart Remote Server") {
+                        RemoteServerControl.shared.restartRemoteServer()
+                    }
+                    .help("Restart the remote server")
                 }
             }
 
@@ -113,18 +166,23 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .help("View and manage servers you've linked to this device")
 
-                Button("Generate Pairing Code") {
-                    _ = PairingManager.shared.generatePairingCode()
-                }
-                .help("Generate a 6-digit code for another device to pair with your server")
-                .disabled(!serverManager.isServerRunning)
-
                 Divider()
 
                 Button("Discover Local Servers") {
-                    NotificationCenter.default.post(name: .discoverServers, object: nil)
+                    localDiscovery.scanForLocalServer()
                 }
                 .help("Scan local network for VoiceLink servers")
+                .disabled(localDiscovery.isScanning)
+
+                if AdminServerManager.shared.isAdmin {
+                    Divider()
+
+                    Button("Server Administration...") {
+                        appState.currentScreen = .admin
+                    }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                    .help("Manage remote server settings (admin only)")
+                }
             }
         }
     }
@@ -149,6 +207,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize menubar status item
         statusBarController = StatusBarController()
 
+        // Register for URL events
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+
         // Show window on launch (user can close it to stay in menubar)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             NSApp.activate(ignoringOtherApps: true)
@@ -159,14 +225,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc func handleURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString) else {
+            return
+        }
+
+        print("[AppDelegate] Received URL: \(url)")
+
+        // Show app window and handle URL
+        showMainWindow()
+
+        Task { @MainActor in
+            URLHandler.shared.handleURL(url)
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Never quit when window closes - stay in menubar
         return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Stop server on quit
-        ServerModeManager.shared.stopServer()
+        // Disconnect from server on quit
+        ServerManager.shared.disconnect()
+        LocalServerDiscovery.shared.stopScanning()
     }
 
     func showMainWindow() {
@@ -199,6 +282,7 @@ class AppState: ObservableObject {
     @Published var errorMessage: String?
 
     let serverManager = ServerManager.shared
+    let licensing = LicensingManager.shared
 
     enum Screen {
         case mainMenu
@@ -207,6 +291,8 @@ class AppState: ObservableObject {
         case voiceChat
         case settings
         case servers
+        case licensing
+        case admin
     }
 
     enum ServerStatus {
@@ -217,6 +303,112 @@ class AppState: ObservableObject {
         detectLocalIP()
         connectToServer()
         setupServerObservers()
+        initializeLicensing()
+        setupURLObservers()
+    }
+
+    private func setupURLObservers() {
+        // Handle URL join room
+        NotificationCenter.default.addObserver(forName: .urlJoinRoom, object: nil, queue: .main) { [weak self] notification in
+            guard let data = notification.object as? [String: Any],
+                  let roomId = data["roomId"] as? String else { return }
+
+            let server = data["server"] as? String
+            self?.handleURLJoinRoom(roomId: roomId, server: server)
+        }
+
+        // Handle URL view room
+        NotificationCenter.default.addObserver(forName: .urlViewRoom, object: nil, queue: .main) { [weak self] notification in
+            guard let data = notification.object as? [String: Any],
+                  let roomId = data["roomId"] as? String else { return }
+
+            self?.handleURLViewRoom(roomId: roomId)
+        }
+
+        // Handle URL connect server
+        NotificationCenter.default.addObserver(forName: .urlConnectServer, object: nil, queue: .main) { [weak self] notification in
+            guard let data = notification.object as? [String: Any],
+                  let serverUrl = data["serverUrl"] as? String else { return }
+
+            self?.handleURLConnectServer(serverUrl: serverUrl)
+        }
+
+        // Handle URL invite
+        NotificationCenter.default.addObserver(forName: .urlUseInvite, object: nil, queue: .main) { [weak self] notification in
+            guard let data = notification.object as? [String: Any],
+                  let code = data["code"] as? String else { return }
+
+            self?.handleURLInvite(code: code)
+        }
+
+        // Handle URL open settings
+        NotificationCenter.default.addObserver(forName: .urlOpenSettings, object: nil, queue: .main) { [weak self] _ in
+            self?.currentScreen = .settings
+        }
+
+        // Handle URL open license
+        NotificationCenter.default.addObserver(forName: .urlOpenLicense, object: nil, queue: .main) { [weak self] _ in
+            self?.currentScreen = .licensing
+        }
+    }
+
+    private func handleURLJoinRoom(roomId: String, server: String?) {
+        print("[AppState] Joining room from URL: \(roomId)")
+
+        // Connect to specified server if provided, otherwise use current
+        if let server = server, !server.isEmpty {
+            // Custom server URL provided
+            serverManager.connectToURL(server)
+        }
+
+        // Join the room by ID
+        serverManager.joinRoom(roomId: roomId, username: username)
+        currentScreen = .voiceChat
+    }
+
+    private func handleURLViewRoom(roomId: String) {
+        print("[AppState] Viewing room from URL: \(roomId)")
+        // Show room details/preview - find in rooms list
+        if let room = rooms.first(where: { $0.id == roomId }) {
+            currentRoom = room
+            // Stay on main menu to show preview
+        }
+    }
+
+    private func handleURLConnectServer(serverUrl: String) {
+        print("[AppState] Connecting to server from URL: \(serverUrl)")
+        serverManager.connectToURL(serverUrl)
+    }
+
+    private func handleURLInvite(code: String) {
+        print("[AppState] Using invite code from URL: \(code)")
+        // Treat invite code as room ID for now
+        serverManager.joinRoom(roomId: code, username: username)
+        currentScreen = .voiceChat
+    }
+
+    private func initializeLicensing() {
+        // Check existing license or start registration
+        Task { @MainActor in
+            if licensing.licenseKey != nil {
+                await licensing.validateLicense()
+            } else {
+                // Auto-register with generated IDs
+                let serverId = "vl_\(getDeviceIdentifier())"
+                let nodeId = "node_\(UUID().uuidString.prefix(8))"
+                await licensing.registerNode(serverId: serverId, nodeId: nodeId)
+            }
+        }
+    }
+
+    private func getDeviceIdentifier() -> String {
+        // Use a persistent identifier for this device
+        if let existing = UserDefaults.standard.string(forKey: "device_identifier") {
+            return existing
+        }
+        let newId = UUID().uuidString.prefix(12).description
+        UserDefaults.standard.set(newId, forKey: "device_identifier")
+        return newId
     }
 
     func connectToServer() {
@@ -378,6 +570,10 @@ struct ContentView: View {
                 SettingsView()
             case .servers:
                 ServersView()
+            case .licensing:
+                LicensingScreenView()
+            case .admin:
+                AdminSettingsView()
             }
         }
     }
@@ -386,7 +582,7 @@ struct ContentView: View {
 // MARK: - Main Menu View
 struct MainMenuView: View {
     @EnvironmentObject var appState: AppState
-    @EnvironmentObject var serverManager: ServerModeManager
+    @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
     @State private var showServersSheet = false
 
@@ -412,7 +608,7 @@ struct MainMenuView: View {
             VStack(spacing: 30) {
                 // Header
                 VStack(spacing: 10) {
-                    Text("VoiceLink Local")
+                    Text("VoiceLink")
                         .font(.system(size: 42, weight: .bold))
                         .foregroundColor(.white)
 
@@ -533,24 +729,36 @@ struct MainMenuView: View {
                 ConnectionHealthView()
                     .frame(maxWidth: 280)
 
-                // Local Server Status (read-only, controls in Hosting menu)
+                // Local Server Discovery Status
                 HStack {
                     Circle()
-                        .fill(serverManager.isServerRunning ? Color.green : Color.gray)
+                        .fill(localDiscovery.localServerFound ? Color.green : Color.gray)
                         .frame(width: 8, height: 8)
                     Text("Local Server")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
-                    Text(serverManager.isServerRunning ? "Running" : "Stopped")
-                        .font(.caption2)
-                        .foregroundColor(serverManager.isServerRunning ? .green : .gray)
+                    if localDiscovery.isScanning {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                    } else {
+                        Text(localDiscovery.localServerFound ? (localDiscovery.localServerName ?? "Found") : "Not Found")
+                            .font(.caption2)
+                            .foregroundColor(localDiscovery.localServerFound ? .green : .gray)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.05))
                 .cornerRadius(8)
-                .accessibilityLabel("Local server is \(serverManager.isServerRunning ? "running" : "stopped"). Use the Hosting menu to start or stop.")
+                .onTapGesture {
+                    if localDiscovery.localServerFound, let url = localDiscovery.localServerURL {
+                        localDiscovery.autoPairWithLocalServer { _ in }
+                    } else {
+                        localDiscovery.scanForLocalServer()
+                    }
+                }
+                .accessibilityLabel("Local server \(localDiscovery.localServerFound ? "found" : "not found"). Tap to \(localDiscovery.localServerFound ? "connect" : "scan").")
 
                 // Servers Button
                 Button(action: { showServersSheet = true }) {
@@ -924,5 +1132,103 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+}
+
+struct LicensingScreenView: View {
+    @EnvironmentObject var appState: AppState
+    @ObservedObject var licensing = LicensingManager.shared
+
+    var body: some View {
+        VStack(spacing: 20) {
+            // Header
+            HStack {
+                Button(action: {
+                    appState.currentScreen = .mainMenu
+                }) {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white.opacity(0.8))
+
+                Spacer()
+
+                Text("License Management")
+                    .font(.title2.bold())
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                // Placeholder for symmetry
+                Button(action: {}) {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .buttonStyle(.plain)
+                .opacity(0)
+            }
+            .padding(.horizontal)
+            .padding(.top)
+
+            Spacer()
+
+            // Main licensing view
+            LicensingView()
+                .frame(maxWidth: 400)
+
+            // Additional info
+            VStack(spacing: 8) {
+                Text("License includes:")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                HStack(spacing: 20) {
+                    FeatureBadge(icon: "globe", text: "Federation")
+                    FeatureBadge(icon: "server.rack", text: "Hosting")
+                    FeatureBadge(icon: "person.3", text: "3 Devices")
+                }
+            }
+            .padding()
+
+            Spacer()
+
+            // Footer with links
+            HStack(spacing: 20) {
+                Button("Purchase More Devices") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/purchase") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                Button("Support") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/support") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.bottom)
+        }
+    }
+}
+
+struct FeatureBadge: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.blue)
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+        }
+        .padding(8)
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(8)
     }
 }

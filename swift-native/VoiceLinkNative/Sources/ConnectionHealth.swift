@@ -249,6 +249,7 @@ class ConnectionHealthMonitor: ObservableObject {
 // MARK: - Connection Health View
 struct ConnectionHealthView: View {
     @ObservedObject var monitor = ConnectionHealthMonitor.shared
+    @State private var showHealthInfo = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -264,15 +265,16 @@ struct ConnectionHealthView: View {
 
                 Spacer()
 
-                Button(action: { monitor.refresh() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .accessibilityLabel("Refresh connection status")
+                // Info button for percentage meanings
+                Button(action: { showHealthInfo.toggle() }) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.gray)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
+                .help("What does this percentage mean?")
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Connection health \(monitor.overallHealth) percent. \(monitor.healthStatus.accessibilityLabel)")
+            .accessibilityLabel("Connection health \(monitor.overallHealth) percent. \(healthMeaning)")
 
             // Health Progress Bar
             GeometryReader { geometry in
@@ -291,11 +293,39 @@ struct ConnectionHealthView: View {
             .frame(height: 8)
             .accessibilityHidden(true)
 
-            // Status Text
-            Text(monitor.healthStatus.rawValue)
-                .font(.caption)
-                .foregroundColor(monitor.healthStatus.color)
-                .accessibilityLabel(monitor.healthStatus.accessibilityLabel)
+            // Status Text with meaning hint
+            HStack {
+                Text(monitor.healthStatus.rawValue)
+                    .font(.caption)
+                    .foregroundColor(monitor.healthStatus.color)
+
+                Text("- \(healthMeaning)")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+            .accessibilityLabel(monitor.healthStatus.accessibilityLabel)
+
+            // Health info popup
+            if showHealthInfo {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Connection Strength Guide:")
+                        .font(.caption.bold())
+                        .foregroundColor(.white)
+
+                    Group {
+                        Text("0-20%: Offline or local only")
+                        Text("21-50%: Partial connection")
+                        Text("51-70%: Connected, syncing")
+                        Text("71-90%: Fully connected")
+                        Text("91-100%: Optimal performance")
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                }
+                .padding(8)
+                .background(Color.black.opacity(0.6))
+                .cornerRadius(8)
+            }
 
             // Detected Nodes
             if !monitor.detectedNodes.isEmpty {
@@ -322,6 +352,26 @@ struct ConnectionHealthView: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(10)
+    }
+
+    /// Human-readable meaning of current health percentage
+    var healthMeaning: String {
+        switch monitor.overallHealth {
+        case 0:
+            return "Completely offline"
+        case 1...10:
+            return "Local server only"
+        case 11...30:
+            return "Checking internet"
+        case 31...50:
+            return "Partial connection"
+        case 51...70:
+            return "Connected, syncing"
+        case 71...90:
+            return "Fully connected"
+        default:
+            return "Optimal"
+        }
     }
 
     var healthGradient: LinearGradient {

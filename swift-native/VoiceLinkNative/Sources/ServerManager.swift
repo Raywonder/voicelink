@@ -68,18 +68,23 @@ class ServerManager: ObservableObject {
     }
 
     func tryLocalThenMain() {
-        // Try local first, if fails connect to main
-        print("Trying local server first...")
-        connect(toMain: false)
+        // Try main/remote server first (primary), fallback to local
+        print("Connecting to main server (primary)...")
+        connect(toMain: true)
 
-        // Set up a timeout to switch to main server if local fails
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        // Set up a timeout to try local server if main fails
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self = self else { return }
-            if !self.isConnected && !self.useMainServer {
-                print("Local server not available, connecting to main server...")
-                self.connect(toMain: true)
+            if !self.isConnected && self.useMainServer {
+                print("Main server not available, trying local server...")
+                self.connect(toMain: false)
             }
         }
+    }
+
+    func tryMainThenLocal() {
+        // Alias for tryLocalThenMain - main is now primary
+        tryLocalThenMain()
     }
 
     func disconnect() {
@@ -87,6 +92,50 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.isConnected = false
             self.serverStatus = "Disconnected"
+            self.connectedServer = ""
+            NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
+        }
+    }
+
+    /// Connect to a custom server URL
+    func connectToURL(_ urlString: String) {
+        // Disconnect existing connection
+        socket?.disconnect()
+
+        // Normalize URL
+        var serverURL = urlString
+        if !serverURL.hasPrefix("http://") && !serverURL.hasPrefix("https://") {
+            serverURL = "https://" + serverURL
+        }
+
+        currentServerURL = serverURL
+        useMainServer = false
+
+        guard let url = URL(string: serverURL) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid server URL"
+            }
+            return
+        }
+
+        print("Connecting to custom server: \(serverURL)")
+
+        manager = SocketManager(socketURL: url, config: [
+            .log(false),
+            .compress,
+            .forceWebsockets(true),
+            .reconnects(true),
+            .reconnectWait(2),
+            .reconnectAttempts(5)
+        ])
+
+        socket = manager?.defaultSocket
+        setupEventHandlers()
+        socket?.connect()
+
+        DispatchQueue.main.async {
+            self.serverStatus = "Connecting..."
+            self.connectedServer = serverURL
         }
     }
 
@@ -99,8 +148,9 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self.isConnected = true
                 self.serverStatus = "Connected"
-                self.connectedServer = self.useMainServer ? "Main Server" : "Local Server"
+                self.connectedServer = self.useMainServer ? "Federation" : "Local Server"
                 self.errorMessage = nil
+                NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             // Request room list after connecting
             self.getRooms()
@@ -111,6 +161,7 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
+                NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
         }
 

@@ -248,7 +248,7 @@ struct UpdateSettingsView: View {
                     .font(.title2)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("VoiceLink Native")
+                    Text("VoiceLink")
                         .font(.headline)
                     Text(updater.versionString)
                         .font(.caption)
