@@ -19,7 +19,7 @@ class ServerExitManager: ObservableObject {
     private var ambiencePlayer: AVAudioPlayer?
 
     // Managers
-    private let serverManager = ServerModeManager.shared
+    private let adminManager = AdminServerManager.shared
     private let roomManager = RoomManager.shared
     private let pairingManager = PairingManager.shared
     private let deviceManager = ServerDeviceManager.shared
@@ -662,18 +662,41 @@ class ServerExitManager: ObservableObject {
     // MARK: - Audio
 
     private func setupAudioPlayers() {
-        // Setup woosh sound
-        if let wooshURL = Bundle.main.url(forResource: "woosh", withExtension: "mp3") {
+        // Setup woosh sound from actual sound file
+        if let wooshURL = Bundle.main.url(forResource: "whoosh_fast1", withExtension: "wav", subdirectory: "sounds") {
             wooshPlayer = try? AVAudioPlayer(contentsOf: wooshURL)
             wooshPlayer?.prepareToPlay()
+        } else {
+            print("ServerExitManager: woosh sound file not found")
         }
 
-        // Setup meditation ambience
-        if let ambienceURL = Bundle.main.url(forResource: "meditation_ambience", withExtension: "mp3") {
-            ambiencePlayer = try? AVAudioPlayer(contentsOf: ambienceURL)
-            ambiencePlayer?.numberOfLoops = -1  // Loop indefinitely
-            ambiencePlayer?.volume = 0.3
-            ambiencePlayer?.prepareToPlay()
+        // Setup meditation ambience - try different locations
+        let ambienceFiles = [
+            ("meditation-room", "mp3", "sounds/ambience"),
+            ("meditation_ambience", "mp3", "sounds"),
+            ("ambience", "mp3", nil)
+        ]
+
+        for (name, ext, subdir) in ambienceFiles {
+            var url: URL?
+            if let sub = subdir {
+                url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: sub)
+            } else {
+                url = Bundle.main.url(forResource: name, withExtension: ext)
+            }
+
+            if let ambienceURL = url {
+                ambiencePlayer = try? AVAudioPlayer(contentsOf: ambienceURL)
+                ambiencePlayer?.numberOfLoops = -1
+                ambiencePlayer?.volume = 0.3
+                ambiencePlayer?.prepareToPlay()
+                print("ServerExitManager: Loaded ambience from \(name).\(ext)")
+                break
+            }
+        }
+
+        if ambiencePlayer == nil {
+            print("ServerExitManager: ambience sound file not found")
         }
     }
 
@@ -688,6 +711,19 @@ class ServerExitManager: ObservableObject {
 
     func stopMeditationAmbience() {
         ambiencePlayer?.stop()
+    }
+
+    // Use AppSoundManager for UI sounds if available
+    func playSuccessSound() {
+        AppSoundManager.shared.playSound(.success)
+    }
+
+    func playErrorSound() {
+        AppSoundManager.shared.playSound(.error)
+    }
+
+    func playNotificationSound() {
+        AppSoundManager.shared.playSound(.notification)
     }
 
     // MARK: - Helpers
@@ -1078,6 +1114,182 @@ class RemoteServerControl: ObservableObject {
         }
     }
 
+    // MARK: - Convenience Methods for Remote Server Control
+
+    /// Start the remote server using multiple methods (OpenLink, Devine webserver, direct IP)
+    func startRemoteServer() {
+        guard let server = getTargetServer() else {
+            NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": "No server connected or linked"])
+            return
+        }
+
+        // Try multiple methods to start the remote server
+        tryMultipleStartMethods(server: server) { success, result in
+            DispatchQueue.main.async {
+                if success {
+                    NotificationCenter.default.post(name: .remoteCommandSuccess, object: ["command": "start", "result": result ?? "Server starting"])
+                } else {
+                    NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": result ?? "Failed to start server"])
+                }
+            }
+        }
+    }
+
+    /// Stop the remote server gracefully
+    func stopRemoteServer() {
+        guard let server = getTargetServer() else {
+            NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": "No server connected or linked"])
+            return
+        }
+
+        sendCommand(to: server, command: .stopServer) { success, result in
+            DispatchQueue.main.async {
+                if success {
+                    NotificationCenter.default.post(name: .remoteCommandSuccess, object: ["command": "stop", "result": result ?? "Server stopping"])
+                } else {
+                    NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": result ?? "Failed to stop server"])
+                }
+            }
+        }
+    }
+
+    /// Restart the remote server
+    func restartRemoteServer() {
+        guard let server = getTargetServer() else {
+            NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": "No server connected or linked"])
+            return
+        }
+
+        sendCommand(to: server, command: .restartServer) { success, result in
+            DispatchQueue.main.async {
+                if success {
+                    NotificationCenter.default.post(name: .remoteCommandSuccess, object: ["command": "restart", "result": result ?? "Server restarting"])
+                } else {
+                    NotificationCenter.default.post(name: .remoteCommandFailed, object: ["error": result ?? "Failed to restart server"])
+                }
+            }
+        }
+    }
+
+    /// Get the target server for commands (currently connected or first linked)
+    private func getTargetServer() -> LinkedServer? {
+        // First, try to find the currently connected server in linked servers
+        let connectedServerName = ServerManager.shared.connectedServer
+        if !connectedServerName.isEmpty {
+            if let server = pairingManager.linkedServers.first(where: { $0.name.contains(connectedServerName) || connectedServerName.contains($0.name) }) {
+                return server
+            }
+        }
+
+        // Fall back to first linked server
+        return pairingManager.linkedServers.first
+    }
+
+    /// Try multiple methods to start the remote server
+    private func tryMultipleStartMethods(server: LinkedServer, completion: @escaping (Bool, String?) -> Void) {
+        let methods: [(String, (@escaping (Bool, String?) -> Void) -> Void)] = [
+            ("OpenLink", { callback in self.startViaOpenLink(server: server, completion: callback) }),
+            ("Devine Webserver", { callback in self.startViaDevineWebserver(server: server, completion: callback) }),
+            ("Direct API", { callback in self.startViaDirectAPI(server: server, completion: callback) }),
+            ("Direct IP", { callback in self.startViaDirectIP(server: server, completion: callback) })
+        ]
+
+        tryNextMethod(methods: methods, index: 0, completion: completion)
+    }
+
+    private func tryNextMethod(methods: [(String, (@escaping (Bool, String?) -> Void) -> Void)], index: Int, completion: @escaping (Bool, String?) -> Void) {
+        guard index < methods.count else {
+            completion(false, "All methods failed to start server")
+            return
+        }
+
+        let (name, method) = methods[index]
+        print("[RemoteServerControl] Trying \(name) to start server...")
+
+        method { [weak self] success, result in
+            if success {
+                print("[RemoteServerControl] \(name) succeeded")
+                completion(true, result)
+            } else {
+                print("[RemoteServerControl] \(name) failed: \(result ?? "unknown")")
+                self?.tryNextMethod(methods: methods, index: index + 1, completion: completion)
+            }
+        }
+    }
+
+    /// Start via OpenLink tunnel
+    private func startViaOpenLink(server: LinkedServer, completion: @escaping (Bool, String?) -> Void) {
+        sendViaOpenLink(to: server, command: .restartServer, parameters: [:], completion: completion)
+    }
+
+    /// Start via Devine webserver app
+    private func startViaDevineWebserver(server: LinkedServer, completion: @escaping (Bool, String?) -> Void) {
+        // Try to reach the Devine webserver management endpoint
+        guard let baseURL = URL(string: server.url) else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        let managementURL = baseURL.appendingPathComponent("/api/service/voicelink/start")
+
+        var request = URLRequest(url: managementURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = server.accessToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(false, error.localizedDescription)
+                return
+            }
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                completion(true, "Server started via webserver")
+            } else {
+                completion(false, "Webserver endpoint not available")
+            }
+        }.resume()
+    }
+
+    /// Start via direct API endpoint
+    private func startViaDirectAPI(server: LinkedServer, completion: @escaping (Bool, String?) -> Void) {
+        guard let baseURL = URL(string: server.url) else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        let startURL = baseURL.appendingPathComponent("/api/admin/start")
+
+        var request = URLRequest(url: startURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = server.accessToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.timeoutInterval = 10
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(false, error.localizedDescription)
+                return
+            }
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                completion(true, "Server started via API")
+            } else {
+                completion(false, "API endpoint not available")
+            }
+        }.resume()
+    }
+
+    /// Start via direct IP connection
+    private func startViaDirectIP(server: LinkedServer, completion: @escaping (Bool, String?) -> Void) {
+        sendViaDirectIP(to: server, command: .restartServer, parameters: [:], completion: completion)
+    }
+
     // MARK: - Auto-Detect Connection Method
 
     private func autoDetectAndSend(to serverDevice: LinkedServer, command: RemoteCommand, parameters: [String: Any], completion: @escaping (Bool, String?) -> Void) {
@@ -1424,8 +1636,11 @@ class RemoteServerControl: ObservableObject {
             return (true, "Server stopping")
 
         case .restartServer:
-            ServerModeManager.shared.restartServer()
-            return (true, "Server restarting")
+            // Send restart command to remote server
+            Task {
+                await adminManager.sendNodeCommand(nodeId: parameters["nodeId"] as? String ?? "", command: "restart")
+            }
+            return (true, "Server restart command sent")
 
         case .transferRooms:
             if let targetDeviceId = parameters["targetDeviceId"] as? String {
@@ -1473,13 +1688,12 @@ class RemoteServerControl: ObservableObject {
     // MARK: - Helper Methods
 
     private func getServerStatus() -> String {
-        let manager = ServerModeManager.shared
+        let serverManager = ServerManager.shared
         let roomManager = RoomManager.shared
 
         let status: [String: Any] = [
-            "isRunning": manager.isServerRunning,
-            "port": manager.serverPort,
-            "connectedClients": manager.connectedClients,
+            "isConnected": serverManager.isConnected,
+            "connectedServer": serverManager.connectedServer,
             "activeRooms": roomManager.permanentRooms.count,
             "waitingRoomActive": exitManager.waitingRoomActive
         ]
@@ -1521,14 +1735,13 @@ class RemoteServerControl: ObservableObject {
     }
 
     private func applyRemoteSettings(_ settings: [String: Any]) {
-        // Apply settings remotely
-        if let port = settings["serverPort"] as? Int {
-            ServerModeManager.shared.serverPort = port
-        }
-
+        // Apply settings - these will be sent to remote server via API
         if let remoteControlEnabled = settings["remoteControlEnabled"] as? Bool {
             isRemoteControlEnabled = remoteControlEnabled
         }
+
+        // Server port and other settings are managed remotely via AdminServerManager
+        // The client doesn't run its own server anymore
     }
 
     private var currentDeviceId: String {
@@ -1940,6 +2153,8 @@ extension Notification.Name {
     static let openLinkCommandResponse = Notification.Name("openLinkCommandResponse")
     static let remoteControlConnected = Notification.Name("remoteControlConnected")
     static let remoteControlDisconnected = Notification.Name("remoteControlDisconnected")
+    static let remoteCommandSuccess = Notification.Name("remoteCommandSuccess")
+    static let remoteCommandFailed = Notification.Name("remoteCommandFailed")
 }
 
 // MARK: - Linked Server Status Manager
