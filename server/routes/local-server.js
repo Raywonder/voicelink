@@ -62,11 +62,14 @@ class VoiceLinkLocalServer {
             let rooms = Array.from(this.rooms.values());
 
             // Filter by access type based on request source
+            // Default to showing rooms if visibility flags aren't explicitly set
             if (!includeHidden) {
                 rooms = rooms.filter(room => {
                     if (room.accessType === 'hidden') return false;
-                    if (source === 'app' && !room.showInApp) return false;
-                    if (source === 'web' && !room.allowEmbed) return false;
+                    // Show in app unless explicitly set to false
+                    if (source === 'app' && room.showInApp === false) return false;
+                    // Allow embed unless explicitly set to false
+                    if (source === 'web' && room.allowEmbed === false) return false;
                     return true;
                 });
             }

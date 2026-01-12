@@ -34,3 +34,10 @@ npm-debug.log*
 
 # Claude
 .claude/
+
+# Swift build artifacts
+swift-native/**/.build/
+swift-native/**/.swiftpm/
+*.xcodeproj/
+DerivedData/
+*.dSYM/

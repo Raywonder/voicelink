@@ -1,0 +1,928 @@
+import SwiftUI
+import AVFoundation
+import AppKit
+import SocketIO
+
+@main
+struct VoiceLinkApp: App {
+    @StateObject private var appState = AppState()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var serverManager = ServerModeManager.shared
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(appState)
+                .environmentObject(serverManager)
+                .frame(minWidth: 900, minHeight: 700)
+                .frame(width: 1000, height: 750)
+        }
+        .defaultSize(width: 1000, height: 750)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    appState.currentScreen = .settings
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(replacing: .newItem) {
+                Button("New Room") {
+                    appState.currentScreen = .createRoom
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandMenu("Room") {
+                Button("Create Room") {
+                    appState.currentScreen = .createRoom
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+
+                Button("Join by Code") {
+                    appState.currentScreen = .joinRoom
+                }
+                .keyboardShortcut("j", modifiers: .command)
+
+                Divider()
+
+                Button("Leave Room") {
+                    appState.currentRoom = nil
+                    appState.currentScreen = .mainMenu
+                }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(appState.currentRoom == nil)
+            }
+            CommandMenu("Audio") {
+                Button("Toggle Mute") {
+                    NotificationCenter.default.post(name: .toggleMute, object: nil)
+                }
+                .keyboardShortcut("m", modifiers: .command)
+
+                Button("Toggle Deafen") {
+                    NotificationCenter.default.post(name: .toggleDeafen, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+            }
+
+            CommandMenu("Hosting") {
+                // Server hosting controls
+                Section {
+                    if serverManager.isServerRunning {
+                        Button("Stop Hosting") {
+                            serverManager.stopServer()
+                        }
+                        .help("Stop the local VoiceLink server on this device")
+
+                        Button("Restart Host Server") {
+                            serverManager.restartServer()
+                        }
+                        .help("Restart the local server to apply changes")
+                    } else {
+                        Button("Start Hosting") {
+                            serverManager.startServer()
+                        }
+                        .help("Start a local VoiceLink server for others to connect")
+                    }
+                }
+
+                Divider()
+
+                // Connection targets
+                Section {
+                    Button("Connect to My Server") {
+                        appState.connectToLocalServer()
+                    }
+                    .help("Connect to your local hosted server")
+                    .disabled(!serverManager.isServerRunning)
+
+                    Button("Connect to Public Server") {
+                        appState.connectToMainServer()
+                    }
+                    .help("Connect to the main VoiceLink public server")
+
+                    Button("Auto-Connect (Recommended)") {
+                        appState.connectToServer()
+                    }
+                    .help("Automatically find and connect to the best available server")
+                }
+            }
+
+            CommandMenu("Servers") {
+                Button("My Linked Servers...") {
+                    appState.currentScreen = .servers
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .help("View and manage servers you've linked to this device")
+
+                Button("Generate Pairing Code") {
+                    _ = PairingManager.shared.generatePairingCode()
+                }
+                .help("Generate a 6-digit code for another device to pair with your server")
+                .disabled(!serverManager.isServerRunning)
+
+                Divider()
+
+                Button("Discover Local Servers") {
+                    NotificationCenter.default.post(name: .discoverServers, object: nil)
+                }
+                .help("Scan local network for VoiceLink servers")
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let toggleMute = Notification.Name("toggleMute")
+    static let toggleDeafen = Notification.Name("toggleDeafen")
+    static let roomJoined = Notification.Name("roomJoined")
+    static let pairingSuccess = Notification.Name("pairingSuccess")
+    static let discoverServers = Notification.Name("discoverServers")
+    static let goToMainMenu = Notification.Name("goToMainMenu")
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusBarController: StatusBarController?
+    static var shared: AppDelegate?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
+
+        // Initialize menubar status item
+        statusBarController = StatusBarController()
+
+        // Show window on launch (user can close it to stay in menubar)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = NSApp.windows.first {
+                window.makeKeyAndOrderFront(nil)
+                window.center()
+            }
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Never quit when window closes - stay in menubar
+        return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Stop server on quit
+        ServerModeManager.shared.stopServer()
+    }
+
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.title.contains("VoiceLink") || $0.contentView != nil }) {
+            window.makeKeyAndOrderFront(nil)
+            window.center()
+        } else {
+            // If no window exists, open a new one
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    func hideMainWindow() {
+        for window in NSApp.windows {
+            window.close()
+        }
+    }
+}
+
+// MARK: - App State
+class AppState: ObservableObject {
+    @Published var currentScreen: Screen = .mainMenu
+    @Published var isConnected: Bool = false
+    @Published var currentRoom: Room?
+    @Published var rooms: [Room] = []
+    @Published var localIP: String = "Detecting..."
+    @Published var serverStatus: ServerStatus = .offline
+    @Published var username: String = "User\(Int.random(in: 1000...9999))"
+    @Published var errorMessage: String?
+
+    let serverManager = ServerManager.shared
+
+    enum Screen {
+        case mainMenu
+        case createRoom
+        case joinRoom
+        case voiceChat
+        case settings
+        case servers
+    }
+
+    enum ServerStatus {
+        case online, offline, connecting
+    }
+
+    init() {
+        detectLocalIP()
+        connectToServer()
+        setupServerObservers()
+    }
+
+    func connectToServer() {
+        serverStatus = .connecting
+        serverManager.tryLocalThenMain()
+    }
+
+    func connectToMainServer() {
+        serverStatus = .connecting
+        serverManager.connectToMainServer()
+    }
+
+    func connectToLocalServer() {
+        serverStatus = .connecting
+        serverManager.connectToLocalServer()
+    }
+
+    private func setupServerObservers() {
+        // Observe server connection status
+        serverManager.$isConnected
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isConnected)
+
+        // Observe server status
+        serverManager.$serverStatus
+            .receive(on: DispatchQueue.main)
+            .map { status -> ServerStatus in
+                switch status {
+                case "Connected": return .online
+                case "Reconnecting...": return .connecting
+                default: return .offline
+                }
+            }
+            .assign(to: &$serverStatus)
+
+        // Observe rooms from server
+        serverManager.$rooms
+            .receive(on: DispatchQueue.main)
+            .map { serverRooms in
+                serverRooms.map { Room(from: $0) }
+            }
+            .assign(to: &$rooms)
+
+        // Observe errors
+        serverManager.$errorMessage
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$errorMessage)
+
+        // Listen for room joined notification
+        NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: .main) { [weak self] notification in
+            if let roomData = notification.object as? [String: Any],
+               let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String {
+                // Find the room and set it as current
+                if let room = self?.rooms.first(where: { $0.id == roomId }) {
+                    self?.currentRoom = room
+                    self?.currentScreen = .voiceChat
+                }
+            }
+        }
+
+        // Listen for navigation back to main menu
+        NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
+            self?.currentScreen = .mainMenu
+        }
+    }
+
+    func refreshRooms() {
+        serverManager.getRooms()
+    }
+
+    func detectLocalIP() {
+        // Get local IP address
+        var address: String = "Unknown"
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+
+        if getifaddrs(&ifaddr) == 0 {
+            var ptr = ifaddr
+            while ptr != nil {
+                defer { ptr = ptr?.pointee.ifa_next }
+                guard let interface = ptr?.pointee else { continue }
+                let addrFamily = interface.ifa_addr.pointee.sa_family
+
+                if addrFamily == UInt8(AF_INET) {
+                    let name = String(cString: interface.ifa_name)
+                    if name == "en0" || name == "en1" {
+                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                        getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                                   &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                        address = String(cString: hostname)
+                    }
+                }
+            }
+            freeifaddrs(ifaddr)
+        }
+
+        DispatchQueue.main.async {
+            self.localIP = address
+        }
+    }
+
+}
+
+// MARK: - Models
+struct Room: Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    var userCount: Int
+    let isPrivate: Bool
+    let maxUsers: Int
+
+    init(id: String, name: String, description: String, userCount: Int, isPrivate: Bool, maxUsers: Int = 50) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.userCount = userCount
+        self.isPrivate = isPrivate
+        self.maxUsers = maxUsers
+    }
+
+    init(from serverRoom: ServerRoom) {
+        self.id = serverRoom.id
+        self.name = serverRoom.name
+        self.description = serverRoom.description
+        self.userCount = serverRoom.userCount
+        self.isPrivate = serverRoom.isPrivate
+        self.maxUsers = serverRoom.maxUsers
+    }
+}
+
+// MARK: - Content View
+struct ContentView: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(red: 0.1, green: 0.1, blue: 0.2),
+                    Color(red: 0.05, green: 0.05, blue: 0.15)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            // Current screen
+            switch appState.currentScreen {
+            case .mainMenu:
+                MainMenuView()
+            case .createRoom:
+                CreateRoomView()
+            case .joinRoom:
+                JoinRoomView()
+            case .voiceChat:
+                VoiceChatView()
+            case .settings:
+                SettingsView()
+            case .servers:
+                ServersView()
+            }
+        }
+    }
+}
+
+// MARK: - Main Menu View
+struct MainMenuView: View {
+    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var serverManager: ServerModeManager
+    @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
+    @State private var showServersSheet = false
+
+    var statusColor: Color {
+        switch appState.serverStatus {
+        case .online: return .green
+        case .connecting: return .yellow
+        case .offline: return .red
+        }
+    }
+
+    var statusText: String {
+        switch appState.serverStatus {
+        case .online: return "Connected"
+        case .connecting: return "Connecting..."
+        case .offline: return "Offline"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Main Content
+            VStack(spacing: 30) {
+                // Header
+                VStack(spacing: 10) {
+                    Text("VoiceLink")
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text("Advanced P2P Voice Chat with 3D Audio")
+                        .font(.title3)
+                        .foregroundColor(.gray)
+                }
+                .padding(.top, 40)
+
+                // Server Status Bar
+                HStack {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 10, height: 10)
+                    Text("Server: \(statusText)")
+                        .foregroundColor(.white.opacity(0.8))
+
+                    if appState.isConnected {
+                        Text("(\(appState.serverManager.connectedServer))")
+                            .foregroundColor(.white.opacity(0.6))
+                            .font(.caption)
+                    }
+
+                    // Server switcher
+                    Menu {
+                        Button("Main Server") {
+                            appState.connectToMainServer()
+                        }
+                        Button("Local Server") {
+                            appState.connectToLocalServer()
+                        }
+                        Button("Auto (Local then Main)") {
+                            appState.connectToServer()
+                        }
+                    } label: {
+                        Image(systemName: "server.rack")
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    .menuStyle(.borderlessButton)
+
+                    Spacer()
+
+                    Button(action: { appState.refreshRooms() }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!appState.isConnected)
+
+                    Text("Local IP: \(appState.localIP)")
+                        .foregroundColor(.white.opacity(0.6))
+                        .font(.caption)
+                }
+                .padding(.horizontal, 40)
+
+            // Error message
+            if let error = appState.errorMessage {
+                Text(error)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .padding(.horizontal, 40)
+            }
+
+            // Room List
+            VStack(alignment: .leading, spacing: 15) {
+                Text("Available Rooms")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(appState.rooms) { room in
+                            RoomCard(room: room) {
+                                // Join room via server
+                                appState.serverManager.joinRoom(
+                                    roomId: room.id,
+                                    username: appState.username
+                                )
+                                appState.currentRoom = room
+                                appState.currentScreen = .voiceChat
+                            }
+                        }
+
+                        if appState.rooms.isEmpty && appState.isConnected {
+                            Text("No rooms available. Create one!")
+                                .foregroundColor(.gray)
+                                .padding()
+                        } else if appState.rooms.isEmpty && !appState.isConnected {
+                            Text("Connect to server to see rooms")
+                                .foregroundColor(.gray)
+                                .padding()
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
+            .padding(.horizontal, 40)
+
+            // Action Buttons
+            HStack(spacing: 20) {
+                ActionButton(title: "Create Room", icon: "plus.circle.fill", color: .blue) {
+                    appState.currentScreen = .createRoom
+                }
+
+                ActionButton(title: "Join by Code", icon: "link.circle.fill", color: .green) {
+                    appState.currentScreen = .joinRoom
+                }
+            }
+            .padding(.horizontal, 40)
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+
+            // Right Sidebar - Connection Health & Servers
+            VStack(spacing: 16) {
+                // Connection Health Panel
+                ConnectionHealthView()
+                    .frame(maxWidth: 280)
+
+                // Local Server Status (read-only, controls in Hosting menu)
+                HStack {
+                    Circle()
+                        .fill(serverManager.isServerRunning ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text("Local Server")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                    Spacer()
+                    Text(serverManager.isServerRunning ? "Running" : "Stopped")
+                        .font(.caption2)
+                        .foregroundColor(serverManager.isServerRunning ? .green : .gray)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(8)
+                .accessibilityLabel("Local server is \(serverManager.isServerRunning ? "running" : "stopped"). Use the Hosting menu to start or stop.")
+
+                // Servers Button
+                Button(action: { showServersSheet = true }) {
+                    HStack {
+                        Image(systemName: "server.rack")
+                        Text("My Servers")
+                        Spacer()
+                        Text("\(PairingManager.shared.linkedServers.count)")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.3))
+                            .cornerRadius(10)
+                    }
+                    .padding()
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white)
+                .accessibilityLabel("My Servers. \(PairingManager.shared.linkedServers.count) servers linked.")
+                .accessibilityHint("Opens server management for linked and owned servers")
+
+                Spacer()
+
+                // Settings tip at bottom of sidebar
+                Text("Cmd+, for Settings")
+                    .font(.caption)
+                    .foregroundColor(.gray.opacity(0.6))
+                    .padding(.bottom, 8)
+            }
+            .frame(width: 280)
+            .padding()
+            .background(Color.black.opacity(0.2))
+        }
+        .sheet(isPresented: $showServersSheet) {
+            ServersView(isSheet: true)
+                .frame(minWidth: 600, minHeight: 500)
+        }
+    }
+}
+
+// MARK: - Room Card
+struct RoomCard: View {
+    let room: Room
+    let onJoin: () -> Void
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(room.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+
+                    if room.isPrivate {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.yellow)
+                            .font(.caption)
+                    }
+                }
+
+                Text(room.description)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+
+            Spacer()
+
+            HStack(spacing: 4) {
+                Image(systemName: "person.fill")
+                Text("\(room.userCount)")
+            }
+            .foregroundColor(.white.opacity(0.6))
+            .font(.caption)
+
+            Button("Join") {
+                onJoin()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+        }
+        .padding()
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - Action Button
+struct ActionButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.title2)
+                Text(title)
+                    .font(.caption)
+            }
+            .frame(width: 100, height: 80)
+            .background(color.opacity(0.2))
+            .foregroundColor(color)
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(color.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Placeholder Views
+struct CreateRoomView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var roomName = ""
+    @State private var roomDescription = ""
+    @State private var isPrivate = false
+    @State private var password = ""
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Create Room")
+                .font(.largeTitle)
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 15) {
+                TextField("Room Name", text: $roomName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 350)
+
+                TextField("Description (optional)", text: $roomDescription)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 350)
+
+                Toggle("Private Room", isOn: $isPrivate)
+                    .foregroundColor(.white)
+                    .frame(width: 350)
+
+                if isPrivate {
+                    SecureField("Room Password", text: $password)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 350)
+                }
+            }
+
+            HStack(spacing: 15) {
+                Button("Create") {
+                    // Create room via server
+                    appState.serverManager.createRoom(
+                        name: roomName,
+                        description: roomDescription,
+                        isPrivate: isPrivate,
+                        password: isPrivate ? password : nil
+                    )
+                    // Go back to main menu - room will appear in list
+                    appState.currentScreen = .mainMenu
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(roomName.isEmpty || !appState.isConnected)
+
+                Button("Cancel") {
+                    appState.currentScreen = .mainMenu
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if !appState.isConnected {
+                Text("Connect to server to create rooms")
+                    .foregroundColor(.orange)
+                    .font(.caption)
+            }
+        }
+    }
+}
+
+struct JoinRoomView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var roomCode = ""
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Join Room")
+                .font(.largeTitle)
+                .foregroundColor(.white)
+
+            TextField("Room Code", text: $roomCode)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 300)
+
+            HStack {
+                Button("Join") {
+                    // Join room logic
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Back") {
+                    appState.currentScreen = .mainMenu
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+struct VoiceChatView: View {
+    @EnvironmentObject var appState: AppState
+    @State private var isMuted = false
+    @State private var isDeafened = false
+
+    var body: some View {
+        VStack {
+            // Room Header
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(appState.currentRoom?.name ?? "Room")
+                        .font(.title)
+                        .foregroundColor(.white)
+                    Text(appState.currentRoom?.description ?? "")
+                        .foregroundColor(.gray)
+                }
+                Spacer()
+
+                // Keyboard shortcut hints
+                HStack(spacing: 15) {
+                    Text("Cmd+M Mute")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("Cmd+D Deafen")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                Button("Leave") {
+                    appState.serverManager.leaveRoom()
+                    appState.currentRoom = nil
+                    appState.currentScreen = .mainMenu
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+            .padding()
+
+            // Users in room
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Users in Room")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        // Show yourself
+                        UserRow(username: appState.username + " (You)", isMuted: isMuted, isDeafened: isDeafened, isSpeaking: false)
+
+                        // Show other users from server
+                        ForEach(appState.serverManager.currentRoomUsers) { user in
+                            UserRow(username: user.username, isMuted: user.isMuted, isDeafened: user.isDeafened, isSpeaking: user.isSpeaking)
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
+            .padding(.horizontal)
+
+            Spacer()
+
+            // Voice Controls
+            HStack(spacing: 30) {
+                VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
+                                  label: isMuted ? "Unmute (Cmd+M)" : "Mute (Cmd+M)",
+                                  isActive: !isMuted) {
+                    isMuted.toggle()
+                    appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                }
+
+                VoiceControlButton(icon: isDeafened ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                  label: isDeafened ? "Undeafen (Cmd+D)" : "Deafen (Cmd+D)",
+                                  isActive: !isDeafened) {
+                    isDeafened.toggle()
+                    appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                }
+            }
+            .padding(.bottom, 40)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleMute)) { _ in
+            isMuted.toggle()
+            appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleDeafen)) { _ in
+            isDeafened.toggle()
+            appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+        }
+    }
+}
+
+struct UserRow: View {
+    let username: String
+    let isMuted: Bool
+    let isDeafened: Bool
+    let isSpeaking: Bool
+
+    var body: some View {
+        HStack {
+            // Speaking indicator
+            Circle()
+                .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
+                .frame(width: 10, height: 10)
+
+            Text(username)
+                .foregroundColor(.white)
+
+            Spacer()
+
+            if isMuted {
+                Image(systemName: "mic.slash.fill")
+                    .foregroundColor(.red)
+            }
+            if isDeafened {
+                Image(systemName: "speaker.slash.fill")
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(8)
+    }
+}
+
+struct VoiceControlButton: View {
+    let icon: String
+    let label: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 32))
+                Text(label)
+                    .font(.caption)
+            }
+            .frame(width: 80, height: 80)
+            .background(isActive ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+            .foregroundColor(isActive ? .green : .red)
+            .cornerRadius(40)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Settings")
+                .font(.largeTitle)
+                .foregroundColor(.white)
+
+            Text("Coming soon...")
+                .foregroundColor(.gray)
+
+            Button("Back") {
+                appState.currentScreen = .mainMenu
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+}
