@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Room System Documentation</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --gray: #6b7280;
+            --bg-dark: #1f2937;
+            --bg-card: #374151;
+            --text: #f9fafb;
+            --text-muted: #9ca3af;
+            --orange: #f97316;
+            --purple: #a855f7;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            margin: 2rem 0 1rem;
+            color: var(--text);
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            font-size: 1.25rem;
+            margin: 1.5rem 0 0.75rem;
+            color: var(--text);
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text-muted);
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .room-card {
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(99, 102, 241, 0.1) 100%);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .room-card.guest {
+            border-color: var(--orange);
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(249, 115, 22, 0.1) 100%);
+        }
+
+        .room-card.permanent {
+            border-color: var(--success);
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(34, 197, 94, 0.1) 100%);
+        }
+
+        .room-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .room-icon {
+            font-size: 2rem;
+        }
+
+        .room-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge.guest { background-color: var(--orange); color: white; }
+        .badge.permanent { background-color: var(--success); color: white; }
+        .badge.level { background-color: var(--primary); color: white; }
+
+        .features-list {
+            list-style: none;
+            margin: 1rem 0;
+        }
+
+        .features-list li {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .features-list li.enabled::before {
+            content: "✓";
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .features-list li.disabled::before {
+            content: "✗";
+            color: var(--danger);
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        th {
+            background-color: rgba(0, 0, 0, 0.2);
+            font-weight: 600;
+        }
+
+        code {
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .note {
+            background-color: rgba(99, 102, 241, 0.1);
+            border-left: 4px solid var(--primary);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .warning {
+            background-color: rgba(245, 158, 11, 0.1);
+            border-left: 4px solid var(--warning);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .rotation-modes {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .rotation-card {
+            background-color: rgba(0, 0, 0, 0.2);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .rotation-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .capacity-bar {
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+            height: 8px;
+            margin: 0.5rem 0;
+            overflow: hidden;
+        }
+
+        .capacity-fill {
+            height: 100%;
+            border-radius: 4px;
+        }
+
+        .reputation-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 0.5rem;
+            margin: 1rem 0;
+        }
+
+        .reputation-badge {
+            padding: 0.5rem;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 0.75rem;
+        }
+
+        .reputation-badge.new { background-color: var(--gray); }
+        .reputation-badge.standard { background-color: #3b82f6; }
+        .reputation-badge.active { background-color: var(--success); }
+        .reputation-badge.established { background-color: var(--purple); }
+        .reputation-badge.veteran { background-color: #eab308; color: #1f2937; }
+
+        .api-endpoint {
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .api-method {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .api-method.post { background-color: #22c55e; color: white; }
+        .api-method.get { background-color: #3b82f6; color: white; }
+        .api-method.delete { background-color: #ef4444; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>VoiceLink Room System</h1>
+        <p>Complete documentation for permanent rooms, guest rooms, device rotation, and capacity management.</p>
+
+        <!-- Room Types -->
+        <h2>Room Types</h2>
+        <p>VoiceLink supports two types of rooms: Guest rooms for unauthenticated users and Permanent rooms for logged-in members.</p>
+
+        <div class="grid">
+            <!-- Guest Rooms -->
+            <div class="room-card guest">
+                <div class="room-header">
+                    <span class="room-icon">???</span>
+                    <div>
+                        <div class="room-title">Guest Rooms</div>
+                        <span class="badge guest">Temporary</span>
+                    </div>
+                </div>
+                <p>For users who haven't logged in. Quick and easy but with limitations.</p>
+                <ul class="features-list">
+                    <li class="enabled">Create rooms without login</li>
+                    <li class="enabled">Join some public rooms</li>
+                    <li class="disabled">10-30 minute duration (random)</li>
+                    <li class="disabled">Maximum 15 members</li>
+                    <li class="disabled">No lock/unlock features</li>
+                    <li class="disabled">1 room at a time only</li>
+                    <li class="disabled">No password protection</li>
+                </ul>
+            </div>
+
+            <!-- Permanent Rooms -->
+            <div class="room-card permanent">
+                <div class="room-header">
+                    <span class="room-icon">???</span>
+                    <div>
+                        <div class="room-title">Permanent Rooms</div>
+                        <span class="badge permanent">Persistent</span>
+                    </div>
+                </div>
+                <p>For logged-in members. Full features with no time limit.</p>
+                <ul class="features-list">
+                    <li class="enabled">Rooms persist indefinitely</li>
+                    <li class="enabled">Lock/unlock rooms</li>
+                    <li class="enabled">Password protection</li>
+                    <li class="enabled">Multiple rooms based on level</li>
+                    <li class="enabled">Higher member capacity</li>
+                    <li class="enabled">Device rotation hosting</li>
+                    <li class="enabled">Full moderation tools</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="warning">
+            <strong>Guest Mode:</strong> Rooms expire after a random 10-30 minutes. Sign in to create permanent rooms with full features!
+        </div>
+
+        <!-- OpenLink Visitor Rooms -->
+        <h2>OpenLink Visitor Rooms</h2>
+        <p>When someone uses OpenLink to initiate a voice chat with a visitor (not logged in), a special hidden room is automatically created.</p>
+
+        <div class="room-card" style="border-color: var(--purple); background: linear-gradient(135deg, var(--bg-card) 0%, rgba(168, 85, 247, 0.1) 100%);">
+            <div class="room-header">
+                <span class="room-icon">???</span>
+                <div>
+                    <div class="room-title">OpenLink Visitor Room</div>
+                    <span class="badge" style="background-color: var(--purple);">Hidden / Auto-Created</span>
+                </div>
+            </div>
+            <p>These rooms are created automatically when an OpenLink remote connection is established with a visitor.</p>
+            <ul class="features-list">
+                <li class="enabled">Auto-created by OpenLink system</li>
+                <li class="enabled">Hidden from public room lists</li>
+                <li class="enabled">Some VoiceLink features available</li>
+                <li class="disabled">Not manually creatable by visitors</li>
+                <li class="disabled">Removed 5 minutes after connection ends</li>
+                <li class="disabled">Max extension: 10-15 minutes for data collection</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>OpenLink Room Lifecycle</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th>Duration</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Active Connection</td>
+                        <td>Unlimited</td>
+                        <td>Room exists while OpenLink connection is active</td>
+                    </tr>
+                    <tr>
+                        <td>Grace Period</td>
+                        <td>5 minutes</td>
+                        <td>After connection ends, room stays for cleanup</td>
+                    </tr>
+                    <tr>
+                        <td>Extended (if needed)</td>
+                        <td>+5-10 minutes</td>
+                        <td>Extra time for data collection in some cases</td>
+                    </tr>
+                    <tr>
+                        <td>Maximum Total</td>
+                        <td>15 minutes post-connection</td>
+                        <td>Room is forcefully removed after this</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="note">
+            <strong>Visitor vs Guest:</strong> Visitors cannot create rooms themselves. OpenLink creates rooms on their behalf when initiating a remote connection. Guests (users who visited but haven't logged in) can create temporary rooms.
+        </div>
+
+        <!-- Permanent Room Limits -->
+        <h2>Permanent Room Limits</h2>
+        <p>The number of permanent rooms you can create depends on your membership level, paid tier, and Mastodon account reputation.</p>
+
+        <div class="card">
+            <h3>Base Rooms by Level</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Level</th>
+                        <th>Name</th>
+                        <th>Permanent Rooms</th>
+                        <th>Devices</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Level 1</td>
+                        <td>Newbie</td>
+                        <td>2 rooms</td>
+                        <td>1 device</td>
+                    </tr>
+                    <tr>
+                        <td>Level 2</td>
+                        <td>Regular</td>
+                        <td>5 rooms</td>
+                        <td>2 devices</td>
+                    </tr>
+                    <tr>
+                        <td>Level 3</td>
+                        <td>Outstanding</td>
+                        <td>10 rooms</td>
+                        <td>3 devices</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Paid Tier Bonuses</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tier</th>
+                        <th>Bonus Rooms</th>
+                        <th>Bonus Devices</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Supporter</td>
+                        <td>+15 rooms</td>
+                        <td>+7 devices</td>
+                    </tr>
+                    <tr>
+                        <td>Unlimited</td>
+                        <td>+90 rooms</td>
+                        <td>+97 devices</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Room Member Capacity -->
+        <h2>Room Member Capacity</h2>
+        <p>Each room has a maximum member capacity based on your level, paid tier, and Mastodon reputation.</p>
+
+        <div class="card">
+            <h3>Base Capacity by Level</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Level</th>
+                        <th>Members Per Room</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Level 1 (Newbie)</td>
+                        <td>2 members</td>
+                    </tr>
+                    <tr>
+                        <td>Level 2 (Regular)</td>
+                        <td>10 members</td>
+                    </tr>
+                    <tr>
+                        <td>Level 3 (Outstanding)</td>
+                        <td>50 members</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Bonus Capacity</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Bonus Members</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Supporter Tier</td>
+                        <td>+25 members</td>
+                    </tr>
+                    <tr>
+                        <td>Unlimited Tier</td>
+                        <td>+950 members (effectively unlimited)</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon: Standard</td>
+                        <td>+5 members</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon: Active</td>
+                        <td>+10 members</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon: Established</td>
+                        <td>+25 members</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon: Veteran</td>
+                        <td>+50 members</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Mastodon Reputation -->
+        <h2>Mastodon Account Reputation</h2>
+        <p>Your Mastodon account's age, followers, and activity contribute to bonus rooms and capacity.</p>
+
+        <div class="reputation-grid">
+            <div class="reputation-badge new">
+                <div>New</div>
+                <div style="font-size: 0.65rem; margin-top: 0.25rem;">No bonuses</div>
+            </div>
+            <div class="reputation-badge standard">
+                <div>Standard</div>
+                <div style="font-size: 0.65rem; margin-top: 0.25rem;">+1 room, +5 members</div>
+            </div>
+            <div class="reputation-badge active">
+                <div>Active</div>
+                <div style="font-size: 0.65rem; margin-top: 0.25rem;">+2 rooms, +10 members</div>
+            </div>
+            <div class="reputation-badge established">
+                <div>Established</div>
+                <div style="font-size: 0.65rem; margin-top: 0.25rem;">+4 rooms, +25 members</div>
+            </div>
+            <div class="reputation-badge veteran">
+                <div>Veteran</div>
+                <div style="font-size: 0.65rem; margin-top: 0.25rem;">+8 rooms, +50 members</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Reputation Factors</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>Influence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Account Age</td>
+                        <td>Older accounts get higher reputation</td>
+                    </tr>
+                    <tr>
+                        <td>Followers Count</td>
+                        <td>More followers = higher reputation</td>
+                    </tr>
+                    <tr>
+                        <td>Following Count</td>
+                        <td>Active following contributes to score</td>
+                    </tr>
+                    <tr>
+                        <td>Status Count</td>
+                        <td>Post activity is considered</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Server Capacity -->
+        <h2>Server Room Capacity</h2>
+        <p>Each server has a room capacity that starts at 50 and can grow up to 5000 based on various factors.</p>
+
+        <div class="card">
+            <h3>Capacity Factors</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>Capacity Bonus</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Base</td>
+                        <td>50 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Level 2 (Regular)</td>
+                        <td>+50 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Level 3 (Outstanding)</td>
+                        <td>+150 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Supporter Tier</td>
+                        <td>+200 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Unlimited Tier</td>
+                        <td>+1000 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Trust Score 90+</td>
+                        <td>+100 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Trust Score 80-89</td>
+                        <td>+50 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Trust Score 70-79</td>
+                        <td>+25 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon Veteran</td>
+                        <td>+500 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon Established</td>
+                        <td>+200 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Mastodon Active</td>
+                        <td>+100 rooms</td>
+                    </tr>
+                    <tr>
+                        <td>Days Active (max)</td>
+                        <td>+500 rooms</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="note">
+            <strong>Maximum Capacity:</strong> Server capacity is capped at 5000 rooms regardless of bonuses.
+        </div>
+
+        <!-- Device Rotation -->
+        <h2>Device Rotation</h2>
+        <p>When you have multiple devices linked, rooms can be hosted across different devices using rotation modes.</p>
+
+        <div class="rotation-modes">
+            <div class="rotation-card">
+                <div class="rotation-icon">???</div>
+                <div><strong>Random</strong></div>
+                <p style="font-size: 0.75rem; color: var(--text-muted);">Randomly select a device for each room</p>
+            </div>
+            <div class="rotation-card">
+                <div class="rotation-icon">???</div>
+                <div><strong>Round Robin</strong></div>
+                <p style="font-size: 0.75rem; color: var(--text-muted);">Rotate through devices in order</p>
+            </div>
+            <div class="rotation-card">
+                <div class="rotation-icon">???</div>
+                <div><strong>Preferred</strong></div>
+                <p style="font-size: 0.75rem; color: var(--text-muted);">Use your preferred device when available</p>
+            </div>
+            <div class="rotation-card">
+                <div class="rotation-icon">???</div>
+                <div><strong>Load Balanced</strong></div>
+                <p style="font-size: 0.75rem; color: var(--text-muted);">Distribute based on device capacity</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>How Device Rotation Works</h3>
+            <ul class="features-list">
+                <li class="enabled">All devices stay in sync with room state</li>
+                <li class="enabled">Rooms automatically migrate if host device goes offline</li>
+                <li class="enabled">You can set a preferred host device</li>
+                <li class="enabled">Load balancing considers current room assignments</li>
+            </ul>
+        </div>
+
+        <!-- API Endpoints -->
+        <h2>API Endpoints</h2>
+
+        <h3>Create Permanent Room</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/rooms/create</code>
+        </div>
+
+        <h3>Create Guest Room</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/rooms/create-guest</code>
+        </div>
+
+        <h3>Delete Room</h3>
+        <div class="api-endpoint">
+            <span class="api-method delete">DELETE</span>
+            <code>/api/rooms/:id/delete</code>
+        </div>
+
+        <h3>Sync Rooms</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/rooms/sync</code>
+        </div>
+
+        <h3>Expire Guest Room</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/rooms/:id/expire</code>
+        </div>
+
+        <!-- WebSocket Events -->
+        <h2>WebSocket Events</h2>
+
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Event</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>room-created</code></td>
+                        <td>New room created</td>
+                    </tr>
+                    <tr>
+                        <td><code>room-deleted</code></td>
+                        <td>Room deleted</td>
+                    </tr>
+                    <tr>
+                        <td><code>room-joined</code></td>
+                        <td>User joined room</td>
+                    </tr>
+                    <tr>
+                        <td><code>room-left</code></td>
+                        <td>User left room</td>
+                    </tr>
+                    <tr>
+                        <td><code>guest-room-expired</code></td>
+                        <td>Guest room time limit reached</td>
+                    </tr>
+                    <tr>
+                        <td><code>room-locked</code></td>
+                        <td>Room locked by owner</td>
+                    </tr>
+                    <tr>
+                        <td><code>room-unlocked</code></td>
+                        <td>Room unlocked by owner</td>
+                    </tr>
+                    <tr>
+                        <td><code>device-rotation</code></td>
+                        <td>Room host device changed</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); text-align: center; color: var(--text-muted);">
+            <p>VoiceLink Room System Documentation</p>
+            <p style="font-size: 0.875rem;">Generated from VoiceLinkNative Swift App</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+VoiceLink Native v1.0 - Safety & Escort Me Video Script
+======================================================
+
+TITLE: Safety Features and Escort Me
+
+DURATION: 2 minutes
+
+---
+
+SCENE 1: Safety First (10 seconds)
+NARRATION:
+"VoiceLink prioritizes your safety. Let's explore the Escort Me feature."
+
+VISUALS:
+- Shield icon
+- Safety badge
+
+SCENE 2: What is Escort Me? (20 seconds)
+NARRATION:
+"Escort Me lets you request a trusted companion to join your voice chat session.
+Whether you feel uncomfortable, need help navigating the app, or want moderation support,
+an escort can be there for you."
+
+VISUALS:
+- Escort Me button in room controls
+- Escort joining animation
+
+SCENE 3: Request Reasons (25 seconds)
+NARRATION:
+"You can request an escort for various reasons:"
+
+VISUALS (show each with icon):
+- "Personal Safety - when you feel unsafe or uncomfortable"
+- "New User Help - get guidance using VoiceLink"
+- "Accessibility Support - assistance for accessibility needs"
+- "Moderation - help moderating your room"
+
+SCENE 4: How to Request (30 seconds)
+NARRATION:
+"Here's how to use Escort Me:
+1. Click the Escort Me button in your room
+2. Select your reason
+3. Choose where to find escorts: Trusted only, Community, or Anyone
+4. Wait for a match
+5. Your escort joins your room
+6. End the session when you're ready"
+
+VISUALS:
+- Step-by-step UI walkthrough
+- Each screen transition
+
+SCENE 5: Trusted Escorts (20 seconds)
+NARRATION:
+"Build a list of trusted escorts - friends you know and trust.
+When you set 'Trusted Only', only people in your list will be contacted.
+Add and manage trusted escorts in your settings."
+
+VISUALS:
+- Trusted escorts list
+- Add/remove actions
+- Priority settings
+
+SCENE 6: Becoming an Escort (20 seconds)
+NARRATION:
+"Want to help others? Become a community escort.
+Requirements:
+- Level 2 membership or higher
+- Trust score of 70+
+- 14 days active
+- No complaints"
+
+VISUALS:
+- Escort badge
+- Requirements checklist
+- Approval animation
+
+SCENE 7: Safety Reminder (15 seconds)
+NARRATION:
+"Your safety matters. Use Escort Me whenever you need support.
+Report any concerning behavior immediately."
+
+VISUALS:
+- Shield with checkmark
+- Report button
+- Community guidelines link
+
+---
+
+END CARD:
+Safety Features Documentation
+voicelink.app/docs/safety

@@ -1,0 +1,106 @@
+VoiceLink Native v1.0 - Membership System Video Script
+=====================================================
+
+TITLE: Understanding the Membership System
+
+DURATION: 2-3 minutes
+
+---
+
+SCENE 1: Introduction (10 seconds)
+NARRATION:
+"VoiceLink uses a fair, level-based membership system. Let's explore how it works."
+
+VISUALS:
+- Membership badge view
+- Level indicator
+
+SCENE 2: The Three Levels (45 seconds)
+
+LEVEL 1 - NEWBIE
+NARRATION:
+"Everyone starts as a Newbie at Level 1. You get 1 device, 2 rooms, and basic features."
+
+VISUALS:
+- Newbie badge (gray star)
+- 1 device icon
+- 2 room icons
+
+LEVEL 2 - REGULAR
+NARRATION:
+"After 7 days of activity and 5 room hours, you become a Regular at Level 2.
+This unlocks 2 devices and 5 rooms."
+
+VISUALS:
+- Regular badge (blue star)
+- Progress bar filling
+- 2 device icons
+- 5 room icons
+
+LEVEL 3 - OUTSTANDING
+NARRATION:
+"Outstanding members at Level 3 have 30 days active and 20 room hours.
+They get 3 devices, 10 rooms, and priority support."
+
+VISUALS:
+- Outstanding badge (gold star)
+- 3 device icons
+- 10 room icons
+- Priority badge
+
+SCENE 3: Level = Device Tier (20 seconds)
+NARRATION:
+"Here's the key: Your level IS your device tier.
+Level 1 means 1 device. Level 2 means 2 devices. Level 3 means 3 devices.
+It's that simple."
+
+VISUALS:
+- Side-by-side comparison
+- Level number matching device count
+
+SCENE 4: Trust Score (30 seconds)
+NARRATION:
+"Your trust score ranges from 0 to 100 and affects upgrades.
+Excellent trust (80-100) lets you upgrade freely.
+Fair or poor trust means you need to improve before upgrading.
+Be a good community member!"
+
+VISUALS:
+- Trust score meter
+- Color-coded badges: Excellent (green), Good (blue), Fair (yellow), Poor (orange), Banned (red)
+
+SCENE 5: Paid Bonuses (25 seconds)
+NARRATION:
+"Paid tiers are optional and add bonus devices and rooms on top of your free level.
+Supporters get +7 devices and +15 rooms.
+Unlimited tier gets up to 100 devices and 100 rooms total."
+
+VISUALS:
+- Supporter badge
+- Unlimited badge
+- Bonus numbers animating
+
+SCENE 6: Mastodon Reputation Bonus (20 seconds)
+NARRATION:
+"Link your Mastodon account for extra bonuses based on your account's reputation.
+Veteran accounts with lots of followers get up to +8 bonus rooms and +50 member capacity."
+
+VISUALS:
+- Mastodon logo
+- Reputation tiers: New, Standard, Active, Established, Veteran
+- Bonus numbers
+
+SCENE 7: Summary (15 seconds)
+NARRATION:
+"Level up by being active, maintain good trust, and optionally support the project for bonuses."
+
+VISUALS:
+- All three level badges
+- Trust score
+- Paid tier badges
+
+---
+
+END CARD:
+Membership System Documentation
+voicelink.app/docs/membership-system

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Native Documentation</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --bg-dark: #1f2937;
+            --bg-card: #374151;
+            --text: #f9fafb;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 800px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--primary);
+        }
+
+        .subtitle {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        .docs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .doc-card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-decoration: none;
+            color: var(--text);
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .doc-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            border-color: var(--primary);
+        }
+
+        .doc-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .doc-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .doc-desc {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .version {
+            margin-top: 3rem;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background-color: var(--success);
+            color: white;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🎙️</div>
+        <h1>VoiceLink Native</h1>
+        <p class="subtitle">macOS Voice Chat Application</p>
+
+        <div class="docs-grid">
+            <a href="membership-system.html" class="doc-card">
+                <div class="doc-icon">⭐</div>
+                <div class="doc-title">Membership System</div>
+                <div class="doc-desc">Levels, trust scores, device tiers, and paid bonuses</div>
+            </a>
+
+            <a href="rooms.html" class="doc-card">
+                <div class="doc-icon">🏠</div>
+                <div class="doc-title">Room System</div>
+                <div class="doc-desc">Permanent rooms, guest mode, device rotation, capacity</div>
+            </a>
+
+            <a href="wallet-integration.html" class="doc-card">
+                <div class="doc-icon">💰</div>
+                <div class="doc-title">Wallet Integration</div>
+                <div class="doc-desc">eCrypto wallet setup, payments, and invite links</div>
+            </a>
+
+            <a href="authentication.html" class="doc-card">
+                <div class="doc-icon">🔐</div>
+                <div class="doc-title">Authentication</div>
+                <div class="doc-desc">Mastodon OAuth, email verification, and pairing</div>
+            </a>
+
+            <a href="safety.html" class="doc-card">
+                <div class="doc-icon">🛡️</div>
+                <div class="doc-title">Safety Features</div>
+                <div class="doc-desc">Escort Me, trusted companions, moderation tools</div>
+            </a>
+
+            <a href="server-sync.html" class="doc-card">
+                <div class="doc-icon">🔄</div>
+                <div class="doc-title">Server Sync</div>
+                <div class="doc-desc">API endpoints and WebSocket events</div>
+            </a>
+        </div>
+
+        <div class="version">
+            <p>VoiceLink Native <span class="badge">v1.0</span></p>
+            <p>Built with Swift and SwiftUI for macOS</p>
+        </div>
+    </div>
+</body>
+</html>

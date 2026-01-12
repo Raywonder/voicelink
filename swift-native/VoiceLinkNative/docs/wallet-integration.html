@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Wallet Integration Documentation</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --purple: #8b5cf6;
+            --gray: #6b7280;
+            --bg-dark: #1f2937;
+            --bg-card: #374151;
+            --text: #f9fafb;
+            --text-muted: #9ca3af;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        .back-link {
+            color: var(--primary);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 { font-size: 2.5rem; margin-bottom: 1rem; color: var(--purple); }
+        h2 { font-size: 1.75rem; margin: 2rem 0 1rem; border-bottom: 2px solid var(--purple); padding-bottom: 0.5rem; }
+        h3 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; }
+        p { margin-bottom: 1rem; color: var(--text-muted); }
+
+        .card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .wallet-types {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .wallet-card {
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(139, 92, 246, 0.1) 100%);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+
+        .wallet-card.embedded { border-color: #3b82f6; background: linear-gradient(135deg, var(--bg-card) 0%, rgba(59, 130, 246, 0.1) 100%); }
+        .wallet-card.external { border-color: var(--success); background: linear-gradient(135deg, var(--bg-card) 0%, rgba(34, 197, 94, 0.1) 100%); }
+
+        .wallet-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .wallet-icon { font-size: 2rem; }
+        .wallet-title { font-size: 1.5rem; font-weight: bold; }
+
+        .features-list {
+            list-style: none;
+            margin: 1rem 0;
+        }
+
+        .features-list li {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .features-list li::before {
+            content: "✓";
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .flow-diagram {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 2rem;
+            margin: 1.5rem 0;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .flow-step:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+        .flow-number {
+            width: 2.5rem;
+            height: 2.5rem;
+            background-color: var(--purple);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .flow-content { flex: 1; }
+        .flow-title { font-weight: bold; margin-bottom: 0.25rem; }
+        .flow-desc { font-size: 0.875rem; color: var(--text-muted); }
+
+        .api-endpoint {
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .api-method {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .api-method.post { background-color: #22c55e; color: white; }
+        .api-method.get { background-color: #3b82f6; color: white; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        th { background-color: rgba(0, 0, 0, 0.2); font-weight: 600; }
+
+        code {
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .note {
+            background-color: rgba(139, 92, 246, 0.1);
+            border-left: 4px solid var(--purple);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .price-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .price-card {
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .price-amount {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--warning);
+        }
+
+        .price-feature {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="index.html" class="back-link">← Back to Documentation</a>
+
+        <h1>💰 eCrypto Wallet Integration</h1>
+        <p>Complete guide to setting up and using eCrypto wallets in VoiceLink.</p>
+
+        <!-- Wallet Types -->
+        <h2>Wallet Types</h2>
+        <p>VoiceLink supports two types of wallet integration:</p>
+
+        <div class="wallet-types">
+            <div class="wallet-card embedded">
+                <div class="wallet-header">
+                    <span class="wallet-icon">📱</span>
+                    <div class="wallet-title">Embedded Wallet</div>
+                </div>
+                <p>A wallet managed by VoiceLink for quick and easy setup.</p>
+                <ul class="features-list">
+                    <li>Instant setup - no app required</li>
+                    <li>Automatic test coins on creation</li>
+                    <li>Tied to your authentication</li>
+                    <li>Perfect for trying features</li>
+                </ul>
+            </div>
+
+            <div class="wallet-card external">
+                <div class="wallet-header">
+                    <span class="wallet-icon">🔐</span>
+                    <div class="wallet-title">eCrypto App</div>
+                </div>
+                <p>Full wallet control with the dedicated eCrypto app.</p>
+                <ul class="features-list">
+                    <li>Complete wallet control</li>
+                    <li>Send & receive eCrypto</li>
+                    <li>Use across multiple apps</li>
+                    <li>Enhanced security features</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Setup Flow -->
+        <h2>Wallet Setup Flow</h2>
+
+        <div class="flow-diagram">
+            <div class="flow-step">
+                <span class="flow-number">1</span>
+                <div class="flow-content">
+                    <div class="flow-title">Authenticate</div>
+                    <div class="flow-desc">Sign in with Mastodon or Email to verify your identity. Your wallet will be linked to this authentication method.</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <span class="flow-number">2</span>
+                <div class="flow-content">
+                    <div class="flow-title">Choose Wallet Type</div>
+                    <div class="flow-desc">Create an embedded wallet for quick start, or connect the eCrypto app for full control.</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <span class="flow-number">3</span>
+                <div class="flow-content">
+                    <div class="flow-title">Receive Test Coins</div>
+                    <div class="flow-desc">New wallets automatically receive test coins from the faucet. Use these to try premium features!</div>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <span class="flow-number">4</span>
+                <div class="flow-content">
+                    <div class="flow-title">Start Using</div>
+                    <div class="flow-desc">Pay for features, upgrade tiers, or transfer server ownership using your wallet.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- eCrypto App Install -->
+        <h2>Installing eCrypto App</h2>
+
+        <div class="card">
+            <h3>Invite Link System</h3>
+            <p>VoiceLink generates personalized invite links for eCrypto installation:</p>
+            <ul class="features-list">
+                <li>Personalized download link tied to your account</li>
+                <li>Bonus test coins included with installation</li>
+                <li>Server owners receive additional hosting credits</li>
+                <li>Share links to earn referral rewards</li>
+            </ul>
+        </div>
+
+        <div class="note">
+            <strong>Test Coins:</strong> Test coins can be used to try all premium features. They work exactly like real eCrypto but are only valid within the VoiceLink ecosystem.
+        </div>
+
+        <!-- Feature Prices -->
+        <h2>Feature Prices</h2>
+        <p>Use eCrypto or test coins to unlock features:</p>
+
+        <div class="price-grid">
+            <div class="price-card">
+                <div class="price-amount">5.00</div>
+                <div class="price-feature">Supporter Tier<br>+7 devices, +15 rooms</div>
+            </div>
+
+            <div class="price-card">
+                <div class="price-amount">20.00</div>
+                <div class="price-feature">Unlimited Tier<br>+97 devices, +90 rooms</div>
+            </div>
+
+            <div class="price-card">
+                <div class="price-amount">1.00</div>
+                <div class="price-feature">Extra Device<br>+1 device slot</div>
+            </div>
+
+            <div class="price-card">
+                <div class="price-amount">0.50</div>
+                <div class="price-feature">Extra Room<br>+1 room slot</div>
+            </div>
+
+            <div class="price-card">
+                <div class="price-amount">10.00</div>
+                <div class="price-feature">Server Hosting<br>Monthly hosting</div>
+            </div>
+        </div>
+
+        <!-- API Endpoints -->
+        <h2>Wallet API Endpoints</h2>
+
+        <h3>Create Embedded Wallet</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/wallet/create</code>
+        </div>
+        <div class="card">
+            <h4>Request Body</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>userId</code></td><td>String</td><td>Authenticated user ID</td></tr>
+                    <tr><td><code>authMethod</code></td><td>String</td><td>"mastodon" or "email"</td></tr>
+                    <tr><td><code>appId</code></td><td>String</td><td>"voicelink"</td></tr>
+                    <tr><td><code>deviceId</code></td><td>String</td><td>Device identifier</td></tr>
+                    <tr><td><code>embedded</code></td><td>Boolean</td><td>true for embedded wallet</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Request Test Coins</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/faucet/request</code>
+        </div>
+        <div class="card">
+            <h4>Request Body</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>walletAddress</code></td><td>String</td><td>Wallet address</td></tr>
+                    <tr><td><code>appId</code></td><td>String</td><td>"voicelink"</td></tr>
+                    <tr><td><code>reason</code></td><td>String</td><td>"new_user" or "promotion"</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Generate Invite Link</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/invite/generate</code>
+        </div>
+        <div class="card">
+            <h4>Request Body</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>appId</code></td><td>String</td><td>"voicelink"</td></tr>
+                    <tr><td><code>hasServer</code></td><td>Boolean</td><td>User owns a server</td></tr>
+                    <tr><td><code>walletAddress</code></td><td>String</td><td>Referrer wallet address</td></tr>
+                    <tr><td><code>userId</code></td><td>String</td><td>User ID</td></tr>
+                </tbody>
+            </table>
+            <h4>Response</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>inviteLink</code></td><td>String</td><td>Personalized invite URL</td></tr>
+                    <tr><td><code>bonusCoins</code></td><td>Number</td><td>Coins included with invite</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Process Payment</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/payment/process</code>
+        </div>
+        <div class="card">
+            <h4>Request Body</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>fromAddress</code></td><td>String</td><td>Payer wallet address</td></tr>
+                    <tr><td><code>amount</code></td><td>Number</td><td>Payment amount</td></tr>
+                    <tr><td><code>feature</code></td><td>String</td><td>Feature being purchased</td></tr>
+                    <tr><td><code>appId</code></td><td>String</td><td>"voicelink"</td></tr>
+                    <tr><td><code>useTestCoins</code></td><td>Boolean</td><td>Use test coins if available</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Get Balance</h3>
+        <div class="api-endpoint">
+            <span class="api-method get">GET</span>
+            <code>/api/wallet/balance?address={walletAddress}</code>
+        </div>
+        <div class="card">
+            <h4>Response</h4>
+            <table>
+                <thead>
+                    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>balance</code></td><td>Number</td><td>Real eCrypto balance</td></tr>
+                    <tr><td><code>testBalance</code></td><td>Number</td><td>Test coin balance</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Wallet Status -->
+        <h2>Wallet Status Indicators</h2>
+
+        <div class="card">
+            <table>
+                <thead>
+                    <tr><th>Status</th><th>Icon</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Not Setup</td><td>📋</td><td>No wallet configured</td></tr>
+                    <tr><td>Creating</td><td>⏳</td><td>Wallet creation in progress</td></tr>
+                    <tr><td>Embedded Ready</td><td>💳</td><td>Embedded wallet active</td></tr>
+                    <tr><td>eCrypto Connected</td><td>✅</td><td>Full eCrypto app connected</td></tr>
+                    <tr><td>Error</td><td>⚠️</td><td>Wallet error occurred</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); text-align: center; color: var(--text-muted);">
+            <p>VoiceLink Wallet Integration Documentation</p>
+            <p style="font-size: 0.875rem;"><a href="index.html" style="color: var(--primary);">Back to Documentation Index</a></p>
+        </div>
+    </div>
+</body>
+</html>

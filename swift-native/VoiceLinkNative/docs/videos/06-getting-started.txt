@@ -1,0 +1,124 @@
+VoiceLink Native v1.0 - Getting Started Video Script
+===================================================
+
+TITLE: Getting Started with VoiceLink Native
+
+DURATION: 3 minutes
+
+---
+
+SCENE 1: Download & Install (20 seconds)
+NARRATION:
+"Welcome to VoiceLink Native! Let's get you set up.
+First, download VoiceLink from voicelink.app.
+Open the DMG and drag VoiceLink to your Applications folder."
+
+VISUALS:
+- Website download page
+- DMG opening
+- Drag to Applications animation
+
+SCENE 2: First Launch (15 seconds)
+NARRATION:
+"Launch VoiceLink from your Applications.
+You'll see the app appear in your menu bar.
+Click the icon to open the main interface."
+
+VISUALS:
+- App launching
+- Menu bar icon appearing
+- Interface opening
+
+SCENE 3: Authentication (30 seconds)
+NARRATION:
+"Sign in to unlock full features. You have two options:"
+
+MASTODON:
+"Sign in with Mastodon - great if you already have an account on the Fediverse.
+Your Mastodon reputation gives you bonus rooms and capacity."
+
+EMAIL:
+"Or use email verification - enter your email, receive a code, and verify."
+
+VISUALS:
+- Auth selection screen
+- Mastodon OAuth flow
+- Email code entry
+
+SCENE 4: Server Pairing (30 seconds)
+NARRATION:
+"Now let's connect to a server.
+Click 'Pair Server' and enter the pairing code from your server.
+The code is shown in the server's VoiceLink menu.
+Once paired, you can join rooms on that server."
+
+VISUALS:
+- Pair Server button
+- Code entry screen
+- Server appearing in list
+- Connected status
+
+SCENE 5: Join Your First Room (25 seconds)
+NARRATION:
+"Browse available rooms on your server.
+Click a room to see details like member count and description.
+Click 'Join' to enter the room and start chatting!"
+
+VISUALS:
+- Room list
+- Room details card
+- Join animation
+- Voice chat interface
+
+SCENE 6: Create a Room (25 seconds)
+NARRATION:
+"Create your own room with the 'Create Room' button.
+Give it a name and description.
+Choose if it's public or private.
+Your room is now live and friends can join!"
+
+VISUALS:
+- Create Room button
+- Room creation form
+- Room appearing in list
+
+SCENE 7: Important Features (25 seconds)
+NARRATION:
+"Remember these key features:
+- Escort Me for safety support
+- Device rotation if you have multiple devices
+- Auto-updates keep you current
+- Settings for preferences and wallet"
+
+VISUALS:
+- Feature icons appearing
+- Settings menu
+
+SCENE 8: Auto-Updates (15 seconds)
+NARRATION:
+"VoiceLink automatically checks for updates.
+When a new version is available, you'll be notified.
+One click to download and install."
+
+VISUALS:
+- Update notification
+- Download progress
+- Install button
+
+SCENE 9: Get Help (15 seconds)
+NARRATION:
+"Need help? Check the documentation at voicelink.app/docs.
+Report issues at github.com/voicelink/issues.
+Welcome to VoiceLink!"
+
+VISUALS:
+- Documentation link
+- GitHub link
+- Welcome message
+
+---
+
+END CARD:
+VoiceLink Native v1.0
+voicelink.app
+Start Chatting Today!

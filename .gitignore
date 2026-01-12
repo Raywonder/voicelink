@@ -1,0 +1,18 @@
+# Swift build artifacts
+.build/
+.swiftpm/
+*.xcodeproj/
+DerivedData/
+*.dSYM/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Node
+node_modules/
+
+# Temporary files
+*.log
+*.tmp

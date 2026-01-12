@@ -1,0 +1,109 @@
+VoiceLink Native v1.0 - Room System Video Script
+================================================
+
+TITLE: Creating and Managing Rooms
+
+DURATION: 2-3 minutes
+
+---
+
+SCENE 1: Room Types Overview (20 seconds)
+NARRATION:
+"VoiceLink has three types of rooms: Guest rooms, Permanent rooms, and OpenLink rooms.
+Let's explore each one."
+
+VISUALS:
+- Three room type icons
+- Quick preview of each
+
+SCENE 2: Guest Rooms (30 seconds)
+NARRATION:
+"Guest rooms are for users who haven't logged in yet.
+They're quick to create but come with limitations:
+- Random duration between 10-30 minutes
+- Maximum 15 members
+- No lock or password features
+- Only one room at a time"
+
+VISUALS:
+- Guest room card (orange)
+- Timer counting down
+- 15 person limit indicator
+- Lock icon with X
+
+NARRATION:
+"Sign in to unlock permanent rooms with full features!"
+
+SCENE 3: Permanent Rooms (45 seconds)
+NARRATION:
+"Permanent rooms are for logged-in members.
+They never expire and come with full features."
+
+VISUALS:
+- Permanent room card (green)
+- Forever icon
+- Feature list appearing
+
+NARRATION:
+"The number of permanent rooms you can create depends on:
+- Your membership level: Level 1 gets 2, Level 2 gets 5, Level 3 gets 10
+- Paid tier bonuses: Supporters get +15, Unlimited gets +90
+- Mastodon reputation bonuses: Up to +8 more"
+
+VISUALS:
+- Room count calculation animation
+- Base + paid + reputation = total
+
+SCENE 4: Room Capacity (30 seconds)
+NARRATION:
+"Each room has a member capacity that scales with your level:
+- Level 1: 2 members per room
+- Level 2: 10 members
+- Level 3: 50 members
+Plus bonuses from paid tiers and Mastodon reputation.
+Unlimited tier members can have 1000+ members per room!"
+
+VISUALS:
+- Capacity meter filling
+- Bonus calculations
+- Unlimited capacity icon
+
+SCENE 5: OpenLink Visitor Rooms (25 seconds)
+NARRATION:
+"OpenLink rooms are special hidden rooms created automatically when someone initiates a call with a visitor.
+These rooms exist while the connection is active, then have a 5-minute grace period after the call ends.
+They can extend up to 15 minutes total for data collection."
+
+VISUALS:
+- OpenLink icon (purple)
+- Hidden room indicator
+- Timer sequence: Active -> 5 min grace -> Extended
+
+SCENE 6: Device Rotation (30 seconds)
+NARRATION:
+"When you have multiple devices linked, your rooms can be hosted across different devices.
+Choose your rotation mode:
+- Random: Different device each time
+- Round Robin: Rotate in order
+- Preferred: Use your favorite device
+- Load Balanced: Distribute based on capacity"
+
+VISUALS:
+- Multiple device icons
+- Rotation mode selector
+- Animation showing room moving between devices
+
+SCENE 7: Server Capacity (15 seconds)
+NARRATION:
+"Servers start with 50 room capacity and can grow up to 5000 based on your activity, trust score, and reputation."
+
+VISUALS:
+- Server capacity bar
+- 50 to 5000 scale
+- Factors contributing
+
+---
+
+END CARD:
+Room System Documentation
+voicelink.app/docs/rooms

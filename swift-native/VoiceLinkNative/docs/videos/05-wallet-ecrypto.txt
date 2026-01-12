@@ -1,0 +1,92 @@
+VoiceLink Native v1.0 - Wallet & eCrypto Video Script
+====================================================
+
+TITLE: eCrypto Wallet Integration
+
+DURATION: 2 minutes
+
+---
+
+SCENE 1: Introduction (10 seconds)
+NARRATION:
+"VoiceLink integrates with eCrypto for payments and premium features.
+Let's see how to set up your wallet."
+
+VISUALS:
+- Wallet icon
+- eCrypto logo
+
+SCENE 2: Why a Wallet? (15 seconds)
+NARRATION:
+"Your eCrypto wallet lets you:
+- Pay for premium features
+- Support servers you enjoy
+- Receive test coins to try features
+- Connect your identity across the network"
+
+VISUALS:
+- Payment animation
+- Test coins icon
+- Identity verification badge
+
+SCENE 3: Wallet Types (25 seconds)
+NARRATION:
+"There are two wallet types:"
+
+EMBEDDED WALLET:
+"The embedded wallet is managed by VoiceLink. It's instant to set up and perfect for getting started."
+
+VISUALS:
+- Simple setup icon
+- One-click creation
+
+ECRYPTO APP:
+"For full control, install the eCrypto app. You get complete access to your wallet, keys, and advanced features."
+
+VISUALS:
+- eCrypto app icon
+- Advanced features list
+
+SCENE 4: Setting Up Your Wallet (30 seconds)
+NARRATION:
+"Setting up is easy:
+1. Sign in with Mastodon or email
+2. Choose to create an embedded wallet or connect eCrypto app
+3. New wallets automatically receive test coins
+4. Start using your wallet for features"
+
+VISUALS:
+- Setup flow animation
+- Test coins appearing
+- Wallet balance display
+
+SCENE 5: Invite Links (20 seconds)
+NARRATION:
+"Generate invite links to share with friends.
+Each invite link includes test coins for the new user.
+The more you invite, the more you help grow the community."
+
+VISUALS:
+- Generate invite button
+- Link copying
+- Share icons
+- Test coin bonus indicator
+
+SCENE 6: Using Your Wallet (20 seconds)
+NARRATION:
+"Use your wallet to:
+- Unlock premium rooms
+- Access special features
+- Support content creators
+- Pay for server hosting costs"
+
+VISUALS:
+- Various use cases
+- Transaction confirmations
+- Balance updates
+
+---
+
+END CARD:
+Wallet Integration Documentation
+voicelink.app/docs/wallet-integration

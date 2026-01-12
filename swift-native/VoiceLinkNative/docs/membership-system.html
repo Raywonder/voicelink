@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Membership System Documentation</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --gray: #6b7280;
+            --bg-dark: #1f2937;
+            --bg-card: #374151;
+            --text: #f9fafb;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            margin: 2rem 0 1rem;
+            color: var(--text);
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            font-size: 1.25rem;
+            margin: 1.5rem 0 0.75rem;
+            color: var(--text);
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text-muted);
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .level-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .level-card {
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(99, 102, 241, 0.1) 100%);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .level-card.newbie {
+            border-color: var(--gray);
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(107, 114, 128, 0.1) 100%);
+        }
+
+        .level-card.regular {
+            border-color: #3b82f6;
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(59, 130, 246, 0.1) 100%);
+        }
+
+        .level-card.outstanding {
+            border-color: #eab308;
+            background: linear-gradient(135deg, var(--bg-card) 0%, rgba(234, 179, 8, 0.1) 100%);
+        }
+
+        .level-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .level-icon {
+            font-size: 2rem;
+        }
+
+        .level-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .level-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .level-badge.newbie { background-color: var(--gray); }
+        .level-badge.regular { background-color: #3b82f6; }
+        .level-badge.outstanding { background-color: #eab308; color: #1f2937; }
+
+        .features-list {
+            list-style: none;
+            margin: 1rem 0;
+        }
+
+        .features-list li {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        .features-list li::before {
+            content: "✓";
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .requirements {
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .requirements h4 {
+            font-size: 0.875rem;
+            color: var(--warning);
+            margin-bottom: 0.5rem;
+        }
+
+        .requirements-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+        }
+
+        .requirement-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .trust-section {
+            margin: 2rem 0;
+        }
+
+        .trust-levels {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin: 1rem 0;
+        }
+
+        .trust-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .trust-badge.excellent { background-color: var(--success); color: white; }
+        .trust-badge.good { background-color: #3b82f6; color: white; }
+        .trust-badge.fair { background-color: var(--warning); color: #1f2937; }
+        .trust-badge.poor { background-color: #f97316; color: white; }
+        .trust-badge.banned { background-color: var(--danger); color: white; }
+
+        .wallet-section {
+            margin: 2rem 0;
+        }
+
+        .flow-diagram {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 2rem;
+            margin: 1.5rem 0;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .flow-number {
+            width: 2rem;
+            height: 2rem;
+            background-color: var(--primary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .api-endpoint {
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .api-method {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .api-method.post { background-color: #22c55e; color: white; }
+        .api-method.get { background-color: #3b82f6; color: white; }
+        .api-method.delete { background-color: #ef4444; color: white; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        th {
+            background-color: rgba(0, 0, 0, 0.2);
+            font-weight: 600;
+        }
+
+        code {
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+        }
+
+        .note {
+            background-color: rgba(99, 102, 241, 0.1);
+            border-left: 4px solid var(--primary);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .warning {
+            background-color: rgba(245, 158, 11, 0.1);
+            border-left: 4px solid var(--warning);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>VoiceLink Membership System</h1>
+        <p>Complete documentation for the VoiceLink community membership, trust score, and eCrypto wallet integration.</p>
+
+        <!-- Membership Levels -->
+        <h2>Membership Levels</h2>
+        <p>VoiceLink uses a level-based membership system where your level directly determines your device tier. Each level unlocks more devices and rooms.</p>
+
+        <div class="level-grid">
+            <!-- Level 1: Newbie -->
+            <div class="level-card newbie">
+                <div class="level-header">
+                    <span class="level-icon">⭐</span>
+                    <div>
+                        <div class="level-title">Level 1: Newbie</div>
+                        <span class="level-badge newbie">Starting Level</span>
+                    </div>
+                </div>
+                <p>Welcome to VoiceLink! This is where every new member starts.</p>
+                <ul class="features-list">
+                    <li>1 Device allowed</li>
+                    <li>2 Room access</li>
+                    <li>Basic community features</li>
+                </ul>
+                <div class="requirements">
+                    <h4>Requirements</h4>
+                    <div class="requirements-grid">
+                        <div class="requirement-item">📅 0 days active</div>
+                        <div class="requirement-item">⏱️ 0 room hours</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Level 2: Regular -->
+            <div class="level-card regular">
+                <div class="level-header">
+                    <span class="level-icon">⭐</span>
+                    <div>
+                        <div class="level-title">Level 2: Regular</div>
+                        <span class="level-badge regular">Active Member</span>
+                    </div>
+                </div>
+                <p>Active community members who participate regularly.</p>
+                <ul class="features-list">
+                    <li>2 Devices allowed</li>
+                    <li>5 Room access</li>
+                    <li>Extended community features</li>
+                </ul>
+                <div class="requirements">
+                    <h4>Requirements</h4>
+                    <div class="requirements-grid">
+                        <div class="requirement-item">📅 7 days active</div>
+                        <div class="requirement-item">⏱️ 5 room hours</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Level 3: Outstanding -->
+            <div class="level-card outstanding">
+                <div class="level-header">
+                    <span class="level-icon">⭐</span>
+                    <div>
+                        <div class="level-title">Level 3: Outstanding</div>
+                        <span class="level-badge outstanding">Community Leader</span>
+                    </div>
+                </div>
+                <p>Outstanding community members with excellent track records.</p>
+                <ul class="features-list">
+                    <li>3 Devices allowed</li>
+                    <li>10 Room access</li>
+                    <li>Full community features</li>
+                    <li>Priority support</li>
+                </ul>
+                <div class="requirements">
+                    <h4>Requirements</h4>
+                    <div class="requirements-grid">
+                        <div class="requirement-item">📅 30 days active</div>
+                        <div class="requirement-item">⏱️ 20 room hours</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="note">
+            <strong>Level = Device Tier:</strong> Your membership level directly determines how many devices you can link to servers. Level up by being active in the community!
+        </div>
+
+        <!-- Trust Score -->
+        <h2>Trust Score System</h2>
+        <p>Every member has a trust score (0-100) that affects their ability to upgrade levels. The trust score is influenced by community behavior.</p>
+
+        <div class="trust-levels">
+            <span class="trust-badge excellent">Excellent (80-100)</span>
+            <span class="trust-badge good">Good (60-79)</span>
+            <span class="trust-badge fair">Fair (40-59)</span>
+            <span class="trust-badge poor">Poor (1-39)</span>
+            <span class="trust-badge banned">Banned (0)</span>
+        </div>
+
+        <div class="card">
+            <h3>Trust Score Effects</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Trust Level</th>
+                        <th>Score Range</th>
+                        <th>Can Upgrade?</th>
+                        <th>Effects</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Excellent</td>
+                        <td>80-100</td>
+                        <td>Yes</td>
+                        <td>Full access, priority upgrades</td>
+                    </tr>
+                    <tr>
+                        <td>Good</td>
+                        <td>60-79</td>
+                        <td>Yes</td>
+                        <td>Normal access</td>
+                    </tr>
+                    <tr>
+                        <td>Fair</td>
+                        <td>40-59</td>
+                        <td>No</td>
+                        <td>Cannot upgrade until trust improves</td>
+                    </tr>
+                    <tr>
+                        <td>Poor</td>
+                        <td>1-39</td>
+                        <td>No</td>
+                        <td>May be demoted, limited features</td>
+                    </tr>
+                    <tr>
+                        <td>Banned</td>
+                        <td>0</td>
+                        <td>No</td>
+                        <td>Cannot link new devices</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h3>Complaint System</h3>
+            <p>Complaints from other users affect your trust score:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Severity</th>
+                        <th>Trust Penalty</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Minor</td>
+                        <td>-5 points</td>
+                        <td>Minor disruption</td>
+                    </tr>
+                    <tr>
+                        <td>Moderate</td>
+                        <td>-15 points</td>
+                        <td>Harassment</td>
+                    </tr>
+                    <tr>
+                        <td>Severe</td>
+                        <td>-30 points</td>
+                        <td>Repeated violations</td>
+                    </tr>
+                    <tr>
+                        <td>Critical</td>
+                        <td>-50 points</td>
+                        <td>Ban-worthy behavior</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Paid Tiers -->
+        <h2>Paid Tiers (Bonus)</h2>
+        <p>Paid tiers add bonus devices and rooms on top of your free membership level. These are optional and use a "pay what you can" model.</p>
+
+        <div class="level-grid">
+            <div class="card">
+                <h3>Supporter Tier</h3>
+                <ul class="features-list">
+                    <li>+7 Bonus Devices</li>
+                    <li>+15 Bonus Rooms</li>
+                    <li>Supporter badge</li>
+                </ul>
+                <p style="color: var(--warning);">Suggested: $5+</p>
+            </div>
+
+            <div class="card">
+                <h3>Unlimited Tier</h3>
+                <ul class="features-list">
+                    <li>+97 Bonus Devices (up to 100 total)</li>
+                    <li>+90 Bonus Rooms (up to 100 total)</li>
+                    <li>Unlimited badge</li>
+                    <li>Priority support</li>
+                </ul>
+                <p style="color: var(--warning);">Suggested: $20+</p>
+            </div>
+        </div>
+
+        <!-- eCrypto Wallet -->
+        <h2>eCrypto Wallet Integration</h2>
+        <p>VoiceLink integrates with eCrypto for payments and identity verification.</p>
+
+        <div class="flow-diagram">
+            <h3>Wallet Setup Flow</h3>
+            <div class="flow-step">
+                <span class="flow-number">1</span>
+                <div>
+                    <strong>Sign In</strong>
+                    <p style="margin: 0; font-size: 0.875rem; color: var(--text-muted);">Authenticate via Mastodon or Email</p>
+                </div>
+            </div>
+            <div class="flow-step">
+                <span class="flow-number">2</span>
+                <div>
+                    <strong>Create/Connect Wallet</strong>
+                    <p style="margin: 0; font-size: 0.875rem; color: var(--text-muted);">Embedded wallet or connect eCrypto app</p>
+                </div>
+            </div>
+            <div class="flow-step">
+                <span class="flow-number">3</span>
+                <div>
+                    <strong>Receive Test Coins</strong>
+                    <p style="margin: 0; font-size: 0.875rem; color: var(--text-muted);">New wallets receive test coins automatically</p>
+                </div>
+            </div>
+            <div class="flow-step">
+                <span class="flow-number">4</span>
+                <div>
+                    <strong>Use Wallet</strong>
+                    <p style="margin: 0; font-size: 0.875rem; color: var(--text-muted);">Pay for features, transfer ownership</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Wallet Types</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Control</th>
+                        <th>Setup</th>
+                        <th>Best For</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Embedded Wallet</td>
+                        <td>Managed by VoiceLink</td>
+                        <td>Instant</td>
+                        <td>Quick start, basic features</td>
+                    </tr>
+                    <tr>
+                        <td>eCrypto App</td>
+                        <td>Full user control</td>
+                        <td>Install app</td>
+                        <td>Advanced users, full features</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- API Endpoints -->
+        <h2>Server API Endpoints</h2>
+
+        <h3>Membership Sync</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/sync/membership</code>
+        </div>
+        <p>Syncs membership level, stats, and trust score with the server.</p>
+
+        <h3>Trust Sync</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/sync/trust</code>
+        </div>
+        <p>Syncs trust score and handles pending complaints from the server.</p>
+
+        <h3>Wallet Sync</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/sync/wallet</code>
+        </div>
+        <p>Syncs wallet address and balances with the eCrypto network.</p>
+
+        <h3>Device Sync</h3>
+        <div class="api-endpoint">
+            <span class="api-method post">POST</span>
+            <code>/api/sync/devices</code>
+        </div>
+        <p>Syncs linked devices and handles revocations from the server.</p>
+
+        <!-- WebSocket Events -->
+        <h2>WebSocket Events</h2>
+
+        <div class="card">
+            <h3>Server Push Events</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Event</th>
+                        <th>Description</th>
+                        <th>Data</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>membership-update</code></td>
+                        <td>Membership level changed</td>
+                        <td><code>{ level: Int }</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>trust-update</code></td>
+                        <td>Trust score changed</td>
+                        <td><code>{ trustScore: Int }</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>wallet-update</code></td>
+                        <td>Wallet balance changed</td>
+                        <td><code>{ balance: Double, testBalance: Double }</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>complaint-received</code></td>
+                        <td>New complaint filed</td>
+                        <td><code>{ reason: String, severity: String }</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>level-upgrade</code></td>
+                        <td>Eligible for level upgrade</td>
+                        <td><code>{ newLevel: Int }</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>access-revoked</code></td>
+                        <td>Device access revoked</td>
+                        <td><code>{ deviceId: String, revokedBy: String }</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="warning">
+            <strong>Trust Score Requirement:</strong> Users must maintain a trust score of 50+ to be eligible for level upgrades. Good community behavior is essential!
+        </div>
+
+        <!-- Footer -->
+        <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.1); text-align: center; color: var(--text-muted);">
+            <p>VoiceLink Membership System Documentation</p>
+            <p style="font-size: 0.875rem;">Generated from VoiceLinkNative Swift App</p>
+        </div>
+    </div>
+</body>
+</html>

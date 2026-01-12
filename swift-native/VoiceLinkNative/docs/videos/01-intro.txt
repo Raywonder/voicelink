@@ -1,0 +1,55 @@
+VoiceLink Native v1.0 - Introduction Video Script
+================================================
+
+TITLE: Welcome to VoiceLink Native
+
+DURATION: 60-90 seconds
+
+---
+
+SCENE 1: App Logo Animation (5 seconds)
+- VoiceLink logo fades in
+- Tagline: "Voice Chat, Reimagined for macOS"
+
+SCENE 2: Overview (15 seconds)
+NARRATION:
+"VoiceLink Native is a powerful voice chat application built specifically for macOS.
+Connect with friends, join rooms, and communicate with crystal-clear audio."
+
+VISUALS:
+- Show app icon in dock
+- Menu bar integration
+- Clean SwiftUI interface
+
+SCENE 3: Key Features (30 seconds)
+NARRATION:
+"With VoiceLink Native, you get:
+- Seamless server pairing with simple codes
+- Multiple authentication options including Mastodon and email
+- A fair membership system that rewards active community members
+- Permanent rooms that you can create and keep
+- Safety features like Escort Me for trusted companions
+- Built-in eCrypto wallet integration"
+
+VISUALS:
+- Quick cuts of each feature
+- Server pairing interface
+- Membership badges
+- Room creation
+- Escort Me button
+
+SCENE 4: Call to Action (10 seconds)
+NARRATION:
+"Download VoiceLink Native today and join the conversation."
+
+VISUALS:
+- Download button
+- App Store badge (if applicable)
+- Website URL
+
+---
+
+END CARD:
+VoiceLink Native v1.0
+voicelink.app
+Built with Swift and SwiftUI for macOS
