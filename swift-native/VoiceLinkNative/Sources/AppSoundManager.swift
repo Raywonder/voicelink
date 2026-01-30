@@ -47,7 +47,7 @@ class AppSoundManager: ObservableObject {
         // Menu/UI transition sounds
         case menuOpen = "whoosh_fast1"
         case menuClose = "whoosh_fast2"
-        case wooshFast = "whoosh_fast1"
+        case wooshFast = "whoosh_fast3"
         case wooshMedium = "whoosh_medium1"
         case wooshSlow = "whoosh_slow1"
 

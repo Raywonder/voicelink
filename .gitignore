@@ -16,3 +16,17 @@ node_modules/
 # Temporary files
 *.log
 *.tmp
+
+# Large archives
+releases.zip
+*.tar.gz
+
+# Build outputs
+build/
+dist/
+*.zip
+
+# Large audio files
+source/assets/sounds/ambience/*.wav
+source/assets/sounds/ambience/*.flac
+source/assets/sounds/ambience/*.mp3

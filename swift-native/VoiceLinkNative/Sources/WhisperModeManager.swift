@@ -18,7 +18,7 @@ class WhisperModeManager: ObservableObject {
     @Published var whisperTargetUsername: String?
 
     // Settings
-    struct WhisperSettings: Codable {
+    struct WhisperSettings: Codable, Equatable {
         var duckingLevelDb: Float = -20      // -20dB ducking for other users
         var lowpassFrequency: Float = 1000   // 1kHz lowpass filter
         var fadeTimeSeconds: Float = 0.03    // 30ms fade
@@ -515,7 +515,7 @@ struct WhisperSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: localSettings) { _, newValue in
+        .onChange(of: localSettings) { newValue in
             whisperManager.updateSettings(newValue)
         }
     }

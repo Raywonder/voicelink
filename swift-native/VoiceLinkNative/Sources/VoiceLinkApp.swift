@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import AppKit
 import SocketIO
+import CoreAudio
 
 @main
 struct VoiceLinkApp: App {
@@ -16,6 +17,12 @@ struct VoiceLinkApp: App {
                 .environmentObject(localDiscovery)
                 .frame(minWidth: 900, minHeight: 700)
                 .frame(width: 1000, height: 750)
+                .sheet(isPresented: $appState.showAnnouncements) {
+                    AnnouncementsView()
+                }
+                .sheet(isPresented: $appState.showBugReport) {
+                    BugReportView()
+                }
         }
         .defaultSize(width: 1000, height: 750)
         .commands {
@@ -61,6 +68,31 @@ struct VoiceLinkApp: App {
                     NotificationCenter.default.post(name: .toggleDeafen, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: .command)
+            }
+
+            CommandMenu("Account") {
+                let authManager = AuthenticationManager.shared
+
+                if authManager.authState == .authenticated {
+                    if let user = authManager.currentUser {
+                        Text("Logged in as: \(user.displayName)")
+                        if let instance = user.mastodonInstance {
+                            Text("Instance: \(instance)")
+                        }
+                    }
+
+                    Divider()
+
+                    Button("Logout") {
+                        authManager.logout()
+                    }
+                    .keyboardShortcut("q", modifiers: [.command, .shift])
+                } else {
+                    Button("Login with Mastodon") {
+                        appState.currentScreen = .login
+                    }
+                    .keyboardShortcut("l", modifiers: .command)
+                }
             }
 
             CommandMenu("License") {
@@ -184,6 +216,47 @@ struct VoiceLinkApp: App {
                     .help("Manage remote server settings (admin only)")
                 }
             }
+
+            CommandMenu("Help") {
+                Button("What's New...") {
+                    appState.showAnnouncements = true
+                }
+                .keyboardShortcut("?", modifiers: [.command, .shift])
+                .help("View latest announcements and release notes")
+
+                Button("Report a Bug...") {
+                    appState.showBugReport = true
+                }
+                .help("Submit a bug report")
+
+                Divider()
+
+                Button("Open Bug Tracker") {
+                    AnnouncementsManager.shared.openBugTracker()
+                }
+                .help("View and track reported issues")
+
+                Button("View Announcements Online") {
+                    AnnouncementsManager.shared.openAnnouncementsInBrowser()
+                }
+                .help("View announcements in web browser")
+
+                Divider()
+
+                Button("Check for Updates...") {
+                    AutoUpdater.shared.checkForUpdates()
+                }
+                .help("Check for available updates")
+
+                Divider()
+
+                Button("VoiceLink Help") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/help") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .help("Open VoiceLink documentation")
+            }
         }
     }
 }
@@ -280,6 +353,8 @@ class AppState: ObservableObject {
     @Published var serverStatus: ServerStatus = .offline
     @Published var username: String = "User\(Int.random(in: 1000...9999))"
     @Published var errorMessage: String?
+    @Published var showAnnouncements: Bool = false
+    @Published var showBugReport: Bool = false
 
     let serverManager = ServerManager.shared
     let licensing = LicensingManager.shared
@@ -293,6 +368,7 @@ class AppState: ObservableObject {
         case servers
         case licensing
         case admin
+        case login
     }
 
     enum ServerStatus {
@@ -574,6 +650,8 @@ struct ContentView: View {
                 LicensingScreenView()
             case .admin:
                 AdminSettingsView()
+            case .login:
+                LoginView()
             }
         }
     }
@@ -584,7 +662,6 @@ struct MainMenuView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
-    @State private var showServersSheet = false
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -632,20 +709,44 @@ struct MainMenuView: View {
                             .font(.caption)
                     }
 
-                    // Server switcher
+                    // Sync Mode Filter
                     Menu {
-                        Button("Main Server") {
-                            appState.connectToMainServer()
+                        ForEach(SyncMode.allCases) { mode in
+                            Button(action: { SettingsManager.shared.syncMode = mode }) {
+                                HStack {
+                                    if SettingsManager.shared.syncMode == mode {
+                                        Image(systemName: "checkmark")
+                                    }
+                                    Image(systemName: mode.icon)
+                                    Text(mode.displayName)
+                                }
+                            }
                         }
-                        Button("Local Server") {
-                            appState.connectToLocalServer()
-                        }
-                        Button("Auto (Local then Main)") {
-                            appState.connectToServer()
+
+                        Divider()
+
+                        Menu("Connection") {
+                            Button("Main Server") {
+                                appState.connectToMainServer()
+                            }
+                            Button("Local Server") {
+                                appState.connectToLocalServer()
+                            }
+                            Button("Auto (Local then Main)") {
+                                appState.connectToServer()
+                            }
                         }
                     } label: {
-                        Image(systemName: "server.rack")
-                            .foregroundColor(.white.opacity(0.7))
+                        HStack(spacing: 4) {
+                            Image(systemName: SettingsManager.shared.syncMode.icon)
+                            Text(SettingsManager.shared.syncMode.displayName)
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                        .foregroundColor(.white.opacity(0.8))
                     }
                     .menuStyle(.borderlessButton)
 
@@ -719,6 +820,43 @@ struct MainMenuView: View {
             }
             .padding(.horizontal, 40)
 
+            // Account Button
+            HStack {
+                let authManager = AuthenticationManager.shared
+                if authManager.authState == .authenticated {
+                    if let user = authManager.currentUser {
+                        HStack {
+                            Image(systemName: "person.circle.fill")
+                                .foregroundColor(.green)
+                            VStack(alignment: .leading) {
+                                Text(user.displayName)
+                                    .foregroundColor(.white)
+                                    .font(.subheadline)
+                                if let instance = user.mastodonInstance {
+                                    Text("@\(instance)")
+                                        .foregroundColor(.gray)
+                                        .font(.caption)
+                                }
+                            }
+                            Spacer()
+                            Button("Logout") {
+                                authManager.logout()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(10)
+                    }
+                } else {
+                    ActionButton(title: "Login with Mastodon", icon: "person.circle.fill", color: .purple) {
+                        appState.currentScreen = .login
+                    }
+                }
+            }
+            .padding(.horizontal, 40)
+
                 Spacer()
             }
             .frame(maxWidth: .infinity)
@@ -760,8 +898,8 @@ struct MainMenuView: View {
                 }
                 .accessibilityLabel("Local server \(localDiscovery.localServerFound ? "found" : "not found"). Tap to \(localDiscovery.localServerFound ? "connect" : "scan").")
 
-                // Servers Button
-                Button(action: { showServersSheet = true }) {
+                // Servers Button - navigate to servers screen instead of sheet
+                Button(action: { appState.currentScreen = .servers }) {
                     HStack {
                         Image(systemName: "server.rack")
                         Text("My Servers")
@@ -793,10 +931,6 @@ struct MainMenuView: View {
             .frame(width: 280)
             .padding()
             .background(Color.black.opacity(0.2))
-        }
-        .sheet(isPresented: $showServersSheet) {
-            ServersView(isSheet: true)
-                .frame(minWidth: 600, minHeight: 500)
         }
     }
 }
@@ -1115,23 +1249,583 @@ struct VoiceControlButton: View {
     }
 }
 
+// MARK: - Sync Mode Enum
+enum SyncMode: String, CaseIterable, Identifiable {
+    case all = "all"
+    case federation = "federation"
+    case personalFederated = "personal_federated"
+    case personalRooms = "personal_rooms"
+    case allRoomTypes = "all_room_types"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All Servers"
+        case .federation: return "Main Federation"
+        case .personalFederated: return "Personal Federated"
+        case .personalRooms: return "Personal Rooms (Hidden)"
+        case .allRoomTypes: return "All Room Types"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .all: return "Show all available servers and rooms"
+        case .federation: return "Main VoiceLink federation network"
+        case .personalFederated: return "Your personal federated servers"
+        case .personalRooms: return "Private rooms not visible publicly"
+        case .allRoomTypes: return "All room types including private"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .all: return "globe"
+        case .federation: return "network"
+        case .personalFederated: return "person.3.fill"
+        case .personalRooms: return "lock.shield"
+        case .allRoomTypes: return "square.grid.2x2"
+        }
+    }
+}
+
+// MARK: - Settings Manager
+class SettingsManager: ObservableObject {
+    static let shared = SettingsManager()
+
+    // Audio Settings
+    @Published var inputDevice: String = "Default"
+    @Published var outputDevice: String = "Default"
+    @Published var inputVolume: Double = 0.8
+    @Published var outputVolume: Double = 0.8
+    @Published var noiseSuppression: Bool = true
+    @Published var echoCancellation: Bool = true
+    @Published var autoGainControl: Bool = true
+
+    // Sync Settings
+    @Published var syncMode: SyncMode = .all {
+        didSet {
+            UserDefaults.standard.set(syncMode.rawValue, forKey: "syncMode")
+            NotificationCenter.default.post(name: .syncModeChanged, object: syncMode)
+        }
+    }
+
+    // Connection Settings
+    @Published var autoConnect: Bool = true
+    @Published var preferLocalServer: Bool = true
+    @Published var reconnectOnDisconnect: Bool = true
+    @Published var connectionTimeout: Double = 30
+
+    // PTT Settings
+    @Published var pttEnabled: Bool = false
+    @Published var pttKey: String = "Space"
+
+    // Notifications
+    @Published var soundNotifications: Bool = true
+    @Published var desktopNotifications: Bool = true
+    @Published var notifyOnJoin: Bool = true
+    @Published var notifyOnLeave: Bool = true
+
+    // Privacy
+    @Published var showOnlineStatus: Bool = true
+    @Published var allowDirectMessages: Bool = true
+
+    // 3D Audio
+    @Published var spatialAudioEnabled: Bool = true
+    @Published var headTrackingEnabled: Bool = false
+
+    // Available devices
+    @Published var availableInputDevices: [String] = ["Default"]
+    @Published var availableOutputDevices: [String] = ["Default"]
+
+    init() {
+        loadSettings()
+        detectAudioDevices()
+    }
+
+    func loadSettings() {
+        if let mode = UserDefaults.standard.string(forKey: "syncMode"),
+           let syncMode = SyncMode(rawValue: mode) {
+            self.syncMode = syncMode
+        }
+
+        inputVolume = UserDefaults.standard.double(forKey: "inputVolume")
+        if inputVolume == 0 { inputVolume = 0.8 }
+
+        outputVolume = UserDefaults.standard.double(forKey: "outputVolume")
+        if outputVolume == 0 { outputVolume = 0.8 }
+
+        noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
+        echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
+        autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
+        autoConnect = UserDefaults.standard.bool(forKey: "autoConnect")
+        preferLocalServer = UserDefaults.standard.bool(forKey: "preferLocalServer")
+        pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
+        spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
+
+        // Defaults that should be true
+        if !UserDefaults.standard.bool(forKey: "settingsInitialized") {
+            noiseSuppression = true
+            echoCancellation = true
+            autoGainControl = true
+            autoConnect = true
+            preferLocalServer = true
+            soundNotifications = true
+            desktopNotifications = true
+            notifyOnJoin = true
+            notifyOnLeave = true
+            showOnlineStatus = true
+            allowDirectMessages = true
+            spatialAudioEnabled = true
+            reconnectOnDisconnect = true
+            UserDefaults.standard.set(true, forKey: "settingsInitialized")
+        }
+    }
+
+    func saveSettings() {
+        UserDefaults.standard.set(syncMode.rawValue, forKey: "syncMode")
+        UserDefaults.standard.set(inputVolume, forKey: "inputVolume")
+        UserDefaults.standard.set(outputVolume, forKey: "outputVolume")
+        UserDefaults.standard.set(noiseSuppression, forKey: "noiseSuppression")
+        UserDefaults.standard.set(echoCancellation, forKey: "echoCancellation")
+        UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
+        UserDefaults.standard.set(autoConnect, forKey: "autoConnect")
+        UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer")
+        UserDefaults.standard.set(pttEnabled, forKey: "pttEnabled")
+        UserDefaults.standard.set(spatialAudioEnabled, forKey: "spatialAudioEnabled")
+    }
+
+    func detectAudioDevices() {
+        // Detect input devices
+        var inputDevices = ["Default"]
+        var outputDevices = ["Default"]
+
+        // Get audio devices using CoreAudio
+        var propertySize: UInt32 = 0
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize)
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &deviceIDs)
+
+        for deviceID in deviceIDs {
+            // Get device name
+            var nameSize: UInt32 = 256
+            var nameAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+
+            var name: CFString = "" as CFString
+            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
+            let deviceName = name as String
+
+            // Check if input device
+            var inputStreamSize: UInt32 = 0
+            var inputAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope: kAudioDevicePropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectGetPropertyDataSize(deviceID, &inputAddress, 0, nil, &inputStreamSize)
+            if inputStreamSize > 0 && !deviceName.isEmpty {
+                inputDevices.append(deviceName)
+            }
+
+            // Check if output device
+            var outputStreamSize: UInt32 = 0
+            var outputAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectGetPropertyDataSize(deviceID, &outputAddress, 0, nil, &outputStreamSize)
+            if outputStreamSize > 0 && !deviceName.isEmpty {
+                outputDevices.append(deviceName)
+            }
+        }
+
+        availableInputDevices = Array(Set(inputDevices)).sorted()
+        availableOutputDevices = Array(Set(outputDevices)).sorted()
+    }
+}
+
+extension Notification.Name {
+    static let syncModeChanged = Notification.Name("syncModeChanged")
+}
+
+// MARK: - Settings View
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
+    @StateObject private var settings = SettingsManager.shared
+    @State private var selectedTab: SettingsTab = .audio
+
+    enum SettingsTab: String, CaseIterable {
+        case audio = "Audio"
+        case connection = "Connection"
+        case sync = "Sync & Filters"
+        case notifications = "Notifications"
+        case privacy = "Privacy"
+        case advanced = "Advanced"
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Settings")
-                .font(.largeTitle)
-                .foregroundColor(.white)
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button(action: {
+                    settings.saveSettings()
+                    appState.currentScreen = .mainMenu
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white.opacity(0.8))
 
-            Text("Coming soon...")
+                Spacer()
+
+                Text("Settings")
+                    .font(.title2.bold())
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                // Symmetry placeholder
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .opacity(0)
+            }
+            .padding()
+            .background(Color.black.opacity(0.3))
+
+            // Main content
+            HSplitView {
+                // Sidebar
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(SettingsTab.allCases, id: \.self) { tab in
+                        Button(action: { selectedTab = tab }) {
+                            HStack {
+                                Image(systemName: iconForTab(tab))
+                                    .frame(width: 20)
+                                Text(tab.rawValue)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(selectedTab == tab ? Color.blue.opacity(0.3) : Color.clear)
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(selectedTab == tab ? .white : .white.opacity(0.7))
+                    }
+                    Spacer()
+                }
+                .frame(width: 180)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 8)
+                .background(Color.black.opacity(0.2))
+
+                // Detail panel
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        switch selectedTab {
+                        case .audio:
+                            audioSettings
+                        case .connection:
+                            connectionSettings
+                        case .sync:
+                            syncSettings
+                        case .notifications:
+                            notificationSettings
+                        case .privacy:
+                            privacySettings
+                        case .advanced:
+                            advancedSettings
+                        }
+                    }
+                    .padding(20)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    func iconForTab(_ tab: SettingsTab) -> String {
+        switch tab {
+        case .audio: return "speaker.wave.2"
+        case .connection: return "wifi"
+        case .sync: return "arrow.triangle.2.circlepath"
+        case .notifications: return "bell"
+        case .privacy: return "lock.shield"
+        case .advanced: return "gear"
+        }
+    }
+
+    // MARK: - Audio Settings
+    @ViewBuilder
+    var audioSettings: some View {
+        SettingsSection(title: "Input Device") {
+            Picker("Microphone", selection: $settings.inputDevice) {
+                ForEach(settings.availableInputDevices, id: \.self) { device in
+                    Text(device).tag(device)
+                }
+            }
+            .pickerStyle(.menu)
+
+            HStack {
+                Text("Input Volume")
+                Slider(value: $settings.inputVolume, in: 0...1)
+                Text("\(Int(settings.inputVolume * 100))%")
+                    .frame(width: 40)
+            }
+        }
+
+        SettingsSection(title: "Output Device") {
+            Picker("Speakers/Headphones", selection: $settings.outputDevice) {
+                ForEach(settings.availableOutputDevices, id: \.self) { device in
+                    Text(device).tag(device)
+                }
+            }
+            .pickerStyle(.menu)
+
+            HStack {
+                Text("Output Volume")
+                Slider(value: $settings.outputVolume, in: 0...1)
+                Text("\(Int(settings.outputVolume * 100))%")
+                    .frame(width: 40)
+            }
+        }
+
+        SettingsSection(title: "Audio Processing") {
+            Toggle("Noise Suppression", isOn: $settings.noiseSuppression)
+            Toggle("Echo Cancellation", isOn: $settings.echoCancellation)
+            Toggle("Auto Gain Control", isOn: $settings.autoGainControl)
+        }
+
+        SettingsSection(title: "3D Spatial Audio") {
+            Toggle("Enable Spatial Audio", isOn: $settings.spatialAudioEnabled)
+            Toggle("Head Tracking (AirPods)", isOn: $settings.headTrackingEnabled)
+                .disabled(!settings.spatialAudioEnabled)
+        }
+
+        SettingsSection(title: "Push-to-Talk") {
+            Toggle("Enable PTT Mode", isOn: $settings.pttEnabled)
+            if settings.pttEnabled {
+                HStack {
+                    Text("PTT Key:")
+                    Text(settings.pttKey)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(4)
+                    Button("Change") {
+                        // PTT key binding - would need key capture UI
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
+    // MARK: - Connection Settings
+    @ViewBuilder
+    var connectionSettings: some View {
+        SettingsSection(title: "Auto-Connect") {
+            Toggle("Connect automatically on launch", isOn: $settings.autoConnect)
+            Toggle("Prefer local server when available", isOn: $settings.preferLocalServer)
+            Toggle("Reconnect on disconnect", isOn: $settings.reconnectOnDisconnect)
+        }
+
+        SettingsSection(title: "Connection Timeout") {
+            HStack {
+                Text("Timeout:")
+                Slider(value: $settings.connectionTimeout, in: 5...60, step: 5)
+                Text("\(Int(settings.connectionTimeout))s")
+                    .frame(width: 40)
+            }
+        }
+
+        SettingsSection(title: "Server Status") {
+            HStack {
+                Circle()
+                    .fill(appState.isConnected ? Color.green : Color.red)
+                    .frame(width: 10, height: 10)
+                Text(appState.isConnected ? "Connected" : "Disconnected")
+                    .foregroundColor(appState.isConnected ? .green : .red)
+                Spacer()
+                if appState.isConnected {
+                    Text(appState.serverManager.connectedServer)
+                        .foregroundColor(.gray)
+                }
+            }
+
+            HStack {
+                Button("Reconnect") {
+                    appState.connectToServer()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Disconnect") {
+                    appState.serverManager.disconnect()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!appState.isConnected)
+            }
+        }
+    }
+
+    // MARK: - Sync Settings
+    @ViewBuilder
+    var syncSettings: some View {
+        SettingsSection(title: "Sync Mode") {
+            Text("Filter which rooms and servers are visible")
+                .font(.caption)
                 .foregroundColor(.gray)
 
-            Button("Back") {
-                appState.currentScreen = .mainMenu
+            ForEach(SyncMode.allCases) { mode in
+                Button(action: { settings.syncMode = mode }) {
+                    HStack {
+                        Image(systemName: mode.icon)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mode.displayName)
+                                .fontWeight(settings.syncMode == mode ? .semibold : .regular)
+                            Text(mode.description)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        Spacer()
+                        if settings.syncMode == mode {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(10)
+                    .background(settings.syncMode == mode ? Color.blue.opacity(0.2) : Color.white.opacity(0.05))
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.white)
+            }
+        }
+
+        SettingsSection(title: "Room Visibility") {
+            Toggle("Show private rooms I'm a member of", isOn: .constant(true))
+            Toggle("Show federated rooms", isOn: .constant(true))
+            Toggle("Show local-only rooms", isOn: .constant(true))
+        }
+    }
+
+    // MARK: - Notification Settings
+    @ViewBuilder
+    var notificationSettings: some View {
+        SettingsSection(title: "Sound Notifications") {
+            Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
+            Toggle("Play sound when user joins", isOn: $settings.notifyOnJoin)
+            Toggle("Play sound when user leaves", isOn: $settings.notifyOnLeave)
+        }
+
+        SettingsSection(title: "Desktop Notifications") {
+            Toggle("Enable desktop notifications", isOn: $settings.desktopNotifications)
+
+            Button("Test Notification") {
+                let notification = NSUserNotification()
+                notification.title = "VoiceLink"
+                notification.informativeText = "Test notification"
+                NSUserNotificationCenter.default.deliver(notification)
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    // MARK: - Privacy Settings
+    @ViewBuilder
+    var privacySettings: some View {
+        SettingsSection(title: "Online Status") {
+            Toggle("Show my online status to others", isOn: $settings.showOnlineStatus)
+        }
+
+        SettingsSection(title: "Direct Messages") {
+            Toggle("Allow direct messages", isOn: $settings.allowDirectMessages)
+        }
+
+        SettingsSection(title: "Data") {
+            Button("Clear Local Data") {
+                // Clear caches
+            }
+            .buttonStyle(.bordered)
+
+            Button("Export My Data") {
+                // Export user data
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    // MARK: - Advanced Settings
+    @ViewBuilder
+    var advancedSettings: some View {
+        SettingsSection(title: "Developer Options") {
+            Toggle("Enable debug logging", isOn: .constant(false))
+            Toggle("Show connection stats", isOn: .constant(false))
+        }
+
+        SettingsSection(title: "Audio Codec") {
+            Picker("Codec", selection: .constant("Opus")) {
+                Text("Opus (Recommended)").tag("Opus")
+                Text("PCM").tag("PCM")
+            }
+            .pickerStyle(.menu)
+        }
+
+        SettingsSection(title: "Network") {
+            Text("Local IP: \(appState.localIP)")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+
+        SettingsSection(title: "Reset") {
+            Button("Reset All Settings") {
+                // Reset to defaults
+            }
+            .buttonStyle(.bordered)
+            .foregroundColor(.red)
+        }
+    }
+}
+
+// MARK: - Settings Section
+struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 10) {
+                content
+            }
+            .padding()
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(10)
+        }
+        .foregroundColor(.white.opacity(0.9))
     }
 }
 

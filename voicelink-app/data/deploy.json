@@ -1,0 +1,446 @@
+{
+  "version": "1.0.0",
+  "server": {
+    "name": "VoiceLink Server",
+    "description": "A VoiceLink voice chat server",
+    "port": 3010,
+    "host": "0.0.0.0",
+    "publicUrl": null,
+    "maxConnections": 500,
+    "rateLimit": {
+      "windowMs": 60000,
+      "maxRequests": 100
+    }
+  },
+  "rooms": {
+    "maxRooms": 100,
+    "maxUsersPerRoom": 50,
+    "defaultMaxUsers": 20,
+    "allowUserCreatedRooms": true,
+    "autoCleanupEnabled": true,
+    "cleanupIntervalMs": 3600000,
+    "emptyRoomTimeoutMs": 1800000,
+    "defaultRoomsEnabled": true,
+    "defaultRoomsCount": 8
+  },
+  "audio": {
+    "sampleRate": 48000,
+    "channels": 2,
+    "bitDepth": 16,
+    "codec": "opus",
+    "spatialAudioEnabled": true,
+    "maxBitrate": 128000,
+    "minBitrate": 16000
+  },
+  "security": {
+    "requireAuth": false,
+    "allowGuests": true,
+    "maxGuestDuration": null,
+    "enableRateLimiting": true,
+    "corsOrigins": [
+      "*"
+    ],
+    "enableHttps": false,
+    "sslCertPath": null,
+    "sslKeyPath": null
+  },
+  "federation": {
+    "enabled": false,
+    "mode": "standalone",
+    "hubUrl": null,
+    "trustedServers": [],
+    "syncInterval": 300000,
+    "globalFederation": true,
+    "roomApprovalRequired": false,
+    "approvalHoldTime": 3600000,
+    "autoApproveAfterHold": true,
+    "tiers": {
+      "none": {
+        "visible": false,
+        "syncInterval": 0
+      },
+      "standard": {
+        "visible": true,
+        "syncInterval": 300000
+      },
+      "promoted": {
+        "visible": true,
+        "syncInterval": 60000,
+        "priority": "high"
+      }
+    },
+    "nodeOperatorPriority": {
+      "enabled": true,
+      "priorityBoost": 100,
+      "verificationInterval": 3600000,
+      "trustedNodes": []
+    }
+  },
+  "mastodon": {
+    "enabled": false,
+    "botEnabled": false,
+    "instances": [],
+    "defaultInstance": null
+  },
+  "admin": {
+    "enabled": true,
+    "requireAuth": true,
+    "adminEmails": [],
+    "adminMastodonHandles": []
+  },
+  "features": {
+    "peekIntoRoom": true,
+    "jukebox": true,
+    "screenShare": false,
+    "recording": false,
+    "transcription": false,
+    "whisperMode": true
+  },
+  "jellyfin": {
+    "bundled": {
+      "enabled": false,
+      "version": null,
+      "installPath": null,
+      "dataPath": null,
+      "mediaPath": null,
+      "port": 8096,
+      "autoStart": true
+    },
+    "connection": {
+      "serverUrl": null,
+      "apiKey": null,
+      "userId": null,
+      "autoSetup": true
+    },
+    "bot": {
+      "enabled": false,
+      "status": "disabled",
+      "suspendedUntil": null,
+      "suspendReason": null,
+      "defaultRooms": [],
+      "globalPlayback": false,
+      "roomOverrides": {},
+      "defaultLibrary": "Music",
+      "ambientOnJoin": true,
+      "ambientVolume": 0.3
+    },
+    "suspension": {
+      "allowedDurations": [
+        {
+          "id": "24h",
+          "label": "24 Hours",
+          "ms": 86400000
+        },
+        {
+          "id": "36h",
+          "label": "36 Hours",
+          "ms": 129600000
+        },
+        {
+          "id": "week",
+          "label": "1 Week",
+          "ms": 604800000
+        },
+        {
+          "id": "month",
+          "label": "1 Month",
+          "ms": 2592000000
+        }
+      ],
+      "autoReEnable": true
+    },
+    "libraries": {
+      "remoteImport": {
+        "enabled": true,
+        "allowedExtensions": [
+          ".zip",
+          ".tar",
+          ".tar.gz",
+          ".mp3",
+          ".m3u",
+          ".m3u8",
+          ".flac",
+          ".ogg",
+          ".wav"
+        ],
+        "maxDownloadSize": 5368709120,
+        "downloadPath": null,
+        "autoExtract": true,
+        "autoCleanup": true,
+        "autoScan": true
+      },
+      "upload": {
+        "enabled": true,
+        "maxFileSize": 5368709120,
+        "allowedExtensions": [
+          ".zip",
+          ".tar",
+          ".tar.gz",
+          ".mp3",
+          ".m3u",
+          ".m3u8",
+          ".flac",
+          ".ogg",
+          ".wav",
+          ".mp4",
+          ".mkv"
+        ],
+        "uploadPath": null
+      },
+      "storage": {
+        "maxTotalSize": null,
+        "currentUsage": 0,
+        "purchasedExtra": 0,
+        "purchaseEnabled": false
+      }
+    },
+    "backup": {
+      "enabled": true,
+      "autoBackup": true,
+      "backupInterval": 86400000,
+      "backupPath": null,
+      "maxBackups": 7,
+      "includeMedia": false,
+      "includeConfig": true,
+      "includeDatabase": true,
+      "lastBackup": null,
+      "lastBackupSize": null
+    },
+    "removal": {
+      "requireConfirmation": true,
+      "requireBackupCheck": true,
+      "removeMedia": false,
+      "removeConfig": true,
+      "removeDatabase": true
+    },
+    "adminPanel": {
+      "showApiKey": false,
+      "editableSettings": [
+        "bot.enabled",
+        "bot.defaultRooms",
+        "bot.globalPlayback",
+        "bot.defaultLibrary",
+        "bot.ambientOnJoin",
+        "bot.ambientVolume",
+        "libraries.remoteImport.enabled",
+        "libraries.upload.enabled",
+        "backup.autoBackup"
+      ],
+      "lockedSettings": [
+        "connection.serverUrl",
+        "connection.apiKey",
+        "bundled.installPath",
+        "bundled.port"
+      ]
+    }
+  },
+  "branding": {
+    "appName": "VoiceLink",
+    "logoUrl": null,
+    "primaryColor": "#6364FF",
+    "secondaryColor": "#563ACC"
+  },
+  "ecripto": {
+    "enabled": false,
+    "apiUrl": "https://api.ecripto.io",
+    "networkId": null,
+    "nodeOperator": {
+      "isNode": false,
+      "nodeWalletAddress": null,
+      "nodeId": null,
+      "nodeType": null,
+      "verifiedAt": null,
+      "verificationProof": null
+    },
+    "mintingEnabled": false,
+    "shopTabEnabled": false,
+    "walletAccessEnabled": false,
+    "requiredTokens": [],
+    "accessTiers": {
+      "enabled": false,
+      "tiers": [
+        {
+          "id": "day",
+          "name": "Day Pass",
+          "duration": 86400000,
+          "price": null
+        },
+        {
+          "id": "week",
+          "name": "Weekly Pass",
+          "duration": 604800000,
+          "price": null
+        },
+        {
+          "id": "month",
+          "name": "Monthly Pass",
+          "duration": 2592000000,
+          "price": null
+        }
+      ]
+    },
+    "filterOptions": {
+      "byUser": true,
+      "byDomain": true,
+      "byMintStatus": true
+    }
+  },
+  "mastodonDiscovery": {
+    "enabled": false,
+    "showDomainServers": true,
+    "showProfileServers": true,
+    "federatedDiscovery": true
+  },
+  "backup": {
+    "enabled": true,
+    "intervalMs": 3600000,
+    "maxBackups": 24,
+    "includeRooms": true,
+    "includeUsers": false
+  },
+  "logging": {
+    "level": "info",
+    "file": null,
+    "maxFileSize": 10485760,
+    "maxFiles": 5
+  },
+  "payments": {
+    "enabled": false,
+    "defaultProvider": null,
+    "currency": "usd",
+    "providers": {
+      "stripe": {
+        "enabled": false,
+        "displayName": "Credit/Debit Card",
+        "publishableKey": null,
+        "secretKey": null,
+        "webhookSecret": null,
+        "supportedMethods": [
+          "card"
+        ],
+        "priority": 1
+      },
+      "paypal": {
+        "enabled": false,
+        "displayName": "PayPal",
+        "clientId": null,
+        "clientSecret": null,
+        "mode": "sandbox",
+        "webhookId": null,
+        "priority": 2
+      },
+      "crypto": {
+        "enabled": false,
+        "displayName": "Cryptocurrency",
+        "ecriptoEnabled": true,
+        "addresses": {
+          "btc": null,
+          "eth": null,
+          "sol": null
+        },
+        "coinbaseCommerceKey": null,
+        "btcPayServerUrl": null,
+        "btcPayServerApiKey": null,
+        "priority": 3
+      },
+      "cashapp": {
+        "enabled": false,
+        "displayName": "Cash App",
+        "cashtag": null,
+        "businessId": null,
+        "priority": 4
+      },
+      "manual": {
+        "enabled": false,
+        "displayName": "Manual Payment",
+        "instructions": "Contact admin for payment details",
+        "contactEmail": null,
+        "contactMastodon": null,
+        "priority": 99
+      }
+    },
+    "pricing": {
+      "roomAccess": {
+        "enabled": false,
+        "tiers": [
+          {
+            "id": "day",
+            "name": "Day Pass",
+            "duration": 86400000,
+            "price": 1
+          },
+          {
+            "id": "week",
+            "name": "Weekly Pass",
+            "duration": 604800000,
+            "price": 5
+          },
+          {
+            "id": "month",
+            "name": "Monthly Pass",
+            "duration": 2592000000,
+            "price": 15
+          }
+        ]
+      },
+      "donations": {
+        "enabled": false,
+        "suggestedAmounts": [
+          5,
+          10,
+          25,
+          50
+        ],
+        "allowCustomAmount": true,
+        "minimumAmount": 1
+      },
+      "premiumFeatures": {
+        "enabled": false,
+        "features": [
+          {
+            "id": "recording",
+            "name": "Recording Access",
+            "price": 5,
+            "duration": 2592000000
+          },
+          {
+            "id": "transcription",
+            "name": "Transcription",
+            "price": 10,
+            "duration": 2592000000
+          },
+          {
+            "id": "priority_federation",
+            "name": "Priority Federation",
+            "price": 20,
+            "duration": 2592000000
+          }
+        ]
+      }
+    },
+    "options": {
+      "requireEmailReceipt": true,
+      "allowRefunds": true,
+      "refundWindowDays": 7,
+      "taxRate": 0,
+      "taxInclusive": false
+    }
+  },
+  "stripe": {
+    "enabled": false,
+    "publishableKey": null,
+    "secretKey": null,
+    "webhookSecret": null,
+    "currency": "usd"
+  },
+  "escort": {
+    "enabled": true,
+    "sessionTimeout": 300000,
+    "maxFollowers": 100,
+    "sounds": {
+      "leave": "whoosh_leave.mp3",
+      "arrive": "whoosh_arrive.mp3"
+    }
+  },
+  "lastModified": "2026-01-20T01:19:57.951Z"
+}

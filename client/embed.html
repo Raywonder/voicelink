@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Room</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a25;
+            --text-primary: #e8e8f0;
+            --text-secondary: #9090a0;
+            --accent-primary: #6366f1;
+            --accent-secondary: #8b5cf6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .embed-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 12px;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        .embed-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .room-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .room-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .room-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .room-users {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .embed-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--error);
+        }
+
+        .status-dot.connected {
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .embed-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .participants-grid {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 8px;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .participant {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 10px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .participant.speaking {
+            box-shadow: 0 0 0 2px var(--success);
+        }
+
+        .participant-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .participant-name {
+            font-size: 11px;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70px;
+        }
+
+        .embed-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .control-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .control-btn.mic {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        .control-btn.mic.muted {
+            background: var(--error);
+        }
+
+        .control-btn.leave {
+            background: var(--error);
+            color: white;
+        }
+
+        .control-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Auth overlay */
+        .auth-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 100;
+        }
+
+        .auth-overlay.hidden {
+            display: none;
+        }
+
+        .auth-logo {
+            font-size: 48px;
+        }
+
+        .auth-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .auth-message {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-align: center;
+            max-width: 280px;
+        }
+
+        .auth-btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .auth-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+        }
+
+        .auth-error {
+            color: var(--error);
+            font-size: 13px;
+        }
+
+        /* Password input */
+        .password-input {
+            display: flex;
+            gap: 8px;
+        }
+
+        .password-input input {
+            padding: 10px 14px;
+            background: var(--bg-secondary);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+            width: 180px;
+        }
+
+        .password-input input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
+
+        /* Powered by badge */
+        .powered-by {
+            position: fixed;
+            bottom: 8px;
+            right: 8px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            opacity: 0.6;
+        }
+
+        .powered-by a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+
+        /* Loading state */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 20px;
+        }
+
+        .loading-spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--bg-tertiary);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Compact mode for small embeds */
+        @media (max-height: 200px) {
+            .embed-header {
+                display: none;
+            }
+            .embed-container {
+                padding: 6px;
+            }
+            .participants-grid {
+                grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
+                gap: 4px;
+                padding: 6px;
+            }
+            .participant {
+                padding: 6px;
+            }
+            .participant-avatar {
+                width: 30px;
+                height: 30px;
+                font-size: 14px;
+            }
+            .control-btn {
+                width: 32px;
+                height: 32px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Auth Overlay -->
+    <div class="auth-overlay" id="auth-overlay">
+        <div class="auth-logo">🔗</div>
+        <div class="auth-title">VoiceLink Room</div>
+        <div class="auth-message" id="auth-message">Join the voice conversation</div>
+        <div class="password-input hidden" id="password-section">
+            <input type="password" id="room-password" placeholder="Room password">
+            <button class="auth-btn" id="password-submit">Join</button>
+        </div>
+        <button class="auth-btn" id="join-btn">Join Room</button>
+        <div class="auth-error hidden" id="auth-error"></div>
+    </div>
+
+    <!-- Main embed content -->
+    <div class="embed-container">
+        <div class="embed-header">
+            <div class="room-info">
+                <div class="room-icon">🎙️</div>
+                <div>
+                    <div class="room-name" id="room-name">Loading...</div>
+                    <div class="room-users" id="room-users">0 participants</div>
+                </div>
+            </div>
+            <div class="embed-status">
+                <div class="status-dot" id="status-dot"></div>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </div>
+
+        <div class="embed-content">
+            <div class="participants-grid" id="participants-grid">
+                <div class="loading">
+                    <div class="loading-spinner"></div>
+                    <span>Connecting to room...</span>
+                </div>
+            </div>
+
+            <div class="embed-controls">
+                <button class="control-btn mic" id="mic-btn" title="Toggle Microphone" disabled>🎤</button>
+                <button class="control-btn leave" id="leave-btn" title="Leave Room" disabled>📴</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="powered-by">
+        Powered by <a href="https://voicelink.tappedin.fm" target="_blank">VoiceLink</a>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Embed configuration
+        const EmbedConfig = {
+            roomId: null,
+            embedToken: null,
+            serverUrl: null,
+            requireAuth: false,
+            allowGuests: true,
+            theme: 'dark'
+        };
+
+        // Parse URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        EmbedConfig.roomId = urlParams.get('room');
+        EmbedConfig.embedToken = urlParams.get('token');
+        EmbedConfig.serverUrl = urlParams.get('server') || window.location.origin;
+        EmbedConfig.requireAuth = urlParams.get('auth') === 'true';
+        EmbedConfig.allowGuests = urlParams.get('guests') !== 'false';
+
+        // State
+        let socket = null;
+        let localStream = null;
+        let peerConnections = {};
+        let isMuted = false;
+        let isJoined = false;
+        let roomInfo = null;
+        let participants = new Map();
+
+        // DOM Elements
+        const authOverlay = document.getElementById('auth-overlay');
+        const authMessage = document.getElementById('auth-message');
+        const joinBtn = document.getElementById('join-btn');
+        const passwordSection = document.getElementById('password-section');
+        const passwordInput = document.getElementById('room-password');
+        const passwordSubmit = document.getElementById('password-submit');
+        const authError = document.getElementById('auth-error');
+        const roomNameEl = document.getElementById('room-name');
+        const roomUsersEl = document.getElementById('room-users');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const participantsGrid = document.getElementById('participants-grid');
+        const micBtn = document.getElementById('mic-btn');
+        const leaveBtn = document.getElementById('leave-btn');
+
+        // Initialize
+        async function init() {
+            if (!EmbedConfig.roomId) {
+                showError('No room specified');
+                return;
+            }
+
+            // Validate embed token if provided
+            if (EmbedConfig.embedToken) {
+                const valid = await validateEmbedToken();
+                if (!valid) {
+                    showError('Invalid or expired embed token');
+                    return;
+                }
+            }
+
+            // Fetch room info
+            await fetchRoomInfo();
+
+            // Connect socket
+            connectSocket();
+        }
+
+        async function validateEmbedToken() {
+            try {
+                const response = await fetch(`${EmbedConfig.serverUrl}/api/embed/validate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        roomId: EmbedConfig.roomId,
+                        token: EmbedConfig.embedToken
+                    })
+                });
+                const data = await response.json();
+                return data.valid;
+            } catch (error) {
+                console.error('Token validation error:', error);
+                return false;
+            }
+        }
+
+        async function fetchRoomInfo() {
+            try {
+                const response = await fetch(`${EmbedConfig.serverUrl}/api/rooms/${EmbedConfig.roomId}`);
+                if (!response.ok) throw new Error('Room not found');
+
+                roomInfo = await response.json();
+                roomNameEl.textContent = roomInfo.name || 'Voice Room';
+
+                // Check if room requires password
+                if (roomInfo.hasPassword && !EmbedConfig.embedToken) {
+                    passwordSection.classList.remove('hidden');
+                    joinBtn.classList.add('hidden');
+                    authMessage.textContent = 'This room requires a password';
+                }
+
+                // Check if room requires auth
+                if (roomInfo.visibility === 'private' && !EmbedConfig.embedToken) {
+                    authMessage.textContent = 'This room requires authentication';
+                    if (EmbedConfig.requireAuth) {
+                        joinBtn.textContent = 'Sign In to Join';
+                    }
+                }
+            } catch (error) {
+                showError('Room not found or unavailable');
+            }
+        }
+
+        function connectSocket() {
+            socket = io(EmbedConfig.serverUrl, {
+                transports: ['websocket', 'polling']
+            });
+
+            socket.on('connect', () => {
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+                micBtn.disabled = false;
+                leaveBtn.disabled = false;
+            });
+
+            socket.on('disconnect', () => {
+                statusDot.classList.remove('connected');
+                statusText.textContent = 'Disconnected';
+            });
+
+            socket.on('room-info', (info) => {
+                roomInfo = info;
+                updateRoomDisplay();
+            });
+
+            socket.on('user-joined', (user) => {
+                participants.set(user.odId, user);
+                updateParticipantsDisplay();
+                notifyParent('user-joined', user);
+            });
+
+            socket.on('user-left', (userId) => {
+                participants.delete(userId);
+                updateParticipantsDisplay();
+                notifyParent('user-left', { odId: userId });
+            });
+
+            socket.on('participants-list', (list) => {
+                participants.clear();
+                list.forEach(p => participants.set(p.odId, p));
+                updateParticipantsDisplay();
+            });
+
+            socket.on('user-speaking', ({ odId, speaking }) => {
+                const el = document.querySelector(`[data-user-id="${odId}"]`);
+                if (el) {
+                    el.classList.toggle('speaking', speaking);
+                }
+            });
+
+            socket.on('error', (error) => {
+                showError(error.message || 'Connection error');
+            });
+
+            // WebRTC signaling
+            socket.on('offer', handleOffer);
+            socket.on('answer', handleAnswer);
+            socket.on('ice-candidate', handleIceCandidate);
+        }
+
+        function showError(message) {
+            authError.textContent = message;
+            authError.classList.remove('hidden');
+        }
+
+        function hideError() {
+            authError.classList.add('hidden');
+        }
+
+        function updateRoomDisplay() {
+            roomNameEl.textContent = roomInfo.name || 'Voice Room';
+            roomUsersEl.textContent = `${participants.size} participant${participants.size !== 1 ? 's' : ''}`;
+        }
+
+        // Safe DOM method for creating participant elements
+        function createParticipantElement(user, odId) {
+            const el = document.createElement('div');
+            el.className = 'participant';
+            el.dataset.userId = odId;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'participant-avatar';
+            avatar.textContent = (user.name || 'U')[0].toUpperCase();
+
+            const name = document.createElement('div');
+            name.className = 'participant-name';
+            name.textContent = user.name || 'User';
+
+            el.appendChild(avatar);
+            el.appendChild(name);
+            return el;
+        }
+
+        // Safe DOM method for creating loading element
+        function createLoadingElement(message) {
+            const loading = document.createElement('div');
+            loading.className = 'loading';
+            loading.textContent = message;
+            return loading;
+        }
+
+        function updateParticipantsDisplay() {
+            updateRoomDisplay();
+
+            // Clear grid safely
+            while (participantsGrid.firstChild) {
+                participantsGrid.removeChild(participantsGrid.firstChild);
+            }
+
+            participants.forEach((user, odId) => {
+                const el = createParticipantElement(user, odId);
+                participantsGrid.appendChild(el);
+            });
+
+            if (participants.size === 0) {
+                participantsGrid.appendChild(createLoadingElement('Waiting for participants...'));
+            }
+        }
+
+        async function joinRoom(password = null) {
+            hideError();
+
+            try {
+                // Get microphone access
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Join room via socket
+                socket.emit('join-room', {
+                    roomId: EmbedConfig.roomId,
+                    password: password,
+                    embedToken: EmbedConfig.embedToken,
+                    name: 'Guest'
+                });
+
+                isJoined = true;
+                authOverlay.classList.add('hidden');
+
+                notifyParent('joined', { roomId: EmbedConfig.roomId });
+            } catch (error) {
+                if (error.name === 'NotAllowedError') {
+                    showError('Microphone access denied');
+                } else {
+                    showError(error.message || 'Failed to join room');
+                }
+            }
+        }
+
+        function leaveRoom() {
+            if (socket) {
+                socket.emit('leave-room');
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            Object.values(peerConnections).forEach(pc => pc.close());
+            peerConnections = {};
+
+            isJoined = false;
+            authOverlay.classList.remove('hidden');
+            participants.clear();
+            updateParticipantsDisplay();
+
+            notifyParent('left', { roomId: EmbedConfig.roomId });
+        }
+
+        function toggleMute() {
+            if (!localStream) return;
+
+            isMuted = !isMuted;
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !isMuted;
+            });
+
+            micBtn.classList.toggle('muted', isMuted);
+            micBtn.textContent = isMuted ? '🔇' : '🎤';
+
+            socket.emit('mute-status', { muted: isMuted });
+            notifyParent('mute-changed', { muted: isMuted });
+        }
+
+        // WebRTC handlers
+        async function handleOffer({ offer, fromId }) {
+            const pc = createPeerConnection(fromId);
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit('answer', { answer, toId: fromId });
+        }
+
+        async function handleAnswer({ answer, fromId }) {
+            const pc = peerConnections[fromId];
+            if (pc) {
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            }
+        }
+
+        function handleIceCandidate({ candidate, fromId }) {
+            const pc = peerConnections[fromId];
+            if (pc && candidate) {
+                pc.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        }
+
+        function createPeerConnection(peerId) {
+            const config = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            };
+
+            const pc = new RTCPeerConnection(config);
+            peerConnections[peerId] = pc;
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        candidate: event.candidate,
+                        toId: peerId
+                    });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                const audio = new Audio();
+                audio.srcObject = event.streams[0];
+                audio.play();
+            };
+
+            return pc;
+        }
+
+        // Parent window communication
+        function notifyParent(event, data) {
+            if (window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'voicelink-embed',
+                    event: event,
+                    data: data,
+                    roomId: EmbedConfig.roomId
+                }, '*');
+            }
+        }
+
+        // Listen for messages from parent
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'voicelink-command') {
+                switch (event.data.command) {
+                    case 'join':
+                        joinRoom(event.data.password);
+                        break;
+                    case 'leave':
+                        leaveRoom();
+                        break;
+                    case 'mute':
+                        if (!isMuted) toggleMute();
+                        break;
+                    case 'unmute':
+                        if (isMuted) toggleMute();
+                        break;
+                }
+            }
+        });
+
+        // Event listeners
+        joinBtn.addEventListener('click', () => joinRoom());
+        passwordSubmit.addEventListener('click', () => joinRoom(passwordInput.value));
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') joinRoom(passwordInput.value);
+        });
+        micBtn.addEventListener('click', toggleMute);
+        leaveBtn.addEventListener('click', leaveRoom);
+
+        // Initialize on load
+        init();
+    </script>
+</body>
+</html>

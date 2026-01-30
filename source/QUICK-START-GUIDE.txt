@@ -1,0 +1,170 @@
+VoiceLink Local v1.0.0 - Quick Start Guide
+==========================================
+
+Welcome to VoiceLink Local! This guide will get you up and running quickly.
+
+FIRST TIME SETUP
+================
+
+1. LAUNCH THE APPLICATION
+   - Double-click the VoiceLink Local app
+   - Wait for the startup screen to load
+   - The server will automatically start on port 3000
+
+2. INITIAL CONFIGURATION
+   - You are automatically assigned as Server Owner (👑)
+   - Access Admin Panel to configure your server
+   - Set your username and preferences
+
+3. CREATE YOUR FIRST ROOM
+   - Click "Create Room" from the main menu
+   - Enter room name and settings
+   - You'll automatically join after creation
+
+BASIC FEATURES
+==============
+
+🎙️ VOICE CHAT:
+- Spatial 3D audio with distance-based volume
+- Push-to-talk (SPACE key) or voice activation
+- High-quality P2P communication
+
+🏠 ROOM MANAGEMENT:
+- Create public, private, or invite-only rooms
+- Set participant limits and duration
+- Room creator information is tracked
+
+👥 USER SYSTEM:
+- 5 user levels: Owner → Admin → Moderator → Member → Guest
+- Permission-based feature access
+- Visual role indicators
+
+NAVIGATION TIPS
+===============
+
+⌨️ KEYBOARD SHORTCUTS:
+- ESC: Navigate back through screens
+- SPACE: Push-to-talk (when configured)
+- ENTER: Join selected room
+- CTRL+A: Admin panel (if authorized)
+
+🖱️ UI NAVIGATION:
+- ESC key works hierarchically throughout the app
+- All major features accessible from main menu
+- Admin controls in dedicated Admin Panel
+
+INVITING OTHERS
+===============
+
+FOR APP USERS:
+1. Share your Room ID (displayed in room)
+2. Or use "Invite Users" in the room panel
+3. They enter the Room ID to join
+
+FOR WEB USERS (NO APP NEEDED):
+1. Share link: http://[your-ip]:3000/room/[room-id]
+2. They click link and join via browser
+3. Works on all modern browsers
+
+ADMIN FEATURES (OWNER/ADMIN ONLY)
+=================================
+
+🔧 USER MANAGEMENT:
+- Admin Panel → User Roles tab
+- Assign roles to other users
+- Manage permissions and access
+
+🌐 SERVER FEDERATION:
+- Connect multiple VoiceLink servers
+- Transfer ownership between servers
+- Create server networks
+
+📢 ANNOUNCEMENTS:
+- PA System for server-wide messages
+- Text-to-Speech integration
+- Priority announcements
+
+COMMON TASKS
+============
+
+CREATE A ROOM:
+Main Menu → Create Room → Fill details → Auto-join
+
+JOIN A ROOM:
+Main Menu → Join Room → Enter Room ID → Connect
+
+INVITE SOMEONE:
+In Room → Participants → Invite Users → Share details
+
+MANAGE USERS:
+Admin Panel → User Roles → Select User → Assign Role
+
+SET UP FEDERATION:
+Admin Panel → Server Federation → Add Server → Configure
+
+TROUBLESHOOTING
+===============
+
+❌ CAN'T CREATE ROOMS:
+- Check your user role (need Member level or higher)
+- Ensure you have createRooms permission
+
+❌ AUDIO NOT WORKING:
+- Check microphone permissions
+- Verify audio device in settings
+- Test spatial audio settings
+
+❌ CAN'T ACCESS ADMIN PANEL:
+- Need Admin or Owner role
+- Check with current server owner
+
+❌ ESC KEY NOT WORKING:
+- Feature works throughout most screens
+- Some dialogs may override ESC behavior
+
+GETTING HELP
+============
+
+📖 DOCUMENTATION:
+- Complete Guide: VoiceLink-Room-Management-Guide.txt
+- Release Notes: RELEASE-NOTES-v1.0.0.txt
+- In-app help system and tooltips
+
+🐛 SUPPORT:
+- Check release notes for known issues
+- Review troubleshooting sections
+- Report bugs through appropriate channels
+
+WHAT'S NEW IN V1.0.0
+====================
+
+🎉 MAJOR FEATURES:
+✅ Complete user roles system
+✅ Server federation capabilities
+✅ Automatic room joining
+✅ ESC key navigation
+✅ Room creator tracking
+✅ Enhanced admin controls
+
+🔄 IMPROVEMENTS:
+✅ Better UI/UX throughout
+✅ Enhanced documentation
+✅ Improved error handling
+✅ Better visual feedback
+
+NEXT STEPS
+==========
+
+1. ✅ Explore the room creation features
+2. ✅ Test spatial audio quality
+3. ✅ Invite friends or colleagues
+4. ✅ Set up user roles if managing a team
+5. ✅ Try federation if you have multiple servers
+6. ✅ Customize settings for your use case
+
+Enjoy using VoiceLink Local v1.0.0!
+
+Need more details? See the complete documentation files included with your installation.
+
+================================================================================
+VoiceLink Local Development Team | October 2024

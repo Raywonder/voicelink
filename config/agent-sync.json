@@ -1,0 +1,86 @@
+# Unified Project Structure - Cross-Device VoiceLink Development
+
+## 📁 Global Directory Structure
+```
+/mnt/c/Users/40493/dev/apps/voicelink-local/
+├── client/                     # Web client (uploaded to server)
+│   ├── index.html          # Main web interface with accessibility
+│   ├── css/               # Styles with AccessKit integration
+│   └── js/
+│       └── core/
+│           └── app.js    # Media playback fixes included
+├── server/                     # Node.js backend (uploaded to server)
+│   └── routes/
+│       └── local-server.js  # Streaming enhancements included
+├── windows-native/              # Windows native app source
+│   ├── VoiceLinkNative/       # WPF application
+│   │   ├── Views/           # XAML interface files
+│   │   ├── ViewModels/      # Data binding models
+│   │   ├── Services/        # Business logic
+│   │   └── Models/          # Data models
+│   └── build-windows.bat      # Build script
+├── swift-native/               # macOS native app source
+│   └── VoiceLinkNative/       # Swift application
+│       ├── Sources/            # Swift source files
+│       ├── Assets/            # Resources and icons
+│       └── xcodeproj           # Xcode project file
+├── archives/                   # Old versions and builds
+│   └── voicelink/
+│       └── old-versions/    # Archive storage
+├── config/                    # Cross-device configuration
+│   ├── agent-sync.json       # Agent configuration
+│   └── build-status.json     # Build status tracking
+└── docs/                      # Project documentation
+    ├── build-instructions.md  # Platform-specific builds
+    ├── api-reference.md        # OpenCode integration
+    └── deployment-guide.md      # Deployment procedures
+```
+
+## 🔄 Agent System Configuration
+<tool_call>write
+<arg_key>content</arg_key>
+<arg_value>{
+  "agentSync": {
+    "version": "1.0.0",
+    "lastSync": "2026-01-24T00:00:00Z",
+    "agents": [
+      {
+        "agentId": "zero",
+        "name": "VoiceLink Agent Zero",
+        "platform": "wsl",
+        "status": "active",
+        "capabilities": [
+          "remote_access",
+          "web_access",
+          "file_management",
+          "build_management",
+          "cross_device_sync"
+        ],
+        "lastHeartbeat": "2026-01-24T00:00:00Z"
+      }
+    ],
+    "sharedProjects": [
+      {
+        "projectId": "voicelink-local",
+        "name": "VoiceLink Local",
+        "path": "/mnt/c/Users/40493/dev/apps/voicelink-local",
+        "lastModified": "2026-01-24T00:00:00Z",
+        "status": "development",
+        "buildStatus": {
+          "windows": {
+            "version": "1.0.0",
+            "built": true,
+            "uploaded": true,
+            "date": "2026-01-24T00:00:00Z"
+          },
+          "macos": {
+            "version": "1.0.0",
+            "built": false,
+            "uploaded": false,
+            "date": null
+          }
+        }
+      }
+    ]
+  }
+}

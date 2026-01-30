@@ -302,6 +302,58 @@ class ServerManager: ObservableObject {
                 SyncManager.shared.handleServerPush(pushData)
             }
         }
+
+        // Device access revoked by server admin
+        socket.on("access-revoked") { data, ack in
+            print("Access revoked: \(data)")
+            if let revokeData = data[0] as? [String: Any] {
+                let reason = revokeData["reason"] as? String ?? "Access has been revoked by the server administrator"
+                DispatchQueue.main.async {
+                    // Post notification for UI handling
+                    NotificationCenter.default.post(
+                        name: .accessRevoked,
+                        object: nil,
+                        userInfo: ["reason": reason, "deviceId": revokeData["deviceId"] as? String ?? ""]
+                    )
+                }
+            }
+        }
+
+        // Device linked notification
+        socket.on("device-linked") { data, ack in
+            print("Device linked: \(data)")
+            if let deviceData = data[0] as? [String: Any] {
+                NotificationCenter.default.post(
+                    name: .deviceLinked,
+                    object: nil,
+                    userInfo: deviceData
+                )
+            }
+        }
+
+        // Device unlinked notification
+        socket.on("device-unlinked") { data, ack in
+            print("Device unlinked: \(data)")
+            if let deviceData = data[0] as? [String: Any] {
+                NotificationCenter.default.post(
+                    name: .deviceUnlinked,
+                    object: nil,
+                    userInfo: deviceData
+                )
+            }
+        }
+
+        // Device removed notification
+        socket.on("device-removed") { data, ack in
+            print("Device removed: \(data)")
+            if let deviceData = data[0] as? [String: Any] {
+                NotificationCenter.default.post(
+                    name: .deviceUnlinked,
+                    object: nil,
+                    userInfo: deviceData
+                )
+            }
+        }
     }
 
     // MARK: - API Methods

@@ -158,6 +158,7 @@ class LocalServerDiscovery: ObservableObject {
 struct MenuBarView: View {
     @ObservedObject var serverManager = ServerManager.shared
     @ObservedObject var localDiscovery = LocalServerDiscovery.shared
+    @ObservedObject var authManager = AuthenticationManager.shared
     @Binding var showMainWindow: Bool
 
     var body: some View {
@@ -180,6 +181,20 @@ struct MenuBarView: View {
                     Text("\(serverManager.currentRoomUsers.count) user(s) in room")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+            }
+
+            // Auth Status
+            if let user = authManager.currentUser {
+                Divider()
+                HStack(spacing: 4) {
+                    Image(systemName: user.authMethod.icon)
+                        .font(.caption)
+                        .foregroundColor(.purple)
+                    Text(user.fullHandle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
             }
 
@@ -208,6 +223,18 @@ struct MenuBarView: View {
                     }
                 }
                 .disabled(serverManager.isConnected && serverManager.connectedServer.contains("Local"))
+
+                // Manage Devices option for local server - opens in new window
+                Button(action: {
+                    if let serverURL = localDiscovery.localServerURL {
+                        openDeviceManagementWindow(serverURL: serverURL)
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "laptopcomputer.and.iphone")
+                        Text("Manage Devices")
+                    }
+                }
             } else {
                 Text("No local server found")
                     .font(.caption)
@@ -244,6 +271,20 @@ struct MenuBarView: View {
         }
         .padding()
         .frame(width: 220)
+    }
+
+    private func openDeviceManagementWindow(serverURL: String) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Manage Linked Devices"
+        window.center()
+        window.contentView = NSHostingView(rootView: DeviceManagementView(serverURL: serverURL))
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

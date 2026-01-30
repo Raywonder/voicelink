@@ -1,0 +1,320 @@
+<Page x:Class="VoiceLinkNative.Views.AdminView"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Background="Transparent"
+      Title="Admin">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,24">
+            <TextBlock Text="Admin Panel" FontSize="28" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       AutomationProperties.HeadingLevel="Level1"/>
+            <TextBlock Text="Server administration and management"
+                       Foreground="{StaticResource SecondaryTextBrush}"/>
+        </StackPanel>
+
+        <!-- Tab Navigation -->
+        <Border Grid.Row="1" Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="Overview" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding NavigateTabCommand}" CommandParameter="Overview"
+                        Margin="0,0,8,0"
+                        AutomationProperties.Name="Overview tab"/>
+                <Button Content="Users" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding NavigateTabCommand}" CommandParameter="Users"
+                        Margin="0,0,8,0"
+                        AutomationProperties.Name="Users tab"/>
+                <Button Content="Rooms" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding NavigateTabCommand}" CommandParameter="Rooms"
+                        Margin="0,0,8,0"
+                        AutomationProperties.Name="Rooms tab"/>
+                <Button Content="Config" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding NavigateTabCommand}" CommandParameter="Config"
+                        Margin="0,0,8,0"
+                        AutomationProperties.Name="Server configuration tab"/>
+                <Button Content="Nodes" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding NavigateTabCommand}" CommandParameter="Nodes"
+                        AutomationProperties.Name="Remote nodes tab"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Content Area -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ContentControl>
+                <ContentControl.Style>
+                    <Style TargetType="ContentControl">
+                        <!-- Default: Overview -->
+                        <Setter Property="Content">
+                            <Setter.Value>
+                                <!-- Overview Tab -->
+                                <StackPanel>
+                                    <TextBlock Text="Server Overview" FontSize="20" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                                               AutomationProperties.HeadingLevel="Level2"/>
+
+                                    <WrapPanel>
+                                        <!-- Total Users Card -->
+                                        <Border Style="{StaticResource Card}" Width="200" Margin="0,0,16,16">
+                                            <StackPanel>
+                                                <TextBlock Text="Total Users" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}"/>
+                                                <TextBlock Text="{Binding TotalUsers}" FontSize="32" FontWeight="Bold"
+                                                           Foreground="{StaticResource TextBrush}"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Online Users Card -->
+                                        <Border Style="{StaticResource Card}" Width="200" Margin="0,0,16,16">
+                                            <StackPanel>
+                                                <TextBlock Text="Online Now" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}"/>
+                                                <TextBlock Text="{Binding OnlineUsers}" FontSize="32" FontWeight="Bold"
+                                                           Foreground="{StaticResource AccentGreenBrush}"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Active Rooms Card -->
+                                        <Border Style="{StaticResource Card}" Width="200" Margin="0,0,16,16">
+                                            <StackPanel>
+                                                <TextBlock Text="Active Rooms" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}"/>
+                                                <TextBlock Text="{Binding ActiveRooms}" FontSize="32" FontWeight="Bold"
+                                                           Foreground="{StaticResource TextBrush}"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Uptime Card -->
+                                        <Border Style="{StaticResource Card}" Width="200" Margin="0,0,16,16">
+                                            <StackPanel>
+                                                <TextBlock Text="Uptime" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}"/>
+                                                <TextBlock Text="{Binding UptimeFormatted}" FontSize="24" FontWeight="Bold"
+                                                           Foreground="{StaticResource TextBrush}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </WrapPanel>
+
+                                    <Button Content="Refresh Stats" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding RefreshStatsCommand}" Margin="0,16,0,0"
+                                            AutomationProperties.Name="Refresh server statistics"/>
+                                </StackPanel>
+                            </Setter.Value>
+                        </Setter>
+
+                        <Style.Triggers>
+                            <!-- Users Tab -->
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="Users">
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="User Management" FontSize="20" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           AutomationProperties.HeadingLevel="Level2"/>
+                                                <Button Grid.Column="1" Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding RefreshUsersCommand}"
+                                                        AutomationProperties.Name="Refresh user list"/>
+                                            </Grid>
+
+                                            <DataGrid ItemsSource="{Binding Users}"
+                                                      SelectedItem="{Binding SelectedUser}"
+                                                      AutoGenerateColumns="False"
+                                                      Background="{StaticResource SurfaceBrush}"
+                                                      Foreground="{StaticResource TextBrush}"
+                                                      BorderThickness="0"
+                                                      RowBackground="{StaticResource SurfaceBrush}"
+                                                      AlternatingRowBackground="#20ffffff"
+                                                      GridLinesVisibility="None"
+                                                      AutomationProperties.Name="Users list">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Username" Binding="{Binding Username}" Width="*"/>
+                                                    <DataGridTextColumn Header="Email" Binding="{Binding Email}" Width="*"/>
+                                                    <DataGridCheckBoxColumn Header="Online" Binding="{Binding IsOnline}" Width="80"/>
+                                                    <DataGridTextColumn Header="Current Room" Binding="{Binding CurrentRoom}" Width="120"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                                <Button Content="Kick User" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding KickUserCommand}" Margin="0,0,8,0"
+                                                        AutomationProperties.Name="Kick selected user"/>
+                                                <Button Content="Ban User" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding BanUserCommand}"
+                                                        AutomationProperties.Name="Ban selected user"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
+
+                            <!-- Rooms Tab -->
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="Rooms">
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Room Management" FontSize="20" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           AutomationProperties.HeadingLevel="Level2"/>
+                                                <Button Grid.Column="1" Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding RefreshRoomsCommand}"
+                                                        AutomationProperties.Name="Refresh room list"/>
+                                            </Grid>
+
+                                            <DataGrid ItemsSource="{Binding Rooms}"
+                                                      SelectedItem="{Binding SelectedRoom}"
+                                                      AutoGenerateColumns="False"
+                                                      Background="{StaticResource SurfaceBrush}"
+                                                      Foreground="{StaticResource TextBrush}"
+                                                      BorderThickness="0"
+                                                      RowBackground="{StaticResource SurfaceBrush}"
+                                                      AlternatingRowBackground="#20ffffff"
+                                                      GridLinesVisibility="None"
+                                                      AutomationProperties.Name="Rooms list">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                                    <DataGridTextColumn Header="Users" Binding="{Binding UserCount}" Width="80"/>
+                                                    <DataGridCheckBoxColumn Header="Private" Binding="{Binding IsPrivate}" Width="80"/>
+                                                    <DataGridTextColumn Header="Owner" Binding="{Binding Owner}" Width="120"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+
+                                            <Button Content="Close Room" Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding CloseRoomCommand}" Margin="0,16,0,0"
+                                                    AutomationProperties.Name="Close selected room"/>
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
+
+                            <!-- Config Tab -->
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="Config">
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <Border Style="{StaticResource Card}" MaxWidth="500">
+                                            <StackPanel>
+                                                <TextBlock Text="Server Configuration" FontSize="20" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                                                           AutomationProperties.HeadingLevel="Level2"/>
+
+                                                <TextBlock Text="Server Name" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                                <TextBox Text="{Binding ServerName, UpdateSourceTrigger=PropertyChanged}"
+                                                         Margin="0,0,0,12"
+                                                         AutomationProperties.Name="Server name"/>
+
+                                                <TextBlock Text="Max Users Per Room" FontSize="12"
+                                                           Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                                <TextBox Text="{Binding MaxUsersPerRoom, UpdateSourceTrigger=PropertyChanged}"
+                                                         Margin="0,0,0,12"
+                                                         AutomationProperties.Name="Maximum users per room"/>
+
+                                                <CheckBox Content="Allow Guest Access" IsChecked="{Binding AllowGuestAccess}"
+                                                          Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"
+                                                          AutomationProperties.Name="Allow guest access"/>
+
+                                                <CheckBox Content="Enable Federation" IsChecked="{Binding FederationEnabled}"
+                                                          Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                                                          AutomationProperties.Name="Enable server federation"/>
+
+                                                <Button Content="Save Configuration" Style="{StaticResource PrimaryButton}"
+                                                        Command="{Binding SaveConfigCommand}"
+                                                        AutomationProperties.Name="Save configuration changes"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
+
+                            <!-- Nodes Tab -->
+                            <DataTrigger Binding="{Binding CurrentTab}" Value="Nodes">
+                                <Setter Property="Content">
+                                    <Setter.Value>
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Remote Nodes" FontSize="20" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           AutomationProperties.HeadingLevel="Level2"/>
+                                                <Button Grid.Column="1" Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding RefreshNodesCommand}"
+                                                        AutomationProperties.Name="Refresh nodes list"/>
+                                            </Grid>
+
+                                            <DataGrid ItemsSource="{Binding LinkedNodes}"
+                                                      SelectedItem="{Binding SelectedNode}"
+                                                      AutoGenerateColumns="False"
+                                                      Background="{StaticResource SurfaceBrush}"
+                                                      Foreground="{StaticResource TextBrush}"
+                                                      BorderThickness="0"
+                                                      RowBackground="{StaticResource SurfaceBrush}"
+                                                      AlternatingRowBackground="#20ffffff"
+                                                      GridLinesVisibility="None"
+                                                      AutomationProperties.Name="Remote nodes list">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                                    <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="*"/>
+                                                    <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="100"/>
+                                                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                                <Button Content="Restart Node" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding RestartNodeCommand}" Margin="0,0,8,0"
+                                                        AutomationProperties.Name="Restart selected node immediately"/>
+                                                <Button Content="Schedule Restart (10 min)" Style="{StaticResource SecondaryButton}"
+                                                        Command="{Binding ScheduleRestartCommand}"
+                                                        AutomationProperties.Name="Schedule restart in 10 minutes"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ContentControl.Style>
+            </ContentControl>
+        </ScrollViewer>
+
+        <!-- Loading Overlay -->
+        <Border Grid.RowSpan="3" Background="#80000000"
+                Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="Loading..." FontSize="16" Foreground="{StaticResource TextBrush}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Not Admin Message -->
+        <Border Grid.RowSpan="3" Background="{StaticResource BackgroundBrush}"
+                Visibility="{Binding IsAdmin, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="Admin Access Required" FontSize="24" FontWeight="Bold"
+                           Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"/>
+                <TextBlock Text="You need administrator privileges to access this panel."
+                           Foreground="{StaticResource SecondaryTextBrush}"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>

@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication & Security - VoiceLink Local Documentation</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <!-- Navigation Header -->
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>🔐 Authentication & Security</h1>
+                <p class="subtitle">Complete guide to all authentication methods and security features</p>
+                <nav class="header-nav">
+                    <a href="index.html" class="nav-link">← Documentation Home</a>
+                    <a href="getting-started.html" class="nav-link">← Getting Started</a>
+                    <a href="../client/index.html" class="nav-link">← Back to App</a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content" id="main-content">
+            <!-- Authentication Overview -->
+            <section class="auth-overview-section">
+                <div class="content-wrapper">
+                    <h2>🎯 Authentication Overview</h2>
+
+                    <div class="auth-intro">
+                        <p>VoiceLink Local supports multiple authentication methods to meet different security needs, from simple password protection to advanced two-factor authentication systems.</p>
+                    </div>
+
+                    <div class="auth-types-grid">
+                        <div class="auth-type-card">
+                            <h3>🔑 Basic Authentication</h3>
+                            <ul>
+                                <li>Username and password</li>
+                                <li>Room-specific passwords</li>
+                                <li>Guest access</li>
+                                <li>Quick and simple setup</li>
+                            </ul>
+                        </div>
+
+                        <div class="auth-type-card">
+                            <h3>📱 iOS 2FA</h3>
+                            <ul>
+                                <li>Face ID / Touch ID integration</li>
+                                <li>iOS Keychain support</li>
+                                <li>Native iOS authentication</li>
+                                <li>Seamless user experience</li>
+                            </ul>
+                        </div>
+
+                        <div class="auth-type-card">
+                            <h3>🔐 Third-Party 2FA</h3>
+                            <ul>
+                                <li>Google Authenticator</li>
+                                <li>Microsoft Authenticator</li>
+                                <li>Authy support</li>
+                                <li>TOTP standard compliance</li>
+                            </ul>
+                        </div>
+
+                        <div class="auth-type-card">
+                            <h3>💬 Message-Based 2FA</h3>
+                            <ul>
+                                <li>SMS verification</li>
+                                <li>Email confirmation</li>
+                                <li>Telegram integration</li>
+                                <li>Discord notifications</li>
+                            </ul>
+                        </div>
+
+                        <div class="auth-type-card">
+                            <h3>🌐 OAuth Integration</h3>
+                            <ul>
+                                <li>Google Sign-In</li>
+                                <li>Microsoft accounts</li>
+                                <li>GitHub authentication</li>
+                                <li>Discord OAuth</li>
+                            </ul>
+                        </div>
+
+                        <div class="auth-type-card">
+                            <h3>🏢 Enterprise SSO</h3>
+                            <ul>
+                                <li>SAML 2.0 support</li>
+                                <li>Active Directory</li>
+                                <li>LDAP integration</li>
+                                <li>OpenID Connect</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Basic Authentication -->
+            <section class="basic-auth-section">
+                <div class="content-wrapper">
+                    <h2>🔑 Basic Authentication Setup</h2>
+
+                    <div class="basic-auth-types">
+                        <div class="auth-method">
+                            <h3>👤 User Account Authentication</h3>
+
+                            <div class="setup-steps">
+                                <h4>Creating an Account</h4>
+                                <ol>
+                                    <li><strong>Access Registration:</strong> Click "Create Account" on login screen</li>
+                                    <li><strong>Choose Username:</strong> Select unique username (3-20 characters)</li>
+                                    <li><strong>Set Password:</strong> Create strong password (minimum 8 characters)</li>
+                                    <li><strong>Email Verification:</strong> Verify email address if required</li>
+                                    <li><strong>Profile Setup:</strong> Complete basic profile information</li>
+                                </ol>
+                            </div>
+
+                            <div class="password-requirements">
+                                <h4>Password Requirements</h4>
+                                <ul>
+                                    <li>Minimum 8 characters length</li>
+                                    <li>At least one uppercase letter</li>
+                                    <li>At least one lowercase letter</li>
+                                    <li>At least one number</li>
+                                    <li>Special characters recommended</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="auth-method">
+                            <h3>🚪 Guest Access</h3>
+
+                            <div class="guest-features">
+                                <h4>Guest User Capabilities</h4>
+                                <ul>
+                                    <li><strong>Room Access:</strong> Join public and passworded rooms</li>
+                                    <li><strong>Voice Chat:</strong> Full voice communication</li>
+                                    <li><strong>Text Chat:</strong> Send and receive messages</li>
+                                    <li><strong>3D Audio:</strong> Participate in spatial audio</li>
+                                </ul>
+
+                                <h4>Guest Limitations</h4>
+                                <ul>
+                                    <li><strong>No Room Creation:</strong> Cannot create new rooms</li>
+                                    <li><strong>No Settings Sync:</strong> Settings not saved across sessions</li>
+                                    <li><strong>Limited History:</strong> No access to room history</li>
+                                    <li><strong>No Bookmarks:</strong> Cannot save favorite rooms</li>
+                                </ul>
+                            </div>
+
+                            <div class="guest-setup">
+                                <h4>Using Guest Access</h4>
+                                <ol>
+                                    <li>Click <strong>"Join as Guest"</strong> on main screen</li>
+                                    <li>Enter <strong>display name</strong> for the session</li>
+                                    <li>Enter <strong>room ID</strong> to join</li>
+                                    <li>Enter <strong>room password</strong> if required</li>
+                                    <li>Start participating immediately</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <div class="auth-method">
+                            <h3>🔒 Room-Level Authentication</h3>
+
+                            <div class="room-auth-types">
+                                <h4>Public Rooms</h4>
+                                <ul>
+                                    <li>No authentication required</li>
+                                    <li>Anyone with room ID can join</li>
+                                    <li>Visible in server room lists</li>
+                                    <li>Best for open communities</li>
+                                </ul>
+
+                                <h4>Password-Protected Rooms</h4>
+                                <ul>
+                                    <li>Single shared password</li>
+                                    <li>Host sets and shares password</li>
+                                    <li>Hidden from public listings</li>
+                                    <li>Ideal for private groups</li>
+                                </ul>
+
+                                <h4>Invite-Only Rooms</h4>
+                                <ul>
+                                    <li>Host manually approves each user</li>
+                                    <li>Request-based joining system</li>
+                                    <li>Maximum privacy control</li>
+                                    <li>Perfect for sensitive meetings</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- iOS 2FA -->
+            <section class="ios-2fa-section">
+                <div class="content-wrapper">
+                    <h2>📱 iOS Two-Factor Authentication</h2>
+
+                    <div class="ios-auth-overview">
+                        <p>VoiceLink Local integrates deeply with iOS security features to provide seamless and secure authentication on iPhone and iPad devices.</p>
+                    </div>
+
+                    <div class="ios-features">
+                        <div class="ios-feature">
+                            <h3>🆔 Face ID / Touch ID Integration</h3>
+
+                            <div class="biometric-setup">
+                                <h4>Enabling Biometric Authentication</h4>
+                                <ol>
+                                    <li><strong>Open Settings:</strong> Go to User Settings → Security</li>
+                                    <li><strong>Enable Biometrics:</strong> Toggle "Use Face ID/Touch ID"</li>
+                                    <li><strong>Authenticate:</strong> Complete initial biometric scan</li>
+                                    <li><strong>Backup Methods:</strong> Set fallback authentication</li>
+                                    <li><strong>Test Access:</strong> Verify biometric login works</li>
+                                </ol>
+                            </div>
+
+                            <div class="biometric-features">
+                                <h4>Biometric Capabilities</h4>
+                                <ul>
+                                    <li><strong>Quick Login:</strong> One-touch authentication</li>
+                                    <li><strong>Room Access:</strong> Biometric verification for private rooms</li>
+                                    <li><strong>Settings Protection:</strong> Secure sensitive settings</li>
+                                    <li><strong>Purchase Verification:</strong> Authorize premium features</li>
+                                </ul>
+                            </div>
+
+                            <div class="biometric-fallbacks">
+                                <h4>Fallback Options</h4>
+                                <ul>
+                                    <li><strong>Device Passcode:</strong> Use iOS passcode as backup</li>
+                                    <li><strong>Password Login:</strong> Traditional username/password</li>
+                                    <li><strong>Recovery Codes:</strong> One-time use backup codes</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="ios-feature">
+                            <h3>🔐 iOS Keychain Integration</h3>
+
+                            <div class="keychain-benefits">
+                                <h4>Keychain Features</h4>
+                                <ul>
+                                    <li><strong>Secure Storage:</strong> Passwords encrypted in iOS Keychain</li>
+                                    <li><strong>Auto-Fill:</strong> Automatic login form completion</li>
+                                    <li><strong>Sync Across Devices:</strong> iCloud Keychain synchronization</li>
+                                    <li><strong>Share Passwords:</strong> Family sharing for room passwords</li>
+                                </ul>
+                            </div>
+
+                            <div class="keychain-setup">
+                                <h4>Setting Up Keychain Integration</h4>
+                                <ol>
+                                    <li><strong>Enable iCloud Keychain:</strong> Settings → [Your Name] → iCloud → Keychain</li>
+                                    <li><strong>Allow VoiceLink Access:</strong> Grant permission when prompted</li>
+                                    <li><strong>Save Credentials:</strong> Choose "Save Password" on login</li>
+                                    <li><strong>Verify Sync:</strong> Check passwords appear on other devices</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <div class="ios-feature">
+                            <h3>🔔 iOS Native Notifications</h3>
+
+                            <div class="notification-2fa">
+                                <h4>Push-Based 2FA</h4>
+                                <ul>
+                                    <li><strong>Login Notifications:</strong> Approve/deny login attempts</li>
+                                    <li><strong>Device Verification:</strong> Confirm new device access</li>
+                                    <li><strong>Location Alerts:</strong> Unusual location login warnings</li>
+                                    <li><strong>Quick Actions:</strong> Approve directly from notification</li>
+                                </ul>
+                            </div>
+
+                            <div class="notification-setup">
+                                <h4>Configuring Notifications</h4>
+                                <ol>
+                                    <li><strong>Enable Notifications:</strong> Allow VoiceLink to send notifications</li>
+                                    <li><strong>Choose Alert Style:</strong> Banner, alert, or badge</li>
+                                    <li><strong>Set Importance:</strong> Critical alerts for security events</li>
+                                    <li><strong>Configure Actions:</strong> Set up quick approve/deny actions</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ios-security-tips">
+                        <h3>🛡️ iOS Security Best Practices</h3>
+                        <div class="security-tips">
+                            <div class="tip">
+                                <h4>Device Security</h4>
+                                <ul>
+                                    <li>Keep iOS updated to latest version</li>
+                                    <li>Use strong device passcode (6+ digits)</li>
+                                    <li>Enable automatic lock after inactivity</li>
+                                    <li>Review app permissions regularly</li>
+                                </ul>
+                            </div>
+                            <div class="tip">
+                                <h4>Biometric Security</h4>
+                                <ul>
+                                    <li>Re-scan Face ID if appearance changes significantly</li>
+                                    <li>Add alternate appearance for Face ID</li>
+                                    <li>Clean Touch ID sensor regularly</li>
+                                    <li>Set up multiple fingerprints for Touch ID</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Third-Party 2FA -->
+            <section class="third-party-2fa-section">
+                <div class="content-wrapper">
+                    <h2>🔐 Third-Party Two-Factor Authentication</h2>
+
+                    <div class="third-party-overview">
+                        <p>VoiceLink Local supports all major authenticator apps using the industry-standard TOTP (Time-based One-Time Password) protocol.</p>
+                    </div>
+
+                    <div class="authenticator-apps">
+                        <div class="app-support">
+                            <h3>📱 Supported Authenticator Apps</h3>
+
+                            <div class="app-grid">
+                                <div class="app-card">
+                                    <h4>🔵 Google Authenticator</h4>
+                                    <ul>
+                                        <li>Free and widely used</li>
+                                        <li>Available on iOS and Android</li>
+                                        <li>Offline code generation</li>
+                                        <li>Backup and sync features</li>
+                                    </ul>
+                                    <div class="setup-link">
+                                        <a href="#google-auth-setup" class="btn-secondary">Setup Guide</a>
+                                    </div>
+                                </div>
+
+                                <div class="app-card">
+                                    <h4>🔷 Microsoft Authenticator</h4>
+                                    <ul>
+                                        <li>Enterprise-grade security</li>
+                                        <li>Push notification support</li>
+                                        <li>Biometric verification</li>
+                                        <li>Cloud backup included</li>
+                                    </ul>
+                                    <div class="setup-link">
+                                        <a href="#microsoft-auth-setup" class="btn-secondary">Setup Guide</a>
+                                    </div>
+                                </div>
+
+                                <div class="app-card">
+                                    <h4>🔶 Authy</h4>
+                                    <ul>
+                                        <li>Multi-device synchronization</li>
+                                        <li>Encrypted cloud backups</li>
+                                        <li>Push notifications</li>
+                                        <li>Advanced security features</li>
+                                    </ul>
+                                    <div class="setup-link">
+                                        <a href="#authy-setup" class="btn-secondary">Setup Guide</a>
+                                    </div>
+                                </div>
+
+                                <div class="app-card">
+                                    <h4>🔸 Other Compatible Apps</h4>
+                                    <ul>
+                                        <li>1Password</li>
+                                        <li>LastPass Authenticator</li>
+                                        <li>Duo Mobile</li>
+                                        <li>Any TOTP-compatible app</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="general-setup">
+                            <h3>⚙️ General 2FA Setup Process</h3>
+
+                            <div class="setup-steps">
+                                <div class="step">
+                                    <div class="step-number">1</div>
+                                    <div class="step-content">
+                                        <h4>Enable 2FA in VoiceLink</h4>
+                                        <ul>
+                                            <li>Go to <strong>User Settings → Security</strong></li>
+                                            <li>Click <strong>"Enable Two-Factor Authentication"</strong></li>
+                                            <li>Choose <strong>"Authenticator App"</strong> method</li>
+                                        </ul>
+                                    </div>
+                                </div>
+
+                                <div class="step">
+                                    <div class="step-number">2</div>
+                                    <div class="step-content">
+                                        <h4>Scan QR Code</h4>
+                                        <ul>
+                                            <li>Open your authenticator app</li>
+                                            <li>Tap <strong>"Add Account"</strong> or <strong>"+"</strong></li>
+                                            <li>Scan the QR code displayed in VoiceLink</li>
+                                            <li>Or manually enter the setup key</li>
+                                        </ul>
+                                    </div>
+                                </div>
+
+                                <div class="step">
+                                    <div class="step-number">3</div>
+                                    <div class="step-content">
+                                        <h4>Verify Setup</h4>
+                                        <ul>
+                                            <li>Enter the 6-digit code from your app</li>
+                                            <li>Click <strong>"Verify and Enable"</strong></li>
+                                            <li>Save the provided backup codes</li>
+                                            <li>Test login with 2FA enabled</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="app-specific-guides">
+                            <div class="app-guide" id="google-auth-setup">
+                                <h3>🔵 Google Authenticator Setup</h3>
+                                <ol>
+                                    <li><strong>Download App:</strong> Install Google Authenticator from App Store</li>
+                                    <li><strong>Open App:</strong> Launch Google Authenticator</li>
+                                    <li><strong>Add Account:</strong> Tap "+" then "Scan QR code"</li>
+                                    <li><strong>Scan Code:</strong> Point camera at VoiceLink QR code</li>
+                                    <li><strong>Account Added:</strong> VoiceLink appears in your accounts list</li>
+                                    <li><strong>Get Code:</strong> Tap VoiceLink entry to see current code</li>
+                                    <li><strong>Enter Code:</strong> Input 6-digit code in VoiceLink</li>
+                                </ol>
+
+                                <div class="google-auth-tips">
+                                    <h4>Google Authenticator Tips</h4>
+                                    <ul>
+                                        <li><strong>Backup:</strong> Enable cloud backup in app settings</li>
+                                        <li><strong>Multiple Devices:</strong> Add account to multiple devices</li>
+                                        <li><strong>Time Sync:</strong> Ensure device time is accurate</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="app-guide" id="microsoft-auth-setup">
+                                <h3>🔷 Microsoft Authenticator Setup</h3>
+                                <ol>
+                                    <li><strong>Install App:</strong> Download Microsoft Authenticator</li>
+                                    <li><strong>Sign In:</strong> Sign in with Microsoft account (optional)</li>
+                                    <li><strong>Add Account:</strong> Tap "+" then "Other account"</li>
+                                    <li><strong>Scan QR:</strong> Use camera to scan VoiceLink QR code</li>
+                                    <li><strong>Name Account:</strong> Enter "VoiceLink Local" as account name</li>
+                                    <li><strong>Verify:</strong> Enter generated code in VoiceLink</li>
+                                    <li><strong>Enable Backup:</strong> Allow cloud backup for recovery</li>
+                                </ol>
+
+                                <div class="microsoft-auth-features">
+                                    <h4>Microsoft Authenticator Features</h4>
+                                    <ul>
+                                        <li><strong>Push Notifications:</strong> Approve logins with one tap</li>
+                                        <li><strong>Biometric Lock:</strong> Secure app with Face ID/Touch ID</li>
+                                        <li><strong>Cloud Sync:</strong> Automatic backup to Microsoft account</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="app-guide" id="authy-setup">
+                                <h3>🔶 Authy Setup</h3>
+                                <ol>
+                                    <li><strong>Download Authy:</strong> Install from App Store</li>
+                                    <li><strong>Create Account:</strong> Register with phone number</li>
+                                    <li><strong>Add Token:</strong> Tap "+" then "Scan QR Code"</li>
+                                    <li><strong>Scan VoiceLink Code:</strong> Point camera at QR code</li>
+                                    <li><strong>Set Icon:</strong> Choose icon and name for account</li>
+                                    <li><strong>Verify Setup:</strong> Enter 6-digit code in VoiceLink</li>
+                                    <li><strong>Enable Sync:</strong> Turn on multi-device sync</li>
+                                </ol>
+
+                                <div class="authy-advantages">
+                                    <h4>Authy Advantages</h4>
+                                    <ul>
+                                        <li><strong>Multi-Device:</strong> Sync across all your devices</li>
+                                        <li><strong>Encrypted Backup:</strong> Secure cloud storage</li>
+                                        <li><strong>Offline Access:</strong> Works without internet</li>
+                                        <li><strong>Desktop App:</strong> Available for Windows, Mac, Linux</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="backup-codes">
+                        <h3>💾 Backup Codes</h3>
+                        <div class="backup-info">
+                            <h4>What are Backup Codes?</h4>
+                            <p>Backup codes are one-time use codes that allow you to access your account if you lose access to your authenticator app.</p>
+
+                            <h4>Using Backup Codes</h4>
+                            <ul>
+                                <li><strong>Save Securely:</strong> Store codes in a safe place (password manager, secure note)</li>
+                                <li><strong>One-Time Use:</strong> Each code can only be used once</li>
+                                <li><strong>Emergency Access:</strong> Use when authenticator app is unavailable</li>
+                                <li><strong>Generate New Codes:</strong> Create new set after using several codes</li>
+                            </ul>
+
+                            <h4>Best Practices</h4>
+                            <ul>
+                                <li>Print and store in secure physical location</li>
+                                <li>Save in password manager</li>
+                                <li>Don't store with your device</li>
+                                <li>Share with trusted person if needed</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Message-Based 2FA -->
+            <section class="message-2fa-section">
+                <div class="content-wrapper">
+                    <h2>💬 Message-Based Two-Factor Authentication</h2>
+
+                    <div class="message-auth-overview">
+                        <p>VoiceLink Local supports various messaging platforms for 2FA delivery, providing flexibility for users who prefer receiving codes through their favorite communication channels.</p>
+                    </div>
+
+                    <div class="messaging-methods">
+                        <div class="method-card">
+                            <h3>📱 SMS Verification</h3>
+
+                            <div class="sms-setup">
+                                <h4>Setting Up SMS 2FA</h4>
+                                <ol>
+                                    <li><strong>Navigate to Security:</strong> User Settings → Security → Two-Factor Authentication</li>
+                                    <li><strong>Choose SMS:</strong> Select "SMS/Text Message" option</li>
+                                    <li><strong>Enter Phone Number:</strong> Provide mobile number with country code</li>
+                                    <li><strong>Verify Number:</strong> Enter code sent to your phone</li>
+                                    <li><strong>Complete Setup:</strong> Confirm SMS 2FA is active</li>
+                                </ol>
+                            </div>
+
+                            <div class="sms-features">
+                                <h4>SMS Features</h4>
+                                <ul>
+                                    <li><strong>Universal Access:</strong> Works on any mobile phone</li>
+                                    <li><strong>No App Required:</strong> Uses built-in SMS functionality</li>
+                                    <li><strong>Quick Delivery:</strong> Usually arrives within seconds</li>
+                                    <li><strong>Offline Friendly:</strong> Doesn't require internet connection</li>
+                                </ul>
+                            </div>
+
+                            <div class="sms-considerations">
+                                <h4>Important Considerations</h4>
+                                <ul>
+                                    <li><strong>Network Dependency:</strong> Requires cellular coverage</li>
+                                    <li><strong>SIM Swapping Risk:</strong> Vulnerable to SIM card attacks</li>
+                                    <li><strong>International Rates:</strong> May incur charges when traveling</li>
+                                    <li><strong>Carrier Reliability:</strong> Dependent on SMS infrastructure</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="method-card">
+                            <h3>📧 Email Verification</h3>
+
+                            <div class="email-setup">
+                                <h4>Setting Up Email 2FA</h4>
+                                <ol>
+                                    <li><strong>Access Settings:</strong> Go to Security settings</li>
+                                    <li><strong>Select Email:</strong> Choose "Email Verification" method</li>
+                                    <li><strong>Verify Email:</strong> Confirm your email address</li>
+                                    <li><strong>Test Delivery:</strong> Send test verification code</li>
+                                    <li><strong>Configure Timing:</strong> Set code expiration (5-30 minutes)</li>
+                                </ol>
+                            </div>
+
+                            <div class="email-features">
+                                <h4>Email 2FA Benefits</h4>
+                                <ul>
+                                    <li><strong>Reliable Delivery:</strong> Email infrastructure is very stable</li>
+                                    <li><strong>Rich Formatting:</strong> Can include additional security information</li>
+                                    <li><strong>Multi-Device Access:</strong> Check email from any device</li>
+                                    <li><strong>Audit Trail:</strong> Permanent record of authentication attempts</li>
+                                </ul>
+                            </div>
+
+                            <div class="email-security">
+                                <h4>Email Security Tips</h4>
+                                <ul>
+                                    <li>Use secure email provider (Gmail, Outlook, ProtonMail)</li>
+                                    <li>Enable 2FA on your email account</li>
+                                    <li>Use strong email password</li>
+                                    <li>Monitor for suspicious login attempts</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="method-card">
+                            <h3>📞 Telegram Integration</h3>
+
+                            <div class="telegram-setup">
+                                <h4>Connecting Telegram</h4>
+                                <ol>
+                                    <li><strong>Start Bot:</strong> Search for "@VoiceLinkBot" in Telegram</li>
+                                    <li><strong>Begin Setup:</strong> Send "/start" command to bot</li>
+                                    <li><strong>Get Code:</strong> Bot provides unique linking code</li>
+                                    <li><strong>Link Account:</strong> Enter code in VoiceLink Security settings</li>
+                                    <li><strong>Verify Connection:</strong> Test 2FA delivery</li>
+                                </ol>
+                            </div>
+
+                            <div class="telegram-features">
+                                <h4>Telegram Advantages</h4>
+                                <ul>
+                                    <li><strong>Instant Delivery:</strong> Real-time message delivery</li>
+                                    <li><strong>Cross-Platform:</strong> Available on all devices</li>
+                                    <li><strong>Secure Protocol:</strong> End-to-end encryption available</li>
+                                    <li><strong>Rich Messages:</strong> Buttons for quick approval/denial</li>
+                                </ul>
+                            </div>
+
+                            <div class="telegram-commands">
+                                <h4>Bot Commands</h4>
+                                <ul>
+                                    <li><code>/status</code> - Check authentication status</li>
+                                    <li><code>/disable</code> - Temporarily disable notifications</li>
+                                    <li><code>/enable</code> - Re-enable notifications</li>
+                                    <li><code>/unlink</code> - Remove Telegram 2FA</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="method-card">
+                            <h3>🎮 Discord Integration</h3>
+
+                            <div class="discord-setup">
+                                <h4>Setting Up Discord 2FA</h4>
+                                <ol>
+                                    <li><strong>Add Bot:</strong> Invite VoiceLink bot to your Discord server</li>
+                                    <li><strong>DM Bot:</strong> Send direct message to start setup</li>
+                                    <li><strong>Link Account:</strong> Use provided command with your user ID</li>
+                                    <li><strong>Verify Setup:</strong> Complete verification process</li>
+                                    <li><strong>Test Delivery:</strong> Ensure codes arrive correctly</li>
+                                </ol>
+                            </div>
+
+                            <div class="discord-features">
+                                <h4>Discord Features</h4>
+                                <ul>
+                                    <li><strong>Gamer-Friendly:</strong> Natural integration for gaming communities</li>
+                                    <li><strong>Server Integration:</strong> Can notify server moderators</li>
+                                    <li><strong>Rich Embeds:</strong> Beautiful formatted messages</li>
+                                    <li><strong>Voice Notifications:</strong> Audio alerts for important events</li>
+                                </ul>
+                            </div>
+
+                            <div class="discord-permissions">
+                                <h4>Required Permissions</h4>
+                                <ul>
+                                    <li>Send Messages (for codes)</li>
+                                    <li>Read Message History (for context)</li>
+                                    <li>Embed Links (for rich messages)</li>
+                                    <li>Use External Emojis (for status indicators)</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="message-security">
+                        <h3>🛡️ Message-Based Security Considerations</h3>
+
+                        <div class="security-comparison">
+                            <table class="security-table">
+                                <thead>
+                                    <tr>
+                                        <th>Method</th>
+                                        <th>Security Level</th>
+                                        <th>Convenience</th>
+                                        <th>Best Use Case</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>SMS</td>
+                                        <td>Medium</td>
+                                        <td>High</td>
+                                        <td>Universal access, simple setup</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Email</td>
+                                        <td>Medium-High</td>
+                                        <td>High</td>
+                                        <td>Professional use, audit trails</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Telegram</td>
+                                        <td>High</td>
+                                        <td>Very High</td>
+                                        <td>Tech-savvy users, instant delivery</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Discord</td>
+                                        <td>High</td>
+                                        <td>High</td>
+                                        <td>Gaming communities, team coordination</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="security-recommendations">
+                            <h4>Security Recommendations</h4>
+                            <ul>
+                                <li><strong>Multiple Methods:</strong> Set up backup 2FA methods</li>
+                                <li><strong>Secure Channels:</strong> Use encrypted messaging when possible</li>
+                                <li><strong>Regular Review:</strong> Audit connected accounts monthly</li>
+                                <li><strong>Immediate Action:</strong> Disable compromised accounts immediately</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Advanced Authentication -->
+            <section class="advanced-auth-section">
+                <div class="content-wrapper">
+                    <h2>🏢 Advanced Authentication Methods</h2>
+
+                    <div class="enterprise-auth">
+                        <div class="auth-protocol">
+                            <h3>🌐 OAuth 2.0 Integration</h3>
+
+                            <div class="oauth-providers">
+                                <h4>Supported OAuth Providers</h4>
+                                <div class="provider-grid">
+                                    <div class="provider-card">
+                                        <h5>🔵 Google</h5>
+                                        <ul>
+                                            <li>Google Workspace integration</li>
+                                            <li>Gmail account linking</li>
+                                            <li>Admin console management</li>
+                                        </ul>
+                                    </div>
+                                    <div class="provider-card">
+                                        <h5>🔷 Microsoft</h5>
+                                        <ul>
+                                            <li>Azure AD integration</li>
+                                            <li>Office 365 accounts</li>
+                                            <li>Enterprise single sign-on</li>
+                                        </ul>
+                                    </div>
+                                    <div class="provider-card">
+                                        <h5>⚫ GitHub</h5>
+                                        <ul>
+                                            <li>Developer account linking</li>
+                                            <li>Organization membership</li>
+                                            <li>Team-based access control</li>
+                                        </ul>
+                                    </div>
+                                    <div class="provider-card">
+                                        <h5>🎮 Discord</h5>
+                                        <ul>
+                                            <li>Gaming community integration</li>
+                                            <li>Server role verification</li>
+                                            <li>Voice channel linking</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="oauth-setup">
+                                <h4>OAuth Setup Process</h4>
+                                <ol>
+                                    <li><strong>Choose Provider:</strong> Select OAuth provider in settings</li>
+                                    <li><strong>Authorize:</strong> Click to redirect to provider</li>
+                                    <li><strong>Grant Permissions:</strong> Allow VoiceLink access</li>
+                                    <li><strong>Return to App:</strong> Automatic redirect after approval</li>
+                                    <li><strong>Verify Account:</strong> Confirm linked account details</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <div class="auth-protocol">
+                            <h3>🏢 SAML 2.0 Support</h3>
+
+                            <div class="saml-overview">
+                                <p>Security Assertion Markup Language (SAML) 2.0 support enables enterprise single sign-on (SSO) integration with existing identity providers.</p>
+                            </div>
+
+                            <div class="saml-providers">
+                                <h4>Compatible Identity Providers</h4>
+                                <ul>
+                                    <li><strong>Active Directory Federation Services (ADFS)</strong></li>
+                                    <li><strong>Okta</strong></li>
+                                    <li><strong>OneLogin</strong></li>
+                                    <li><strong>Ping Identity</strong></li>
+                                    <li><strong>Auth0</strong></li>
+                                    <li><strong>Azure AD</strong></li>
+                                </ul>
+                            </div>
+
+                            <div class="saml-configuration">
+                                <h4>SAML Configuration</h4>
+                                <ol>
+                                    <li><strong>IdP Setup:</strong> Configure VoiceLink as service provider in your IdP</li>
+                                    <li><strong>Metadata Exchange:</strong> Exchange SAML metadata files</li>
+                                    <li><strong>Attribute Mapping:</strong> Map user attributes (name, email, groups)</li>
+                                    <li><strong>Test SSO:</strong> Verify login flow works correctly</li>
+                                    <li><strong>Deploy:</strong> Enable for organization users</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <div class="auth-protocol">
+                            <h3>📂 LDAP Integration</h3>
+
+                            <div class="ldap-features">
+                                <h4>LDAP Capabilities</h4>
+                                <ul>
+                                    <li><strong>Active Directory:</strong> Windows domain authentication</li>
+                                    <li><strong>OpenLDAP:</strong> Open source directory service</li>
+                                    <li><strong>Group Membership:</strong> Role-based access control</li>
+                                    <li><strong>User Sync:</strong> Automatic user provisioning</li>
+                                </ul>
+                            </div>
+
+                            <div class="ldap-setup">
+                                <h4>LDAP Configuration</h4>
+                                <ol>
+                                    <li><strong>Server Details:</strong> Configure LDAP server address and port</li>
+                                    <li><strong>Bind Account:</strong> Set up service account for queries</li>
+                                    <li><strong>Search Base:</strong> Define user and group search paths</li>
+                                    <li><strong>Attribute Mapping:</strong> Map LDAP attributes to VoiceLink fields</li>
+                                    <li><strong>Test Connection:</strong> Verify LDAP connectivity and authentication</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <div class="auth-protocol">
+                            <h3>🔐 OpenID Connect</h3>
+
+                            <div class="oidc-benefits">
+                                <h4>OpenID Connect Features</h4>
+                                <ul>
+                                    <li><strong>Modern Standard:</strong> Built on OAuth 2.0</li>
+                                    <li><strong>Identity Layer:</strong> User identity verification</li>
+                                    <li><strong>Token-Based:</strong> Secure token exchange</li>
+                                    <li><strong>Broad Support:</strong> Many provider options</li>
+                                </ul>
+                            </div>
+
+                            <div class="oidc-providers">
+                                <h4>OpenID Connect Providers</h4>
+                                <ul>
+                                    <li>Google Identity Platform</li>
+                                    <li>Microsoft Azure AD</li>
+                                    <li>Auth0</li>
+                                    <li>Keycloak</li>
+                                    <li>Custom OIDC providers</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Security Best Practices -->
+            <section class="security-practices-section">
+                <div class="content-wrapper">
+                    <h2>🛡️ Security Best Practices</h2>
+
+                    <div class="practice-categories">
+                        <div class="practice-category">
+                            <h3>🔒 Account Security</h3>
+                            <ul>
+                                <li><strong>Strong Passwords:</strong> Use unique, complex passwords for all accounts</li>
+                                <li><strong>Password Manager:</strong> Store credentials securely</li>
+                                <li><strong>Regular Updates:</strong> Change passwords periodically</li>
+                                <li><strong>Monitor Access:</strong> Review login history regularly</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>📱 2FA Security</h3>
+                            <ul>
+                                <li><strong>Multiple Methods:</strong> Set up backup 2FA options</li>
+                                <li><strong>Secure Storage:</strong> Protect backup codes safely</li>
+                                <li><strong>App Security:</strong> Lock authenticator apps</li>
+                                <li><strong>Device Security:</strong> Keep devices updated and secure</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>🌐 Network Security</h3>
+                            <ul>
+                                <li><strong>Secure Connections:</strong> Use HTTPS and WSS protocols</li>
+                                <li><strong>Trusted Networks:</strong> Avoid public WiFi for sensitive operations</li>
+                                <li><strong>VPN Usage:</strong> Use VPN when on untrusted networks</li>
+                                <li><strong>Firewall Rules:</strong> Configure appropriate network restrictions</li>
+                            </ul>
+                        </div>
+
+                        <div class="practice-category">
+                            <h3>👥 Organization Security</h3>
+                            <ul>
+                                <li><strong>Role-Based Access:</strong> Implement principle of least privilege</li>
+                                <li><strong>Regular Audits:</strong> Review user access periodically</li>
+                                <li><strong>Security Training:</strong> Educate users on security practices</li>
+                                <li><strong>Incident Response:</strong> Have plan for security incidents</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="security-checklist">
+                        <h3>✅ Security Checklist</h3>
+                        <div class="checklist-grid">
+                            <div class="checklist-section">
+                                <h4>Initial Setup</h4>
+                                <ul class="checklist">
+                                    <li>□ Create strong, unique password</li>
+                                    <li>□ Enable two-factor authentication</li>
+                                    <li>□ Save backup codes securely</li>
+                                    <li>□ Verify email address</li>
+                                    <li>□ Review privacy settings</li>
+                                </ul>
+                            </div>
+                            <div class="checklist-section">
+                                <h4>Ongoing Maintenance</h4>
+                                <ul class="checklist">
+                                    <li>□ Monitor login activity monthly</li>
+                                    <li>□ Update passwords quarterly</li>
+                                    <li>□ Review connected apps annually</li>
+                                    <li>□ Test backup 2FA methods</li>
+                                    <li>□ Keep software updated</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Troubleshooting -->
+            <section class="auth-troubleshooting-section">
+                <div class="content-wrapper">
+                    <h2>🔧 Authentication Troubleshooting</h2>
+
+                    <div class="troubleshooting-grid">
+                        <div class="trouble-item">
+                            <h3>❌ Can't Log In</h3>
+                            <div class="trouble-solutions">
+                                <h4>Common Causes:</h4>
+                                <ul>
+                                    <li>Incorrect username or password</li>
+                                    <li>2FA app out of sync</li>
+                                    <li>Account locked or suspended</li>
+                                    <li>Network connectivity issues</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Reset password using "Forgot Password"</li>
+                                    <li>Sync authenticator app time</li>
+                                    <li>Use backup codes</li>
+                                    <li>Contact support for account issues</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="trouble-item">
+                            <h3>📱 2FA Not Working</h3>
+                            <div class="trouble-solutions">
+                                <h4>Common Causes:</h4>
+                                <ul>
+                                    <li>Time synchronization issues</li>
+                                    <li>Wrong authenticator account</li>
+                                    <li>Network delays</li>
+                                    <li>Code already used</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Check device time settings</li>
+                                    <li>Verify correct app account</li>
+                                    <li>Wait for new code generation</li>
+                                    <li>Use backup authentication method</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="trouble-item">
+                            <h3>🔄 OAuth Errors</h3>
+                            <div class="trouble-solutions">
+                                <h4>Common Causes:</h4>
+                                <ul>
+                                    <li>Provider service outage</li>
+                                    <li>Insufficient permissions</li>
+                                    <li>Expired authorization</li>
+                                    <li>Configuration mismatch</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Check provider status page</li>
+                                    <li>Re-authorize application</li>
+                                    <li>Clear browser cookies</li>
+                                    <li>Use alternative login method</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="trouble-item">
+                            <h3>📧 Not Receiving Codes</h3>
+                            <div class="trouble-solutions">
+                                <h4>Common Causes:</h4>
+                                <ul>
+                                    <li>Spam/junk folder filtering</li>
+                                    <li>Network carrier delays</li>
+                                    <li>Incorrect contact information</li>
+                                    <li>Service provider issues</li>
+                                </ul>
+                                <h4>Solutions:</h4>
+                                <ul>
+                                    <li>Check spam/junk folders</li>
+                                    <li>Verify phone number/email</li>
+                                    <li>Try alternative delivery method</li>
+                                    <li>Wait and retry in few minutes</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="docs-footer">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Authentication</h4>
+                    <ul>
+                        <li><a href="#basic-auth">Basic Authentication</a></li>
+                        <li><a href="#ios-2fa">iOS 2FA</a></li>
+                        <li><a href="#third-party-2fa">Third-Party 2FA</a></li>
+                        <li><a href="#message-2fa">Message-Based 2FA</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Related Topics</h4>
+                    <ul>
+                        <li><a href="user-settings.html">User Settings</a></li>
+                        <li><a href="room-management.html">Room Management</a></li>
+                        <li><a href="ios-browser.html">iOS Browser Support</a></li>
+                        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="faq.html">FAQ</a></li>
+                        <li><a href="contact.html">Contact Support</a></li>
+                        <li><a href="security-report.html">Report Security Issue</a></li>
+                        <li><a href="index.html">← Back to Docs Home</a></li>
+                    </ul>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <script src="scripts/docs.js"></script>
+</body>
+</html>

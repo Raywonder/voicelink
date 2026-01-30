@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Getting Started - VoiceLink Local Documentation</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <!-- Navigation Header -->
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>🚀 Getting Started with VoiceLink Local</h1>
+                <p class="subtitle">Complete setup guide for new users</p>
+                <nav class="header-nav">
+                    <a href="index.html" class="nav-link">← Documentation Home</a>
+                    <a href="../client/index.html" class="nav-link">← Back to App</a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content" id="main-content">
+            <!-- Decentralized Network Info -->
+            <section class="decentralized-info" style="background: linear-gradient(135deg, #667eea15, #764ba215); padding: 2rem; border-radius: 12px; margin-bottom: 2rem; border-left: 4px solid #667eea;">
+                <div class="content-wrapper">
+                    <h2>🌐 Understanding VoiceLink's Decentralized Network</h2>
+                    <p style="font-size: 1.1rem; margin-bottom: 1rem;">
+                        <strong>VoiceLink is a federated, decentralized platform.</strong> Unlike traditional voice chat services,
+                        VoiceLink connects users across multiple independent servers worldwide.
+                    </p>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
+                        <div style="background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <h4 style="color: #667eea; margin-bottom: 0.5rem;">🖥️ Choose Your Server</h4>
+                            <p>When connecting, you'll need to know which server you want to join. Each server may have different rooms, communities, and features.</p>
+                        </div>
+                        <div style="background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <h4 style="color: #667eea; margin-bottom: 0.5rem;">🔗 Federation</h4>
+                            <p>Federated servers can share rooms across the network. Rooms from other servers appear in your room list marked with their source.</p>
+                        </div>
+                        <div style="background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <h4 style="color: #667eea; margin-bottom: 0.5rem;">🏠 Self-Hosting</h4>
+                            <p>You can run your own VoiceLink server for complete control over your voice chat community and data.</p>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 1.5rem; padding: 1rem; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                        <strong>Important:</strong> To connect, you need the URL of a VoiceLink server. Common options include:
+                        <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                            <li><strong>Public Hub:</strong> <code>https://voicelink.devinecreations.net</code> (main public server)</li>
+                            <li><strong>Community Servers:</strong> URLs shared by communities you're part of</li>
+                            <li><strong>Self-Hosted:</strong> Your own server URL (e.g., <code>https://voice.yourdomain.com</code>)</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Quick Start Overview -->
+            <section class="quick-overview">
+                <div class="content-wrapper">
+                    <h2>📋 What You'll Learn</h2>
+                    <div class="overview-grid">
+                        <div class="overview-item">
+                            <h3>1. Installation</h3>
+                            <p>Download and install VoiceLink Local on your platform</p>
+                        </div>
+                        <div class="overview-item">
+                            <h3>2. First Setup</h3>
+                            <p>Configure audio settings and create your profile</p>
+                        </div>
+                        <div class="overview-item">
+                            <h3>3. Join Your First Room</h3>
+                            <p>Connect with others and start voice chatting</p>
+                        </div>
+                        <div class="overview-item">
+                            <h3>4. Advanced Features</h3>
+                            <p>Explore 3D audio, media streaming, and more</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 1: Installation -->
+            <section class="installation-section">
+                <div class="content-wrapper">
+                    <h2>📦 Step 1: Installation</h2>
+
+                    <div class="platform-tabs">
+                        <div class="tab-buttons">
+                            <button class="tab-btn active" data-tab="desktop">🖥️ Desktop Apps</button>
+                            <button class="tab-btn" data-tab="ios">📱 iOS Browser</button>
+                            <button class="tab-btn" data-tab="web">🌐 Web Browser</button>
+                            <button class="tab-btn" data-tab="server">🐧 Server Setup</button>
+                        </div>
+
+                        <!-- Desktop Installation -->
+                        <div class="tab-content active" id="desktop-tab">
+                            <h3>Desktop Application (Recommended)</h3>
+                            <p>VoiceLink Local provides native desktop applications for the best experience.</p>
+
+                            <div class="download-grid">
+                                <div class="download-card">
+                                    <h4>🍎 macOS</h4>
+                                    <p>Compatible with Intel and Apple Silicon Macs</p>
+                                    <ul>
+                                        <li><strong>DMG Installer:</strong> Standard installation</li>
+                                        <li><strong>Portable ZIP:</strong> No installation required</li>
+                                    </ul>
+                                    <div class="download-buttons">
+                                        <button class="btn-primary">Download DMG</button>
+                                        <button class="btn-secondary">Download ZIP</button>
+                                    </div>
+                                </div>
+
+                                <div class="download-card">
+                                    <h4>🪟 Windows</h4>
+                                    <p>Windows 10/11 (x64 and x86)</p>
+                                    <ul>
+                                        <li><strong>Portable EXE:</strong> Run directly, no installation</li>
+                                        <li><strong>ZIP Archive:</strong> Extract and run</li>
+                                    </ul>
+                                    <div class="download-buttons">
+                                        <button class="btn-primary">Download Portable</button>
+                                        <button class="btn-secondary">Download ZIP</button>
+                                    </div>
+                                </div>
+
+                                <div class="download-card">
+                                    <h4>🐧 Linux</h4>
+                                    <p>Ubuntu, Debian, CentOS, and other distributions</p>
+                                    <ul>
+                                        <li><strong>AppImage:</strong> Universal Linux app</li>
+                                        <li><strong>DEB Package:</strong> For Debian/Ubuntu</li>
+                                        <li><strong>TAR.GZ:</strong> Portable archive</li>
+                                    </ul>
+                                    <div class="download-buttons">
+                                        <button class="btn-primary">Download AppImage</button>
+                                        <button class="btn-secondary">Download DEB</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="installation-steps">
+                                <h4>Installation Steps:</h4>
+                                <ol>
+                                    <li><strong>Download</strong> the appropriate version for your system</li>
+                                    <li><strong>Install/Extract:</strong>
+                                        <ul>
+                                            <li>DMG: Open and drag to Applications</li>
+                                            <li>Portable: Extract ZIP and run executable</li>
+                                            <li>AppImage: Make executable and run</li>
+                                        </ul>
+                                    </li>
+                                    <li><strong>First Launch:</strong> The app will guide you through initial setup</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- iOS Browser -->
+                        <div class="tab-content" id="ios-tab">
+                            <h3>📱 iOS Browser Support</h3>
+                            <p>VoiceLink Local works excellently in iOS browsers with full feature support.</p>
+
+                            <div class="browser-support">
+                                <div class="browser-card">
+                                    <h4>🧭 Safari (Recommended)</h4>
+                                    <p>Best performance and integration on iOS devices</p>
+                                    <ul>
+                                        <li>Full 3D audio support</li>
+                                        <li>Optimized touch interface</li>
+                                        <li>Native iOS features integration</li>
+                                    </ul>
+                                </div>
+
+                                <div class="browser-card">
+                                    <h4>🔵 Chrome</h4>
+                                    <p>Alternative browser option with excellent compatibility</p>
+                                    <ul>
+                                        <li>Cross-platform sync</li>
+                                        <li>Advanced developer tools</li>
+                                        <li>Extensions support</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div class="ios-steps">
+                                <h4>iOS Setup Steps:</h4>
+                                <ol>
+                                    <li><strong>Open Browser:</strong> Launch Safari or Chrome on your iOS device</li>
+                                    <li><strong>Navigate:</strong> Go to your VoiceLink Local server URL</li>
+                                    <li><strong>Add to Home Screen:</strong> For app-like experience
+                                        <ul>
+                                            <li>Tap Share button</li>
+                                            <li>Select "Add to Home Screen"</li>
+                                            <li>Choose a name and add</li>
+                                        </ul>
+                                    </li>
+                                    <li><strong>Enable Audio:</strong> Grant microphone permissions when prompted</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- Web Browser -->
+                        <div class="tab-content" id="web-tab">
+                            <h3>🌐 Web Browser</h3>
+                            <p>Access VoiceLink Local through any modern web browser.</p>
+
+                            <div class="browser-requirements">
+                                <h4>Supported Browsers:</h4>
+                                <div class="browser-grid">
+                                    <div class="browser-item">
+                                        <strong>Chrome 88+</strong>
+                                        <span class="status recommended">Recommended</span>
+                                    </div>
+                                    <div class="browser-item">
+                                        <strong>Firefox 85+</strong>
+                                        <span class="status supported">Supported</span>
+                                    </div>
+                                    <div class="browser-item">
+                                        <strong>Safari 14+</strong>
+                                        <span class="status supported">Supported</span>
+                                    </div>
+                                    <div class="browser-item">
+                                        <strong>Edge 88+</strong>
+                                        <span class="status supported">Supported</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="web-requirements">
+                                <h4>Required Features:</h4>
+                                <ul>
+                                    <li>WebRTC support (for P2P voice)</li>
+                                    <li>Web Audio API (for 3D audio)</li>
+                                    <li>WebSocket support (for real-time communication)</li>
+                                    <li>Modern JavaScript (ES2018+)</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <!-- Server Setup -->
+                        <div class="tab-content" id="server-tab">
+                            <h3>🐧 Server Setup</h3>
+                            <p>Host your own VoiceLink Local server for maximum control and privacy.</p>
+
+                            <div class="server-specs">
+                                <h4>Minimum Requirements:</h4>
+                                <ul>
+                                    <li><strong>CPU:</strong> 2 cores, 2.0 GHz</li>
+                                    <li><strong>RAM:</strong> 2GB (4GB recommended)</li>
+                                    <li><strong>Storage:</strong> 1GB free space</li>
+                                    <li><strong>Network:</strong> 10 Mbps upload/download</li>
+                                    <li><strong>OS:</strong> Linux (Ubuntu 20.04+, CentOS 8+, Debian 11+)</li>
+                                </ul>
+
+                                <h4>Recommended for Large Deployments:</h4>
+                                <ul>
+                                    <li><strong>CPU:</strong> 8+ cores, 3.0+ GHz</li>
+                                    <li><strong>RAM:</strong> 16GB+</li>
+                                    <li><strong>Storage:</strong> SSD with 10GB+ free</li>
+                                    <li><strong>Network:</strong> 100+ Mbps with low latency</li>
+                                </ul>
+                            </div>
+
+                            <div class="server-capacity">
+                                <h4>Server Capacity:</h4>
+                                <table class="capacity-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Server Configuration</th>
+                                            <th>Max Total Users</th>
+                                            <th>Max Users Per Room</th>
+                                            <th>Connections Per IP</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Small (2 cores, 2GB RAM)</td>
+                                            <td>100 users</td>
+                                            <td>50 per room</td>
+                                            <td>2-3 per IP</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Medium (4 cores, 8GB RAM)</td>
+                                            <td>500 users</td>
+                                            <td>250 per room</td>
+                                            <td>3-5 per IP</td>
+                                        </tr>
+                                        <tr>
+                                            <td>Large (8+ cores, 16GB+ RAM)</td>
+                                            <td>1000 users</td>
+                                            <td>5000 per room</td>
+                                            <td>5+ per IP</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p><a href="server-deployment.html" class="btn-primary">Full Server Setup Guide →</a></p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 2: First Setup -->
+            <section class="first-setup-section">
+                <div class="content-wrapper">
+                    <h2>⚙️ Step 2: Initial Configuration</h2>
+
+                    <div class="setup-steps">
+                        <div class="setup-step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h3>Audio Permissions</h3>
+                                <p>When you first open VoiceLink Local, you'll be prompted to allow microphone access.</p>
+                                <ul>
+                                    <li>Click <strong>"Allow"</strong> when prompted</li>
+                                    <li>On iOS: Tap the microphone icon in the address bar if needed</li>
+                                    <li>Desktop apps: Grant permission in system settings if required</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="setup-step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h3>Create Your Profile</h3>
+                                <p>Set up your user profile for others to identify you.</p>
+                                <ul>
+                                    <li><strong>Nickname:</strong> Your display name in rooms</li>
+                                    <li><strong>Status:</strong> Choose from online, away, working, gaming, etc.</li>
+                                    <li><strong>Avatar:</strong> Optional emoji or image</li>
+                                    <li><strong>Signature:</strong> Optional bio with links support</li>
+                                </ul>
+                                <p><a href="user-settings.html">Complete User Settings Guide →</a></p>
+                            </div>
+                        </div>
+
+                        <div class="setup-step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h3>Audio Testing</h3>
+                                <p>Test your microphone and speakers to ensure optimal quality.</p>
+                                <ol>
+                                    <li>Go to <strong>Audio Settings</strong> from the main menu</li>
+                                    <li>Click <strong>"Test Microphone"</strong> - speak and check the level meter</li>
+                                    <li>Click <strong>"Test Speakers"</strong> - verify you can hear the test sound</li>
+                                    <li>Adjust volume levels as needed</li>
+                                    <li>Enable noise suppression and echo cancellation</li>
+                                </ol>
+                                <p><a href="audio-setup.html">Detailed Audio Setup Guide →</a></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 3: Join Your First Room -->
+            <section class="first-room-section">
+                <div class="content-wrapper">
+                    <h2>🏠 Step 3: Join Your First Room</h2>
+
+                    <div class="room-options">
+                        <div class="room-option">
+                            <h3>Join an Existing Room</h3>
+                            <p>Connect to a room someone else has created.</p>
+                            <ol>
+                                <li>Click <strong>"Join Existing Room"</strong> on the main menu</li>
+                                <li>Enter the <strong>Room ID</strong> (6-character code)</li>
+                                <li>Enter your <strong>Name</strong> for this room</li>
+                                <li>Enter the <strong>Password</strong> if the room is private</li>
+                                <li>Click <strong>"Join Room"</strong></li>
+                            </ol>
+                        </div>
+
+                        <div class="room-option">
+                            <h3>Create Your Own Room</h3>
+                            <p>Start a new room and invite others to join.</p>
+                            <ol>
+                                <li>Click <strong>"Create New Room"</strong> on the main menu</li>
+                                <li>Enter a <strong>Room Name</strong> (visible to participants)</li>
+                                <li>Set a <strong>Password</strong> (optional, for private rooms)</li>
+                                <li>Choose <strong>Max Users</strong> (2 to 5000)</li>
+                                <li>Select <strong>Room Duration</strong>:
+                                    <ul>
+                                        <li>1 hour, 2 hours, 6 hours</li>
+                                        <li>30 days, 69 days</li>
+                                        <li>Lifetime (permanent)</li>
+                                    </ul>
+                                </li>
+                                <li>Click <strong>"Create Room"</strong></li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div class="room-features">
+                        <h3>Room Features Overview</h3>
+                        <div class="feature-grid">
+                            <div class="feature-item">
+                                <h4>🎙️ Voice Chat</h4>
+                                <p>Crystal-clear P2P voice communication</p>
+                            </div>
+                            <div class="feature-item">
+                                <h4>🎯 3D Audio</h4>
+                                <p>Position users in 3D space for immersive experience</p>
+                            </div>
+                            <div class="feature-item">
+                                <h4>💬 Text Chat</h4>
+                                <p>Send messages alongside voice communication</p>
+                            </div>
+                            <div class="feature-item">
+                                <h4>🎵 Media Sharing</h4>
+                                <p>Stream music from Jellyfin or live radio</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 4: Essential Controls -->
+            <section class="controls-section">
+                <div class="content-wrapper">
+                    <h2>🎛️ Step 4: Essential Controls</h2>
+
+                    <div class="controls-grid">
+                        <div class="control-group">
+                            <h3>Voice Controls</h3>
+                            <ul>
+                                <li><strong>Mute/Unmute:</strong> Click microphone icon or press Space (if PTT enabled)</li>
+                                <li><strong>Deafen:</strong> Temporarily stop hearing others</li>
+                                <li><strong>Push-to-Talk:</strong> Hold Space to speak (if enabled)</li>
+                                <li><strong>Volume:</strong> Adjust your hearing volume with slider</li>
+                            </ul>
+                        </div>
+
+                        <div class="control-group">
+                            <h3>User Interactions</h3>
+                            <ul>
+                                <li><strong>Right-click users:</strong> Access context menu with options</li>
+                                <li><strong>Keyboard shortcuts:</strong> Shift+M (VoiceOver) or Applications key (Windows)</li>
+                                <li><strong>Direct messages:</strong> Send private messages to specific users</li>
+                                <li><strong>User volume:</strong> Adjust individual user volumes</li>
+                            </ul>
+                        </div>
+
+                        <div class="control-group">
+                            <h3>3D Audio Controls</h3>
+                            <ul>
+                                <li><strong>Drag users:</strong> Position others in 3D space</li>
+                                <li><strong>Your position:</strong> Move yourself around the virtual room</li>
+                                <li><strong>Room reverb:</strong> Choose from different acoustic environments</li>
+                                <li><strong>Spatial settings:</strong> Enable/disable 3D audio effects</li>
+                            </ul>
+                        </div>
+
+                        <div class="control-group">
+                            <h3>Room Management</h3>
+                            <ul>
+                                <li><strong>Leave room:</strong> Click the door icon to exit</li>
+                                <li><strong>Room settings:</strong> Access via settings gear (if you're the host)</li>
+                                <li><strong>User management:</strong> Kick, ban, or moderate users (host only)</li>
+                                <li><strong>Room info:</strong> View room details and participant list</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Next Steps -->
+            <section class="next-steps-section">
+                <div class="content-wrapper">
+                    <h2>🎯 What's Next?</h2>
+
+                    <div class="next-steps-grid">
+                        <div class="next-step-card">
+                            <h3>🎵 Media Streaming</h3>
+                            <p>Learn to stream music from Jellyfin servers or live radio stations</p>
+                            <a href="media-streaming.html" class="btn-secondary">Media Guide</a>
+                        </div>
+
+                        <div class="next-step-card">
+                            <h3>🔐 Security Setup</h3>
+                            <p>Configure 2FA authentication and secure messaging</p>
+                            <a href="authentication.html" class="btn-secondary">Security Guide</a>
+                        </div>
+
+                        <div class="next-step-card">
+                            <h3>🎛️ Advanced Audio</h3>
+                            <p>Explore multi-input management and audio effects</p>
+                            <a href="audio-effects.html" class="btn-secondary">Audio Guide</a>
+                        </div>
+
+                        <div class="next-step-card">
+                            <h3>📢 Communication</h3>
+                            <p>Set up TTS announcements and PA system features</p>
+                            <a href="tts-announcements.html" class="btn-secondary">Communication Guide</a>
+                        </div>
+                    </div>
+
+                    <div class="help-section">
+                        <h3>Need Help?</h3>
+                        <p>If you run into any issues, check out our comprehensive support resources:</p>
+                        <div class="help-links">
+                            <a href="troubleshooting.html" class="help-link">🔧 Troubleshooting</a>
+                            <a href="faq.html" class="help-link">❓ FAQ</a>
+                            <a href="contact.html" class="help-link">📧 Contact Support</a>
+                            <a href="community.html" class="help-link">👥 Community</a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Related Topics & Support -->
+        <section class="related-support" style="margin: 2rem; padding: 2rem; background: #f8f9fa; border-radius: 12px;">
+            <h2 style="margin-bottom: 1.5rem;">Related Topics</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+                <a href="room-management.html" style="display: block; padding: 1rem; background: white; border-radius: 8px; text-decoration: none; color: inherit; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <strong style="color: #667eea;">Room Management</strong>
+                    <p style="font-size: 0.9rem; margin-top: 0.5rem; color: #666;">Create and manage voice chat rooms</p>
+                </a>
+                <a href="spatial-audio.html" style="display: block; padding: 1rem; background: white; border-radius: 8px; text-decoration: none; color: inherit; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <strong style="color: #667eea;">3D Spatial Audio</strong>
+                    <p style="font-size: 0.9rem; margin-top: 0.5rem; color: #666;">Learn about immersive audio positioning</p>
+                </a>
+                <a href="authentication.html" style="display: block; padding: 1rem; background: white; border-radius: 8px; text-decoration: none; color: inherit; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <strong style="color: #667eea;">Authentication</strong>
+                    <p style="font-size: 0.9rem; margin-top: 0.5rem; color: #666;">Sign in with Mastodon or create account</p>
+                </a>
+                <a href="federation.html" style="display: block; padding: 1rem; background: white; border-radius: 8px; text-decoration: none; color: inherit; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <strong style="color: #667eea;">Federation</strong>
+                    <p style="font-size: 0.9rem; margin-top: 0.5rem; color: #666;">Connect across multiple servers</p>
+                </a>
+            </div>
+
+            <!-- Support Module Integration -->
+            <div id="support-section" style="padding: 1.5rem; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 12px; color: white;">
+                <h3 style="margin-bottom: 1rem;">Need More Help?</h3>
+                <p style="margin-bottom: 1rem;">Our support team is here to assist you. Choose how you'd like to get help:</p>
+                <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+                    <a href="../client/index.html#support" style="display: inline-block; padding: 0.75rem 1.5rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-weight: 600;">
+                        Open Support Chat
+                    </a>
+                    <a href="troubleshooting.html" style="display: inline-block; padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.2); color: white; border-radius: 6px; text-decoration: none; border: 1px solid rgba(255,255,255,0.3);">
+                        Troubleshooting Guide
+                    </a>
+                    <a href="faq.html" style="display: inline-block; padding: 0.75rem 1.5rem; background: rgba(255,255,255,0.2); color: white; border-radius: 6px; text-decoration: none; border: 1px solid rgba(255,255,255,0.3);">
+                        View FAQ
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="docs-footer">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Getting Started</h4>
+                    <ul>
+                        <li><a href="#installation">Installation</a></li>
+                        <li><a href="#first-setup">Initial Setup</a></li>
+                        <li><a href="#first-room">Join Your First Room</a></li>
+                        <li><a href="#controls">Essential Controls</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Next Steps</h4>
+                    <ul>
+                        <li><a href="room-management.html">Room Management</a></li>
+                        <li><a href="user-settings.html">User Settings</a></li>
+                        <li><a href="spatial-audio.html">3D Audio</a></li>
+                        <li><a href="media-streaming.html">Media Streaming</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+                        <li><a href="faq.html">FAQ</a></li>
+                        <li><a href="contact.html">Contact Support</a></li>
+                        <li><a href="index.html">← Back to Docs Home</a></li>
+                    </ul>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <script src="scripts/docs.js"></script>
+    <script>
+        // Tab functionality for platform selection
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabName = btn.dataset.tab;
+
+                // Update active tab button
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Update active tab content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                document.getElementById(tabName + '-tab').classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

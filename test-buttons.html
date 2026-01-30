@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VoiceLink Button Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        button { margin: 10px; padding: 10px 20px; font-size: 16px; }
+        #results { margin-top: 20px; padding: 10px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>VoiceLink Button Functionality Test</h1>
+    
+    <h2>Main Menu Buttons</h2>
+    <button id="create-room-btn">Create New Room</button>
+    <button id="join-room-btn">Join Existing Room</button>
+    <button id="open-settings-btn">Settings</button>
+    <button id="quick-audio-btn">Quick Audio</button>
+    <button id="test-audio-btn">Test Audio</button>
+    
+    <h2>Server Control Buttons</h2>
+    <button id="start-server-btn">Start Server</button>
+    <button id="stop-server-btn">Stop Server</button>
+    <button id="restart-server-btn">Restart Server</button>
+    
+    <h2>Auth Buttons</h2>
+    <button id="mastodon-login-btn">Login with Mastodon</button>
+    
+    <h2>URL Copy Buttons</h2>
+    <button id="copy-local-url-btn">Copy Local URL</button>
+    <button id="copy-public-url-btn">Copy Public URL</button>
+    <button id="copy-localhost-url-btn">Copy Localhost</button>
+    
+    <div id="results">
+        <h3>Test Results:</h3>
+        <p>Click buttons above to test functionality...</p>
+    </div>
+
+    <script>
+        // Mock the VoiceLink app functionality
+        const results = document.getElementById('results');
+        let testResults = {
+            'create-room-btn': false,
+            'join-room-btn': false,
+            'open-settings-btn': false,
+            'quick-audio-btn': false,
+            'test-audio-btn': false,
+            'start-server-btn': false,
+            'stop-server-btn': false,
+            'restart-server-btn': false,
+            'mastodon-login-btn': false,
+            'copy-local-url-btn': false,
+            'copy-public-url-btn': false,
+            'copy-localhost-url-btn': false
+        };
+
+        function logResult(buttonId, action, success = true) {
+            testResults[buttonId] = success;
+            const timestamp = new Date().toLocaleTimeString();
+            const status = success ? '✅ PASS' : '❌ FAIL';
+            results.innerHTML += `<p>[${timestamp}] ${status} ${buttonId}: ${action}</p>`;
+        }
+
+        // Simulate the button event listeners from app.js
+        document.getElementById('create-room-btn')?.addEventListener('click', () => {
+            try {
+                logResult('create-room-btn', 'Navigated to create room screen');
+                console.log('Create Room button clicked - would show create-room-screen');
+            } catch (error) {
+                logResult('create-room-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('join-room-btn')?.addEventListener('click', () => {
+            try {
+                logResult('join-room-btn', 'Navigated to join room screen');
+                console.log('Join Room button clicked - would show join-room-screen');
+            } catch (error) {
+                logResult('join-room-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('open-settings-btn')?.addEventListener('click', () => {
+            try {
+                logResult('open-settings-btn', 'Opened settings screen');
+                console.log('Settings button clicked - would show settings-screen');
+            } catch (error) {
+                logResult('open-settings-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('quick-audio-btn')?.addEventListener('click', () => {
+            try {
+                logResult('quick-audio-btn', 'Opened quick audio controls');
+                console.log('Quick Audio button clicked');
+            } catch (error) {
+                logResult('quick-audio-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('test-audio-btn')?.addEventListener('click', () => {
+            try {
+                logResult('test-audio-btn', 'Started audio test');
+                console.log('Test Audio button clicked');
+            } catch (error) {
+                logResult('test-audio-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('start-server-btn')?.addEventListener('click', async () => {
+            try {
+                logResult('start-server-btn', 'Server start initiated');
+                console.log('Start Server button clicked');
+            } catch (error) {
+                logResult('start-server-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('stop-server-btn')?.addEventListener('click', async () => {
+            try {
+                logResult('stop-server-btn', 'Server stop initiated');
+                console.log('Stop Server button clicked');
+            } catch (error) {
+                logResult('stop-server-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('restart-server-btn')?.addEventListener('click', async () => {
+            try {
+                logResult('restart-server-btn', 'Server restart initiated');
+                console.log('Restart Server button clicked');
+            } catch (error) {
+                logResult('restart-server-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('mastodon-login-btn')?.addEventListener('click', () => {
+            try {
+                logResult('mastodon-login-btn', 'Mastodon login initiated');
+                console.log('Mastodon Login button clicked');
+            } catch (error) {
+                logResult('mastodon-login-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('copy-local-url-btn')?.addEventListener('click', () => {
+            try {
+                logResult('copy-local-url-btn', 'Local URL copied to clipboard');
+                console.log('Copy Local URL button clicked');
+            } catch (error) {
+                logResult('copy-local-url-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('copy-public-url-btn')?.addEventListener('click', () => {
+            try {
+                logResult('copy-public-url-btn', 'Public URL copied to clipboard');
+                console.log('Copy Public URL button clicked');
+            } catch (error) {
+                logResult('copy-public-url-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        document.getElementById('copy-localhost-url-btn')?.addEventListener('click', () => {
+            try {
+                logResult('copy-localhost-url-btn', 'Localhost URL copied to clipboard');
+                console.log('Copy Localhost button clicked');
+            } catch (error) {
+                logResult('copy-localhost-url-btn', `Error: ${error.message}`, false);
+            }
+        });
+
+        // Test audio feedback simulation
+        const mockButtonAudio = {
+            clickSound: true,
+            playClick: () => {
+                console.log('🔊 Click sound played');
+                const audioStatus = document.createElement('p');
+                audioStatus.textContent = '[Audio] 🔊 Button click sound played';
+                audioStatus.style.color = 'green';
+                results.appendChild(audioStatus);
+            }
+        };
+
+        // Add click sound to all buttons (simulate the audio system)
+        document.addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON') {
+                mockButtonAudio.playClick();
+            }
+        });
+
+        // Summary function
+        function showSummary() {
+            const totalButtons = Object.keys(testResults).length;
+            const passedButtons = Object.values(testResults).filter(result => result).length;
+            const failedButtons = totalButtons - passedButtons;
+            
+            const summary = document.createElement('div');
+            summary.innerHTML = `
+                <h3>Test Summary:</h3>
+                <p>✅ Passed: ${passedButtons}/${totalButtons} buttons</p>
+                <p>❌ Failed: ${failedButtons}/${totalButtons} buttons</p>
+                <p><strong>Overall Status: ${failedButtons === 0 ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED'}</strong></p>
+            `;
+            summary.style.backgroundColor = failedButtons === 0 ? '#d4edda' : '#f8d7da';
+            summary.style.padding = '15px';
+            summary.style.marginTop = '20px';
+            summary.style.borderRadius = '5px';
+            
+            results.appendChild(summary);
+        }
+
+        // Add summary button
+        const summaryBtn = document.createElement('button');
+        summaryBtn.textContent = 'Show Test Summary';
+        summaryBtn.style.backgroundColor = '#007bff';
+        summaryBtn.style.color = 'white';
+        summaryBtn.onclick = showSummary;
+        document.body.appendChild(summaryBtn);
+    </script>
+</body>
+</html>

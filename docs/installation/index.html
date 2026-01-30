@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installation Guide - VoiceLink Local</title>
+    <link rel="stylesheet" href="../styles/docs.css">
+    <style>
+        /* Installation page specific styles */
+        .install-nav {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .install-nav h2 {
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        .install-nav ul {
+            list-style: none;
+            padding: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.5rem;
+        }
+        .install-nav a {
+            display: block;
+            padding: 0.5rem 1rem;
+            background: white;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #333;
+            border: 1px solid #e0e0e0;
+        }
+        .install-nav a:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        .platform-section {
+            margin-bottom: 3rem;
+            scroll-margin-top: 2rem;
+        }
+        .platform-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #667eea;
+        }
+        .platform-icon {
+            font-size: 2.5rem;
+        }
+        .requirements-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0 2rem;
+        }
+        .requirements-table th,
+        .requirements-table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border: 1px solid #e0e0e0;
+        }
+        .requirements-table th {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        .requirements-table tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+        .download-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+        .download-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+        .download-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+        }
+        .download-card h4 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+        .download-card .size {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        .steps-list {
+            counter-reset: step;
+            list-style: none;
+            padding: 0;
+        }
+        .steps-list li {
+            counter-increment: step;
+            padding: 1rem 1rem 1rem 3.5rem;
+            position: relative;
+            margin-bottom: 0.5rem;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        .steps-list li::before {
+            content: counter(step);
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 1.5rem;
+            height: 1.5rem;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+        .code-block {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.9rem;
+            margin: 1rem 0;
+        }
+        .note-box {
+            background: #e7f3ff;
+            border-left: 4px solid #0066cc;
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 0 6px 6px 0;
+        }
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 0 6px 6px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="docs-container">
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>Installation Guide</h1>
+                <p class="subtitle">Download and install VoiceLink Local on your platform</p>
+                <nav class="header-nav">
+                    <a href="../index.html" class="nav-link">Documentation Home</a>
+                    <a href="../../releases/index.html" class="nav-link">Downloads</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="content">
+            <!-- Quick Navigation -->
+            <nav class="install-nav">
+                <h2>Jump to Platform</h2>
+                <ul>
+                    <li><a href="#macos">macOS Installation</a></li>
+                    <li><a href="#windows">Windows Installation</a></li>
+                    <li><a href="#linux">Linux Installation</a></li>
+                    <li><a href="#server">Server Deployment</a></li>
+                    <li><a href="#web-install">Web Installer</a></li>
+                </ul>
+            </nav>
+
+            <!-- System Requirements Overview -->
+            <section class="platform-section">
+                <h2>System Requirements Overview</h2>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Minimum</th>
+                            <th>Recommended</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Processor</strong></td>
+                            <td>Dual-core 2.0 GHz</td>
+                            <td>Quad-core 2.5 GHz+</td>
+                        </tr>
+                        <tr>
+                            <td><strong>RAM</strong></td>
+                            <td>4 GB</td>
+                            <td>8 GB+</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Storage</strong></td>
+                            <td>500 MB</td>
+                            <td>1 GB+</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Network</strong></td>
+                            <td>Broadband 5 Mbps</td>
+                            <td>10+ Mbps, low latency</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Audio</strong></td>
+                            <td>Microphone + Speakers</td>
+                            <td>Headset with noise cancellation</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- macOS Section -->
+            <section id="macos" class="platform-section">
+                <div class="platform-header">
+                    <span class="platform-icon">&#127822;</span>
+                    <div>
+                        <h2>macOS Installation</h2>
+                        <p>macOS 10.15 Catalina or later</p>
+                    </div>
+                </div>
+
+                <h3>Download Options</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Package</th>
+                            <th>Architecture</th>
+                            <th>Size</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0-arm64.dmg">DMG (Apple Silicon)</a></td>
+                            <td>arm64</td>
+                            <td>421 MB</td>
+                            <td>For M1/M2/M3 Macs - Recommended</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0.dmg">DMG (Intel)</a></td>
+                            <td>x86_64</td>
+                            <td>426 MB</td>
+                            <td>For Intel-based Macs</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0-arm64-mac.zip">ZIP (Apple Silicon)</a></td>
+                            <td>arm64</td>
+                            <td>416 MB</td>
+                            <td>Portable - no installation required</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0-mac.zip">ZIP (Intel)</a></td>
+                            <td>x86_64</td>
+                            <td>421 MB</td>
+                            <td>Portable - no installation required</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Installation Steps</h3>
+                <ol class="steps-list">
+                    <li><strong>Download</strong> the appropriate version for your Mac (Apple Silicon or Intel)</li>
+                    <li><strong>Open</strong> the downloaded DMG file by double-clicking</li>
+                    <li><strong>Drag</strong> VoiceLink Local to your Applications folder</li>
+                    <li><strong>Launch</strong> from Applications or Spotlight search</li>
+                    <li><strong>Allow</strong> microphone access when prompted</li>
+                </ol>
+
+                <div class="note-box">
+                    <strong>First Launch:</strong> On first run, you may need to right-click and select "Open" to bypass Gatekeeper. This is only required once.
+                </div>
+            </section>
+
+            <!-- Windows Section -->
+            <section id="windows" class="platform-section">
+                <div class="platform-header">
+                    <span class="platform-icon">&#128187;</span>
+                    <div>
+                        <h2>Windows Installation</h2>
+                        <p>Windows 10 or Windows 11</p>
+                    </div>
+                </div>
+
+                <h3>Download Options</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Package</th>
+                            <th>Architecture</th>
+                            <th>Size</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0-win.zip">ZIP (64-bit)</a></td>
+                            <td>x64</td>
+                            <td>440 MB</td>
+                            <td>Portable - Recommended for most users</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0-ia32-win.zip">ZIP (32-bit)</a></td>
+                            <td>x86</td>
+                            <td>422 MB</td>
+                            <td>For older 32-bit systems</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Installation Steps</h3>
+                <ol class="steps-list">
+                    <li><strong>Download</strong> the 64-bit ZIP (or 32-bit for older systems)</li>
+                    <li><strong>Extract</strong> the ZIP file to your preferred location (e.g., Desktop or Program Files)</li>
+                    <li><strong>Open</strong> the extracted folder</li>
+                    <li><strong>Run</strong> "VoiceLink Local.exe"</li>
+                    <li><strong>Allow</strong> microphone and network access when prompted by Windows</li>
+                </ol>
+
+                <div class="note-box">
+                    <strong>Tip:</strong> Right-click "VoiceLink Local.exe" and select "Pin to Start" or "Pin to taskbar" for quick access.
+                </div>
+            </section>
+
+            <!-- Linux Section -->
+            <section id="linux" class="platform-section">
+                <div class="platform-header">
+                    <span class="platform-icon">&#128039;</span>
+                    <div>
+                        <h2>Linux Installation</h2>
+                        <p>Ubuntu 18.04+, Debian 10+, Fedora 30+, or equivalent</p>
+                    </div>
+                </div>
+
+                <h3>Download Options</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Package</th>
+                            <th>Format</th>
+                            <th>Size</th>
+                            <th>Best For</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><a href="../../releases/VoiceLink Local-1.0.0.AppImage">AppImage</a></td>
+                            <td>Universal</td>
+                            <td>423 MB</td>
+                            <td>Any distribution - Recommended</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/voicelink-local_1.0.0_amd64.deb">DEB Package</a></td>
+                            <td>.deb</td>
+                            <td>281 MB</td>
+                            <td>Ubuntu, Debian, Linux Mint</td>
+                        </tr>
+                        <tr>
+                            <td><a href="../../releases/voicelink-local-1.0.0.tar.gz">TAR.GZ Archive</a></td>
+                            <td>.tar.gz</td>
+                            <td>376 MB</td>
+                            <td>Manual installation on any distro</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>AppImage Installation (Recommended)</h3>
+                <ol class="steps-list">
+                    <li><strong>Download</strong> the AppImage file</li>
+                    <li><strong>Make executable:</strong> <code>chmod +x VoiceLink\ Local-1.0.0.AppImage</code></li>
+                    <li><strong>Run:</strong> <code>./VoiceLink\ Local-1.0.0.AppImage</code></li>
+                </ol>
+
+                <h3>DEB Package Installation</h3>
+                <div class="code-block">
+sudo dpkg -i voicelink-local_1.0.0_amd64.deb
+sudo apt-get install -f  # Fix dependencies if needed
+                </div>
+
+                <h3>Audio System Configuration</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Audio System</th>
+                            <th>Check Command</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>PulseAudio</strong></td>
+                            <td><code>pulseaudio --check</code></td>
+                            <td>Default on Ubuntu/Fedora - works out of box</td>
+                        </tr>
+                        <tr>
+                            <td><strong>ALSA</strong></td>
+                            <td><code>aplay -l</code></td>
+                            <td>Low-level audio - check device permissions</td>
+                        </tr>
+                        <tr>
+                            <td><strong>JACK</strong></td>
+                            <td><code>jack_control status</code></td>
+                            <td>Professional low-latency - start before VoiceLink</td>
+                        </tr>
+                        <tr>
+                            <td><strong>PipeWire</strong></td>
+                            <td><code>pw-cli info</code></td>
+                            <td>Modern replacement - full compatibility</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- Server Section -->
+            <section id="server" class="platform-section">
+                <div class="platform-header">
+                    <span class="platform-icon">&#9881;</span>
+                    <div>
+                        <h2>Server Deployment</h2>
+                        <p>Self-hosted VoiceLink server for teams and organizations</p>
+                    </div>
+                </div>
+
+                <h3>Server Requirements</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Specification</th>
+                            <th>Small (up to 100 users)</th>
+                            <th>Medium (up to 500 users)</th>
+                            <th>Large (1000+ users)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>CPU</strong></td>
+                            <td>2 cores, 2.0 GHz</td>
+                            <td>4 cores, 2.5 GHz</td>
+                            <td>8+ cores, 3.0+ GHz</td>
+                        </tr>
+                        <tr>
+                            <td><strong>RAM</strong></td>
+                            <td>2 GB</td>
+                            <td>8 GB</td>
+                            <td>16+ GB</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Storage</strong></td>
+                            <td>1 GB SSD</td>
+                            <td>5 GB SSD</td>
+                            <td>10+ GB SSD</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Network</strong></td>
+                            <td>10 Mbps</td>
+                            <td>100 Mbps</td>
+                            <td>1 Gbps</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Users per Room</strong></td>
+                            <td>50</td>
+                            <td>250</td>
+                            <td>5000</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Quick Server Install</h3>
+                <div class="code-block">
+# Download and extract
+wget https://voicelink.devinecreations.net/releases/latest.tar.gz
+tar -xzf latest.tar.gz
+cd voicelink-local
+
+# Install dependencies
+npm install --production
+
+# Configure (edit deploy.json)
+cp data/deploy.json.example data/deploy.json
+nano data/deploy.json
+
+# Start server
+npm start
+                </div>
+
+                <div class="note-box">
+                    <strong>Web Installer Available:</strong> For servers without SSH access, use the <a href="#web-install">Web Installer</a> for guided setup through your browser.
+                </div>
+            </section>
+
+            <!-- Web Installer Section -->
+            <section id="web-install" class="platform-section">
+                <div class="platform-header">
+                    <span class="platform-icon">&#127760;</span>
+                    <div>
+                        <h2>Web Installer</h2>
+                        <p>Browser-based installation for hosting providers</p>
+                    </div>
+                </div>
+
+                <p>The Web Installer allows you to set up VoiceLink Local on web hosting without SSH access.</p>
+
+                <h3>Requirements</h3>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>Required</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Node.js</strong></td>
+                            <td>v18.0.0+</td>
+                            <td>Check with hosting provider</td>
+                        </tr>
+                        <tr>
+                            <td><strong>File Upload</strong></td>
+                            <td>Yes</td>
+                            <td>FTP, cPanel, or file manager</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Domain/Subdomain</strong></td>
+                            <td>Yes</td>
+                            <td>SSL certificate recommended</td>
+                        </tr>
+                        <tr>
+                            <td><strong>WebSocket Support</strong></td>
+                            <td>Yes</td>
+                            <td>Required for real-time communication</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Installation Steps</h3>
+                <ol class="steps-list">
+                    <li><strong>Download</strong> the server package from the <a href="../../releases/index.html">Downloads page</a></li>
+                    <li><strong>Upload</strong> all files to your web hosting via FTP or file manager</li>
+                    <li><strong>Navigate</strong> to <code>yourdomain.com/install.html</code> in your browser</li>
+                    <li><strong>Follow</strong> the on-screen setup wizard</li>
+                    <li><strong>Configure</strong> your server name, admin credentials, and features</li>
+                    <li><strong>Complete</strong> installation and access your admin panel</li>
+                </ol>
+
+                <div class="warning-box">
+                    <strong>Security Note:</strong> After installation completes, delete or rename <code>install.html</code> to prevent unauthorized reinstallation.
+                </div>
+            </section>
+
+            <!-- Troubleshooting Quick Reference -->
+            <section class="platform-section">
+                <h2>Troubleshooting Quick Reference</h2>
+                <table class="requirements-table">
+                    <thead>
+                        <tr>
+                            <th>Issue</th>
+                            <th>Possible Cause</th>
+                            <th>Solution</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>App won't start</td>
+                            <td>Missing dependencies</td>
+                            <td>Reinstall or check system requirements</td>
+                        </tr>
+                        <tr>
+                            <td>No microphone audio</td>
+                            <td>Permissions not granted</td>
+                            <td>Check system privacy settings</td>
+                        </tr>
+                        <tr>
+                            <td>Can't hear others</td>
+                            <td>Wrong output device</td>
+                            <td>Check Audio Settings in app</td>
+                        </tr>
+                        <tr>
+                            <td>Connection failed</td>
+                            <td>Firewall blocking</td>
+                            <td>Allow VoiceLink through firewall</td>
+                        </tr>
+                        <tr>
+                            <td>High latency</td>
+                            <td>Network congestion</td>
+                            <td>Use wired connection, close other apps</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p><a href="../troubleshooting.html" class="btn-primary">Full Troubleshooting Guide</a></p>
+            </section>
+        </main>
+
+        <footer class="docs-footer">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="#macos">macOS</a></li>
+                        <li><a href="#windows">Windows</a></li>
+                        <li><a href="#linux">Linux</a></li>
+                        <li><a href="#server">Server</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="../troubleshooting.html">Troubleshooting</a></li>
+                        <li><a href="../faq.html">FAQ</a></li>
+                        <li><a href="../contact.html">Contact</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 DevineCreations. VoiceLink Local v1.0.0</p>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>

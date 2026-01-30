@@ -528,7 +528,7 @@ struct ChatInputField: View {
         HStack(spacing: 12) {
             TextField(placeholder, text: $text)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: text) { _, newValue in
+                .onChange(of: text) { newValue in
                     // Typing indicator
                     typingTimer?.invalidate()
                     if !newValue.isEmpty {
@@ -599,7 +599,7 @@ struct ChatView: View {
                         }
                     }
                 }
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: messages.count) { _ in
                     if let lastId = messages.last?.id {
                         withAnimation {
                             proxy.scrollTo(lastId, anchor: .bottom)

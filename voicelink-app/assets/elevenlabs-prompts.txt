@@ -1,0 +1,292 @@
+# VoiceLink Local - ElevenLabs Voice Prompts
+
+This file contains prompts that can be generated using ElevenLabs and integrated into the VoiceLink Local application for various app actions and notifications.
+
+## Connection & Network Prompts
+
+### Connection Status
+- "Connected to voice room successfully"
+- "Connection established"
+- "Joining voice channel"
+- "You are now connected"
+- "Connection lost - attempting to reconnect"
+- "Reconnecting to server"
+- "Unable to connect to server"
+- "Connection timeout"
+- "Network error occurred"
+
+### Room Management
+- "Entering voice room"
+- "Leaving voice room"
+- "Room joined successfully"
+- "You have been moved to a different room"
+- "Private room created"
+- "Room is now public"
+- "Room locked"
+- "Room unlocked"
+- "New user joined the room"
+- "User left the room"
+
+## Audio & Settings Prompts
+
+### Audio Configuration
+- "Microphone test starting"
+- "Microphone configured successfully"
+- "Audio quality set to high"
+- "Audio quality set to medium"
+- "Audio quality set to low"
+- "Spatial audio enabled"
+- "Spatial audio disabled"
+- "Voice activation enabled"
+- "Push to talk activated"
+- "Audio ducking enabled"
+- "Background noise suppression on"
+- "Echo cancellation active"
+
+### VST & Effects
+- "VST effect applied"
+- "Reverb enabled"
+- "Compressor activated"
+- "EQ settings applied"
+- "Audio effect disabled"
+- "Voice processing enabled"
+- "Real-time effects active"
+- "Audio chain configured"
+
+## Streaming & Media Prompts
+
+### Live Streaming
+- "Live stream started"
+- "Stream connected successfully"
+- "Stream quality excellent"
+- "Stream buffering"
+- "Stream disconnected"
+- "Broadcasting to audience"
+- "Recording started"
+- "Recording stopped"
+- "Stream metadata updated"
+
+### Media Playback
+- "Now playing"
+- "Media paused"
+- "Track skipped"
+- "Playlist loaded"
+- "Shuffling playlist"
+- "Repeat mode enabled"
+- "Volume adjusted"
+- "Media library loaded"
+
+### Protocol Notifications
+- "RTMP stream initialized"
+- "Icecast server connected"
+- "SRT low-latency mode active"
+- "WebRTC peer connected"
+- "HLS stream ready"
+- "NDI source discovered"
+- "WHIP protocol established"
+
+## System & Interface Prompts
+
+### Application States
+- "VoiceLink starting up"
+- "Application ready"
+- "Settings saved"
+- "Configuration updated"
+- "Profile loaded"
+- "Theme changed"
+- "Updates available"
+- "Restart required"
+- "Application minimized to tray"
+- "Full screen mode"
+
+### Security & Privacy
+- "Encryption enabled"
+- "Secure connection established"
+- "Authentication successful"
+- "Permission granted"
+- "Privacy mode activated"
+- "Anonymous mode enabled"
+- "Biometric authentication"
+- "Two-factor verification"
+
+### Error & Warning Prompts
+- "Warning: High CPU usage"
+- "Error: Unable to access microphone"
+- "Alert: Network instability detected"
+- "Caution: Low battery"
+- "Notice: Update recommended"
+- "Critical: Audio device disconnected"
+- "Information: New features available"
+
+## User Interaction Prompts
+
+### Navigation
+- "Opening settings"
+- "Switching to audio tab"
+- "Accessing streaming options"
+- "Loading preferences"
+- "Returning to main screen"
+- "Quick settings panel"
+- "Help documentation opened"
+
+### Social Features
+- "Friend request received"
+- "Message received"
+- "Notification enabled"
+- "Status updated"
+- "Presence changed to away"
+- "Do not disturb mode"
+- "Available for chat"
+
+### Advanced Features
+- "AI noise suppression active"
+- "Real-time voice enhancement"
+- "Professional mode enabled"
+- "Podcast mode activated"
+- "Conference call mode"
+- "Gaming audio optimized"
+- "Music production setup"
+
+## Custom Voice Commands
+
+### Voice Control Activation
+- "Voice commands enabled"
+- "Listening for commands"
+- "Command recognized"
+- "Voice control activated"
+- "Speech recognition ready"
+- "Voice assistant active"
+
+### Quick Actions
+- "Mute activated"
+- "Unmuted"
+- "Volume up"
+- "Volume down"
+- "Push to talk ready"
+- "Quick connect"
+- "Fast setup complete"
+
+## Professional Broadcasting
+
+### Live Production
+- "Going live in 3, 2, 1"
+- "You are now live"
+- "Broadcasting professional quality"
+- "Studio mode activated"
+- "Production setup complete"
+- "Multi-camera feed active"
+- "Professional audio engaged"
+
+### Streaming Analytics
+- "Viewer count updated"
+- "Stream quality optimal"
+- "Bitrate stable"
+- "Low latency confirmed"
+- "High definition active"
+- "Stream health excellent"
+
+## Accessibility Prompts
+
+### Screen Reader Support
+- "Screen reader mode"
+- "High contrast enabled"
+- "Large text mode"
+- "Keyboard navigation active"
+- "Voice description available"
+- "Accessibility features on"
+
+### Hearing Assistance
+- "Visual notifications enabled"
+- "Vibration alerts active"
+- "Closed captions available"
+- "Audio enhancement for hearing aids"
+- "Frequency adjustment applied"
+
+## Tutorial & Onboarding
+
+### First Time Setup
+- "Welcome to VoiceLink Local"
+- "Setup wizard starting"
+- "Microphone setup complete"
+- "Audio test successful"
+- "Ready to join your first room"
+- "Configuration complete"
+- "You're all set up"
+
+### Feature Introductions
+- "Introducing spatial audio"
+- "Discover VST effects"
+- "Try live streaming"
+- "Explore advanced settings"
+- "New feature available"
+- "Tutorial complete"
+
+## Emergency & Critical Prompts
+
+### System Critical
+- "Critical system error"
+- "Emergency shutdown"
+- "Audio system failure"
+- "Network emergency"
+- "Immediate restart required"
+- "Critical update needed"
+
+### Safety Notifications
+- "Volume safety limit"
+- "Hearing protection active"
+- "Audio level warning"
+- "Safe listening reminder"
+- "Take a break notification"
+
+## Seasonal & Special Events
+
+### Updates & Releases
+- "New version available"
+- "Feature update installed"
+- "Beta features enabled"
+- "Stable release ready"
+- "Performance improvements"
+- "Security update applied"
+
+### Community Events
+- "Community event starting"
+- "Special broadcast beginning"
+- "Live event notification"
+- "Group listening session"
+- "Virtual concert starting"
+
+---
+
+## Implementation Notes
+
+### Voice Characteristics
+- **Primary Voice**: Professional, clear, friendly
+- **Secondary Voice**: Warm, approachable for tutorials
+- **Alert Voice**: Urgent but not alarming for warnings
+- **System Voice**: Neutral, informative for status updates
+
+### Audio Settings
+- **Sample Rate**: 48kHz for high quality
+- **Format**: WAV or high-quality MP3
+- **Bit Depth**: 24-bit minimum
+- **Duration**: Keep prompts under 3 seconds for quick responses
+
+### Integration Points
+- Place audio files in `/source/assets/audio/voice-prompts/`
+- Use `VoicePromptManager` class for playback control
+- Implement volume ducking when prompts play
+- Support multiple languages for international users
+- Include fallback text-to-speech for missing prompts
+
+### Naming Convention
+- Use descriptive names: `connection-established.wav`
+- Group by category: `audio/microphone-test-start.wav`
+- Include alternatives: `welcome-variant1.wav`, `welcome-variant2.wav`
+
+### Accessibility
+- Ensure prompts work with screen readers
+- Provide visual alternatives for hearing-impaired users
+- Include subtitle/transcript files for each prompt
+- Test with various accessibility tools
+
+This prompt library ensures VoiceLink Local provides excellent user experience through clear, professional voice feedback for all major application functions and states.

@@ -64,7 +64,7 @@ class PATransmissionManager: ObservableObject {
 
     // MARK: - Settings
 
-    struct PASettings: Codable {
+    struct PASettings: Codable, Equatable {
         var playStartChime: Bool = true
         var playEndChime: Bool = true
         var chimeVolume: Float = 0.4               // 40% volume for chimes
@@ -385,7 +385,7 @@ class PATransmissionManager: ObservableObject {
             userInfo: [
                 "transmitting": transmitting,
                 "target": targetInfo,
-                "chimeStyle": settings.chimeStyle
+                "chimeStyle": selectedChimeStyle
             ]
         )
     }
@@ -410,9 +410,9 @@ class PATransmissionManager: ObservableObject {
         if transmitting {
             // Play incoming PA start chime
             if let chimeStyle = data["chimeStyle"] as? Int {
-                settings.chimeStyle = chimeStyle
+                selectedChimeStyle = chimeStyle
             }
-            playPAChime(isStart: true) {}
+            playPAChime(style: selectedChimeStyle) {}
 
             // Notify UI
             let scope = data["scope"] as? String ?? "all"
@@ -420,7 +420,7 @@ class PATransmissionManager: ObservableObject {
             onPAReceived?(username, target)
         } else {
             // Play end chime
-            playPAChime(isStart: false) {}
+            playPAChime(style: selectedChimeStyle) {}
         }
     }
 
@@ -497,7 +497,7 @@ class PATransmissionManager: ObservableObject {
             "isTransmitting": isTransmitting,
             "target": currentTarget.displayName,
             "duration": transmitDuration,
-            "chimeStyle": settings.chimeStyle
+            "chimeStyle": selectedChimeStyle
         ]
     }
 }
@@ -532,7 +532,6 @@ struct PAIndicator: View {
                     // Mic is active - user can speak
                     Image(systemName: "dot.radiowaves.left.and.right")
                         .foregroundColor(.red)
-                        .symbolEffect(.pulse)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -943,7 +942,7 @@ struct PASettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: paManager.settings) { _, _ in
+        .onChange(of: paManager.settings) { _ in
             paManager.saveSettings()
         }
     }

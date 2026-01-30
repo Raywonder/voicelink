@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Local - P2P Voice Chat</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="screen active">
+            <div class="loading-content">
+                <h1>🎙️ VoiceLink Local</h1>
+                <p>Initializing P2P voice chat system...</p>
+                <div class="loading-spinner"></div>
+            </div>
+        </div>
+
+        <!-- Main Menu -->
+        <div id="main-menu" class="screen">
+            <div class="menu-header">
+                <h1>🎙️ VoiceLink Local</h1>
+                <p>Advanced P2P Voice Chat with 3D Audio</p>
+            </div>
+
+            <div class="menu-content">
+                <!-- Desktop App Controls (only shown when running in Electron) -->
+                <div id="desktop-controls" class="menu-section" style="display: none;">
+                    <h3>App Controls</h3>
+                    <button id="minimize-to-tray-btn" class="settings-btn">📍 Minimize to Menu Bar</button>
+                    <button id="preferences-btn" class="settings-btn">⚙️ Application Settings</button>
+                </div>
+
+                <div class="menu-section">
+                    <h3>Quick Start</h3>
+                    <button id="create-room-btn" class="primary-btn">Create New Room</button>
+                    <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
+                </div>
+
+                <div class="menu-section">
+                    <h3>Settings & Tools</h3>
+                    <button id="open-settings-btn" class="primary-btn">⚙️ Settings</button>
+                    <button id="quick-audio-btn" class="settings-btn">🎵 Quick Audio</button>
+                    <button id="test-audio-btn" class="settings-btn">🧪 Test Audio</button>
+                </div>
+
+                <div class="menu-section">
+                    <h3>Server Status</h3>
+                    <div id="server-status-display" class="server-status">
+                        <div class="status-item">
+                            <span class="status-label">Server:</span>
+                            <span class="status-value" id="server-status-value">🔴 Offline</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Port:</span>
+                            <span class="status-value" id="server-port-value">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Users:</span>
+                            <span class="status-value" id="server-users-value">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Rooms:</span>
+                            <span class="status-value" id="server-rooms-value">0</span>
+                        </div>
+                    </div>
+                    <div class="server-control-buttons">
+                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
+                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
+                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
+                    </div>
+                </div>
+
+
+                <div class="menu-section">
+                    <h3>Available Rooms</h3>
+                    <div id="room-list" class="room-list">
+                        <p class="loading">Loading rooms...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Room Creation -->
+        <div id="create-room-screen" class="screen">
+            <div class="form-container">
+                <h2>Create New Room</h2>
+                <form id="create-room-form">
+                    <div class="input-group">
+                        <label for="room-name">Room Name</label>
+                        <input type="text" id="room-name" placeholder="Enter room name" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="room-password">Password (Optional)</label>
+                        <input type="password" id="room-password" placeholder="Leave empty for public room">
+                    </div>
+
+                    <div class="input-group">
+                        <label for="max-users">Max Users</label>
+                        <select id="max-users">
+                            <option value="2">2 Users</option>
+                            <option value="5">5 Users</option>
+                            <option value="10" selected>10 Users</option>
+                            <option value="20">20 Users</option>
+                            <option value="50">50 Users</option>
+                            <option value="100">100 Users</option>
+                            <option value="500">500 Users</option>
+                            <option value="1000">1000 Users</option>
+                            <option value="5000">5000 Users</option>
+                        </select>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="room-duration">Room Duration</label>
+                        <select id="room-duration">
+                            <option value="lifetime">Lifetime (Never Expires)</option>
+                            <option value="3600000">1 Hour</option>
+                            <option value="7200000">2 Hours</option>
+                            <option value="21600000">6 Hours</option>
+                            <option value="86400000">24 Hours</option>
+                            <option value="259200000">3 Days</option>
+                            <option value="604800000">1 Week</option>
+                            <option value="2592000000">30 Days</option>
+                            <option value="5184000000">60 Days</option>
+                        </select>
+                    </div>
+
+                    <div id="room-privacy-controls" class="input-group">
+                        <!-- Privacy controls will be dynamically added here -->
+                    </div>
+
+                    <div class="button-group">
+                        <button type="submit" class="primary-btn">Create Room</button>
+                        <button type="button" id="back-to-menu" class="secondary-btn">Back</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Join Room -->
+        <div id="join-room-screen" class="screen">
+            <div class="form-container">
+                <h2>Join Room</h2>
+                <form id="join-room-form">
+                    <div class="input-group">
+                        <label for="join-room-id">Room ID</label>
+                        <input type="text" id="join-room-id" placeholder="Enter room ID" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="user-name">Your Name</label>
+                        <input type="text" id="user-name" placeholder="Enter your name" required>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="join-room-password">Password</label>
+                        <input type="password" id="join-room-password" placeholder="Enter password if required">
+                    </div>
+
+                    <div class="button-group">
+                        <button type="submit" class="primary-btn">Join Room</button>
+                        <button type="button" id="back-to-menu-2" class="secondary-btn">Back</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Voice Chat Room -->
+        <div id="voice-chat-screen" class="screen">
+            <div class="chat-header">
+                <div class="room-info">
+                    <h2 id="current-room-name">Room Name</h2>
+                    <span id="room-id-display">Room ID: </span>
+                </div>
+                <div class="header-controls">
+                    <button id="room-settings-btn" class="icon-btn" title="Settings">⚙️</button>
+                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio">🎵</button>
+                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room">🚪</button>
+                </div>
+            </div>
+
+            <div class="chat-main">
+                <!-- User List -->
+                <div class="user-panel">
+                    <h3>Users (<span id="user-count">0</span>)</h3>
+                    <div id="user-list" class="user-list"></div>
+                </div>
+
+                <!-- 3D Audio Visualization -->
+                <div class="audio-panel">
+                    <h3>3D Audio Space</h3>
+                    <div id="spatial-audio-canvas" class="spatial-canvas">
+                        <div id="spatial-listener" class="listener-position" title="Your Position">🎧</div>
+                        <!-- User positions will be added dynamically -->
+                    </div>
+
+                    <div class="audio-controls">
+                        <button id="mute-btn" class="control-btn">🎙️ Unmuted</button>
+                        <button id="deafen-btn" class="control-btn">🔊 Hearing</button>
+                        <button id="push-to-talk-btn" class="control-btn">🔒 PTT: Off</button>
+                    </div>
+                </div>
+
+                <!-- Chat Panel -->
+                <div class="chat-panel">
+                    <h3>Text Chat</h3>
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-container">
+                        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                        <button id="send-message-btn">Send</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Routing Panel -->
+            <div id="audio-routing-panel" class="routing-panel hidden">
+                <h3>Audio Routing</h3>
+                <div class="routing-content">
+                    <div class="routing-section">
+                        <h4>Output Device</h4>
+                        <select id="output-device-select">
+                            <option value="default">Built-in Output</option>
+                        </select>
+                    </div>
+
+                    <div class="routing-section">
+                        <h4>User Audio Routing</h4>
+                        <div id="user-routing-list" class="user-routing-list">
+                            <!-- User routing controls will be added dynamically -->
+                        </div>
+                    </div>
+
+                    <div class="routing-section">
+                        <h4>3D Audio Settings</h4>
+                        <div class="audio-setting">
+                            <label>
+                                <input type="checkbox" id="spatial-audio-enabled" checked>
+                                Enable 3D Spatial Audio
+                            </label>
+                        </div>
+                        <div class="audio-setting">
+                            <label>Room Reverb:</label>
+                            <select id="reverb-setting">
+                                <option value="none">None</option>
+                                <option value="small-room">Small Room</option>
+                                <option value="large-room" selected>Large Room</option>
+                                <option value="hall">Concert Hall</option>
+                                <option value="cathedral">Cathedral</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <button id="close-routing-panel" class="secondary-btn">Close</button>
+            </div>
+        </div>
+
+        <!-- Comprehensive Settings Screen -->
+        <div id="settings-screen" class="screen">
+            <div class="settings-container">
+                <div class="settings-header">
+                    <h2>⚙️ VoiceLink Settings</h2>
+                    <button id="close-settings" class="close-btn">✕</button>
+                </div>
+
+                <!-- Settings Tabs -->
+                <div class="settings-tabs">
+                    <button class="tab-btn active" data-tab="audio">🎵 Audio</button>
+                    <button class="tab-btn" data-tab="app">📱 Application</button>
+                    <button class="tab-btn" data-tab="network">🌐 Network</button>
+                    <button class="tab-btn" data-tab="streaming">📺 Streaming</button>
+                    <button class="tab-btn" data-tab="privacy">🔒 Privacy</button>
+                    <button class="tab-btn" data-tab="advanced">🔧 Advanced</button>
+                </div>
+
+                <!-- Audio Settings Tab -->
+                <div id="audio-tab" class="settings-tab active">
+                    <div class="settings-section">
+                        <h3>Audio Devices</h3>
+                        <div class="setting-item">
+                            <label>Input Device:</label>
+                            <select id="input-device-select">
+                                <option value="default">Default Microphone</option>
+                            </select>
+                            <button id="test-microphone" class="test-btn">Test</button>
+                        </div>
+                        <div id="mic-level-meter" class="level-meter">
+                            <div class="level-bar"></div>
+                        </div>
+
+                        <div class="setting-item">
+                            <label>Output Device:</label>
+                            <select id="output-device-settings">
+                                <option value="default">Default Output</option>
+                            </select>
+                            <button id="test-speakers" class="test-btn">Test</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Audio Levels</h3>
+                        <div class="setting-item">
+                            <label>Input Volume:</label>
+                            <input type="range" id="input-volume" min="0" max="200" value="100">
+                            <span id="input-volume-value">100%</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Output Volume:</label>
+                            <input type="range" id="output-volume" min="0" max="200" value="100">
+                            <span id="output-volume-value">100%</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Audio Processing</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="noise-suppression" checked>
+                                Noise Suppression
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="echo-cancellation" checked>
+                                Echo Cancellation
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="spatial-audio-enabled" checked>
+                                3D Spatial Audio
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Push-to-Talk</h3>
+                        <div class="setting-item">
+                            <label>PTT Key:</label>
+                            <select id="ptt-key-select">
+                                <option value="ctrl">Ctrl</option>
+                                <option value="alt">Alt</option>
+                                <option value="shift">Shift</option>
+                                <option value="space">Space</option>
+                                <option value="f1">F1</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Application Settings Tab -->
+                <div id="app-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Startup & System</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="auto-launch-setting">
+                                Launch at startup
+                            </label>
+                            <span class="setting-desc">Start VoiceLink when computer boots</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="start-minimized-setting">
+                                Start minimized
+                            </label>
+                            <span class="setting-desc">Open in menubar without showing window</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="auto-minimize-setting">
+                                Auto-minimize on startup
+                            </label>
+                            <span class="setting-desc">Perfect for web UI only users</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Window Behavior</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="hide-to-tray-setting" checked>
+                                Hide to menubar on close
+                            </label>
+                            <span class="setting-desc">Keep running when window is closed</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="keep-in-menubar-setting" checked>
+                                Stay in menubar
+                            </label>
+                            <span class="setting-desc">Remain accessible from system tray</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Updates</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="auto-update-check-setting" checked>
+                                Check for updates automatically
+                            </label>
+                            <span class="setting-desc">Get notified of new versions</span>
+                        </div>
+                        <button id="check-updates-btn" class="secondary-btn">Check Now</button>
+                    </div>
+                </div>
+
+                <!-- Network Settings Tab -->
+                <div id="network-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Server Configuration</h3>
+                        <div class="setting-item">
+                            <label>Server Port:</label>
+                            <input type="number" id="server-port-setting" min="1024" max="65535" value="3000">
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="allow-external-setting" checked>
+                                Allow external connections
+                            </label>
+                            <span class="setting-desc">Accept connections from other devices</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Connection Info</h3>
+                        <div class="server-info" id="settings-server-info">
+                            <!-- Server info will be populated here -->
+                        </div>
+                        <div class="button-group">
+                            <button id="copy-url-btn" class="secondary-btn">📋 Copy URL</button>
+                            <button id="show-qr-btn" class="secondary-btn">📱 QR Code</button>
+                            <button id="restart-server-btn" class="secondary-btn">🔄 Restart</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Streaming Settings Tab -->
+                <div id="streaming-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Streaming Platforms</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="enable-streaming">
+                                Enable Live Streaming
+                            </label>
+                            <span class="setting-desc">Stream voice chat sessions to platforms</span>
+                        </div>
+
+                        <div class="streaming-platforms">
+                            <div class="platform-item">
+                                <div class="platform-header">
+                                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMTMuMDkgOC4yNkwyMCA5TDEzLjA5IDE1Ljc0TDEyIDIyTDEwLjkxIDE1Ljc0TDQgOUwxMC45MSA4LjI2TDEyIDJaIiBmaWxsPSIjOTk0NkZGIi8+PC9zdmc+" alt="Twitch" class="platform-icon">
+                                    <span class="platform-name">Twitch</span>
+                                    <input type="checkbox" id="twitch-enabled">
+                                </div>
+                                <input type="text" id="twitch-key" placeholder="Stream Key">
+                                <input type="text" id="twitch-server" placeholder="Server URL (optional)">
+                            </div>
+                            <div class="platform-item">
+                                <div class="platform-header">
+                                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTIzLjUgNkwyMC41IDlWMTVIMTdWMThIMTQuNVYxNUg5VjkuNUwxNC41IDQuNUgyMy41VjZaIiBmaWxsPSIjRkYwMDAwIi8+PC9zdmc+" alt="YouTube" class="platform-icon">
+                                    <span class="platform-name">YouTube Live</span>
+                                    <input type="checkbox" id="youtube-enabled">
+                                </div>
+                                <input type="text" id="youtube-key" placeholder="Stream Key">
+                                <input type="text" id="youtube-server" placeholder="Server URL (optional)">
+                            </div>
+                            <div class="platform-item">
+                                <div class="platform-header">
+                                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMTMuMDkgOC4yNkwyMCA5TDEzLjA5IDE1Ljc0TDEyIDIyTDEwLjkxIDE1Ljc0TDQgOUwxMC45MSA4LjI2TDEyIDJaIiBmaWxsPSIjMDA3MEY0Ii8+PC9zdmc+" alt="Facebook" class="platform-icon">
+                                    <span class="platform-name">Facebook Live</span>
+                                    <input type="checkbox" id="facebook-enabled">
+                                </div>
+                                <input type="text" id="facebook-key" placeholder="Stream Key">
+                                <input type="text" id="facebook-server" placeholder="Server URL (optional)">
+                            </div>
+                            <div class="platform-item">
+                                <div class="platform-header">
+                                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMTMuMDkgOC4yNkwyMCA5TDEzLjA5IDE1Ljc0TDEyIDIyTDEwLjkxIDE1Ljc0TDQgOUwxMC45MSA4LjI2TDEyIDJaIiBmaWxsPSIjRkY2NjAwIi8+PC9zdmc+" alt="Kick" class="platform-icon">
+                                    <span class="platform-name">Kick</span>
+                                    <input type="checkbox" id="kick-enabled">
+                                </div>
+                                <input type="text" id="kick-key" placeholder="Stream Key">
+                                <input type="text" id="kick-server" placeholder="Server URL (optional)">
+                            </div>
+                            <div class="platform-item">
+                                <div class="platform-header">
+                                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PHBhdGggZD0iTTEyIDJMMTMuMDkgOC4yNkwyMCA5TDEzLjA5IDE1Ljc0TDEyIDIyTDEwLjkxIDE1Ljc0TDQgOUwxMC45MSA4LjI2TDEyIDJaIiBmaWxsPSIjNzI4OUZGIi8+PC9zdmc+" alt="Discord" class="platform-icon">
+                                    <span class="platform-name">Discord Stage</span>
+                                    <input type="checkbox" id="discord-enabled">
+                                </div>
+                                <input type="text" id="discord-webhook" placeholder="Webhook URL">
+                                <input type="text" id="discord-channel" placeholder="Channel ID (optional)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Video/Audio Encoder Settings</h3>
+                        <div class="setting-item">
+                            <label>Video Encoder:</label>
+                            <select id="video-encoder">
+                                <option value="h264">H.264 (Hardware)</option>
+                                <option value="h264-software">H.264 (Software)</option>
+                                <option value="h265">H.265/HEVC</option>
+                                <option value="av1">AV1 (Future)</option>
+                                <option value="vp8">VP8 (WebM)</option>
+                                <option value="vp9">VP9 (WebM)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Audio Encoder:</label>
+                            <select id="audio-encoder">
+                                <option value="aac">AAC</option>
+                                <option value="opus">Opus</option>
+                                <option value="mp3">MP3</option>
+                                <option value="flac">FLAC (Lossless)</option>
+                                <option value="vorbis">Vorbis</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Video Bitrate:</label>
+                            <input type="range" id="stream-bitrate" min="500" max="50000" value="3000">
+                            <span id="bitrate-value">3000 kbps</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Audio Bitrate:</label>
+                            <input type="range" id="audio-bitrate" min="64" max="320" value="160">
+                            <span id="audio-bitrate-value">160 kbps</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Resolution:</label>
+                            <select id="stream-resolution">
+                                <option value="480p">854x480 (480p)</option>
+                                <option value="720p">1280x720 (720p)</option>
+                                <option value="1080p">1920x1080 (1080p)</option>
+                                <option value="1440p">2560x1440 (1440p)</option>
+                                <option value="4k">3840x2160 (4K)</option>
+                                <option value="8k">7680x4320 (8K)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Frame Rate:</label>
+                            <select id="stream-framerate">
+                                <option value="24">24 FPS (Cinematic)</option>
+                                <option value="30">30 FPS (Standard)</option>
+                                <option value="60">60 FPS (Smooth)</option>
+                                <option value="120">120 FPS (High Refresh)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Hardware Acceleration:</label>
+                            <select id="hw-acceleration">
+                                <option value="auto">Auto (Recommended)</option>
+                                <option value="nvenc">NVIDIA NVENC</option>
+                                <option value="amd">AMD VCE</option>
+                                <option value="intel">Intel QSV</option>
+                                <option value="software">Software Only</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Recording Options</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="enable-recording">
+                                Enable Local Recording
+                            </label>
+                            <span class="setting-desc">Record sessions to local files</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Recording Format:</label>
+                            <select id="recording-format">
+                                <option value="mp4">MP4 (H.264)</option>
+                                <option value="webm">WebM (VP9)</option>
+                                <option value="mkv">MKV (Raw)</option>
+                                <option value="mov">MOV (QuickTime)</option>
+                                <option value="avi">AVI (Legacy)</option>
+                                <option value="flv">FLV (Flash)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Recording Quality:</label>
+                            <select id="recording-quality">
+                                <option value="lossless">Lossless (Large Files)</option>
+                                <option value="high">High Quality</option>
+                                <option value="medium">Medium Quality</option>
+                                <option value="low">Low Quality (Small Files)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Recording Path:</label>
+                            <input type="text" id="recording-path" placeholder="~/Documents/VoiceLink Recordings">
+                            <button class="secondary-btn" id="browse-recording-path">Browse</button>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="auto-record-rooms">
+                                Auto-record all rooms
+                            </label>
+                            <span class="setting-desc">Automatically start recording when joining rooms</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="split-recordings">
+                                Split recordings by user
+                            </label>
+                            <span class="setting-desc">Create separate audio tracks for each user</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Max Recording Duration:</label>
+                            <select id="max-recording-duration">
+                                <option value="unlimited">Unlimited</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                                <option value="120">2 hours</option>
+                                <option value="240">4 hours</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Streaming Protocols</h3>
+                        <div class="protocol-options">
+                            <div class="protocol-group">
+                                <h4>RTMP Streaming</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-rtmp">
+                                        RTMP Server Support
+                                    </label>
+                                    <span class="setting-desc">Stream to RTMP endpoints (Twitch, YouTube, etc.)</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>RTMP URL:</label>
+                                    <input type="text" id="rtmp-url" placeholder="rtmp://your-server.com/live">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Stream Key:</label>
+                                    <input type="password" id="rtmp-key" placeholder="Your stream key">
+                                </div>
+                            </div>
+
+                            <div class="protocol-group">
+                                <h4>Icecast Streaming</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-icecast">
+                                        Icecast Server Support
+                                    </label>
+                                    <span class="setting-desc">Audio streaming to Icecast/Shoutcast servers</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>Icecast Server:</label>
+                                    <input type="text" id="icecast-server" placeholder="your-server.com">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Port:</label>
+                                    <input type="number" id="icecast-port" value="8000" min="1" max="65535">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Mount Point:</label>
+                                    <input type="text" id="icecast-mount" placeholder="/live.mp3">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Username:</label>
+                                    <input type="text" id="icecast-username" placeholder="source">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Password:</label>
+                                    <input type="password" id="icecast-password" placeholder="Server password">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Audio Format:</label>
+                                    <select id="icecast-format">
+                                        <option value="mp3">MP3</option>
+                                        <option value="ogg">OGG Vorbis</option>
+                                        <option value="opus">OGG Opus</option>
+                                        <option value="aac">AAC</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="protocol-group">
+                                <h4>SRT Protocol</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-srt">
+                                        SRT Protocol Support
+                                    </label>
+                                    <span class="setting-desc">Low-latency streaming over unreliable networks</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>SRT Address:</label>
+                                    <input type="text" id="srt-address" placeholder="srt://your-server.com:9999">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Latency (ms):</label>
+                                    <input type="number" id="srt-latency" value="200" min="20" max="8000">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Passphrase:</label>
+                                    <input type="password" id="srt-passphrase" placeholder="Optional encryption">
+                                </div>
+                            </div>
+
+                            <div class="protocol-group">
+                                <h4>WebRTC Streaming</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-webrtc-streaming">
+                                        WebRTC Streaming
+                                    </label>
+                                    <span class="setting-desc">Ultra-low latency browser-based streaming</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>WHIP Endpoint:</label>
+                                    <input type="text" id="whip-endpoint" placeholder="https://your-server.com/whip">
+                                </div>
+                                <div class="setting-item">
+                                    <label>Bearer Token:</label>
+                                    <input type="password" id="whip-token" placeholder="Authentication token">
+                                </div>
+                            </div>
+
+                            <div class="protocol-group">
+                                <h4>HLS Streaming</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-hls">
+                                        HLS Output
+                                    </label>
+                                    <span class="setting-desc">HTTP Live Streaming for broad compatibility</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>Output Directory:</label>
+                                    <input type="text" id="hls-directory" placeholder="~/Documents/HLS Stream">
+                                    <button class="secondary-btn" id="browse-hls-dir">Browse</button>
+                                </div>
+                                <div class="setting-item">
+                                    <label>Segment Duration:</label>
+                                    <select id="hls-segment-duration">
+                                        <option value="2">2 seconds</option>
+                                        <option value="4">4 seconds</option>
+                                        <option value="6">6 seconds</option>
+                                        <option value="10">10 seconds</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="protocol-group">
+                                <h4>NDI Output</h4>
+                                <div class="setting-item">
+                                    <label>
+                                        <input type="checkbox" id="enable-ndi">
+                                        NDI Network Output
+                                    </label>
+                                    <span class="setting-desc">Network Device Interface for professional workflows</span>
+                                </div>
+                                <div class="setting-item">
+                                    <label>NDI Source Name:</label>
+                                    <input type="text" id="ndi-source-name" placeholder="VoiceLink Room Audio">
+                                </div>
+                                <div class="setting-item">
+                                    <label>NDI Groups:</label>
+                                    <input type="text" id="ndi-groups" placeholder="production,broadcast">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="multi-streaming-options">
+                            <h4>Multi-Streaming Options</h4>
+                            <div class="setting-item">
+                                <label>
+                                    <input type="checkbox" id="enable-multi-streaming">
+                                    Multi-platform Streaming
+                                </label>
+                                <span class="setting-desc">Stream to multiple platforms simultaneously</span>
+                            </div>
+                            <div class="setting-item">
+                                <label>Stream Delay:</label>
+                                <input type="range" id="stream-delay" min="0" max="30" value="2">
+                                <span id="delay-value">2 seconds</span>
+                            </div>
+                            <div class="setting-item">
+                                <label>Failover Mode:</label>
+                                <select id="failover-mode">
+                                    <option value="none">No Failover</option>
+                                    <option value="automatic">Automatic Failover</option>
+                                    <option value="manual">Manual Failover</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Stream Controls & Status</h3>
+                        <div class="stream-status-display">
+                            <div class="status-row">
+                                <div class="status-indicator offline" id="stream-status">⚫ Offline</div>
+                                <div class="stream-info">
+                                    <span class="stream-title" id="stream-title">Not Streaming</span>
+                                    <span class="stream-time" id="stream-time">--:--:--</span>
+                                </div>
+                            </div>
+                            <div class="stream-stats">
+                                <div class="stat-item">
+                                    <span class="stat-label">Viewers:</span>
+                                    <span class="stat-value" id="viewer-count">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Bitrate:</span>
+                                    <span class="stat-value" id="current-bitrate">0 kbps</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">FPS:</span>
+                                    <span class="stat-value" id="current-fps">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Dropped:</span>
+                                    <span class="stat-value" id="dropped-frames">0</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="stream-control-buttons">
+                            <button id="start-stream" class="primary-btn">📺 Start Stream</button>
+                            <button id="start-recording" class="secondary-btn">⏺️ Start Recording</button>
+                            <button id="test-stream" class="test-btn">🧪 Test Stream</button>
+                            <button id="stream-settings-preset" class="secondary-btn">💾 Save Preset</button>
+                        </div>
+                        <div class="preset-controls">
+                            <label>Stream Presets:</label>
+                            <select id="stream-presets">
+                                <option value="">Select Preset...</option>
+                                <option value="720p30">720p 30fps (Standard)</option>
+                                <option value="1080p60">1080p 60fps (High Quality)</option>
+                                <option value="1440p60">1440p 60fps (Premium)</option>
+                                <option value="podcast">Audio-Only (Podcast)</option>
+                                <option value="mobile">Mobile-Optimized</option>
+                            </select>
+                            <button id="load-preset" class="secondary-btn">Load</button>
+                            <button id="delete-preset" class="danger-btn">Delete</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Privacy Settings Tab -->
+                <div id="privacy-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Encryption</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="enable-encryption">
+                                Enable end-to-end encryption
+                            </label>
+                            <span class="setting-desc">Encrypt all voice and text communications</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="require-encryption">
+                                Require encryption for all rooms
+                            </label>
+                            <span class="setting-desc">Block unencrypted communications</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Privacy Controls</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="anonymous-mode">
+                                Anonymous mode
+                            </label>
+                            <span class="setting-desc">Hide user identification</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="disable-telemetry">
+                                Disable telemetry
+                            </label>
+                            <span class="setting-desc">No usage data collection</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Settings Tab -->
+                <div id="advanced-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Performance</h3>
+                        <div class="setting-item">
+                            <label>Audio Buffer Size:</label>
+                            <select id="buffer-size-select">
+                                <option value="256">256 samples (Low latency)</option>
+                                <option value="512" selected>512 samples (Balanced)</option>
+                                <option value="1024">1024 samples (High quality)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Sample Rate:</label>
+                            <select id="sample-rate-select">
+                                <option value="44100">44.1 kHz</option>
+                                <option value="48000" selected>48 kHz</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Debug & Testing</h3>
+                        <div class="button-group">
+                            <button id="test-audio-advanced" class="test-btn">🧪 Audio Test</button>
+                            <button id="open-dev-tools" class="test-btn">🔧 Dev Tools</button>
+                            <button id="reset-settings" class="danger-btn">🔄 Reset All</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Application Info</h3>
+                        <div class="app-info">
+                            <div class="info-item">
+                                <span class="info-label">Version:</span>
+                                <span class="info-value" id="app-version">1.0.0</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Platform:</span>
+                                <span class="info-value" id="app-platform">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-footer">
+                    <button id="save-all-settings" class="primary-btn">Save All Settings</button>
+                    <button id="cancel-settings" class="secondary-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Core Scripts -->
+    <script src="js/core/ios-compatibility.js"></script>
+    <script src="js/core/audio-engine.js"></script>
+    <script src="js/core/media-metadata-detector.js"></script>
+    <script src="js/core/user-settings-manager.js"></script>
+    <script src="js/core/server-encryption-manager.js"></script>
+    <script src="js/core/default-rooms-manager.js"></script>
+    <script src="js/core/feature-permissions-manager.js"></script>
+    <script src="js/integrations/wordpress-integration.js"></script>
+    <script src="js/core/app.js"></script>
+
+    <!-- Audio Processing -->
+    <script src="js/audio/spatial-audio.js"></script>
+    <script src="js/audio/multi-channel-engine.js"></script>
+    <script src="js/audio/vst-streaming-engine.js"></script>
+    <script src="js/audio/builtin-effects-processor.js"></script>
+    <script src="js/audio/audio-ducking-processor.js"></script>
+
+    <!-- Network & Communication -->
+    <script src="js/network/webrtc-manager.js"></script>
+    <script src="js/network/server-access-manager.js"></script>
+    <script src="js/network/pa-system-manager.js"></script>
+
+    <!-- Security -->
+    <script src="js/security/keychain-auth-manager.js"></script>
+    <script src="js/security/security-encryption-manager.js"></script>
+
+    <!-- User Interface -->
+    <!-- <script src="js/ui/settings-interface-manager.js"></script> --> <!-- Replaced by unified admin interface -->
+    <script src="js/ui/unified-admin-interface.js"></script>
+    <script src="js/ui/tts-announcement-manager.js"></script>
+    <!-- <script src="js/ui/multi-input-manager.js"></script> --> <!-- Integrated into unified interface -->
+    <!-- <script src="js/ui/user-settings-interface.js"></script> --> <!-- Replaced by unified admin interface -->
+    <script src="js/ui/user-context-menu.js"></script>
+    <script src="js/ui/encryption-status-display.js"></script>
+    <!-- <script src="js/ui/default-rooms-interface.js"></script> --> <!-- Room management in unified interface -->
+
+    <!-- Testing & Audio Tools -->
+    <script src="js/tests/audio-test-manager.js"></script>
+    <script src="js/tests/synthetic-audio-generator.js"></script>
+
+    <!-- Media Streaming -->
+    <script src="js/media/jellyfin-manager.js"></script>
+    <script src="js/media/live-streaming-manager.js"></script>
+    <script src="js/ui/media-streaming-interface.js"></script>
+</body>
+</html>

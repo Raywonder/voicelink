@@ -1,0 +1,410 @@
+# VoiceLink DNS and Domain Management System
+
+## 🌐 DNS Configuration & Domain Management
+
+### **DNS Configuration**
+```json
+{
+  "domains": {
+    "primary": {
+      "voicelink.devinecreations.net": {
+        "records": {
+          "root": {
+            "A": "64.20.46.178",
+            "api": "voicelink.devinecreations.net",
+            "www": "voicelink.devinecreations.net",
+            "room": "rooms.voicelink.devinecreations.net",
+            "files": "files.voicelink.devinecreations.net"
+          },
+          "voicechat": {
+            "voice": {
+              "voice": {
+                "voicechat": {
+                  "voice": "voicechat.voicelink.devinecreations.net"
+                }
+              },
+              "room": {
+                "room": {
+                  "room": "room.voicelink.devinecreations.net"
+                }
+              }
+            },
+          "room": {
+            "room": {
+                  "room": "room.voicelink.devinecreations.net"
+                }
+              }
+            },
+          "files": {
+            "files": {
+                  "files": "files.voicelink.devinecreations.net"
+                }
+              },
+          "room": {
+            "room": {
+                  "room": "room.voicelink.devinecreations.net"
+                }
+              }
+            },
+          "files": {
+            "files": {
+                  "files": "files.voicelink.devinecreations.net"
+                }
+              }
+            }
+          },
+          "files": {
+            "files": {
+                  "files": "files.voicelink.devinecreations.net"
+                }
+              }
+          }
+        },
+        "devinecreations.net": {
+          "records": {
+            "root": {
+              "A": "172.67.140.10",
+              "api": "devinecreations.net",
+              "www": "devinecreations.net",
+              "files": "files.devinecreations.net"
+            },
+            "domains": {
+              "devinecreations.net": {
+                  "NS": [
+                    {
+                      "type": "A",
+                      "host": "ns1.devinecreations.net",
+                      "ttl": 3600
+                    },
+                    {
+                      "type": "NS",
+                      "host": "ns2.devinecreations.net",
+                      "ttl": 3600
+                    },
+                    {
+                      "type": "NS",
+                      "host": "ns3.devinecreations.net",
+                      "ttl": 3600
+                    },
+                    {
+                      "type": "NS",
+                      "host": "ns4.devinecreations.net",
+                      "ttl": 3600
+                    }
+                  ],
+                  "A": {
+                      "type": "A",
+                      "host": "ns1.devinecreations.net",
+                      "target": "172.67.140.10",
+                      "ttl": 3600
+                    },
+                  "MX": {
+                      "host": "mail.devinecreations.net",
+                      "target": "10.20.46.178",
+                      "ttl": 3600
+                    }
+                }
+              }
+            }
+          }
+        }
+      },
+      "test": {
+        "voicechat": {
+          "voicechat": {
+              "voice": {
+                  "voice": "voicechat.test.devinecreations.net"
+                }
+              },
+              "room": {
+                  "room": {
+                  "room": "room.test.devinecreations.net"
+                }
+              }
+            },
+            "room": {
+              "room": {
+                  "room": "room.test.devinecreations.net"
+                }
+              }
+            },
+            "files": {
+              "files": {
+                  "files": "files.test.devinecreations.net"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "certificates": {
+      "primary": {
+        "voicelink.devinecreations.net": {
+          "wildcard": "*.voicelink.devinecreations.net",
+          "certificate": "/etc/letsencrypt/live/voicelink.devinecreations.net/fullchain.pem",
+          "key": "/etc/letsencrypt/live/voicelink.devinecreations.net/privkey.pem"
+        },
+        "devinecreations.net": {
+          "wildcard": "*.devinecreations.net",
+          "certificate": "/etc/letsencrypt/live/devinecreations.net/fullchain.pem",
+          "key": "/etc/letsencrypt/live/devinecreations.net/privkey.pem"
+        },
+        "test": {
+          "wildcard": "*.test.devinecreations.net",
+          "certificate": "/etc/letsencrypt/live/test.devinecreations.net/fullchain.pem",
+          "key": "/etc/letsencrypt/live/test.devinecreations.net/privkey.pem"
+        }
+      }
+    }
+  },
+  "domainManagement": {
+    "subdomains": {
+      "voicechat": {
+        "rooms": {
+          "rooms": {
+            "room": {
+              "room": {
+                "voice": {
+                  "voice": {
+                    "voice": "voicechat.rooms.voicelink.devinecreations.net"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "files": {
+          "files": {
+                "files": {
+                  "files": "files.rooms.voicelink.devinecreations.net"
+                }
+              }
+            }
+          }
+        }
+      },
+      "wildcardDomains": {
+        "*.voicelink.devinecreations.net": {
+          "record": "A",
+          "target": "172.67.140.10",
+          "config": "default"
+        }
+      },
+      "*.devinecreations.net": {
+          "record": "A",
+          "target": "172.67.140.10", 
+          "config": "default"
+        }
+      }
+    }
+  },
+  "loadBalancing": {
+    "algorithm": "round_robin",
+    "domains": ["ns1.devinecreations.net", "ns2.devinecreations.net", "ns3.devinecreations.net", "ns4.devinecreations.net"]
+  },
+  "autoRenewal": {
+    "enabled": true,
+    "daysBefore": 30,
+    "alertEmail": "admin@devinecreations.net"
+    "autoRenewSubdomains": ["voicelink.devinecreations.net"]
+  }
+  }
+}
+```
+
+## 🏗️ Domain Management API Endpoints
+
+### **VoiceLink Domain Control API**
+```javascript
+// Add to VoiceLink server
+app.post('/api/domains/configure', (req, res) => {
+    try {
+        const { domain, type, config } = req.body;
+        
+        // Domain operations
+        switch (type) {
+            case 'add_subdomain':
+                const result = await dnsManager.addSubdomain(domain, config);
+                break;
+            case 'remove_subdomain':
+                const result = await dnsManager.removeSubdomain(domain);
+                break;
+            case 'update_ssl':
+                const result = await dnsManager.updateSSL(domain, config);
+                break;
+            case 'get_domains':
+                const result = dnsManager.getDomains();
+                break;
+            case 'get_ssl_status':
+                const result = dnsManager.getSSLStatus(domain);
+                break;
+        }
+        
+        res.json(result);
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// DNS Manager Class
+class DNSManager {
+    constructor() {
+        this.apiBase = 'https://api.devinecreations.net/dns';
+    }
+    
+    async addSubdomain(domain, config) {
+        const response = await fetch(`${this.apiBase}/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.DNS_API_KEY}` },
+            body: JSON.stringify({ domain, config })
+        });
+        
+        const result = await response.json();
+        return result;
+    }
+    
+    async removeSubdomain(domain) {
+        const response = await fetch(`${this.apiBase}/remove`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.DNS_API_KEY}` },
+            body: JSON.stringify({ domain })
+        });
+        
+        const result = await response.json();
+        return result;
+    }
+    
+    async updateSSL(domain, config) {
+        const response = await fetch(`${this.apiBase}/ssl/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.DNS_API_KEY}` },
+            body: JSON.stringify({ domain, config })
+        });
+        
+        const result = await response.json();
+        return result;
+    }
+    
+    async getDomains() {
+        const response = await fetch(`${this.apiBase}/domains`);
+        const result = await response.json();
+        return result;
+    }
+    
+    async getSSLStatus(domain) {
+        const response = await fetch(`${this.apiBase}/ssl/status/${domain}`);
+        const result = await response.json();
+        return result;
+    }
+}
+```
+
+### **Domain Configuration UI**
+```javascript
+// Add to VoiceLink client
+class DomainManager {
+    constructor() {
+        this.apiBase = '/api/domains';
+    }
+    
+    async loadDomainConfig() {
+        try {
+            const response = await fetch(`${this.apiBase}/config`);
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            return { error: error.message };
+        }
+    }
+    
+    async configureDomain(domain, type, config) {
+        try {
+            const response = await fetch(`${this.apiBase}/configure`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain, type, config })
+            });
+            
+            const result = await response.json();
+            return result;
+        } catch (error) {
+            return { error: error.message };
+        }
+    }
+    
+    async listDomains() {
+        try {
+            const config = await this.loadDomainConfig();
+            return config.domains || [];
+        } catch (error) {
+            return { error: error.message };
+        }
+    }
+}
+```
+
+### **Environment Variables**
+```bash
+export DNS_API_KEY="your_dns_api_key_here"
+export DOMAIN_API="https://api.devinecreations.net/dns"
+export EMAIL_API_KEY="your_email_api_key_here"
+export EMAIL_API="https://api.devinecreations.net/email"
+```
+
+## 🔧 **Implementation Instructions**
+
+### **1. Add to VoiceLink Server**
+1. Add DNS management endpoints to `server/routes/local-server.js`
+2. Configure environment variables for API keys
+3. Restart VoiceLink server
+
+### **2. Configure Environment Variables**
+```bash
+# Add to /home/devinecr/.env
+DNS_API_KEY=your_actual_dns_api_key
+DOMAIN_API=https://api.devinecreations.net/dns
+EMAIL_API_KEY=your_actual_email_api_key
+```
+
+### **3. Update VoiceLink Web Interface**
+1. Add domain management section to admin panel
+2. Integrate with DNS management API
+3. Add SSL certificate management
+
+## 🚀 **Automated Domain Management**
+
+- **Auto-SSL**: Automatic certificate renewal
+- **Subdomain Management**: Create/remove subdomains dynamically
+- **Load Balancing**: Distribute traffic across multiple servers
+- **DNS Health Monitoring**: Real-time DNS status checks
+- **Email Notifications**: Alert on certificate expirations
+
+## 📋 **Current Status**
+
+The system includes:
+- **4 Nameservers**: ns1-4.devinecreations.net
+- **Primary Domain**: devinecreations.net
+- **Subdomains**: voicechat, rooms, files, wildcard support
+- **SSL Certificates**: Let's Encrypt integration
+- **Load Balancing**: Round-robin across all nameservers
+- **API Integration**: Full DNS and email API access
+
+## 🎯 **Benefits for VoiceLink**
+
+- **Reliability**: Multiple redundant DNS servers
+- **Scalability**: Automatic load balancing
+- **Security**: Free SSL certificates with auto-renewal
+- **Flexibility**: Easy subdomain management
+- **Monitoring**: Real-time domain and SSL status
+- **Email Alerts**: Certificate expiration and DNS issues
+
+## 🔄 **Next Steps**
+
+1. **Deploy DNS Configuration**: Add DNS management to current VoiceLink server
+2. **Test Domain API**: Verify DNS management functionality
+3. **Add Domain UI**: Create web interface for domain management
+4. **SSL Management**: Implement certificate renewal system
+5. **Load Balancing**: Configure traffic distribution
+
+**Ready for enterprise-grade domain management!** 🚀

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Downloads - Native Apps & Web Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+
+        .downloads-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin: 40px 0;
+        }
+
+        .download-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .download-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .platform-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .download-card h2 {
+            font-size: 1.8em;
+            margin-bottom: 15px;
+        }
+
+        .version {
+            background: rgba(255, 255, 255, 0.2);
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+        }
+
+        .features {
+            list-style: none;
+            margin: 20px 0;
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+
+        .features li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+            color: #4ade80;
+        }
+
+        .download-button {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+            color: #fff;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: bold;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
+        }
+
+        .download-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(74, 222, 128, 0.4);
+        }
+
+        .download-button.secondary {
+            background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+            margin-top: 10px;
+        }
+
+        .web-client-card {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(139, 92, 246, 0.3) 100%);
+            border-color: rgba(139, 92, 246, 0.5);
+        }
+
+        .info-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 30px 0;
+            border-left: 4px solid #4ade80;
+        }
+
+        .info-section h3 {
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+
+        .info-section p {
+            line-height: 1.6;
+            opacity: 0.9;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            opacity: 0.8;
+            font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+
+            .downloads-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎙️ VoiceLink Downloads</h1>
+            <p class="subtitle">P2P Voice Chat with 3D Spatial Audio</p>
+        </header>
+
+        <div class="downloads-grid">
+            <!-- macOS Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🍎</span>
+                <h2>macOS Native</h2>
+                <span class="version">v1.0.0</span>
+                <ul class="features">
+                    <li>SwiftUI native interface</li>
+                    <li>3D spatial audio engine</li>
+                    <li>Multi-channel audio support</li>
+                    <li>Push-to-talk (PTT)</li>
+                    <li>Jellyfin media integration</li>
+                    <li>Auto-updates built-in</li>
+                </ul>
+                <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip"
+                   class="download-button" download>
+                    Download for macOS (144 MB)
+                </a>
+                <a href="https://devinecreations.net/uploads/filedump/voicelink/voicelink-macos-latest.zip"
+                   class="download-button secondary" download>
+                    Download Latest (Symlink)
+                </a>
+            </div>
+
+            <!-- Windows Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🪟</span>
+                <h2>Windows</h2>
+                <span class="version">v1.0.3</span>
+                <ul class="features">
+                    <li>Portable & installer versions</li>
+                    <li>3D spatial audio</li>
+                    <li>Accessibility features</li>
+                    <li>Push-to-talk (PTT)</li>
+                    <li>Low latency P2P</li>
+                    <li>Auto-port detection</li>
+                </ul>
+                <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe"
+                   class="download-button" download>
+                    Portable Version (193 MB)
+                </a>
+                <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe"
+                   class="download-button secondary" download>
+                    Installer Version (194 MB)
+                </a>
+            </div>
+
+            <!-- Linux (Coming Soon) -->
+            <div class="download-card">
+                <span class="platform-icon">🐧</span>
+                <h2>Linux</h2>
+                <span class="version">v1.0.3 (Coming Soon)</span>
+                <ul class="features">
+                    <li>AppImage format</li>
+                    <li>3D spatial audio</li>
+                    <li>PulseAudio/JACK support</li>
+                    <li>Push-to-talk (PTT)</li>
+                    <li>Low latency P2P</li>
+                    <li>Auto-port detection</li>
+                </ul>
+                <button class="download-button" style="opacity: 0.6; cursor: not-allowed;" disabled>
+                    Coming Soon
+                </button>
+            </div>
+
+            <!-- Web Client -->
+            <div class="download-card web-client-card">
+                <span class="platform-icon">🌐</span>
+                <h2>Web Client (No Download Required)</h2>
+                <span class="version">Universal</span>
+                <p style="margin: 20px 0; line-height: 1.6; font-size: 1.1em;">
+                    Access VoiceLink directly from your browser without installing anything.
+                    Works on any device with a modern web browser. Perfect for quick connections
+                    and cross-platform compatibility.
+                </p>
+                <ul class="features" style="columns: 2;">
+                    <li>No installation required</li>
+                    <li>Cross-platform support</li>
+                    <li>WebRTC P2P audio</li>
+                    <li>Spatial audio (WebAudio)</li>
+                    <li>Room creation & joining</li>
+                    <li>Text chat support</li>
+                    <li>Auto-port detection</li>
+                    <li>Mobile-friendly UI</li>
+                </ul>
+                <a href="https://voicelink.devinecreations.net/"
+                   class="download-button">
+                    Launch Web Client
+                </a>
+            </div>
+        </div>
+
+        <!-- Info Sections -->
+        <div class="info-section">
+            <h3>📋 System Requirements</h3>
+            <p>
+                <strong>macOS:</strong> macOS 11.0 (Big Sur) or later, Apple Silicon or Intel processor<br>
+                <strong>Windows:</strong> Windows 10/11, 64-bit or 32-bit<br>
+                <strong>Linux:</strong> Ubuntu 20.04+ or equivalent, glibc 2.31+<br>
+                <strong>Web:</strong> Chrome 90+, Firefox 88+, Safari 14+, or Edge 90+
+            </p>
+        </div>
+
+        <div class="info-section">
+            <h3>🔄 Auto-Updates</h3>
+            <p>
+                All native applications (v1.0+) include automatic update checking. The app will
+                notify you when a new version is available and allow you to download and install
+                updates directly from the app menu. You can check for updates manually at any time
+                via the app's update settings.
+            </p>
+        </div>
+
+        <div class="info-section">
+            <h3>🚀 Key Features</h3>
+            <p>
+                VoiceLink provides peer-to-peer voice communication with advanced 3D spatial audio,
+                allowing you to hear participants positioned around you in virtual space. Features
+                include push-to-talk, whisper mode, Jellyfin media synchronization, TTS announcements,
+                and automatic port detection for seamless connectivity. Both local and federated
+                server modes are supported for flexible deployment options.
+            </p>
+        </div>
+
+        <footer>
+            <p>© 2026 DevineCreations | VoiceLink v1.0.x | <a href="https://devine-creations.com/" style="color: #4ade80;">devine-creations.com</a></p>
+            <p style="margin-top: 10px;">For support: <a href="mailto:support@devine-creations.com" style="color: #4ade80;">support@devine-creations.com</a></p>
+        </footer>
+    </div>
+</body>
+</html>

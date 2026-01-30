@@ -1,0 +1,708 @@
+VOICELINK VIDEO TUTORIAL SCRIPTS
+================================
+Generated for Google LLM Video Creation (NotebookLM Compatible)
+Version: 1.0.2
+Last Updated: January 2025
+
+================================================================================
+VISUAL RESOURCES FOR VIDEO GENERATION
+================================================================================
+
+The following public URLs and resources can be accessed and shown in videos:
+
+PUBLIC ACCESSIBLE PAGES:
+- Main Application: https://voicelink.devinecreations.net
+- Documentation Home: https://voicelink.devinecreations.net/docs/
+- Getting Started Guide: https://voicelink.devinecreations.net/docs/getting-started.html
+- Room Management Docs: https://voicelink.devinecreations.net/docs/room-management.html
+- Download Page: https://voicelink.devinecreations.net/downloads/
+
+SAFE UI ELEMENTS TO SHOW:
+- Room list interface (public rooms only)
+- Audio control panel (volume, mute buttons)
+- Settings panel (general settings tab)
+- Help documentation pages
+- Download/installation pages
+- Server connection dialog
+- Room creation form (empty/demo state)
+
+DO NOT SHOW IN VIDEOS:
+- Private room contents or user lists
+- Personal settings or account details
+- Admin panels or server configuration
+- User chat messages or private conversations
+- Payment or billing information
+- API keys or authentication tokens
+
+================================================================================
+TUTORIAL 1: GETTING STARTED WITH VOICELINK
+================================================================================
+
+Title: VoiceLink - Getting Started Guide
+Duration: 3-5 minutes
+Audience: New users
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Main landing page at https://voicelink.devinecreations.net
+[SHOW] Room list with public room names visible
+[SHOW] Audio controls panel (bottom of screen)
+[SHOW] Settings icon and general settings tab
+[SHOW] Documentation link in header/footer
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Show VoiceLink logo and tagline
+Audio: "Welcome to VoiceLink, a self-hosted peer-to-peer voice chat platform with 3D spatial audio. In this tutorial, we'll show you how to get started with VoiceLink."
+
+[SCENE 1: UNDERSTANDING VOICELINK - 30 seconds]
+Visual: Show the main interface with room list
+Audio: "VoiceLink is a decentralized voice chat platform. This means there are multiple servers around the world, and you choose which one to connect to. The main public server is at voicelink.devinecreations.net, but communities can run their own servers too."
+
+Key points to display as text overlays:
+- "Decentralized: Multiple servers worldwide"
+- "Choose your server"
+- "Public hub or self-hosted"
+
+[SCENE 2: ACCESSING VOICELINK - 30 seconds]
+Visual: Show browser address bar, then desktop app icon
+Audio: "There are two ways to access VoiceLink. First, through any web browser by visiting a VoiceLink server URL. Second, using the desktop application available for Mac, Windows, and Linux. The desktop app provides additional features like local network hosting."
+
+Visual elements:
+- Browser with URL bar showing voicelink.devinecreations.net
+- Desktop app icons for each platform
+- "Web" and "Desktop" comparison graphic
+
+[SCENE 3: THE ROOM LIST - 45 seconds]
+Visual: Show room list interface with categories
+Audio: "When you open VoiceLink, you'll see a list of available rooms organized by category. Public rooms are shown with their name, description, and current user count. Some rooms may require a password or be locked."
+
+Visual elements to highlight:
+- Room cards with names (use generic names: "General Chat", "Music Lounge")
+- User count indicators
+- Lock icons on secured rooms
+- Category headers
+- "Federated" badge showing rooms from other servers
+
+[SCENE 4: JOINING A ROOM - 45 seconds]
+Visual: Show clicking a room, permission dialog
+Audio: "To join a room, simply click on it. If the room has a password, you'll be prompted to enter it. Your browser will ask for microphone permission - click Allow to enable voice chat. Once connected, you'll see other users in the room."
+
+Step-by-step visual:
+1. Cursor clicking room card
+2. Password prompt (if applicable)
+3. Browser microphone permission dialog
+4. Connected state with user avatars
+
+[SCENE 5: AUDIO CONTROLS - 60 seconds]
+Visual: Show audio control panel at bottom of screen
+Audio: "VoiceLink gives you full control over your audio. The volume slider adjusts your master volume. The microphone button mutes or unmutes you - red means muted. The spatial audio toggle enables 3D positioning. Push-to-talk can be enabled in settings."
+
+Control panel elements to show:
+- Volume slider with percentage
+- Microphone button (muted/unmuted states)
+- Spatial audio toggle
+- Settings gear icon
+- Connection quality indicator
+
+[SCENE 6: BASIC SETTINGS - 30 seconds]
+Visual: Show settings panel, general tab
+Audio: "Click the gear icon to access settings. Here you can configure your audio devices, adjust spatial audio intensity, and customize your experience. Changes are saved automatically."
+
+Settings to show (safe):
+- Audio device selection dropdowns
+- Volume controls
+- Theme selection
+- Language options
+
+[OUTRO - 15 seconds]
+Visual: Show documentation link, help button
+Audio: "That's the basics of VoiceLink! For more detailed guides, click the Help & Docs link. Check out our other tutorials for advanced features like creating rooms and spatial audio positioning."
+
+================================================================================
+TUTORIAL 2: CREATING AND MANAGING ROOMS
+================================================================================
+
+Title: How to Create and Manage VoiceLink Rooms
+Duration: 4-6 minutes
+Audience: Room creators and moderators
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Create Room button and dialog (empty form)
+[SHOW] Room settings panel (general options)
+[SHOW] Room type selection dropdown
+[SHOW] Visibility options (public/private selector)
+[SHOW] Documentation for room management
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Room list with "Create Room" button highlighted
+Audio: "Learn how to create your own VoiceLink rooms and manage them effectively. Whether you're hosting a movie night or a team meeting, this guide has you covered."
+
+[SCENE 1: CREATE ROOM DIALOG - 60 seconds]
+Visual: Show the create room form with empty fields
+Audio: "To create a new room, click the Create Room button. You'll see a form with several options."
+
+Form fields to show and explain:
+- Room Name field (show typing "My New Room")
+- Description field (optional)
+- Max Users dropdown (5, 10, 25, 50, 100)
+- Visibility selector (Public, Unlisted, Private)
+- Access Type (Web, App, Hybrid)
+
+Text overlays:
+- "Public: Visible to everyone"
+- "Unlisted: Only with direct link"
+- "Private: Invite only"
+
+[SCENE 2: ROOM TYPES - 45 seconds]
+Visual: Show room type/template dropdown
+Audio: "VoiceLink offers pre-configured room templates for different use cases."
+
+Show template options:
+- "Standard Voice Chat" - Basic communication
+- "Movie Room" - Synchronized video playback
+- "Music Room" - Background music and jukebox
+- "Radio Room" - Streaming broadcast style
+
+[SCENE 3: ROOM SECURITY - 45 seconds]
+Visual: Show security options in room settings
+Audio: "Secure your room with password protection and locking features."
+
+Security options to show:
+- Password field (show asterisks, not actual password)
+- "Lock Room" toggle
+- Auto-lock settings dropdown
+- "Require approval to join" option
+
+Text overlays:
+- "Password: Require code to enter"
+- "Lock: Prevent new users from joining"
+- "Auto-lock: Lock automatically after conditions"
+
+[SCENE 4: MODERATOR CONTROLS - 60 seconds]
+Visual: Show room controls panel (moderator view)
+Audio: "As a room creator or moderator, you have special controls."
+
+Controls to show:
+- "Mute All" button
+- Individual user mute options
+- "Lock Room" / "Unlock Room" button
+- Room settings gear icon
+
+Note: Show controls with generic user names or empty state
+
+[SCENE 5: NOW PLAYING DISPLAY - 45 seconds]
+Visual: Show now playing panel in a media room
+Audio: "Media rooms display what's currently playing, including title, description, and progress."
+
+Now playing elements:
+- Title display area
+- Description text
+- Progress bar with time
+- Thumbnail placeholder
+- Duration indicator
+
+[OUTRO - 15 seconds]
+Visual: Show room management documentation page
+Audio: "Now you know how to create and manage VoiceLink rooms! Visit the documentation for advanced settings and federation options."
+
+================================================================================
+TUTORIAL 3: SPATIAL AUDIO AND 3D POSITIONING
+================================================================================
+
+Title: Mastering VoiceLink's 3D Spatial Audio
+Duration: 3-4 minutes
+Audience: All users
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Spatial audio settings panel
+[SHOW] Room visualization with user positions (generic avatars)
+[SHOW] Audio settings in preferences
+[SHOW] 3D audio diagram/illustration
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Animated 3D audio visualization diagram
+Audio: "VoiceLink's spatial audio makes conversations feel natural by positioning voices in 3D space around you. Let's explore how to use and customize this feature."
+
+[SCENE 1: WHAT IS SPATIAL AUDIO - 45 seconds]
+Visual: Split screen - traditional audio vs spatial audio diagram
+Audio: "Traditional voice chat puts everyone's voice directly in your ears at the same volume. Spatial audio is different - each person has a position in virtual 3D space. Voices come from different directions, and distance affects volume naturally."
+
+Diagram elements:
+- Center circle (you)
+- Multiple circles around representing other users
+- Sound wave lines showing direction
+- Distance indicators
+
+[SCENE 2: THE ROOM VIEW - 45 seconds]
+Visual: Show room visualization with positioned avatars
+Audio: "In VoiceLink, you can see where everyone is positioned in the room. Your position is in the center, and other users appear around you based on their virtual location."
+
+Visual elements:
+- Room visualization panel
+- User avatars as circles or icons (use generic icons)
+- Your position indicator
+- Direction arrows
+
+[SCENE 3: SPATIAL SETTINGS - 60 seconds]
+Visual: Show spatial audio settings panel
+Audio: "Customize your spatial audio experience in Settings. Adjust the intensity from subtle to maximum 3D effect. Choose room acoustics like small room, large hall, or outdoor. Enable head tracking if you have supported headphones."
+
+Settings to show:
+- Spatial Intensity slider (Low/Medium/High)
+- Room Reverb dropdown
+- Head Tracking toggle
+- HRTF profile selector
+
+[SCENE 4: ACCESSIBILITY - 30 seconds]
+Visual: Show accessibility options in settings
+Audio: "If spatial audio doesn't work for you, you can disable it for traditional stereo, enable mono mode for single-ear listening, or adjust individual user volumes."
+
+Options to show:
+- "Disable Spatial Audio" toggle
+- "Mono Audio" toggle
+- Per-user volume sliders (generic names)
+
+[OUTRO - 15 seconds]
+Visual: Return to room view with spatial indicators
+Audio: "Spatial audio makes VoiceLink conversations more natural and engaging. Experiment with different settings to find what works best for you!"
+
+================================================================================
+TUTORIAL 4: MEDIA ROOMS AND WATCH PARTIES
+================================================================================
+
+Title: Hosting Watch Parties with VoiceLink Media Rooms
+Duration: 4-5 minutes
+Audience: Movie night hosts
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Media room creation template
+[SHOW] Now playing display panel
+[SHOW] Media controls (play/pause icons)
+[SHOW] Playback mode selector
+[SHOW] Queue interface (empty state)
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Media room template icon with play button
+Audio: "VoiceLink Media Rooms let you watch movies and TV shows together with friends while chatting. Here's how to set up and host a perfect watch party."
+
+[SCENE 1: CREATING A MEDIA ROOM - 45 seconds]
+Visual: Show room creation with "Movie Room" template selected
+Audio: "To create a media room, click Create Room and select the Movie Room or TV Room template. These templates automatically configure synchronized playback and appropriate controls."
+
+Show form with:
+- Template dropdown showing "Movie Room" selected
+- Room name field
+- Auto-populated settings from template
+
+[SCENE 2: NOW PLAYING DISPLAY - 60 seconds]
+Visual: Show the now playing panel with example content
+Audio: "When content is playing, users see the Now Playing display showing the title, description, and how much time remains. The progress bar shows exactly where everyone is in the playback."
+
+Now Playing elements (use placeholder/example data):
+- Title: "Movie Title Here"
+- Description: "A description of the content..."
+- Progress bar at 25%
+- Time remaining: "1:30:00"
+- Thumbnail placeholder box
+
+[SCENE 3: PLAYBACK MODES - 45 seconds]
+Visual: Show playback mode selector
+Audio: "VoiceLink supports two playback modes. Scheduled mode plays like a TV channel - content runs in real-time and users join wherever it currently is. On-demand mode lets users control playback, available in personal rooms."
+
+Mode selector showing:
+- "Scheduled (TV Style)" option
+- "On-Demand (Personal)" option
+- Description text for each
+
+[SCENE 4: HOST CONTROLS - 60 seconds]
+Visual: Show media controls panel (host view)
+Audio: "As the host, you control the viewing experience. Use play and pause to control playback for everyone. The seek bar lets you jump to different points. Your volume control only affects your personal audio."
+
+Controls to show:
+- Play/Pause button
+- Seek bar with time markers
+- Volume slider (labeled "Your Volume")
+- Queue button
+
+[SCENE 5: INTERMISSIONS - 30 seconds]
+Visual: Show intermission/trailer concept
+Audio: "Between movies or episodes, VoiceLink can automatically play trailers or intermission content, giving viewers a break and building anticipation for what's next."
+
+Visual concept:
+- "Intermission" title card
+- "Up Next" preview box
+- Timer showing break duration
+
+[OUTRO - 15 seconds]
+Visual: Media room with users and now playing
+Audio: "Media rooms make distance irrelevant for movie nights! Set one up and bring your friends together for your next watch party."
+
+================================================================================
+TUTORIAL 5: DESKTOP APP INSTALLATION
+================================================================================
+
+Title: Installing the VoiceLink Desktop App
+Duration: 3-4 minutes
+Audience: Desktop users
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Download page at https://voicelink.devinecreations.net/downloads/
+[SHOW] Platform selection icons (Mac, Windows, Linux)
+[SHOW] Installation wizard steps (generic)
+[SHOW] App icon and first launch screen
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Desktop app icon with Mac/Windows/Linux logos
+Audio: "The VoiceLink desktop app provides additional features not available in the web version. Let's walk through installation on Mac, Windows, and Linux."
+
+[SCENE 1: DOWNLOAD PAGE - 30 seconds]
+Visual: Show download page with platform options
+Audio: "Visit the VoiceLink downloads page. Choose your platform - Mac, Windows, or Linux. Each platform has multiple download options."
+
+Download page elements:
+- Platform tabs/buttons (macOS, Windows, Linux)
+- Download buttons for each format
+- Version number display
+- File size information
+
+[SCENE 2: MAC INSTALLATION - 45 seconds]
+Visual: Show macOS installation steps
+Audio: "For Mac, download the DMG file. Open it and drag VoiceLink to your Applications folder. On first launch, you may need to right-click and select Open to bypass security."
+
+Step visuals:
+1. DMG file icon
+2. Drag-to-Applications window
+3. Right-click menu with "Open" option
+4. Security dialog with "Open" button
+
+[SCENE 3: WINDOWS INSTALLATION - 45 seconds]
+Visual: Show Windows installation steps
+Audio: "For Windows, download the portable EXE or ZIP file. The portable version runs directly with no installation. For the ZIP, extract the contents and run the VoiceLink executable."
+
+Step visuals:
+1. EXE/ZIP file icons
+2. Extract dialog (for ZIP)
+3. VoiceLink.exe in folder
+4. Windows security prompt "Run anyway"
+
+[SCENE 4: LINUX INSTALLATION - 45 seconds]
+Visual: Show Linux installation options
+Audio: "For Linux, the AppImage works on most distributions. Download it, make it executable, and run. Debian users can also use the DEB package with your package manager."
+
+Step visuals:
+1. AppImage file icon
+2. Properties dialog showing "executable" checkbox
+3. Terminal showing chmod command (safe to show)
+4. Running application
+
+[SCENE 5: DESKTOP FEATURES - 30 seconds]
+Visual: Show desktop app with feature highlights
+Audio: "The desktop app includes exclusive features like local network hosting, system audio routing, native notifications, and automatic updates."
+
+Feature callouts:
+- "Local Network" icon
+- "Audio Routing" icon
+- "Notifications" icon
+- "Auto-Update" icon
+
+[OUTRO - 15 seconds]
+Visual: Desktop app running with room list
+Audio: "You're all set! The desktop app will update automatically when new versions are available."
+
+================================================================================
+TUTORIAL 6: FEDERATION AND CONNECTED SERVERS
+================================================================================
+
+Title: Understanding VoiceLink Federation
+Duration: 3-4 minutes
+Audience: Advanced users and server admins
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Room list with "Federated" badges
+[SHOW] Server connection dialog
+[SHOW] Federation concept diagram
+[SHOW] Documentation pages about federation
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Network diagram showing connected servers
+Audio: "VoiceLink federation connects independent servers into a network. Users can discover and join rooms across federated servers. Here's how it works."
+
+[SCENE 1: DECENTRALIZED CONCEPT - 45 seconds]
+Visual: Animated diagram of multiple servers
+Audio: "Federation means multiple VoiceLink servers work together. Each server is independent with its own rooms and users, but they can share public rooms across the network."
+
+Diagram elements:
+- Multiple server icons
+- Connection lines between servers
+- Room icons flowing between servers
+- "Your Server" label on one
+
+Benefits text overlay:
+- "Larger community"
+- "More rooms to discover"
+- "Decentralized infrastructure"
+
+[SCENE 2: ROOM SOURCES - 30 seconds]
+Visual: Show room list with source badges
+Audio: "In your room list, you'll see rooms from different sources. Local rooms are on your connected server. Federated rooms come from partner servers. The main hub provides globally shared rooms."
+
+Room list showing:
+- Room with "Local" badge
+- Room with "Federated" badge
+- Room with "Hub" badge
+
+[SCENE 3: CONNECTING TO SERVERS - 45 seconds]
+Visual: Show server connection dialog
+Audio: "To connect to a different server, use the server selector. Enter the server URL or choose from known servers. Your account may work across federated servers if they share authentication."
+
+Connection dialog showing:
+- Server URL input field
+- "Known Servers" dropdown
+- Connect button
+- Current server indicator
+
+[SCENE 4: MASTODON INTEGRATION - 60 seconds]
+Visual: Show Mastodon login button and flow
+Audio: "VoiceLink integrates with Mastodon for identity. Click Sign in with Mastodon, enter your instance, and authorize. Your Mastodon handle becomes your VoiceLink identity across all federated servers."
+
+Login flow:
+1. "Sign in with Mastodon" button
+2. Instance selection field
+3. Authorization page (generic representation)
+4. Connected profile display
+
+[OUTRO - 15 seconds]
+Visual: Federated network diagram
+Audio: "Federation makes VoiceLink more powerful by connecting communities. Explore federated rooms to discover new communities!"
+
+================================================================================
+TUTORIAL 7: ADMIN PANEL OVERVIEW
+================================================================================
+
+Title: VoiceLink Admin Panel Guide
+Duration: 5-6 minutes
+Audience: Server administrators
+
+VISUAL REFERENCES:
+------------------
+NOTE: Admin panel should only show general structure, NOT:
+- Actual user data
+- Sensitive configuration
+- API keys or credentials
+- Real analytics data
+
+[SHOW] Admin panel navigation menu (section names only)
+[SHOW] Dashboard layout (with placeholder/demo data)
+[SHOW] General settings categories
+[SHOW] Documentation for admin features
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Admin panel icon with gear symbol
+Audio: "The VoiceLink Admin Panel gives you complete control over your server. This guide covers the major sections and capabilities."
+
+[SCENE 1: ACCESSING ADMIN - 30 seconds]
+Visual: Show admin access flow (conceptual)
+Audio: "Access the admin panel by logging in as an administrator and clicking Admin Panel in the menu. For security, change the default password immediately after first setup and enable two-factor authentication."
+
+Show (conceptually):
+- User menu with "Admin Panel" option
+- Login security reminder graphic
+
+[SCENE 2: DASHBOARD OVERVIEW - 45 seconds]
+Visual: Dashboard layout with placeholder metrics
+Audio: "The dashboard shows at-a-glance metrics including active users, rooms, server health, and recent alerts. Quick action buttons let you perform common tasks."
+
+Dashboard elements (use placeholder numbers):
+- "Active Users: --"
+- "Active Rooms: --"
+- "Server Status: Online"
+- Quick action buttons (icons only)
+
+[SCENE 3: NAVIGATION SECTIONS - 60 seconds]
+Visual: Show admin menu with section names
+Audio: "The admin panel is organized into sections. Users for account management. Rooms for room oversight. Settings for server configuration. Integrations for external services. Updates for system maintenance."
+
+Menu items to show:
+- Dashboard icon + "Dashboard"
+- Users icon + "Users"
+- Rooms icon + "Rooms"
+- Settings icon + "Settings"
+- Integrations icon + "Integrations"
+- Updates icon + "Updates"
+
+[SCENE 4: KEY CAPABILITIES - 60 seconds]
+Visual: Show capability icons/cards
+Audio: "Key admin capabilities include user management, room moderation, integration setup, and system updates. Each section has role-based access controls."
+
+Capability cards:
+- "User Management" - Create, edit, roles
+- "Room Oversight" - Monitor, moderate, configure
+- "Integrations" - Mastodon, Jellyfin, payments
+- "Updates" - Apply updates, select features
+
+[SCENE 5: UPDATE MANAGEMENT - 45 seconds]
+Visual: Show update categories concept
+Audio: "The update system lets you choose which features to enable. Core updates are always required for compatibility. Optional categories include media features, federation, UI updates, and integrations."
+
+Update categories:
+- "Core (Required)" - checkmark, locked
+- "Media Features" - checkbox
+- "Federation" - checkbox
+- "UI Updates" - checkbox
+
+[OUTRO - 15 seconds]
+Visual: Admin documentation link
+Audio: "The admin panel puts you in complete control. Check the admin documentation for detailed guides on each section."
+
+================================================================================
+TUTORIAL 8: TROUBLESHOOTING COMMON ISSUES
+================================================================================
+
+Title: VoiceLink Troubleshooting Guide
+Duration: 4-5 minutes
+Audience: All users
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Settings panel audio section
+[SHOW] Browser permission dialogs (generic)
+[SHOW] Connection status indicators
+[SHOW] Help/troubleshooting documentation page
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Question mark icon with wrench/tool
+Audio: "Having trouble with VoiceLink? This guide covers the most common issues and how to fix them."
+
+[SCENE 1: AUDIO ISSUES - 60 seconds]
+Visual: Show audio troubleshooting steps
+Audio: "If you can't hear others or be heard, first check if you're muted - look for the red microphone icon. Then verify browser permissions - look for a microphone icon in your address bar. Finally, check your audio device settings in VoiceLink preferences."
+
+Troubleshooting steps visual:
+1. Microphone button (muted = red, unmuted = green)
+2. Browser address bar with mic icon
+3. Settings > Audio Devices dropdown
+4. System sound settings reference
+
+[SCENE 2: CONNECTION ISSUES - 60 seconds]
+Visual: Show connection troubleshooting
+Audio: "For connection problems, first check your internet by testing other websites. VPNs and corporate firewalls can block voice chat - try disabling temporarily. If you see 'Reconnecting', wait 10-15 seconds for automatic recovery."
+
+Connection status indicators:
+- "Connected" (green)
+- "Reconnecting..." (yellow)
+- "Disconnected" (red)
+- Troubleshooting checklist graphic
+
+[SCENE 3: AUDIO QUALITY - 45 seconds]
+Visual: Show quality settings
+Audio: "For poor audio quality, check your internet speed. Close bandwidth-heavy applications. Try reducing video quality if streaming media. For echo, use headphones and enable echo cancellation in settings."
+
+Quality tips:
+- Bandwidth indicator
+- Echo cancellation toggle
+- Noise reduction toggle
+- "Use headphones" recommendation
+
+[SCENE 4: ROOM ISSUES - 45 seconds]
+Visual: Show room status indicators
+Audio: "If you can't join a room, check if it's locked - look for the lock icon. The room may be full or require a password. If rooms aren't appearing, try refreshing the room list or check federation status."
+
+Room status icons:
+- Lock icon = "Room is locked"
+- Full indicator = "Room is full"
+- Password icon = "Password required"
+- Refresh button location
+
+[SCENE 5: GETTING HELP - 30 seconds]
+Visual: Show help resources
+Audio: "If you're still stuck, check the Help Docs in the app, visit the troubleshooting guide online, or contact your server administrator. When reporting issues, include your browser version and steps to reproduce."
+
+Help resources:
+- "Help & Docs" button in app
+- Documentation URL
+- "Contact Admin" option
+- Bug report checklist
+
+[OUTRO - 15 seconds]
+Visual: Thumbs up with help icon
+Audio: "Most issues have simple fixes. If you're still stuck, our community is here to help!"
+
+================================================================================
+END OF TUTORIAL CONTENT
+================================================================================
+
+VIDEO PRODUCTION NOTES FOR AI GENERATION:
+-----------------------------------------
+
+1. SAFE CONTENT GUIDELINES:
+   - Use placeholder data (---, example.com, "User 1", etc.)
+   - Show UI structure, not actual user data
+   - Use generic room names in examples
+   - Blur or omit any personal information
+   - Don't show real chat messages or usernames
+
+2. VISUAL STYLE:
+   - VoiceLink brand colors: #667eea (primary), #764ba2 (secondary)
+   - Clean, modern UI aesthetic
+   - Smooth transitions between scenes
+   - Text overlays for key points
+   - Animated diagrams where helpful
+
+3. ACCESSIBILITY:
+   - Include subtitles/captions
+   - Describe visual elements in narration
+   - Use high contrast for text overlays
+   - Keep animations smooth, avoid flashing
+
+4. BRANDING:
+   - VoiceLink logo in intro/outro
+   - Consistent color scheme throughout
+   - "voicelink.devinecreations.net" as reference URL
+   - Attribution: "Devine Creations"
+
+5. PUBLICLY ACCESSIBLE URLS FOR B-ROLL:
+   - https://voicelink.devinecreations.net (main app)
+   - https://voicelink.devinecreations.net/docs/ (documentation)
+   - https://voicelink.devinecreations.net/docs/getting-started.html
+   - https://voicelink.devinecreations.net/docs/room-management.html
+
+6. DURATION TARGETS:
+   - Tutorial 1: 3-5 minutes
+   - Tutorial 2: 4-6 minutes
+   - Tutorial 3: 3-4 minutes
+   - Tutorial 4: 4-5 minutes
+   - Tutorial 5: 3-4 minutes
+   - Tutorial 6: 3-4 minutes
+   - Tutorial 7: 5-6 minutes
+   - Tutorial 8: 4-5 minutes
+
+================================================================================

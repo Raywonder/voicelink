@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Admin Authentication System - VoiceLink Documentation</title>
+    <link rel="stylesheet" href="../styles/docs.css">
+    <style>
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5a6fd6;
+            --secondary: #764ba2;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #333333;
+            --text-muted: #666666;
+            --border: #e0e0e0;
+            --code-bg: #1e1e1e;
+            --code-text: #d4d4d4;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+        }
+        .docs-header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        .docs-header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .docs-header .breadcrumb {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        .docs-header .breadcrumb a { color: white; text-decoration: none; }
+        .docs-header .breadcrumb a:hover { text-decoration: underline; }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        h2 {
+            color: var(--primary);
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border);
+        }
+        h3 {
+            color: var(--text);
+            margin: 1.5rem 0 0.75rem;
+        }
+        h4 { margin: 1rem 0 0.5rem; }
+        p { margin-bottom: 1rem; }
+        ul, ol {
+            margin: 1rem 0;
+            padding-left: 2rem;
+        }
+        li { margin-bottom: 0.5rem; }
+        code {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        .highlight-bash { color: #9cdcfe; }
+        .highlight-comment { color: #6a9955; }
+        .highlight-string { color: #ce9178; }
+        .highlight-keyword { color: #569cd6; }
+        a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+        a:hover { text-decoration: underline; }
+        blockquote {
+            border-left: 4px solid var(--primary);
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        .alert-info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .alert-warning {
+            background: #fff3cd;
+            border-left: 4px solid var(--warning);
+        }
+        .alert-danger {
+            background: #f8d7da;
+            border-left: 4px solid var(--danger);
+        }
+        .alert-success {
+            background: #d4edda;
+            border-left: 4px solid var(--success);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: var(--bg);
+            font-weight: 600;
+        }
+        .nav-links {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+        .nav-links a {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .card { padding: 1rem; }
+            pre { font-size: 0.85rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="docs-header">
+        <h1>VoiceLink Admin Authentication System</h1>
+        <div class="breadcrumb"><a href="../index.html">Docs</a> /  / VoiceLink Admin Authentication System</div>
+    </div>
+    <div class="container">
+        <div class="card">
+            <h1>VoiceLink Admin Authentication System</h1>
+
+<h2>Overview</h2>
+
+<p>Dual authentication system supporting both local email/password accounts and Mastodon OAuth, with account linking capabilities.</p>
+
+<h2>Authentication Methods</h2>
+
+<h3>1. Email/Password Authentication</h3>
+<ul>
+<li>Local accounts stored server-side</li>
+<li>For users without Mastodon accounts</li>
+<li>Password hashed with bcrypt</li>
+<li>Email verification optional but recommended</li>
+<p></ul></p>
+
+<h3>2. Mastodon OAuth Authentication</h3>
+<ul>
+<li>Federated authentication via any Mastodon-compatible instance</li>
+<li>Roles synced from Mastodon (Admin, Moderator, User)</li>
+<li>Supports: Mastodon, Pleroma, Akkoma, Misskey, GoToSocial</li>
+<p></ul></p>
+
+<h3>3. Account Linking</h3>
+<ul>
+<li>Users can link email account to Mastodon account</li>
+<li>Either method can be used to login</li>
+<li>If one fails, fallback to the other</li>
+<li>Roles merged from both sources (highest privilege wins)</li>
+<p></ul></p>
+
+<h2>Role Hierarchy</h2>
+
+<p>| Role | Permissions |</p>
+<p>|------|-------------|</p>
+<p>| Owner | Full system access, can manage admins |</p>
+<p>| Admin | Server settings, user management, room control |</p>
+<p>| Moderator | Room management, user moderation, kick/ban |</p>
+<p>| User | Create rooms, join rooms, basic features |</p>
+<p>| Guest | Join public rooms only, limited features |</p>
+
+<h2>Database Schema (Server-Side)</h2>
+
+<pre><code class="language-javascript">// users collection
+{
+  id: &quot;uuid&quot;,
+  email: &quot;user@example.com&quot;,
+  passwordHash: &quot;bcrypt_hash&quot;,
+  displayName: &quot;Display Name&quot;,
+  avatar: &quot;url&quot;,
+  role: &quot;admin|moderator|user&quot;,
+  mastodonLinked: {
+    instance: &quot;mastodon.social&quot;,
+    accountId: &quot;12345&quot;,
+    username: &quot;user&quot;,
+    accessToken: &quot;encrypted_token&quot;
+  },
+  createdAt: &quot;timestamp&quot;,
+  lastLogin: &quot;timestamp&quot;,
+  emailVerified: true,
+  settings: { ... }
+<p>}</code></pre></p>
+
+<h2>Client-Side Implementation</h2>
+
+<h3>Login Modal UI</h3>
+
+<pre><code class="language-text">+------------------------------------------+
+|           VoiceLink Login                |
++------------------------------------------+
+|                                          |
+|  [Tab: Email] [Tab: Mastodon]            |
+|                                          |
+|  --- Email Login ---                     |
+|  Email: [_______________________]        |
+|  Password: [___________________]         |
+|  [ ] Remember me                         |
+|                                          |
+|  [Login] [Create Account]                |
+|                                          |
+|  --- Or continue with ---                |
+|  [🐘 Login with Mastodon]                |
+|                                          |
+|  Forgot password?                        |
+<p>+------------------------------------------+</code></pre></p>
+
+<h3>Admin Panel Access</h3>
+
+<ul>
+<li>User logs in via email/password OR Mastodon</li>
+<li>Server checks user role</li>
+<li>If admin/moderator: Show admin panel button</li>
+<li>Admin panel shows role-appropriate controls</li>
+<p></ul></p>
+
+<h2>API Endpoints (Server)</h2>
+
+<pre><code class="language-text">POST /api/auth/register     - Create email account
+POST /api/auth/login        - Email/password login
+POST /api/auth/logout       - End session
+POST /api/auth/verify-email - Verify email address
+POST /api/auth/forgot       - Request password reset
+POST /api/auth/reset        - Reset password with token
+
+POST /api/auth/mastodon/callback  - Mastodon OAuth callback
+POST /api/auth/link-mastodon      - Link Mastodon to existing account
+DELETE /api/auth/unlink-mastodon  - Unlink Mastodon account
+
+GET  /api/auth/me           - Get current user info
+<p>PUT  /api/auth/me           - Update user profile</code></pre></p>
+
+<h2>Implementation Files</h2>
+
+<h3>New Files to Create:</h3>
+<ul>
+<li><code>client/js/auth/email-auth.js</code> - Email/password authentication</li>
+<li><code>client/js/auth/auth-manager.js</code> - Unified auth manager</li>
+<li><code>client/js/ui/login-modal.js</code> - Login/Register UI</li>
+<li><code>server/routes/auth.js</code> - Auth API endpoints</li>
+<li><code>server/models/user.js</code> - User model</li>
+<p></ul></p>
+
+<h3>Files to Modify:</h3>
+<ul>
+<li><code>client/js/core/app.js</code> - Integrate new auth system</li>
+<li><code>client/index.html</code> - Add login modal HTML</li>
+<li><code>client/css/style.css</code> - Login modal styles</li>
+<p></ul></p>
+
+<h2>Security Considerations</h2>
+
+<ul>
+<li>Passwords: bcrypt with cost factor 12</li>
+<li>Sessions: JWT tokens with 7-day expiry</li>
+<li>CSRF: State parameter for OAuth</li>
+<li>Rate limiting: 5 login attempts per minute</li>
+<li>Email verification: Required for password reset</li>
+<li>Account lockout: After 10 failed attempts</li>
+<p></ul></p>
+
+<h2>Migration Path</h2>
+
+<ul>
+<li>Existing Mastodon users keep their accounts</li>
+<li>New email registration available</li>
+<li>Users can link existing Mastodon to new email</li>
+<li>Graceful fallback if Mastodon unavailable</li>
+<p></ul></p>
+
+<h2>Admin Roles from auth.devinecreations.net</h2>
+
+<p>If integrating with a central auth server:</p>
+<ul>
+<li>Sync admin list from auth.devinecreations.net</li>
+<li>Check user email against admin registry</li>
+<li>Override local role if user is in central admin list</li>
+<p></ul></p>
+
+<h2>Implementation Priority</h2>
+
+<ul>
+<li><strong>Phase 1</strong>: Login modal UI with tabs</li>
+<li><strong>Phase 2</strong>: Email/password backend</li>
+<li><strong>Phase 3</strong>: Account linking</li>
+<li><strong>Phase 4</strong>: Central admin registry sync</li>
+<p></ul></p>
+
+        </div>
+    </div>
+    <div class="footer">
+        <p>VoiceLink Documentation &copy; 2026 Devine Creations</p>
+        <p><a href="../index.html">Back to Documentation Home</a></p>
+    </div>
+</body>
+</html>

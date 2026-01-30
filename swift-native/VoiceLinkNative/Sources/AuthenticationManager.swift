@@ -574,6 +574,180 @@ struct LinkedDevice: Codable, Identifiable {
 // MARK: - Notifications
 extension Notification.Name {
     static let mastodonAccountLoaded = Notification.Name("mastodonAccountLoaded")
+    // Note: accessRevoked is already declared in ServerManager.swift
+    static let deviceLinked = Notification.Name("deviceLinked")
+    static let deviceUnlinked = Notification.Name("deviceUnlinked")
+}
+
+// MARK: - Device Revocation Manager
+
+class DeviceRevocationManager: ObservableObject {
+    static let shared = DeviceRevocationManager()
+
+    @Published var linkedDevices: [LinkedDevice] = []
+    @Published var isLoading = false
+    @Published var error: String?
+
+    private var serverURL: String?
+
+    init() {
+        // Listen for Socket.IO revocation events
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAccessRevoked(_:)),
+            name: .accessRevoked,
+            object: nil
+        )
+    }
+
+    @objc private func handleAccessRevoked(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reason = userInfo["reason"] as? String else { return }
+
+        DispatchQueue.main.async {
+            // Show alert to user
+            let alert = NSAlert()
+            alert.messageText = "Access Revoked"
+            alert.informativeText = reason
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+
+            // Clear local auth state
+            AuthenticationManager.shared.logout()
+        }
+    }
+
+    // Fetch linked devices from server
+    func fetchDevices(serverURL: String) {
+        self.serverURL = serverURL
+        isLoading = true
+        error = nil
+
+        guard let url = URL(string: "\(serverURL)/api/devices") else {
+            error = "Invalid server URL"
+            isLoading = false
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                self?.isLoading = false
+
+                if let error = error {
+                    self?.error = error.localizedDescription
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let devicesArray = json["devices"] as? [[String: Any]] else {
+                    self?.error = "Failed to parse devices"
+                    return
+                }
+
+                self?.linkedDevices = devicesArray.compactMap { dict -> LinkedDevice? in
+                    guard let id = dict["id"] as? String,
+                          let deviceName = dict["deviceName"] as? String,
+                          let clientId = dict["clientId"] as? String ?? dict["id"] as? String,
+                          let authMethodStr = dict["authMethod"] as? String,
+                          let authMethod = AuthMethod(rawValue: authMethodStr) else {
+                        return nil
+                    }
+
+                    let linkedAtStr = dict["linkedAt"] as? String
+                    let lastSeenStr = dict["lastSeen"] as? String
+
+                    let formatter = ISO8601DateFormatter()
+                    let linkedAt = linkedAtStr.flatMap { formatter.date(from: $0) } ?? Date()
+                    let lastSeen = lastSeenStr.flatMap { formatter.date(from: $0) } ?? Date()
+
+                    return LinkedDevice(
+                        id: id,
+                        deviceName: deviceName,
+                        clientId: clientId,
+                        authMethod: authMethod,
+                        linkedAt: linkedAt,
+                        lastSeen: lastSeen,
+                        isRevoked: dict["isRevoked"] as? Bool ?? false
+                    )
+                }
+            }
+        }.resume()
+    }
+
+    // Revoke a specific device
+    func revokeDevice(deviceId: String, reason: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+        guard let serverURL = serverURL,
+              let url = URL(string: "\(serverURL)/api/devices/\(deviceId)/revoke") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        if let reason = reason {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["reason": reason])
+        }
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool, success else {
+                    completion(false, "Failed to revoke device")
+                    return
+                }
+
+                // Update local list
+                if let index = self?.linkedDevices.firstIndex(where: { $0.id == deviceId }) {
+                    self?.linkedDevices[index].isRevoked = true
+                }
+
+                completion(true, nil)
+            }
+        }.resume()
+    }
+
+    // Remove a device completely
+    func removeDevice(deviceId: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let serverURL = serverURL,
+              let url = URL(string: "\(serverURL)/api/devices/\(deviceId)") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool, success else {
+                    completion(false, "Failed to remove device")
+                    return
+                }
+
+                // Remove from local list
+                self?.linkedDevices.removeAll { $0.id == deviceId }
+
+                completion(true, nil)
+            }
+        }.resume()
+    }
 }
 
 // MARK: - Authentication Views
@@ -750,5 +924,204 @@ struct EmailAuthView: View {
                 onSuccess?()
             }
         }
+    }
+}
+
+// MARK: - Device Management View (for server admin/menubar)
+
+struct DeviceManagementView: View {
+    @ObservedObject private var revocationManager = DeviceRevocationManager.shared
+    @State private var showRevokeConfirm = false
+    @State private var showRemoveConfirm = false
+    @State private var selectedDevice: LinkedDevice?
+    @State private var revokeReason: String = ""
+    let serverURL: String
+
+    var body: some View {
+        VStack(spacing: 15) {
+            // Header
+            HStack {
+                Image(systemName: "laptopcomputer.and.iphone")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text("Linked Devices")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Spacer()
+                Button(action: { revocationManager.fetchDevices(serverURL: serverURL) }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .disabled(revocationManager.isLoading)
+            }
+
+            Divider()
+
+            if revocationManager.isLoading {
+                ProgressView()
+                    .padding()
+            } else if let error = revocationManager.error {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .foregroundColor(.gray)
+                }
+                .padding()
+            } else if revocationManager.linkedDevices.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "link.circle")
+                        .font(.system(size: 40))
+                        .foregroundColor(.gray)
+                    Text("No linked devices")
+                        .foregroundColor(.gray)
+                    Text("Devices paired with this server will appear here")
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.7))
+                }
+                .padding(.vertical, 40)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(revocationManager.linkedDevices) { device in
+                            DeviceCard(
+                                device: device,
+                                onRevoke: {
+                                    selectedDevice = device
+                                    showRevokeConfirm = true
+                                },
+                                onRemove: {
+                                    selectedDevice = device
+                                    showRemoveConfirm = true
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 400, minHeight: 300)
+        .onAppear {
+            revocationManager.fetchDevices(serverURL: serverURL)
+        }
+        .alert("Revoke Device Access?", isPresented: $showRevokeConfirm) {
+            TextField("Reason (optional)", text: $revokeReason)
+            Button("Cancel", role: .cancel) {
+                revokeReason = ""
+            }
+            Button("Revoke", role: .destructive) {
+                if let device = selectedDevice {
+                    revocationManager.revokeDevice(
+                        deviceId: device.id,
+                        reason: revokeReason.isEmpty ? nil : revokeReason
+                    ) { _, _ in }
+                }
+                revokeReason = ""
+            }
+        } message: {
+            if let device = selectedDevice {
+                Text("This will revoke access for \"\(device.deviceName)\". The device will be notified and disconnected.")
+            }
+        }
+        .alert("Remove Device?", isPresented: $showRemoveConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                if let device = selectedDevice {
+                    revocationManager.removeDevice(deviceId: device.id) { _, _ in }
+                }
+            }
+        } message: {
+            if let device = selectedDevice {
+                Text("This will permanently remove \"\(device.deviceName)\" from the linked devices list.")
+            }
+        }
+    }
+}
+
+struct DeviceCard: View {
+    let device: LinkedDevice
+    let onRevoke: () -> Void
+    let onRemove: () -> Void
+
+    var authMethodColor: Color {
+        switch device.authMethod {
+        case .pairingCode: return .gray
+        case .mastodon: return .purple
+        case .email: return .blue
+        }
+    }
+
+    var body: some View {
+        HStack {
+            // Status indicator
+            Circle()
+                .fill(device.isRevoked ? Color.red : Color.green)
+                .frame(width: 10, height: 10)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(device.deviceName)
+                        .font(.headline)
+
+                    // Auth method badge
+                    HStack(spacing: 2) {
+                        Image(systemName: device.authMethod.icon)
+                            .font(.caption2)
+                        Text(device.authMethod.displayName)
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(authMethodColor.opacity(0.2))
+                    .foregroundColor(authMethodColor)
+                    .cornerRadius(4)
+
+                    if device.isRevoked {
+                        Text("REVOKED")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.red.opacity(0.2))
+                            .foregroundColor(.red)
+                            .cornerRadius(4)
+                    }
+                }
+
+                Text(device.statusText)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                Text("Linked \(device.linkedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.7))
+            }
+
+            Spacer()
+
+            // Actions
+            if !device.isRevoked {
+                Button(action: onRevoke) {
+                    Image(systemName: "xmark.circle")
+                        .foregroundColor(.orange)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Revoke access")
+            }
+
+            Button(action: onRemove) {
+                Image(systemName: "trash")
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Remove device")
+        }
+        .padding()
+        .background(device.isRevoked ? Color.red.opacity(0.05) : Color.white.opacity(0.05))
+        .cornerRadius(10)
     }
 }

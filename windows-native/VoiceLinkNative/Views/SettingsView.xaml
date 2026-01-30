@@ -1,0 +1,191 @@
+<Page x:Class="VoiceLinkNative.Views.SettingsView"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Background="Transparent"
+      Title="Settings">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,0,16,0">
+            <!-- Header -->
+            <TextBlock Text="Settings" FontSize="28" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                       AutomationProperties.HeadingLevel="Level1"/>
+            <TextBlock Text="Configure your VoiceLink experience"
+                       Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,24"/>
+
+            <!-- Audio Settings -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="Audio" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <Grid Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Input Volume"
+                                   Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+                        <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="100"
+                                Value="{Binding InputVolume}" Margin="0,0,0,12"
+                                AutomationProperties.Name="Input volume"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Output Volume"
+                                   Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+                        <Slider Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="100"
+                                Value="{Binding OutputVolume}" Margin="0,0,0,12"
+                                AutomationProperties.Name="Output volume"/>
+                    </Grid>
+
+                    <CheckBox Content="Noise Suppression" IsChecked="{Binding NoiseSuppression}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Enable noise suppression"/>
+
+                    <CheckBox Content="Echo Cancellation" IsChecked="{Binding EchoCancellation}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"
+                              AutomationProperties.Name="Enable echo cancellation"/>
+
+                    <CheckBox Content="Push to Talk" IsChecked="{Binding PushToTalk}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Enable push to talk mode"/>
+
+                    <StackPanel Orientation="Horizontal"
+                                Visibility="{Binding PushToTalk, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="Push to Talk Key:" Foreground="{StaticResource SecondaryTextBrush}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding PushToTalkKey, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="100"
+                                 AutomationProperties.Name="Push to talk key binding"/>
+                    </StackPanel>
+
+                    <Button Content="Test Audio" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding TestAudioCommand}" Margin="0,16,0,0"
+                            AutomationProperties.Name="Play test audio"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Notifications -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="Notifications" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <CheckBox Content="Notify when user joins" IsChecked="{Binding NotifyUserJoin}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Show notification when user joins room"/>
+
+                    <CheckBox Content="Notify when user leaves" IsChecked="{Binding NotifyUserLeave}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Show notification when user leaves room"/>
+
+                    <CheckBox Content="Play UI Sounds" IsChecked="{Binding PlaySounds}"
+                              Foreground="{StaticResource TextBrush}"
+                              AutomationProperties.Name="Play sound effects for UI events"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Application -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="Application" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <CheckBox Content="Start minimized" IsChecked="{Binding StartMinimized}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Start application minimized"/>
+
+                    <CheckBox Content="Minimize to system tray" IsChecked="{Binding MinimizeToTray}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Minimize to system tray instead of taskbar"/>
+
+                    <CheckBox Content="Start with Windows" IsChecked="{Binding StartWithWindows}"
+                              Foreground="{StaticResource TextBrush}"
+                              AutomationProperties.Name="Start VoiceLink when Windows starts"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Account -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="Account" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <StackPanel Visibility="{Binding IsAuthenticated, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Username:"
+                                       Foreground="{StaticResource SecondaryTextBrush}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Username}"
+                                       Foreground="{StaticResource TextBrush}"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Email:"
+                                       Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Email}"
+                                       Foreground="{StaticResource TextBrush}" Margin="0,4,0,0"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Auth Method:"
+                                       Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AuthMethodDisplay}"
+                                       Foreground="{StaticResource TextBrush}" Margin="0,4,0,0"/>
+                        </Grid>
+
+                        <Button Content="Logout" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding LogoutCommand}"
+                                AutomationProperties.Name="Logout from account"/>
+                    </StackPanel>
+
+                    <TextBlock Text="Not logged in"
+                               Foreground="{StaticResource SecondaryTextBrush}"
+                               Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Reset -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Reset" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <TextBlock Text="Reset all settings to their default values."
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,12"/>
+
+                    <Button Content="Reset All Settings" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding ResetSettingsCommand}"
+                            AutomationProperties.Name="Reset all settings to defaults"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Version Info -->
+            <TextBlock Text="VoiceLink Native for Windows v1.0.0" FontSize="12"
+                       Foreground="{StaticResource SecondaryTextBrush}" Margin="0,24,0,0"
+                       HorizontalAlignment="Center"/>
+            <TextBlock Text="Devine Creations" FontSize="11"
+                       Foreground="{StaticResource SecondaryTextBrush}"
+                       HorizontalAlignment="Center"/>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <!-- VoiceLink Menubar Icon - Simple microphone with sound waves -->
+  <defs>
+    <style>
+      .icon-fill { fill: #000000; }
+      @media (prefers-color-scheme: dark) {
+        .icon-fill { fill: #ffffff; }
+      }
+    </style>
+  </defs>
+
+  <!-- Microphone body -->
+  <rect x="6" y="3" width="4" height="6" rx="2" class="icon-fill"/>
+
+  <!-- Microphone base -->
+  <rect x="7" y="9" width="2" height="3" class="icon-fill"/>
+  <rect x="5" y="12" width="6" height="1" class="icon-fill"/>
+
+  <!-- Sound waves -->
+  <path d="M2 6 Q1 8 2 10" stroke="currentColor" stroke-width="1" fill="none" class="icon-fill"/>
+  <path d="M14 6 Q15 8 14 10" stroke="currentColor" stroke-width="1" fill="none" class="icon-fill"/>
+
+  <!-- Active indicator dot -->
+  <circle cx="13" cy="3" r="1.5" fill="#00ff00" opacity="0.8"/>
+</svg>

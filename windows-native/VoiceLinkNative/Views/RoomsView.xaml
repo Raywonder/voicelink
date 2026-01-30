@@ -1,0 +1,271 @@
+<Page x:Class="VoiceLinkNative.Views.RoomsView"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+      xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+      mc:Ignorable="d"
+      Background="Transparent"
+      Title="Rooms">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,24">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Voice Rooms" FontSize="28" FontWeight="Bold"
+                               Foreground="{StaticResource TextBrush}"
+                               AutomationProperties.HeadingLevel="Level1"/>
+                    <TextBlock Text="Join or create voice chat rooms"
+                               Foreground="{StaticResource SecondaryTextBrush}"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Refresh" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding RefreshRoomsCommand}" Margin="0,0,8,0"
+                            AutomationProperties.Name="Refresh room list"/>
+                    <Button Content="Create Room" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding ShowCreateRoomCommand}"
+                            AutomationProperties.Name="Create a new room"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <!-- Content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300" MinWidth="250"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Room List -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Available Rooms" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Rooms}"
+                             SelectedItem="{Binding SelectedRoom}"
+                             Background="Transparent" BorderThickness="0"
+                             AutomationProperties.Name="Room list">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="#404060" BorderThickness="1" CornerRadius="8"
+                                        Padding="12" Margin="0,0,0,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}"/>
+                                                <TextBlock Text="(Private)" FontSize="11"
+                                                           Foreground="{StaticResource AccentYellowBrush}"
+                                                           Margin="8,0,0,0"
+                                                           Visibility="{Binding IsPrivate, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Description}" FontSize="12"
+                                                       Foreground="{StaticResource SecondaryTextBrush}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock FontSize="12" Foreground="{StaticResource SecondaryTextBrush}">
+                                                <Run Text="{Binding UserCount}"/>
+                                                <Run Text="/"/>
+                                                <Run Text="{Binding MaxUsers}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- Right Panel - Join/Current Room -->
+            <StackPanel Grid.Column="1">
+                <!-- Join Room Panel (when not in room) -->
+                <Border Style="{StaticResource Card}" Margin="0,0,0,16"
+                        Visibility="{Binding IsInRoom, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="Join Room" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                                   AutomationProperties.HeadingLevel="Level2"/>
+
+                        <TextBlock Text="Username" FontSize="12"
+                                   Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding JoinUsername, UpdateSourceTrigger=PropertyChanged}"
+                                 Margin="0,0,0,12"
+                                 AutomationProperties.Name="Your username for joining rooms"/>
+
+                        <TextBlock Text="Password (if private)" FontSize="12"
+                                   Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"
+                                   Visibility="{Binding SelectedRoom.IsPrivate, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                        <PasswordBox x:Name="JoinPasswordBox"
+                                     Margin="0,0,0,16"
+                                     Visibility="{Binding SelectedRoom.IsPrivate, Converter={StaticResource BoolToVisibilityConverter}}"
+                                     AutomationProperties.Name="Room password"/>
+
+                        <Button Content="Join Selected Room" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding JoinRoomCommand}"
+                                IsEnabled="{Binding SelectedRoom, Converter={StaticResource NullToVisibilityConverter}}"
+                                AutomationProperties.Name="Join the selected room"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Current Room Panel (when in room) -->
+                <Border Style="{StaticResource Card}" Margin="0,0,0,16"
+                        Visibility="{Binding IsInRoom, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding CurrentRoom.Name}" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                                   AutomationProperties.HeadingLevel="Level2"/>
+                        <TextBlock Text="{Binding CurrentRoom.Description}" FontSize="12"
+                                   Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,16"/>
+
+                        <!-- Audio Controls -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <Button Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding ToggleMuteCommand}"
+                                    Margin="0,0,8,0"
+                                    AutomationProperties.Name="{Binding IsMuted, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter='Unmute|Mute'}">
+                                <Button.Content>
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="Mute"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsMuted}" Value="True">
+                                                        <Setter Property="Text" Value="Unmute"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Button.Content>
+                            </Button>
+                            <Button Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding ToggleDeafenCommand}"
+                                    AutomationProperties.Name="{Binding IsDeafened, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter='Undeafen|Deafen'}">
+                                <Button.Content>
+                                    <TextBlock>
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="Deafen"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDeafened}" Value="True">
+                                                        <Setter Property="Text" Value="Undeafen"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Button.Content>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Users in Room -->
+                        <TextBlock Text="Users in Room" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"/>
+                        <ItemsControl ItemsSource="{Binding CurrentRoomUsers}"
+                                      AutomationProperties.Name="Users in current room">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                                        <Ellipse Width="8" Height="8" Margin="0,0,8,0">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Fill" Value="{StaticResource AccentGreenBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSpeaking}" Value="True">
+                                                            <Setter Property="Fill" Value="{StaticResource AccentYellowBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsMuted}" Value="True">
+                                                            <Setter Property="Fill" Value="{StaticResource AccentRedBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                        <TextBlock Text="{Binding Username}" Foreground="{StaticResource TextBrush}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Button Content="Leave Room" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding LeaveRoomCommand}" Margin="0,16,0,0"
+                                AutomationProperties.Name="Leave current room"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- Create Room Dialog Overlay -->
+        <Border Grid.RowSpan="2" Background="#80000000"
+                Visibility="{Binding ShowCreateRoomDialog, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Border Style="{StaticResource Card}" MaxWidth="400" MaxHeight="500"
+                    VerticalAlignment="Center" HorizontalAlignment="Center"
+                    AutomationProperties.Name="Create room dialog">
+                <StackPanel>
+                    <TextBlock Text="Create New Room" FontSize="20" FontWeight="Bold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
+                               AutomationProperties.HeadingLevel="Level2"/>
+
+                    <TextBlock Text="Room Name" FontSize="12"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding NewRoomName, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,12"
+                             AutomationProperties.Name="Room name"/>
+
+                    <TextBlock Text="Description" FontSize="12"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding NewRoomDescription, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,12" Height="60" TextWrapping="Wrap" AcceptsReturn="True"
+                             AutomationProperties.Name="Room description"/>
+
+                    <CheckBox Content="Private Room" IsChecked="{Binding NewRoomIsPrivate}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"
+                              AutomationProperties.Name="Make room private"/>
+
+                    <TextBlock Text="Password" FontSize="12"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"
+                               Visibility="{Binding NewRoomIsPrivate, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <TextBox Text="{Binding NewRoomPassword, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,16"
+                             Visibility="{Binding NewRoomIsPrivate, Converter={StaticResource BoolToVisibilityConverter}}"
+                             AutomationProperties.Name="Room password"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding CancelCreateRoomCommand}" Margin="0,0,8,0"
+                                AutomationProperties.Name="Cancel room creation"/>
+                        <Button Content="Create" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding CreateRoomCommand}"
+                                AutomationProperties.Name="Create the room"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
+</Page>

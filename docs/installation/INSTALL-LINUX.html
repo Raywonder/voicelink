@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Local - Linux Installation Guide - VoiceLink Documentation</title>
+    <link rel="stylesheet" href="../styles/docs.css">
+    <style>
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5a6fd6;
+            --secondary: #764ba2;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #333333;
+            --text-muted: #666666;
+            --border: #e0e0e0;
+            --code-bg: #1e1e1e;
+            --code-text: #d4d4d4;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+        }
+        .docs-header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        .docs-header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .docs-header .breadcrumb {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        .docs-header .breadcrumb a { color: white; text-decoration: none; }
+        .docs-header .breadcrumb a:hover { text-decoration: underline; }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        h2 {
+            color: var(--primary);
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border);
+        }
+        h3 {
+            color: var(--text);
+            margin: 1.5rem 0 0.75rem;
+        }
+        h4 { margin: 1rem 0 0.5rem; }
+        p { margin-bottom: 1rem; }
+        ul, ol {
+            margin: 1rem 0;
+            padding-left: 2rem;
+        }
+        li { margin-bottom: 0.5rem; }
+        code {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        .highlight-bash { color: #9cdcfe; }
+        .highlight-comment { color: #6a9955; }
+        .highlight-string { color: #ce9178; }
+        .highlight-keyword { color: #569cd6; }
+        a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+        a:hover { text-decoration: underline; }
+        blockquote {
+            border-left: 4px solid var(--primary);
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        .alert-info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .alert-warning {
+            background: #fff3cd;
+            border-left: 4px solid var(--warning);
+        }
+        .alert-danger {
+            background: #f8d7da;
+            border-left: 4px solid var(--danger);
+        }
+        .alert-success {
+            background: #d4edda;
+            border-left: 4px solid var(--success);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: var(--bg);
+            font-weight: 600;
+        }
+        .nav-links {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+        .nav-links a {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .card { padding: 1rem; }
+            pre { font-size: 0.85rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="docs-header">
+        <h1>VoiceLink Local - Linux Installation Guide</h1>
+        <div class="breadcrumb"><a href="../index.html">Docs</a> / installation / VoiceLink Local - Linux Installation Guide</div>
+    </div>
+    <div class="container">
+        <div class="card">
+            <h1>VoiceLink Local - Linux Installation Guide</h1>
+
+<h2>System Requirements</h2>
+
+<ul>
+<li><strong>Linux Distribution</strong>: Ubuntu 18.04+, Debian 10+, Fedora 30+, or equivalent</li>
+<li><strong>Architecture</strong>: x86_64 (64-bit)</li>
+<li><strong>Kernel</strong>: 4.15 or later</li>
+<li><strong>RAM</strong>: 8GB minimum (16GB recommended)</li>
+<li><strong>Disk Space</strong>: 500MB available</li>
+<li><strong>Audio</strong>: ALSA, PulseAudio, or JACK support</li>
+<p></ul></p>
+
+<h2>Download Options</h2>
+
+<h3>AppImage (Universal - Recommended)</h3>
+<ol>
+<li><strong>AppImage</strong>: <a href="../releases/VoiceLink%20Local-1.0.0.AppImage">VoiceLink Local-1.0.0.AppImage</a> (351MB)</li>
+<li>Works on any Linux distribution with glibc 2.27+</li>
+<p></ol></p>
+
+<h3>Debian/Ubuntu Package</h3>
+<ol>
+<li><strong>DEB Package</strong>: <a href="../releases/voicelink-local_1.0.0_amd64.deb">voicelink-local_1.0.0_amd64.deb</a> (294MB)</li>
+<li>For Debian, Ubuntu, and derivatives</li>
+<p></ol></p>
+
+<h3>Generic Linux Archive</h3>
+<ol>
+<li><strong>TAR.GZ</strong>: <a href="../releases/voicelink-local-1.0.0.tar.gz">voicelink-local-1.0.0.tar.gz</a> (348MB)</li>
+<li>For manual installation on any Linux distribution</li>
+<p></ol></p>
+
+<h2>Installation Methods</h2>
+
+<h3>Method 1: AppImage (Recommended)</h3>
+
+<p>The AppImage format works on most Linux distributions without installation:</p>
+
+<ul>
+<li><strong>Download</strong> the AppImage file</li>
+<li><strong>Make executable</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">chmod +x VoiceLink\ Local-1.0.0.AppImage</code></pre></p>
+<ul>
+<li><strong>Run</strong> the application:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">./VoiceLink\ Local-1.0.0.AppImage</code></pre></p>
+
+<h4>Optional: Desktop Integration</h4>
+<pre><code class="language-bash"># Move to applications directory
+sudo mv VoiceLink\ Local-1.0.0.AppImage /opt/voicelink-local.appimage
+
+<h1>Create desktop entry</h1>
+cat &gt; ~/.local/share/applications/voicelink-local.desktop &lt;&lt; EOF
+[Desktop Entry]
+Type=Application
+Name=VoiceLink Local
+Comment=P2P Voice Chat with 3D Audio
+Exec=/opt/voicelink-local.appimage
+Icon=voicelink-local
+Categories=AudioVideo;Audio;Network;
+StartupNotify=true
+<p>EOF</code></pre></p>
+
+<h3>Method 2: Debian/Ubuntu Package</h3>
+
+<p>For Debian-based distributions:</p>
+
+<ul>
+<li><strong>Download</strong> the DEB package</li>
+<li><strong>Install</strong> using dpkg:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">sudo dpkg -i voicelink-local_1.0.0_amd64.deb</code></pre></p>
+<ul>
+<li><strong>Fix dependencies</strong> if needed:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">sudo apt-get install -f</code></pre></p>
+<ul>
+<li><strong>Launch</strong> from applications menu or command line:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">voicelink-local</code></pre></p>
+
+<h3>Method 3: Generic Linux Archive</h3>
+
+<p>For other distributions or manual installation:</p>
+
+<ul>
+<li><strong>Extract</strong> the archive:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">tar -xzf voicelink-local-1.0.0.tar.gz</code></pre></p>
+<ul>
+<li><strong>Move</strong> to desired location:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">sudo mv voicelink-local /opt/</code></pre></p>
+<ul>
+<li><strong>Create</strong> symbolic link:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">sudo ln -s /opt/voicelink-local/voicelink-local /usr/local/bin/</code></pre></p>
+<ul>
+<li><strong>Run</strong> the application:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">voicelink-local</code></pre></p>
+
+<h2>Audio System Configuration</h2>
+
+<h3>PulseAudio (Default for most distributions)</h3>
+
+<p>VoiceLink Local works with PulseAudio out of the box:</p>
+
+<pre><code class="language-bash"># Check PulseAudio is running
+pulseaudio --check
+
+<h1>List audio devices</h1>
+pactl list short sources
+pactl list short sinks
+
+<h1>Set default devices if needed</h1>
+pactl set-default-source alsa_input.pci-0000_00_1f.3.analog-stereo
+<p>pactl set-default-sink alsa_output.pci-0000_00_1f.3.analog-stereo</code></pre></p>
+
+<h3>JACK Audio (Professional Setup)</h3>
+
+<p>For low-latency professional audio:</p>
+
+<ul>
+<li><strong>Install JACK</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash"># Ubuntu/Debian
+   sudo apt install jackd2 qjackctl
+
+   # Fedora
+   sudo dnf install jack-audio-connection-kit qjackctl
+
+   # Arch Linux
+<p>   sudo pacman -S jack2 qjackctl</code></pre></p>
+
+<ul>
+<li><strong>Configure JACK</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash"># Start JACK with low latency
+<p>   jackd -d alsa -r 48000 -p 128 -n 2</code></pre></p>
+
+<ul>
+<li><strong>Launch</strong> VoiceLink Local after JACK is running</li>
+<p></ul></p>
+
+<h3>ALSA (Low-level configuration)</h3>
+
+<p>For direct ALSA access:</p>
+
+<pre><code class="language-bash"># List audio devices
+aplay -l
+arecord -l
+
+<h1>Test audio output</h1>
+speaker-test -c2
+
+<h1>Test microphone</h1>
+<p>arecord -f cd -d 5 test.wav &amp;&amp; aplay test.wav</code></pre></p>
+
+<h2>Permissions and Security</h2>
+
+<h3>Audio Device Access</h3>
+
+<p>Add user to audio group:</p>
+<pre><code class="language-bash">sudo usermod -a -G audio $USER</code></pre>
+
+<h3>Microphone Permissions</h3>
+
+<p>For distributions with strict security policies:</p>
+<pre><code class="language-bash"># Check microphone access
+pactl list short sources
+
+<h1>Test microphone</h1>
+<p>arecord -f S16_LE -r 44100 -c 2 -d 5 test.wav</code></pre></p>
+
+<h3>Firewall Configuration</h3>
+
+<p>Allow VoiceLink Local through firewall:</p>
+<pre><code class="language-bash"># UFW (Ubuntu)
+sudo ufw allow &#039;VoiceLink Local&#039;
+
+<h1>FirewallD (Fedora/CentOS)</h1>
+sudo firewall-cmd --permanent --add-port=3000-65535/tcp
+sudo firewall-cmd --permanent --add-port=3000-65535/udp
+sudo firewall-cmd --reload
+
+<h1>iptables (manual)</h1>
+sudo iptables -A INPUT -p tcp --dport 3000:65535 -j ACCEPT
+<p>sudo iptables -A INPUT -p udp --dport 3000:65535 -j ACCEPT</code></pre></p>
+
+<h2>Desktop Environment Integration</h2>
+
+<h3>GNOME</h3>
+
+<p>VoiceLink Local integrates with GNOME's audio controls and notifications.</p>
+
+<h3>KDE Plasma</h3>
+
+<p>Works with KDE's audio system and can be added to the system tray.</p>
+
+<h3>Xfce/LXDE</h3>
+
+<p>Basic audio integration. Use PulseAudio mixer for audio control.</p>
+
+<h2>Troubleshooting</h2>
+
+<h3>Application Won't Start</h3>
+
+<ul>
+<li><strong>Check dependencies</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">ldd VoiceLink\ Local-1.0.0.AppImage</code></pre></p>
+
+<ul>
+<li><strong>Verify glibc version</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">ldd --version</code></pre></p>
+
+<ul>
+<li><strong>Run with debug output</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">./VoiceLink\ Local-1.0.0.AppImage --verbose</code></pre></p>
+
+<h3>Audio Issues</h3>
+
+<ul>
+<li><strong>Check audio system</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash"># PulseAudio
+   pulseaudio --check
+   pactl info
+
+   # ALSA
+   cat /proc/asound/cards
+
+   # JACK
+<p>   jack_control status</code></pre></p>
+
+<ul>
+<li><strong>Test microphone</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">arecord -f cd -d 5 /tmp/test.wav &amp;&amp; aplay /tmp/test.wav</code></pre></p>
+
+<ul>
+<li><strong>Check permissions</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">groups $USER  # Should include &#039;audio&#039;</code></pre></p>
+
+<h3>Network Issues</h3>
+
+<ul>
+<li><strong>Check firewall</strong>:</li>
+<p></ul></p>
+<p>   <pre><code class="language-bash">sudo netstat -tulpn | grep voicelink</code></pre></p>
+
+<ul>
+<li><strong>Test connectivity</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash">ping google.com
+<p>   telnet chat-server.example.com 443</code></pre></p>
+
+<h3>Performance Issues</h3>
+
+<ul>
+<li><strong>Check system resources</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash">top
+   free -h
+<p>   df -h</code></pre></p>
+
+<ul>
+<li><strong>Audio latency optimization</strong>:</li>
+<p></ul></p>
+   <pre><code class="language-bash"># Reduce audio latency
+<p>   echo &#039;options snd-hda-intel position_fix=1&#039; | sudo tee -a /etc/modprobe.d/alsa-base.conf</code></pre></p>
+
+<h2>Distribution-Specific Notes</h2>
+
+<h3>Ubuntu/Debian</h3>
+<ul>
+<li>Use the DEB package for best integration</li>
+<li>PulseAudio is default audio system</li>
+<li>May need to install additional codecs</li>
+<p></ul></p>
+
+<h3>Fedora/CentOS/RHEL</h3>
+<ul>
+<li>Use AppImage or compile from source</li>
+<li>SELinux may need configuration</li>
+<li>Firewall is enabled by default</li>
+<p></ul></p>
+
+<h3>Arch Linux</h3>
+<ul>
+<li>Use AppImage or AUR package</li>
+<li>JACK support readily available</li>
+<li>Minimal by default, may need audio packages</li>
+<p></ul></p>
+
+<h3>openSUSE</h3>
+<ul>
+<li>Use AppImage</li>
+<li>YaST can configure audio systems</li>
+<li>Firewall configuration through YaST</li>
+<p></ul></p>
+
+<h2>Uninstallation</h2>
+
+<h3>AppImage</h3>
+<p>Simply delete the AppImage file and any desktop entries.</p>
+
+<h3>DEB Package</h3>
+<pre><code class="language-bash">sudo apt remove voicelink-local</code></pre>
+
+<h3>Manual Installation</h3>
+<pre><code class="language-bash">sudo rm -rf /opt/voicelink-local
+sudo rm /usr/local/bin/voicelink-local
+<p>rm ~/.local/share/applications/voicelink-local.desktop</code></pre></p>
+
+<h2>Advanced Configuration</h2>
+
+<h3>Custom Audio Backend</h3>
+<pre><code class="language-bash"># Force specific audio backend
+export VOICELINK_AUDIO_BACKEND=pulse
+./VoiceLink\ Local-1.0.0.AppImage
+
+<h1>Available backends: pulse, alsa, jack</code></pre></h1>
+
+<h3>Environment Variables</h3>
+<pre><code class="language-bash"># Custom configuration directory
+export VOICELINK_CONFIG_DIR=~/.config/voicelink-local
+
+<h1>Debug mode</h1>
+export VOICELINK_DEBUG=1
+
+<h1>Custom audio device</h1>
+<p>export VOICELINK_AUDIO_DEVICE=&quot;hw:0,0&quot;</code></pre></p>
+
+<h2>Support</h2>
+
+<p>For Linux-specific issues:</p>
+<ul>
+<li>Check system logs: <code>journalctl -u voicelink-local</code></li>
+<li>Verify audio system configuration</li>
+<li>Test with different audio backends</li>
+<li>Consult distribution-specific forums</li>
+<li>Review the main troubleshooting guide in README.md</li></ul>
+
+        </div>
+    </div>
+    <div class="footer">
+        <p>VoiceLink Documentation &copy; 2026 Devine Creations</p>
+        <p><a href="../index.html">Back to Documentation Home</a></p>
+    </div>
+</body>
+</html>

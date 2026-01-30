@@ -12,7 +12,7 @@ class AutoUpdater: ObservableObject {
     static let buildNumber = 1
 
     // Update server configuration
-    private let updateServerURL = "https://voicelink.app/api/updates"
+    private let updateServerURL = "https://voicelink.devinecreations.net/api/updates"
     private let platform = "macos"
 
     @Published var updateAvailable: Bool = false

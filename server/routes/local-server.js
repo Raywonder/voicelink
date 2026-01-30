@@ -16,6 +16,7 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
+const JellyfinServiceManager = require('../utils/jellyfin-service-manager');
 
 // Stripe integration - lazy loaded if configured
 let stripe = null;
@@ -67,6 +68,11 @@ class VoiceLinkLocalServer {
 
         // Initialize Mastodon bot manager
         this.mastodonBot = new MastodonBotManager(this);
+
+        // Initialize Jellyfin service manager
+        this.jellyfinManager = new JellyfinServiceManager();
+        this.setupJellyfinManagement();
+        this.jellyfinManager.startMonitoring();
 
         // Authenticated users (Mastodon OAuth)
         this.authenticatedUsers = new Map(); // socketId -> mastodon user info
@@ -188,6 +194,17 @@ class VoiceLinkLocalServer {
      * Fetch rooms from main signal server
      */
     async fetchMainServerRooms() {
+        // If this IS the main server, don't fetch from ourselves (circular dependency)
+        // Check if we're running on the main server domain
+        const isMainServer = process.env.IS_MAIN_SERVER === 'true' ||
+                           process.env.MAIN_SERVER_URL === undefined ||
+                           MAIN_SERVER_URL.includes(process.env.DOMAIN || 'voicelink.devinecreations.net');
+
+        if (isMainServer) {
+            console.log('[LocalServer] Running as main server, skipping external room fetch');
+            return [];
+        }
+
         return new Promise((resolve) => {
             const url = `${MAIN_SERVER_URL}/api/rooms?source=app`;
             console.log('[LocalServer] Fetching rooms from main server:', url);
@@ -381,9 +398,45 @@ class VoiceLinkLocalServer {
                 isDefault,
                 template,
                 locked = false,
-                autoLock = null  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
+                autoLock = null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
+                isAuthenticated = false
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
+
+            // Enforce guest restrictions
+            if (!isAuthenticated) {
+                // Guests can only create public rooms
+                if (visibility !== 'public') {
+                    return res.status(403).json({
+                        error: 'Guests can only create public rooms. Please login to create private rooms.',
+                        requiresAuth: true
+                    });
+                }
+
+                // Guests cannot use passwords
+                if (password) {
+                    return res.status(403).json({
+                        error: 'Guests cannot create password-protected rooms. Please login for this feature.',
+                        requiresAuth: true
+                    });
+                }
+
+                // Guests limited to 10-30 minute durations
+                if (duration === null || duration > 1800000) { // 30 minutes max
+                    return res.status(403).json({
+                        error: 'Guests can only create rooms lasting 10-30 minutes. Please login for longer durations.',
+                        requiresAuth: true,
+                        maxGuestDuration: 1800000
+                    });
+                }
+
+                if (duration < 600000) { // 10 minutes minimum
+                    return res.status(400).json({
+                        error: 'Room duration must be at least 10 minutes.',
+                        minGuestDuration: 600000
+                    });
+                }
+            }
 
             // Calculate expiration if duration is set
             let expiresAt = null;
@@ -734,6 +787,104 @@ class VoiceLinkLocalServer {
             });
         });
 
+        // Updates check endpoint for native clients
+        this.app.post('/api/updates/check', (req, res) => {
+            const { platform, currentVersion, buildNumber } = req.body;
+
+            // Latest versions for each platform
+            const latestVersions = {
+                macos: {
+                    version: '1.0.0',
+                    buildNumber: 1,
+                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
+                    releaseNotes: 'Initial release with full SwiftUI native support:\n• Spatial audio engine\n• Multi-channel audio\n• Push-to-talk\n• Jellyfin integration\n• Auto-updates\n• TTS announcements\n• Whisper mode'
+                },
+                windows: {
+                    version: '1.0.3',
+                    buildNumber: 3,
+                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
+                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.'
+                },
+                linux: {
+                    version: '1.0.3',
+                    buildNumber: 3,
+                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.3-linux.AppImage',
+                    releaseNotes: 'Linux release with AppImage support.'
+                }
+            };
+
+            const platformInfo = latestVersions[platform] || latestVersions.macos;
+
+            // Compare versions
+            const compareVersions = (v1, v2) => {
+                const p1 = v1.split('.').map(Number);
+                const p2 = v2.split('.').map(Number);
+                for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+                    const n1 = p1[i] || 0;
+                    const n2 = p2[i] || 0;
+                    if (n1 > n2) return 1;
+                    if (n1 < n2) return -1;
+                }
+                return 0;
+            };
+
+            const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
+
+            res.json({
+                updateAvailable: hasUpdate,
+                version: platformInfo.version,
+                buildNumber: platformInfo.buildNumber,
+                downloadURL: hasUpdate ? platformInfo.downloadURL : null,
+                releaseNotes: hasUpdate ? platformInfo.releaseNotes : null,
+                platform: platform || 'unknown',
+                currentVersion: currentVersion || 'unknown'
+            });
+        });
+
+        // Get all available downloads
+        this.app.get('/api/downloads', (req, res) => {
+            res.json({
+                platforms: {
+                    macos: {
+                        version: '1.0.0',
+                        downloads: [
+                            {
+                                name: 'macOS Universal (DMG)',
+                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
+                                size: '144 MB',
+                                type: 'native'
+                            }
+                        ]
+                    },
+                    windows: {
+                        version: '1.0.3',
+                        downloads: [
+                            {
+                                name: 'Windows Portable',
+                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
+                                size: '193 MB',
+                                type: 'native'
+                            },
+                            {
+                                name: 'Windows Setup',
+                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe',
+                                size: '194 MB',
+                                type: 'native'
+                            }
+                        ]
+                    },
+                    linux: {
+                        version: '1.0.3',
+                        downloads: []
+                    }
+                },
+                webClient: {
+                    url: 'https://voicelink.devinecreations.net/',
+                    description: 'No download required - access directly from your browser'
+                }
+            });
+        });
+
         // Get relay statistics
         this.app.get('/api/relay/stats', (req, res) => {
             res.json({
@@ -746,6 +897,11 @@ class VoiceLinkLocalServer {
         // Serve the main client
         this.app.get('/', (req, res) => {
             res.sendFile(path.join(__dirname, '..', '..', 'client', 'index.html'));
+        });
+
+        // Serve downloads page
+        this.app.get('/downloads.html', (req, res) => {
+            res.sendFile(path.join(__dirname, '..', '..', 'client', 'downloads.html'));
         });
 
         // Setup federation API routes
@@ -1313,6 +1469,309 @@ class VoiceLinkLocalServer {
         });
 
         // ============================================
+        // DEVICE PAIRING & MANAGEMENT
+        // Remote authentication and access control
+        // ============================================
+
+        // Store for linked devices and pending email verifications
+        this.linkedDevices = new Map(); // deviceId -> LinkedDevice
+        this.pairingCodes = new Map(); // code -> { expiresAt, serverInfo }
+        this.emailVerificationCodes = new Map(); // email -> { code, expiresAt, clientId }
+
+        // Generate pairing code for this server
+        this.app.post('/api/pairing/generate', (req, res) => {
+            // Generate 6-character code (no confusing chars)
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let code = '';
+            for (let i = 0; i < 6; i++) {
+                code += chars[Math.floor(Math.random() * chars.length)];
+            }
+
+            this.pairingCodes.set(code, {
+                expiresAt: new Date(Date.now() + 60000), // 60 seconds
+                serverInfo: {
+                    id: this.serverId,
+                    name: this.serverName || 'VoiceLink Server',
+                    url: req.protocol + '://' + req.get('host')
+                }
+            });
+
+            // Auto-cleanup after expiry
+            setTimeout(() => {
+                this.pairingCodes.delete(code);
+            }, 60000);
+
+            res.json({
+                success: true,
+                code,
+                expiresAt: new Date(Date.now() + 60000)
+            });
+        });
+
+        // Pair device with this server
+        this.app.post('/api/pair', (req, res) => {
+            const { code, clientId, clientName, authMethod, authToken, authUserId, authUsername, mastodonInstance, email } = req.body;
+
+            if (!code || !clientId) {
+                return res.status(400).json({ error: 'Code and client ID required' });
+            }
+
+            // Validate pairing code
+            const pairingData = this.pairingCodes.get(code.toUpperCase());
+            if (!pairingData) {
+                return res.status(400).json({ error: 'Invalid or expired pairing code' });
+            }
+
+            if (new Date() > pairingData.expiresAt) {
+                this.pairingCodes.delete(code.toUpperCase());
+                return res.status(400).json({ error: 'Pairing code expired' });
+            }
+
+            // Generate access token for this device
+            const accessToken = 'vldev_' + uuidv4() + '_' + Date.now().toString(36);
+            const deviceId = 'dev_' + uuidv4().substring(0, 8);
+
+            const linkedDevice = {
+                id: deviceId,
+                deviceName: clientName || 'Unknown Device',
+                clientId,
+                authMethod: authMethod || 'pairing',
+                authUserId,
+                authUsername,
+                mastodonInstance,
+                email,
+                accessToken,
+                linkedAt: new Date(),
+                lastSeen: new Date(),
+                isRevoked: false
+            };
+
+            this.linkedDevices.set(deviceId, linkedDevice);
+
+            // Remove used pairing code
+            this.pairingCodes.delete(code.toUpperCase());
+
+            // Notify via WebSocket if available
+            if (this.io) {
+                this.io.emit('device-linked', {
+                    deviceId,
+                    deviceName: clientName,
+                    authMethod
+                });
+            }
+
+            res.json({
+                success: true,
+                accessToken,
+                server: pairingData.serverInfo
+            });
+        });
+
+        // Unlink device (client-initiated)
+        this.app.post('/api/unlink', (req, res) => {
+            const { clientId } = req.body;
+            const authHeader = req.headers.authorization;
+
+            let deviceFound = false;
+
+            this.linkedDevices.forEach((device, id) => {
+                if (device.clientId === clientId || device.accessToken === authHeader) {
+                    this.linkedDevices.delete(id);
+                    deviceFound = true;
+
+                    // Notify via WebSocket
+                    if (this.io) {
+                        this.io.emit('device-unlinked', { deviceId: id });
+                    }
+                }
+            });
+
+            res.json({ success: deviceFound });
+        });
+
+        // List linked devices (server admin)
+        this.app.get('/api/devices', (req, res) => {
+            const devices = [];
+            this.linkedDevices.forEach((device, id) => {
+                devices.push({
+                    id: device.id,
+                    deviceName: device.deviceName,
+                    authMethod: device.authMethod,
+                    authUsername: device.authUsername,
+                    linkedAt: device.linkedAt,
+                    lastSeen: device.lastSeen,
+                    isRevoked: device.isRevoked
+                });
+            });
+            res.json({ devices });
+        });
+
+        // Revoke device access (server-initiated)
+        this.app.post('/api/devices/:deviceId/revoke', (req, res) => {
+            const { deviceId } = req.params;
+            const device = this.linkedDevices.get(deviceId);
+
+            if (!device) {
+                return res.status(404).json({ error: 'Device not found' });
+            }
+
+            device.isRevoked = true;
+            device.accessToken = null;
+
+            // Notify device via WebSocket
+            if (this.io) {
+                this.io.emit('access-revoked', {
+                    deviceId,
+                    reason: req.body.reason || 'Access revoked by server administrator'
+                });
+            }
+
+            res.json({ success: true, message: 'Device access revoked' });
+        });
+
+        // Delete device completely
+        this.app.delete('/api/devices/:deviceId', (req, res) => {
+            const { deviceId } = req.params;
+
+            if (!this.linkedDevices.has(deviceId)) {
+                return res.status(404).json({ error: 'Device not found' });
+            }
+
+            this.linkedDevices.delete(deviceId);
+
+            // Notify via WebSocket
+            if (this.io) {
+                this.io.emit('device-removed', { deviceId });
+            }
+
+            res.json({ success: true, message: 'Device removed' });
+        });
+
+        // ============================================
+        // EMAIL VERIFICATION
+        // For email-based authentication
+        // ============================================
+
+        // Request email verification code
+        this.app.post('/api/auth/email/request', async (req, res) => {
+            const { email, clientId, clientName } = req.body;
+
+            if (!email || !clientId) {
+                return res.status(400).json({ error: 'Email and client ID required' });
+            }
+
+            // Validate email format
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+
+            // Rate limiting - check if code was recently sent
+            const existing = this.emailVerificationCodes.get(email);
+            if (existing && new Date() < new Date(existing.createdAt.getTime() + 60000)) {
+                return res.status(429).json({ error: 'Please wait before requesting another code' });
+            }
+
+            // Generate 6-digit verification code
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+            this.emailVerificationCodes.set(email, {
+                code,
+                clientId,
+                clientName,
+                createdAt: new Date(),
+                expiresAt: new Date(Date.now() + 300000), // 5 minutes
+                attempts: 0
+            });
+
+            // Auto-cleanup after expiry
+            setTimeout(() => {
+                this.emailVerificationCodes.delete(email);
+            }, 300000);
+
+            // Try to send email if nodemailer is configured
+            try {
+                if (this.mailer) {
+                    await this.mailer.sendMail({
+                        from: this.emailFrom || 'noreply@voicelink.local',
+                        to: email,
+                        subject: 'VoiceLink Verification Code',
+                        text: `Your VoiceLink verification code is: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, please ignore this email.`,
+                        html: `
+                            <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+                                <h2 style="color: #6366f1;">VoiceLink Verification</h2>
+                                <p>Your verification code is:</p>
+                                <div style="font-size: 32px; font-weight: bold; letter-spacing: 4px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center;">
+                                    ${code}
+                                </div>
+                                <p style="color: #666; font-size: 14px;">This code expires in 5 minutes.</p>
+                                <p style="color: #999; font-size: 12px;">If you did not request this code, please ignore this email.</p>
+                            </div>
+                        `
+                    });
+                    res.json({ success: true, message: 'Verification code sent to email' });
+                } else {
+                    // No mailer configured - return code in response for testing
+                    console.log(`[Email Verification] Code for ${email}: ${code}`);
+                    res.json({
+                        success: true,
+                        message: 'Verification code generated (email not configured)',
+                        // Only include code in development/testing
+                        ...(process.env.NODE_ENV !== 'production' && { testCode: code })
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to send verification email:', err);
+                res.status(500).json({ error: 'Failed to send verification email' });
+            }
+        });
+
+        // Verify email code
+        this.app.post('/api/auth/email/verify', (req, res) => {
+            const { email, code, clientId } = req.body;
+
+            if (!email || !code) {
+                return res.status(400).json({ error: 'Email and code required' });
+            }
+
+            const verification = this.emailVerificationCodes.get(email);
+
+            if (!verification) {
+                return res.status(400).json({ error: 'No verification pending for this email' });
+            }
+
+            if (new Date() > verification.expiresAt) {
+                this.emailVerificationCodes.delete(email);
+                return res.status(400).json({ error: 'Verification code expired' });
+            }
+
+            // Check attempts
+            verification.attempts++;
+            if (verification.attempts > 5) {
+                this.emailVerificationCodes.delete(email);
+                return res.status(429).json({ error: 'Too many attempts. Please request a new code.' });
+            }
+
+            if (verification.code !== code.toString()) {
+                return res.status(400).json({ error: 'Invalid verification code' });
+            }
+
+            // Success - generate access token
+            const accessToken = 'vlemail_' + uuidv4() + '_' + Date.now().toString(36);
+            const userId = 'user_' + email.replace(/[^a-z0-9]/gi, '_').substring(0, 20) + '_' + Date.now().toString(36);
+
+            // Clean up verification code
+            this.emailVerificationCodes.delete(email);
+
+            res.json({
+                success: true,
+                accessToken,
+                userId,
+                email
+            });
+        });
+
+        // ============================================
         // JELLYFIN MEDIA STREAMING INTEGRATION
         // Stream audio/video from Jellyfin into rooms
         // ============================================
@@ -1845,19 +2304,48 @@ class VoiceLinkLocalServer {
 
             try {
                 let streamUrl;
+                let directPlayUrl;
+                
                 if (type === 'audio') {
-                    streamUrl = `${server.url}/Audio/${itemId}/universal?api_key=${server.apiKey}&AudioCodec=mp3&Container=mp3&TranscodingContainer=mp3&TranscodingProtocol=http`;
+                    // Primary transcode stream (more compatible)
+                    streamUrl = `${server.url}/Audio/${itemId}/universal?api_key=${server.apiKey}&AudioCodec=mp3&Container=mp3&TranscodingContainer=mp3&TranscodingProtocol=http&Container=mp3,mp4,aac,flac,ogg,wav`;
+                    
+                    // Alternative stream formats for fallback
+                    const alternativeStreams = [
+                        `${server.url}/Audio/${itemId}/stream?api_key=${server.apiKey}&static=true&format=mp3`,
+                        `${server.url}/Audio/${itemId}/stream?api_key=${server.apiKey}&static=true&format=aac`,
+                        `${server.url}/Audio/${itemId}/universal?api_key=${server.apiKey}&AudioCodec=aac&Container=aac&TranscodingContainer=aac&TranscodingProtocol=http`
+                    ];
+                    
+                    // Direct download as fallback
+                    directPlayUrl = `${server.url}/Items/${itemId}/Download?api_key=${server.apiKey}`;
                 } else {
+                    // Video streams
                     streamUrl = `${server.url}/Videos/${itemId}/stream?api_key=${server.apiKey}&Static=true`;
+                    directPlayUrl = `${server.url}/Items/${itemId}/Download?api_key=${server.apiKey}`;
                 }
 
+                // Add caching headers and CORS support
                 res.json({
                     success: true,
                     streamUrl,
-                    directPlay: `${server.url}/Items/${itemId}/Download?api_key=${server.apiKey}`
+                    directPlay: directPlayUrl,
+                    alternativeStreams,
+                    // Add additional metadata for better error handling
+                    metadata: {
+                        itemId,
+                        type,
+                        serverUrl: server.url,
+                        timestamp: Date.now()
+                    }
                 });
             } catch (error) {
-                res.json({ success: false, error: error.message });
+                console.error('Stream URL generation error:', error);
+                res.json({ 
+                    success: false, 
+                    error: error.message,
+                    timestamp: Date.now()
+                });
             }
         });
 
@@ -2661,6 +3149,159 @@ class VoiceLinkLocalServer {
             if (!confirmRestore) return res.status(400).json({ error: 'Set confirmRestore: true' });
             if (!backupFile) return res.status(400).json({ error: 'Specify backupFile' });
             res.json({ success: true, message: 'Restore initiated for ' + backupFile });
+        });
+
+        // ============================================
+        // JELLYFIN SERVICE MANAGEMENT API
+        // Automatic process monitoring and restart
+        // ============================================
+
+        // Get all Jellyfin processes (discovered + managed)
+        this.app.get('/api/jellyfin-service/processes', async (req, res) => {
+            try {
+                const processes = await this.jellyfinManager.getAllProcesses();
+                res.json({ success: true, processes });
+            } catch (error) {
+                console.error('[JellyfinService] Error getting processes:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Get status of specific process
+        this.app.get('/api/jellyfin-service/process/:name', async (req, res) => {
+            try {
+                const { name } = req.params;
+                const status = await this.jellyfinManager.getProcessStatus(name);
+                if (!status) {
+                    return res.status(404).json({ error: `Process ${name} not found` });
+                }
+                res.json({ success: true, process: status });
+            } catch (error) {
+                console.error('[JellyfinService] Error getting process status:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Register a Jellyfin process for management
+        this.app.post('/api/jellyfin-service/process/:name/register', (req, res) => {
+            try {
+                const { name } = req.params;
+                const config = req.body;
+                
+                this.jellyfinManager.registerProcess(name, config);
+                console.log(`[JellyfinService] Registered process: ${name}`);
+                
+                res.json({ 
+                    success: true, 
+                    message: `Process ${name} registered for management`,
+                    config: this.jellyfinManager.processes.get(name)?.config
+                });
+            } catch (error) {
+                console.error('[JellyfinService] Error registering process:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Start a specific Jellyfin process
+        this.app.post('/api/jellyfin-service/process/:name/start', async (req, res) => {
+            try {
+                const { name } = req.params;
+                const started = await this.jellyfinManager.startProcess(name);
+                
+                if (started) {
+                    console.log(`[JellyfinService] Successfully started process: ${name}`);
+                    res.json({ success: true, message: `Process ${name} started` });
+                } else {
+                    console.warn(`[JellyfinService] Failed to start process: ${name}`);
+                    res.status(500).json({ error: `Failed to start process ${name}` });
+                }
+            } catch (error) {
+                console.error('[JellyfinService] Error starting process:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Stop a specific Jellyfin process
+        this.app.post('/api/jellyfin-service/process/:name/stop', async (req, res) => {
+            try {
+                const { name } = req.params;
+                const { graceful = true } = req.body;
+                
+                await this.jellyfinManager.stopProcess(name, graceful);
+                console.log(`[JellyfinService] Stopped process: ${name}`);
+                
+                res.json({ success: true, message: `Process ${name} stopped` });
+            } catch (error) {
+                console.error('[JellyfinService] Error stopping process:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Restart a specific Jellyfin process
+        this.app.post('/api/jellyfin-service/process/:name/restart', async (req, res) => {
+            try {
+                const { name } = req.params;
+                
+                await this.jellyfinManager.restartProcess(name);
+                console.log(`[JellyfinService] Restarting process: ${name}`);
+                
+                res.json({ success: true, message: `Process ${name} restart initiated` });
+            } catch (error) {
+                console.error('[JellyfinService] Error restarting process:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Auto-configure and register discovered Jellyfin processes
+        this.app.post('/api/jellyfin-service/auto-configure', async (req, res) => {
+            try {
+                const processes = await this.jellyfinManager.discoverProcesses();
+                let registered = 0;
+                
+                for (const process of processes) {
+                    // Only register if not already managed
+                    if (!this.jellyfinManager.processes.has(process.name)) {
+                        const config = {
+                            user: process.user,
+                            command: process.command,
+                            port: process.port,
+                            workingDirectory: process.command.includes('/home/') ? 
+                                process.command.match(/(\/home\/[^\/]+\/[^\/]+)/)?.[0] : null
+                        };
+                        
+                        this.jellyfinManager.registerProcess(process.name, config);
+                        registered++;
+                    }
+                }
+                
+                console.log(`[JellyfinService] Auto-configured ${registered} processes`);
+                res.json({ 
+                    success: true, 
+                    message: `Auto-configured ${registered} processes`,
+                    totalDiscovered: processes.length,
+                    newlyRegistered: registered
+                });
+            } catch (error) {
+                console.error('[JellyfinService] Error auto-configuring:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Get service manager status
+        this.app.get('/api/jellyfin-service/status', (req, res) => {
+            try {
+                const status = {
+                    monitoring: this.jellyfinManager.monitoringInterval !== null,
+                    managedProcesses: this.jellyfinManager.processes.size,
+                    restartCounters: Object.fromEntries(this.jellyfinManager.restartCounters),
+                    config: this.jellyfinManager.config
+                };
+                
+                res.json({ success: true, status });
+            } catch (error) {
+                console.error('[JellyfinService] Error getting status:', error);
+                res.status(500).json({ error: error.message });
+            }
         });
 
         // ============================================
@@ -5505,6 +6146,63 @@ class VoiceLinkLocalServer {
         if (removedCount > 0) {
             console.log(`[Messages] Cleaned up ${removedCount} expired guest messages`);
         }
+    }
+
+    /**
+     * Setup Jellyfin service management with default processes
+     */
+    setupJellyfinManagement() {
+        console.log('[JellyfinService] Setting up Jellyfin service management...');
+
+        // Register known Jellyfin processes based on discovered configurations
+        const defaultProcesses = {
+            'jellyfin-tappedin': {
+                user: 'tappedin',
+                command: '/home/tappedin/apps/jellyfin/jellyfin/jellyfin --datadir /home/tappedin/apps/jellyfin/config --cachedir /home/tappedin/apps/jellyfin/cache --webdir /home/tappedin/apps/jellyfin/jellyfin/jellyfin-web --published-server-url http://127.0.0.1:9096 --service --nowebclient=false',
+                port: 9096,
+                workingDirectory: '/home/tappedin/apps/jellyfin'
+            },
+            'jellyfin-dom': {
+                user: 'dom',
+                command: '/home/dom/apps/jellyfin/jellyfin/jellyfin --datadir /home/dom/apps/jellyfin/config --cachedir /home/dom/apps/jellyfin/cache --webdir /home/dom/apps/jellyfin/jellyfin/jellyfin-web --published-server-url http://127.0.0.1:9097 --service --nowebclient=false',
+                port: 9097,
+                workingDirectory: '/home/dom/apps/jellyfin'
+            },
+            'jellyfin-devinecr': {
+                user: 'devinecr',
+                command: '/home/devinecr/apps/jellyfin/jellyfin/jellyfin --datadir /home/devinecr/apps/jellyfin/config --cachedir /home/devinecr/apps/jellyfin/cache --webdir /home/devinecr/apps/jellyfin/jellyfin/jellyfin-web --published-server-url http://127.0.0.1:8096 --service --nowebclient=false',
+                port: 8096,
+                workingDirectory: '/home/devinecr/apps/jellyfin'
+            }
+        };
+
+        // Register default processes
+        Object.entries(defaultProcesses).forEach(([name, config]) => {
+            this.jellyfinManager.registerProcess(name, config);
+        });
+
+        // Set up event listeners for Jellyfin manager
+        this.jellyfinManager.on('processStarted', (name, pid) => {
+            console.log(`[JellyfinService] Process ${name} started (PID: ${pid})`);
+            this.io.emit('jellyfinProcessStarted', { name, pid });
+        });
+
+        this.jellyfinManager.on('processStopped', (name) => {
+            console.log(`[JellyfinService] Process ${name} stopped`);
+            this.io.emit('jellyfinProcessStopped', { name });
+        });
+
+        this.jellyfinManager.on('processAutoRestarted', (name) => {
+            console.log(`[JellyfinService] Process ${name} was automatically restarted`);
+            this.io.emit('jellyfinProcessAutoRestarted', { name });
+        });
+
+        this.jellyfinManager.on('processRestartFailed', (name) => {
+            console.warn(`[JellyfinService] Failed to restart process ${name}`);
+            this.io.emit('jellyfinProcessRestartFailed', { name });
+        });
+
+        console.log('[JellyfinService] Jellyfin service management configured');
     }
 
     start() {

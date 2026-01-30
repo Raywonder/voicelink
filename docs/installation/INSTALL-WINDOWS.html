@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Local - Windows Installation Guide - VoiceLink Documentation</title>
+    <link rel="stylesheet" href="../styles/docs.css">
+    <style>
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5a6fd6;
+            --secondary: #764ba2;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #333333;
+            --text-muted: #666666;
+            --border: #e0e0e0;
+            --code-bg: #1e1e1e;
+            --code-text: #d4d4d4;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+        }
+        .docs-header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+        .docs-header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+        .docs-header .breadcrumb {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        .docs-header .breadcrumb a { color: white; text-decoration: none; }
+        .docs-header .breadcrumb a:hover { text-decoration: underline; }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        h2 {
+            color: var(--primary);
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border);
+        }
+        h3 {
+            color: var(--text);
+            margin: 1.5rem 0 0.75rem;
+        }
+        h4 { margin: 1rem 0 0.5rem; }
+        p { margin-bottom: 1rem; }
+        ul, ol {
+            margin: 1rem 0;
+            padding-left: 2rem;
+        }
+        li { margin-bottom: 0.5rem; }
+        code {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        .highlight-bash { color: #9cdcfe; }
+        .highlight-comment { color: #6a9955; }
+        .highlight-string { color: #ce9178; }
+        .highlight-keyword { color: #569cd6; }
+        a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+        a:hover { text-decoration: underline; }
+        blockquote {
+            border-left: 4px solid var(--primary);
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        .alert-info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .alert-warning {
+            background: #fff3cd;
+            border-left: 4px solid var(--warning);
+        }
+        .alert-danger {
+            background: #f8d7da;
+            border-left: 4px solid var(--danger);
+        }
+        .alert-success {
+            background: #d4edda;
+            border-left: 4px solid var(--success);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            background: var(--bg);
+            font-weight: 600;
+        }
+        .nav-links {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+        .nav-links a {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .card { padding: 1rem; }
+            pre { font-size: 0.85rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="docs-header">
+        <h1>VoiceLink Local - Windows Installation Guide</h1>
+        <div class="breadcrumb"><a href="../index.html">Docs</a> / installation / VoiceLink Local - Windows Installation Guide</div>
+    </div>
+    <div class="container">
+        <div class="card">
+            <h1>VoiceLink Local - Windows Installation Guide</h1>
+
+<h2>System Requirements</h2>
+
+<ul>
+<li><strong>Windows 10</strong> (version 1903 or later) or <strong>Windows 11</strong></li>
+<li><strong>x64</strong> or <strong>x86</strong> (32-bit) processor</li>
+<li><strong>8GB RAM</strong> minimum (16GB recommended)</li>
+<li><strong>500MB</strong> available disk space</li>
+<li><strong>Audio device</strong> with microphone support</li>
+<p></ul></p>
+
+<h2>Download Options</h2>
+
+<h3>64-bit Windows (Recommended)</h3>
+<ol>
+<li><strong>ZIP Archive</strong>: <a href="../releases/VoiceLink%20Local-1.0.0-win.zip">VoiceLink Local-1.0.0-win.zip</a> (369MB)</li>
+<p></ol></p>
+
+<h3>32-bit Windows</h3>
+<ol>
+<li><strong>ZIP Archive</strong>: <a href="../releases/VoiceLink%20Local-1.0.0-ia32-win.zip">VoiceLink Local-1.0.0-ia32-win.zip</a> (351MB)</li>
+<p></ol></p>
+
+<h2>Installation</h2>
+
+<h3>Method 1: ZIP Archive (Recommended)</h3>
+
+<ul>
+<li><strong>Download</strong> the appropriate ZIP file for your Windows version</li>
+<li><strong>Right-click</strong> the downloaded ZIP file</li>
+<li><strong>Select</strong> "Extract All..." or use your preferred extraction tool</li>
+<li><strong>Choose</strong> destination folder (e.g., <code>C:\Program Files\VoiceLink Local\</code>)</li>
+<li><strong>Run</strong> <code>VoiceLink Local.exe</code> from the extracted folder</li>
+<p></ul></p>
+
+<h3>Method 2: Portable Installation</h3>
+
+<ul>
+<li><strong>Extract</strong> to any folder (e.g., USB drive, Documents folder)</li>
+<li><strong>Create</strong> desktop shortcut by right-clicking <code>VoiceLink Local.exe</code></li>
+<li><strong>Select</strong> "Create shortcut" and move to desktop</li>
+<p></ul></p>
+
+<h2>First Launch</h2>
+
+<h3>Windows Defender SmartScreen</h3>
+<p>Windows may show a security warning on first launch:</p>
+
+<ul>
+<li><strong>If you see "Windows protected your PC"</strong>:</li>
+<p></ul></p>
+<p>   - Click <strong>"More info"</strong></p>
+<p>   - Click <strong>"Run anyway"</strong></p>
+
+<ul>
+<li><strong>Alternative method</strong>:</li>
+<p></ul></p>
+<p>   - Right-click <code>VoiceLink Local.exe</code></p>
+<p>   - Select <strong>"Properties"</strong></p>
+<p>   - Check <strong>"Unblock"</strong> if present</p>
+<p>   - Click <strong>"OK"</strong></p>
+
+<h3>Microphone Permissions</h3>
+<p>Windows 10/11 requires microphone access:</p>
+
+<ul>
+<li><strong>Grant permission</strong> when prompted by VoiceLink Local</li>
+<li><strong>If missed</strong>: Go to <strong>Settings</strong> → <strong>Privacy</strong> → <strong>Microphone</strong></li>
+<li><strong>Toggle</strong> "Allow desktop apps to access your microphone" to <strong>On</strong></li>
+<p></ul></p>
+
+<h3>Windows Firewall</h3>
+<p>You may see a firewall prompt:</p>
+
+<ul>
+<li><strong>Allow</strong> VoiceLink Local through Windows Firewall</li>
+<li><strong>Check both</strong> "Private networks" and "Public networks" if you plan to use on different networks</li>
+<p></ul></p>
+
+<h2>Audio Configuration</h2>
+
+<h3>Default Audio Settings</h3>
+<ul>
+<li><strong>Right-click</strong> the speaker icon in system tray</li>
+<li><strong>Select</strong> "Open Sound settings"</li>
+<li><strong>Set</strong> your preferred input and output devices</li>
+<li><strong>Test</strong> microphone levels</li>
+<p></ul></p>
+
+<h3>Professional Audio Interfaces</h3>
+<p>For ASIO-compatible audio interfaces:</p>
+
+<ul>
+<li><strong>Install</strong> manufacturer drivers before launching VoiceLink Local</li>
+<li><strong>Configure</strong> buffer sizes in your audio interface control panel</li>
+<li><strong>Set</strong> sample rate to 48kHz or 44.1kHz for best compatibility</li>
+<p></ul></p>
+
+<h3>Advanced Audio Settings</h3>
+<ul>
+<li><strong>Disable</strong> audio enhancements in Windows sound settings</li>
+<li><strong>Set</strong> exclusive mode for professional audio interfaces</li>
+<li><strong>Adjust</strong> buffer sizes for optimal latency</li>
+<p></ul></p>
+
+<h2>Troubleshooting</h2>
+
+<h3>Application Won't Start</h3>
+<ul>
+<li><strong>Check Windows version</strong>: Requires Windows 10 (1903+) or Windows 11</li>
+<li><strong>Verify architecture</strong>: Use 64-bit version on 64-bit Windows</li>
+<li><strong>Run as Administrator</strong>: Right-click → "Run as administrator"</li>
+<li><strong>Check antivirus software</strong>: Add VoiceLink Local to exceptions</li>
+<p></ul></p>
+
+<h3>Audio Issues</h3>
+<ul>
+<li><strong>Check microphone permissions</strong> in Windows Settings</li>
+<li><strong>Verify audio devices</strong> are working in Windows Sound settings</li>
+<li><strong>Update audio drivers</strong> through Device Manager</li>
+<li><strong>Disable audio enhancements</strong> that may interfere</li>
+<li><strong>Try different audio sample rates</strong></li>
+<p></ul></p>
+
+<h3>Performance Issues</h3>
+<ul>
+<li><strong>Close</strong> other audio applications</li>
+<li><strong>Increase</strong> audio buffer sizes</li>
+<li><strong>Check</strong> Task Manager for CPU/memory usage</li>
+<li><strong>Disable</strong> Windows Game Mode if causing issues</li>
+<li><strong>Update graphics drivers</strong></li>
+<p></ul></p>
+
+<h3>Connection Issues</h3>
+<ul>
+<li><strong>Check Windows Firewall</strong> settings</li>
+<li><strong>Verify</strong> network connectivity</li>
+<li><strong>Try</strong> different network configurations</li>
+<li><strong>Disable</strong> VPN temporarily if having connection issues</li>
+<p></ul></p>
+
+<h2>Uninstallation</h2>
+
+<h3>Complete Removal</h3>
+<ul>
+<li><strong>Close</strong> VoiceLink Local completely</li>
+<li><strong>Delete</strong> the VoiceLink Local folder</li>
+<li><strong>Remove</strong> desktop shortcuts</li>
+<li><strong>Clear</strong> application data (optional):</li>
+<p></ul></p>
+<p>   - Navigate to <code>%APPDATA%\VoiceLink Local\</code></p>
+<p>   - Delete the folder and contents</p>
+
+<h3>Registry Cleanup (Optional)</h3>
+<p>Most users won't need this, but if experiencing issues:</p>
+<ul>
+<li><strong>Press</strong> Win+R, type <code>regedit</code></li>
+<li><strong>Navigate</strong> to <code>HKEY_CURRENT_USER\Software\</code></li>
+<li><strong>Look for</strong> VoiceLink-related entries and delete if present</li>
+<p></ul></p>
+
+<h2>Advanced Configuration</h2>
+
+<h3>Command Line Options</h3>
+<p>Launch with custom settings:</p>
+<pre><code class="language-cmd">&quot;VoiceLink Local.exe&quot; --audio-buffer=512 --sample-rate=48000</code></pre>
+
+<h3>Batch File for Custom Launch</h3>
+<p>Create a <code>.bat</code> file with:</p>
+<pre><code class="language-batch">@echo off
+cd /d &quot;C:\Path\To\VoiceLink Local\&quot;
+&quot;VoiceLink Local.exe&quot; --audio-buffer=512
+<p>pause</code></pre></p>
+
+<h3>Professional Audio Setup</h3>
+<p>For professional audio workflows:</p>
+<ul>
+<li>Use ASIO drivers when available</li>
+<li>Configure low-latency monitoring</li>
+<li>Set up multi-channel audio routing</li>
+<li>Configure VST plugin paths</li>
+<p></ul></p>
+
+<h2>Windows-Specific Features</h2>
+
+<h3>Windows Audio Session API (WASAPI)</h3>
+<p>VoiceLink Local uses WASAPI for:</p>
+<ul>
+<li>Low-latency audio processing</li>
+<li>Exclusive mode access to audio devices</li>
+<li>High-quality audio rendering</li>
+<p></ul></p>
+
+<h3>Windows 11 Enhancements</h3>
+<ul>
+<li>Better microphone access controls</li>
+<li>Improved audio device management</li>
+<li>Enhanced privacy settings</li>
+<p></ul></p>
+
+<h2>Support</h2>
+
+<p>For Windows-specific issues:</p>
+<ul>
+<li>Check Windows Event Viewer for error messages</li>
+<li>Verify system requirements and compatibility</li>
+<li>Review audio device and driver setup</li>
+<li>Consult the main troubleshooting guide in README.md</li>
+<p></ul></p>
+
+<h3>Common Error Codes</h3>
+<ul>
+<li><strong>Error 0x80070005</strong>: Run as Administrator</li>
+<li><strong>Audio initialization failed</strong>: Check microphone permissions</li>
+<li><strong>Network connection error</strong>: Check firewall settings</li></ul>
+
+        </div>
+    </div>
+    <div class="footer">
+        <p>VoiceLink Documentation &copy; 2026 Devine Creations</p>
+        <p><a href="../index.html">Back to Documentation Home</a></p>
+    </div>
+</body>
+</html>

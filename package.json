@@ -1,0 +1,164 @@
+{
+  "name": "voicelink-local",
+  "version": "1.0.4",
+  "description": "VoiceLink Local - P2P Voice Chat with 3D Audio",
+  "homepage": "https://devine-creations.com/",
+  "main": "src/main.js",
+  "author": {
+    "name": "DevineCreations",
+    "email": "support@devine-creations.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron . --no-sandbox",
+    "dev": "electron . --dev --no-sandbox",
+    "build": "electron-builder",
+    "build:dev": "node build.config.js development",
+    "build:prod": "node build.config.js production",
+    "test": "node test/audio-test.js",
+    "test:audio": "node test/audio-test.js",
+    "package": "npm run build:prod && electron-builder",
+    "clean": "node build.config.js clean",
+    "build:mac": "npm run build:prod && electron-builder --mac",
+    "build:win": "npm run build:prod && electron-builder --win",
+    "build:linux": "npm run build:prod && electron-builder --linux",
+    "build:all": "npm run build:prod && electron-builder --mac --win --linux",
+    "build:portable": "npm run build:prod && electron-builder --win portable --mac zip --linux tar.gz",
+    "dist": "npm run build:all"
+  },
+  "dependencies": {
+    "auto-launch": "^5.0.6",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.2",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
+    "uuid": "^9.0.0"
+  },
+  "build": {
+    "appId": "com.devinecreations.voicelink-local",
+    "productName": "VoiceLink Local",
+    "directories": {
+      "output": "../releases"
+    },
+    "files": [
+      "src/**/*",
+      "server/**/*",
+      "client/**/*",
+      "assets/**/*",
+      "build.config.js",
+      "README.md",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "client",
+        "to": "client"
+      },
+      {
+        "from": "server",
+        "to": "server"
+      }
+    ],
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file",
+          "path": "README.txt"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "extraFiles": [
+        {
+          "from": "README.txt",
+          "to": "README.txt"
+        }
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "extraFiles": [
+        {
+          "from": "README-Windows.txt",
+          "to": "README.txt"
+        }
+      ],
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "extraFiles": [
+        {
+          "from": "README-Linux.txt",
+          "to": "README.txt"
+        }
+      ],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^38.4.0",
+    "electron-builder": "^26.0.12"
+  },
+  "category": "Network"
+}

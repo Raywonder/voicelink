@@ -32,9 +32,9 @@ class PTTManager: ObservableObject {
 
     @Published var settings = PTTSettings()
 
-    // MARK: - Private
+    // MARK: - Internal State
 
-    private var isKeyPressed = false
+    var isKeyPressed = false
     private var transmitStartTime: Date?
     private var transmitTimer: Timer?
     private var maxTransmitTimer: Timer?

@@ -22,7 +22,7 @@ class ServerExitManager: ObservableObject {
     private let adminManager = AdminServerManager.shared
     private let roomManager = RoomManager.shared
     private let pairingManager = PairingManager.shared
-    private let deviceManager = ServerDeviceManager.shared
+    private let serverManager = ServerManager.shared
 
     // Waiting room settings
     static let waitingRoomTimeout: TimeInterval = 300  // 5 minutes default
@@ -207,7 +207,7 @@ class ServerExitManager: ObservableObject {
 
     private func executeSystemReboot() {
         // Stop server first
-        serverManager.stopServer()
+        serverManager.disconnect()
 
         // Execute system reboot command
         let task = Process()
@@ -572,7 +572,7 @@ class ServerExitManager: ObservableObject {
         notifyUsersOfShutdown()
 
         // Stop server
-        serverManager.stopServer()
+        serverManager.disconnect()
 
         exitProgress = .complete
 
@@ -584,7 +584,7 @@ class ServerExitManager: ObservableObject {
 
     private func performDelayedShutdown() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.serverManager.stopServer()
+            self?.serverManager.disconnect()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 NSApp.terminate(nil)
             }
@@ -1637,9 +1637,11 @@ class RemoteServerControl: ObservableObject {
 
         case .restartServer:
             // Send restart command to remote server
-            Task {
-                await adminManager.sendNodeCommand(nodeId: parameters["nodeId"] as? String ?? "", command: "restart")
-            }
+            NotificationCenter.default.post(
+                name: .serverRestartRequested,
+                object: nil,
+                userInfo: ["nodeId": parameters["nodeId"] as? String ?? ""]
+            )
             return (true, "Server restart command sent")
 
         case .transferRooms:
@@ -2155,6 +2157,7 @@ extension Notification.Name {
     static let remoteControlDisconnected = Notification.Name("remoteControlDisconnected")
     static let remoteCommandSuccess = Notification.Name("remoteCommandSuccess")
     static let remoteCommandFailed = Notification.Name("remoteCommandFailed")
+    static let serverRestartRequested = Notification.Name("serverRestartRequested")
 }
 
 // MARK: - Linked Server Status Manager
