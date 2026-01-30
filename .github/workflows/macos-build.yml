@@ -1,0 +1,301 @@
+name: macOS Build
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.1)'
+        required: false
+        default: '1.0.1'
+      sign_and_notarize:
+        description: 'Sign and notarize the app'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  APP_NAME: VoiceLinkNative
+  SWIFT_VERSION: '5.9'
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Pull LFS files
+        run: git lfs pull
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.2'
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            swift-native/VoiceLinkNative/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swift-${{ hashFiles('swift-native/VoiceLinkNative/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-
+
+      - name: Resolve dependencies
+        working-directory: swift-native/VoiceLinkNative
+        run: swift package resolve
+
+      - name: Build release
+        working-directory: swift-native/VoiceLinkNative
+        run: |
+          swift build -c release
+          echo "Build completed successfully"
+
+      - name: Create app bundle
+        working-directory: swift-native/VoiceLinkNative
+        run: |
+          VERSION="${{ github.event.inputs.version || '1.0.1' }}"
+          BUILD_NUMBER="${{ github.run_number }}"
+
+          # Create app bundle structure
+          APP_BUNDLE="$APP_NAME.app"
+          mkdir -p "$APP_BUNDLE/Contents/MacOS"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+
+          # Copy executable
+          cp .build/release/$APP_NAME "$APP_BUNDLE/Contents/MacOS/"
+
+          # Copy resources (sounds, assets)
+          if [ -d "Resources" ]; then
+            cp -R Resources/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+          fi
+
+          # Create Info.plist
+          cat > "$APP_BUNDLE/Contents/Info.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>$APP_NAME</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundleIdentifier</key>
+              <string>net.devinecreations.voicelink</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>VoiceLink</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundleVersion</key>
+              <string>$BUILD_NUMBER</string>
+              <key>LSApplicationCategoryType</key>
+              <string>public.app-category.social-networking</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSMicrophoneUsageDescription</key>
+              <string>VoiceLink needs microphone access for voice chat.</string>
+              <key>NSHumanReadableCopyright</key>
+              <string>Copyright © 2026 Devine Creations. All rights reserved.</string>
+              <key>LSUIElement</key>
+              <false/>
+          </dict>
+          </plist>
+          PLIST
+
+          # Create PkgInfo
+          echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
+
+          echo "App bundle created: $APP_BUNDLE"
+          ls -la "$APP_BUNDLE/Contents/"
+
+      - name: Import signing certificate
+        if: ${{ github.event.inputs.sign_and_notarize == 'true' && secrets.MACOS_CERTIFICATE != '' }}
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Import certificate from secrets
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Sign app bundle
+        if: ${{ github.event.inputs.sign_and_notarize == 'true' && secrets.MACOS_CERTIFICATE != '' }}
+        working-directory: swift-native/VoiceLinkNative
+        env:
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          codesign --deep --force --verify --verbose \
+            --sign "$SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements ../../entitlements.mac.plist \
+            "$APP_NAME.app"
+
+          # Verify signature
+          codesign --verify --verbose "$APP_NAME.app"
+
+      - name: Create DMG
+        working-directory: swift-native/VoiceLinkNative
+        run: |
+          VERSION="${{ github.event.inputs.version || '1.0.1' }}"
+          DMG_NAME="VoiceLink-${VERSION}-macOS.dmg"
+
+          # Create DMG folder
+          mkdir -p dmg_contents
+          cp -R "$APP_NAME.app" dmg_contents/
+          ln -s /Applications dmg_contents/Applications
+
+          # Create DMG
+          hdiutil create -volname "VoiceLink $VERSION" \
+            -srcfolder dmg_contents \
+            -ov -format UDZO \
+            "$DMG_NAME"
+
+          echo "DMG created: $DMG_NAME"
+          ls -la "$DMG_NAME"
+
+      - name: Notarize DMG
+        if: ${{ github.event.inputs.sign_and_notarize == 'true' && secrets.APPLE_ID != '' }}
+        working-directory: swift-native/VoiceLinkNative
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          VERSION="${{ github.event.inputs.version || '1.0.1' }}"
+          DMG_NAME="VoiceLink-${VERSION}-macOS.dmg"
+
+          # Submit for notarization
+          xcrun notarytool submit "$DMG_NAME" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the ticket
+          xcrun stapler staple "$DMG_NAME"
+
+          echo "Notarization complete"
+
+      - name: Upload app bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceLinkNative-app-bundle
+          path: swift-native/VoiceLinkNative/VoiceLinkNative.app
+          retention-days: 30
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceLink-macOS-DMG
+          path: swift-native/VoiceLinkNative/*.dmg
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            swift-native/VoiceLinkNative/*.dmg
+          draft: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-openlink:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.2'
+
+      - name: Build OpenLink
+        working-directory: swift-native/OpenLink
+        run: |
+          swift build -c release
+          echo "OpenLink build completed"
+
+      - name: Create OpenLink app bundle
+        working-directory: swift-native/OpenLink
+        run: |
+          VERSION="${{ github.event.inputs.version || '1.0.1' }}"
+          APP_BUNDLE="OpenLink.app"
+
+          mkdir -p "$APP_BUNDLE/Contents/MacOS"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+
+          cp .build/release/OpenLink "$APP_BUNDLE/Contents/MacOS/"
+
+          cat > "$APP_BUNDLE/Contents/Info.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>OpenLink</string>
+              <key>CFBundleIdentifier</key>
+              <string>net.devinecreations.openlink</string>
+              <key>CFBundleName</key>
+              <string>OpenLink</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundleVersion</key>
+              <string>${{ github.run_number }}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
+
+      - name: Upload OpenLink artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenLink-app-bundle
+          path: swift-native/OpenLink/OpenLink.app
+          retention-days: 30
