@@ -1,0 +1,367 @@
+VoiceLink Local v1.0.0 - Complete Feature Guide
+===============================================
+
+OVERVIEW
+--------
+VoiceLink Local is a comprehensive P2P voice chat application with advanced
+3D spatial audio, user management, and server federation capabilities.
+The application supports both native app users and web-based participants
+with a robust permission system and administrative controls.
+
+NEW IN V1.0.0
+-------------
+✅ 5-Level User Roles & Permissions System
+✅ Server Federation & Ownership Transfer
+✅ Automatic Room Joining After Creation
+✅ Escape Key Navigation Throughout UI
+✅ Room Creation Tracking & Creator Information
+✅ Advanced Admin Controls & Management
+✅ Cross-Server Communication & Linking
+
+USER ROLES & PERMISSIONS SYSTEM
+-------------------------------
+
+VoiceLink Local v1.0.0 introduces a comprehensive 5-level user hierarchy:
+
+1. SERVER OWNER (👑)
+   - Full control over server and all users
+   - Can transfer server ownership to external servers
+   - Can federate servers and manage all settings
+   - Can assign/remove any user role
+   - Access to all admin and moderation features
+
+2. ADMINISTRATOR (⚡)
+   - Server management and user administration
+   - Can manage rooms, users, and announcements
+   - Can assign roles up to Moderator level
+   - Access to admin panel and user management
+   - Cannot transfer server ownership
+
+3. MODERATOR (🛡️)
+   - Room and user moderation capabilities
+   - Can kick/mute users and manage room permissions
+   - Can create and modify rooms
+   - Limited admin access
+   - Cannot assign admin roles
+
+4. MEMBER (👤)
+   - Standard user with full voice chat access
+   - Can create rooms and invite other users
+   - Can join public and invited rooms
+   - Standard communication privileges
+
+5. GUEST (👥)
+   - Limited access user
+   - Can only join invited rooms
+   - Restricted voice and text chat
+   - Cannot create rooms or invite users
+
+CHANGING USER ROLES:
+- Access Admin Panel → User Roles tab
+- Select user and choose new role level
+- Changes take effect immediately
+- Role restrictions are enforced automatically
+
+SERVER FEDERATION & OWNERSHIP TRANSFER
+--------------------------------------
+
+FEDERATION TYPES:
+1. Independent Server - Standalone operation
+2. Main Server - Controls sub-servers and federation
+3. Sub-Server - Linked to main server, follows policies
+
+CONNECTING SERVERS:
+1. Admin Panel → Server Federation
+2. Enter target server endpoint (IP:port)
+3. Provide API key if required
+4. Select federation type
+5. Confirm connection
+
+TRANSFERRING OWNERSHIP:
+1. Admin Panel → User Roles → External Transfer
+2. Enter target server details and user ID
+3. Choose to include full backup (recommended)
+4. Confirm transfer - THIS IS IRREVERSIBLE
+5. All user data and settings are migrated
+6. Original server ownership is transferred
+
+ESCAPE KEY NAVIGATION
+--------------------
+
+Press ESC key for quick navigation:
+- Create Room → Main Menu
+- Join Room → Main Menu
+- Settings → Main Menu
+- Admin Panel → Main Menu
+- Main Menu → Startup Screen
+- Startup Screen → Exit confirmation
+
+Navigation is hierarchical and intuitive throughout the application.
+
+ROOM CREATION ENHANCEMENTS
+--------------------------
+
+NEW FEATURES:
+✅ Automatic room joining after creation
+✅ Creator information tracking and display
+✅ Enhanced room metadata storage
+
+ROOM CREATOR INFORMATION:
+- Creator name and timestamp displayed
+- Client type and creation details stored
+- "Time ago" formatting for easy reference
+- Styled creator info boxes in room listings
+
+ROOM CREATION (App Users Only)
+------------------------------
+
+1. CREATING A NEW ROOM
+   - Open VoiceLink Local application
+   - Navigate to "Rooms" or "Create Room" section
+   - Enter room details:
+     * Room Name (required)
+     * Room Description (optional)
+     * Privacy Level: Public, Private, or Invite-Only
+     * Maximum Participants (default: 50)
+     * Audio Quality Settings
+     * 3D Spatial Audio enabled/disabled
+   - Click "Create Room"
+   - Room will be assigned a unique Room ID and optional custom URL
+
+2. ROOM PERMISSIONS & SETTINGS
+   - Room Creator automatically becomes Admin
+   - Admin can designate Moderators
+   - Permission levels:
+     * Admin: Full control, can delete room, manage all users
+     * Moderator: Can manage participants, kick/mute users
+     * Member: Standard voice chat access
+     * Guest: Limited access, may have restrictions
+
+3. ROOM ACCESS CONTROLS
+   - Public: Anyone can join (with or without app)
+   - Private: Requires invitation or admin approval
+   - Invite-Only: Only specifically invited users can join
+   - Password Protection: Optional additional security layer
+
+JOINING ROOMS
+-------------
+
+1. FOR APP USERS:
+   - Method 1: Room Browser
+     * Open app → Browse Rooms → Select room → Join
+   - Method 2: Direct Room ID
+     * Enter Room ID in "Join Room" field → Connect
+   - Method 3: Invitation Link
+     * Click invitation link → Opens app → Auto-join
+
+2. FOR WEB USERS (No App Required):
+   - Access via web browser at: http://[host-ip]:3000/room/[room-id]
+   - Or use custom room URL if provided
+   - Web interface provides:
+     * Voice chat capabilities
+     * Basic spatial audio (browser-dependent)
+     * Text chat
+     * Participant list
+     * Limited UI controls
+
+INVITING USERS
+--------------
+
+1. INVITING APP USERS:
+   - In room → Participant Panel → "Invite Users"
+   - Search by username or email
+   - Send direct invitation through app
+   - Or share Room ID: [6-8 digit code]
+   - Invited user receives notification in app
+
+2. INVITING WEB USERS:
+   - Generate invitation link: http://[host-ip]:3000/invite/[room-id]
+   - Share link via:
+     * Email
+     * Text message
+     * Social media
+     * QR code (generated in app)
+   - Web user clicks link → Browser opens → Joins room
+   - No app installation required
+
+3. INVITATION MANAGEMENT:
+   - View pending invitations
+   - Set invitation expiration time
+   - Revoke invitations if needed
+   - Track who was invited and their status
+
+WEB UI ACCESS RESTRICTIONS
+--------------------------
+
+1. ROOM ACCESS LIMITATIONS:
+   - Web users CANNOT create rooms
+   - Can only join rooms they have permission for:
+     * Public rooms (if enabled by admin)
+     * Rooms they've been specifically invited to
+     * Rooms where they've been granted access
+
+2. ADMIN CONTROLS FOR WEB ACCESS:
+   - Global Settings:
+     * Enable/disable web access entirely
+     * Require registration for web users
+     * Set maximum web participants per room
+   - Per-Room Settings:
+     * Allow/block web participants
+     * Set web user permission level
+     * Require approval for web users
+
+3. WEB USER LIMITATIONS:
+   - Cannot change room settings
+   - Cannot invite other users
+   - Cannot access admin/moderator functions
+   - May have reduced audio quality options
+   - Limited to basic spatial audio features
+
+STEP-BY-STEP INVITATION PROCESS
+-------------------------------
+
+SCENARIO 1: Inviting Someone WITH the App
+1. Open your room in VoiceLink Local app
+2. Click "Participants" panel
+3. Click "Invite Users" button
+4. Search for user by username/email OR
+5. Click "Share Room ID" → Copy: Room ID #123456
+6. Send Room ID via message/email
+7. Recipient: Opens app → "Join Room" → Enter ID → Connect
+
+SCENARIO 2: Inviting Someone WITHOUT the App
+1. In your room, click "Web Invite" or "Share Link"
+2. Copy the generated link: http://192.168.1.100:3000/room/123456
+3. Send link to recipient via:
+   - Email: "Join my voice chat: [link]"
+   - Text: "Click to join: [link]"
+   - Social media post/message
+4. Recipient: Clicks link → Browser opens → Grants microphone permission → Joins
+
+SCENARIO 3: Mixed Group Invitation
+1. Create room in app with appropriate settings
+2. Set room to "Public" or "Invite-Only" as needed
+3. For app users: Share Room ID #123456
+4. For web users: Share web link http://[ip]:3000/room/123456
+5. Both types of users can participate together
+
+SECURITY & PRIVACY CONSIDERATIONS
+---------------------------------
+
+1. ROOM SECURITY:
+   - Use "Private" or "Invite-Only" for sensitive conversations
+   - Enable password protection for extra security
+   - Monitor participant list regularly
+   - Remove unwanted participants immediately
+
+2. WEB USER SECURITY:
+   - Web users identified by browser/IP
+   - Less secure than authenticated app users
+   - Consider requiring "approval" for web participants
+   - Limit web user permissions as needed
+
+3. NETWORK SECURITY:
+   - VoiceLink runs on local network by default
+   - External access requires port forwarding (security risk)
+   - Consider VPN for remote access instead
+   - Monitor for unauthorized access attempts
+
+TROUBLESHOOTING COMMON ISSUES
+-----------------------------
+
+1. WEB USER CAN'T JOIN:
+   - Check room privacy settings
+   - Verify web access is enabled
+   - Ensure correct IP address in link
+   - Check firewall/network restrictions
+   - Try different browser
+
+2. APP USER CAN'T JOIN:
+   - Verify Room ID is correct
+   - Check if room requires invitation
+   - Ensure app is updated to latest version
+   - Check network connectivity
+
+3. AUDIO ISSUES:
+   - Web users: Check browser microphone permissions
+   - App users: Verify audio device settings
+   - Test audio before joining important meetings
+   - Consider using spatial audio test features
+
+4. INVITATION LINKS NOT WORKING:
+   - Verify host IP address is accessible
+   - Check if VoiceLink server is running
+   - Ensure port 3000 is not blocked
+   - Try regenerating invitation link
+
+BEST PRACTICES
+--------------
+
+1. ROOM MANAGEMENT:
+   - Create descriptive room names
+   - Set appropriate participant limits
+   - Use waiting rooms for large meetings
+   - Assign moderators for busy rooms
+
+2. INVITATION STRATEGY:
+   - Send app download links to frequent users
+   - Use web invites for one-time participants
+   - Create different rooms for different purposes
+   - Plan for mixed app/web user groups
+
+3. AUDIO QUALITY:
+   - Enable spatial audio for immersive experience
+   - Set appropriate quality based on network
+   - Test audio setup before important meetings
+   - Have backup communication methods ready
+
+TECHNICAL NOTES
+---------------
+
+- Default server port: 3000
+- Room ID format: 6-8 digit numeric code
+- Web UI supports: Chrome, Firefox, Safari, Edge
+- Spatial audio requires WebRTC support
+- Maximum recommended participants: 50 per room
+- Audio codecs: Opus, G.722, G.711
+
+KEYBOARD SHORTCUTS
+------------------
+
+ESC         - Navigate back through UI hierarchy
+SPACE       - Push-to-talk (when configured)
+CTRL+S      - Quick access to settings
+CTRL+A      - Quick access to admin panel (if authorized)
+CTRL+R      - Refresh room list
+ENTER       - Join selected room
+SHIFT+ENTER - Preview room audio
+
+ADVANCED FEATURES
+-----------------
+
+✅ 3D Spatial Audio with distance-based volume
+✅ Real-time voice activity detection
+✅ Customizable audio quality settings
+✅ Push-to-talk and voice activation modes
+✅ Room privacy controls and encryption
+✅ Multi-platform support (macOS, Windows, Linux)
+✅ Web browser compatibility for guests
+✅ PA System for server-wide announcements
+✅ Text-to-Speech integration
+✅ Comprehensive logging and diagnostics
+
+TROUBLESHOOTING V1.0.0
+----------------------
+
+COMMON ISSUES:
+- Room creation: Ensure proper user role permissions
+- Federation: Verify network connectivity and API keys
+- Audio issues: Check spatial audio settings and device permissions
+- Navigation: Use ESC key for quick UI navigation
+- Role assignment: Only users with sufficient permissions can assign roles
+
+For technical support or advanced configuration, consult the
+VoiceLink Local documentation or contact your system administrator.
+
+Last Updated: October 2024
+Version: 1.0.0 - Major Release with User Management & Federation
