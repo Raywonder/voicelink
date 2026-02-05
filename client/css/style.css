@@ -277,6 +277,13 @@ a.help-link:hover {
     padding: 0.5rem;
 }
 
+.audio-controls-help {
+    text-align: center;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-top: 0.25rem;
+}
+
 .control-group {
     display: flex;
     flex-direction: column;
@@ -3266,6 +3273,18 @@ a.help-link:hover {
     padding: 0 15px;
     color: #666;
     font-size: 12px;
+}
+
+.auth-actions-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.auth-actions-row .secondary-btn {
+    flex: 1 1 160px;
+    text-align: center;
 }
 
 /* Mastodon Benefits */

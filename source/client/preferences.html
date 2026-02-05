@@ -376,9 +376,13 @@
         // Initialize preferences
         async function initPreferences() {
             try {
+                if (!window.nativeAPI) {
+                    document.getElementById('loading').textContent = 'Preferences are only available in the native app.';
+                    return;
+                }
                 // Load current settings and server info
-                settings = await window.electronAPI.getAllSettings();
-                serverInfo = await window.electronAPI.getServerInfo();
+                settings = await window.nativeAPI.getAllSettings();
+                serverInfo = await window.nativeAPI.getServerInfo();
 
                 // Update UI with current values
                 updateServerInfo();
@@ -436,7 +440,7 @@
 
         async function updateSettingsUI() {
             // Auto launch toggle
-            const autoLaunchEnabled = await window.electronAPI.getAutoLaunchEnabled();
+            const autoLaunchEnabled = await window.nativeAPI.getAutoLaunchEnabled();
             const autoLaunchToggle = document.getElementById('auto-launch-toggle');
             autoLaunchToggle.classList.toggle('active', autoLaunchEnabled);
 
@@ -470,7 +474,7 @@
             const newState = !currentState;
 
             try {
-                const success = await window.electronAPI.setAutoLaunchEnabled(newState);
+                const success = await window.nativeAPI.setAutoLaunchEnabled(newState);
                 if (success) {
                     toggle.classList.toggle('active', newState);
                 } else {
@@ -488,7 +492,7 @@
             const newState = !currentState;
 
             try {
-                await window.electronAPI.setSetting(settingKey, newState);
+                await window.nativeAPI.setSetting(settingKey, newState);
                 toggle.classList.toggle('active', newState);
                 settings[settingKey] = newState;
             } catch (error) {
@@ -499,7 +503,7 @@
 
         async function copyServerUrl() {
             try {
-                const url = await window.electronAPI.copyServerUrl();
+                const url = await window.nativeAPI.copyServerUrl();
                 // Show temporary feedback
                 const btn = event.target;
                 const originalText = btn.textContent;
@@ -514,7 +518,7 @@
 
         async function showQRCode() {
             try {
-                await window.electronAPI.showQRCode();
+                await window.nativeAPI.showQRCode();
             } catch (error) {
                 console.error('Failed to show QR code:', error);
             }
@@ -528,11 +532,11 @@
                     btn.textContent = '🔄 Restarting...';
                     btn.disabled = true;
 
-                    const success = await window.electronAPI.restartServer();
+                    const success = await window.nativeAPI.restartServer();
                     if (success) {
                         // Refresh server info after restart
                         setTimeout(async () => {
-                            serverInfo = await window.electronAPI.getServerInfo();
+                            serverInfo = await window.nativeAPI.getServerInfo();
                             updateServerInfo();
                             updateConnectionInfo();
                             btn.textContent = originalText;

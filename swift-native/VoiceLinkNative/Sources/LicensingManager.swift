@@ -23,6 +23,11 @@ class LicensingManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var devices: [ActivatedDevice] = []
 
+    // 2FA support
+    @Published var requires2FA: Bool = false
+    @Published var twoFactorCode: String = ""
+    @Published var show2FAPrompt: Bool = false
+
     // MARK: - Configuration
     private let apiBaseUrl: String
     private let registrationDelayMinutes: Int = 15
@@ -46,6 +51,7 @@ class LicensingManager: ObservableObject {
         case deviceLimitReached = "device_limit_reached"
         case revoked = "revoked"
         case error = "error"
+        case requires2FA = "requires_2fa"
     }
 
     struct DeviceInfo: Codable {
@@ -154,7 +160,18 @@ class LicensingManager: ObservableObject {
     // MARK: - API Methods
 
     /// Register this node for licensing (starts 15-min delay)
+    /// Requires user to be logged in - uses AuthenticationManager email
     func registerNode(serverId: String, nodeId: String, nodeUrl: String? = nil) async {
+        // Check if user is logged in
+        guard let currentUser = AuthenticationManager.shared.currentUser,
+              let userEmail = currentUser.email else {
+            await MainActor.run {
+                errorMessage = "You must be logged in to get a license. Please sign in first."
+                licenseStatus = .error
+            }
+            return
+        }
+
         isChecking = true
         errorMessage = nil
 
@@ -167,6 +184,7 @@ class LicensingManager: ObservableObject {
                 "serverId": serverId,
                 "nodeId": nodeId,
                 "nodeUrl": nodeUrl ?? "",
+                "email": userEmail,  // Required for WHMCS authentication
                 "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
                 "deviceInfo": [
                     "name": deviceInfo.name,
@@ -177,7 +195,7 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
-            let result = try await apiRequest(endpoint: "/register", method: "POST", body: body)
+            let result = try await apiRequest(endpoint: "/register", method: "POST", body: body, userEmail: userEmail)
 
             if let status = result["status"] as? String {
                 switch status {
@@ -213,6 +231,109 @@ class LicensingManager: ObservableObject {
                         startHeartbeat()
                     }
 
+                default:
+                    errorMessage = result["message"] as? String ?? "Unknown status"
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            licenseStatus = .error
+        }
+
+        isChecking = false
+    }
+
+    /// Verify with 2FA code after 2FA is required
+    func verifyWith2FA() async {
+        guard let currentUser = AuthenticationManager.shared.currentUser,
+              let userEmail = currentUser.email else {
+            errorMessage = "You must be logged in to verify 2FA."
+            return
+        }
+
+        guard !twoFactorCode.isEmpty else {
+            errorMessage = "Please enter your 2FA code."
+            return
+        }
+
+        isChecking = true
+        errorMessage = nil
+
+        guard let serverId = UserDefaults.standard.string(forKey: serverIdKey),
+              let nodeId = UserDefaults.standard.string(forKey: nodeIdKey) else {
+            // If no stored IDs, generate new ones
+            let newServerId = "server_\(UUID().uuidString.prefix(8))"
+            let newNodeId = "node_\(UUID().uuidString.prefix(8))"
+            await registerNodeWith2FA(serverId: newServerId, nodeId: newNodeId, email: userEmail)
+            return
+        }
+
+        await registerNodeWith2FA(serverId: serverId, nodeId: nodeId, email: userEmail)
+    }
+
+    private func registerNodeWith2FA(serverId: String, nodeId: String, email: String) async {
+        do {
+            let body: [String: Any] = [
+                "serverId": serverId,
+                "nodeId": nodeId,
+                "email": email,
+                "twoFactorCode": twoFactorCode,
+                "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
+                "deviceInfo": [
+                    "name": deviceInfo.name,
+                    "platform": deviceInfo.platform,
+                    "uuid": deviceInfo.uuid,
+                    "model": deviceInfo.model,
+                    "osVersion": deviceInfo.osVersion
+                ]
+            ]
+
+            var request = URLRequest(url: URL(string: apiBaseUrl + "/register")!)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(email, forHTTPHeaderField: "X-User-Email")
+            request.setValue(twoFactorCode, forHTTPHeaderField: "X-2FA-Code")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let error = json["error"] as? String {
+                    errorMessage = error
+                }
+                licenseStatus = .error
+                isChecking = false
+                return
+            }
+
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                errorMessage = "Invalid response from server"
+                licenseStatus = .error
+                isChecking = false
+                return
+            }
+
+            // Clear 2FA code and process result
+            twoFactorCode = ""
+            requires2FA = false
+
+            if let status = result["status"] as? String {
+                switch status {
+                case "licensed", "already_licensed":
+                    if let key = result["licenseKey"] as? String {
+                        saveLicense(key)
+                        licenseStatus = .licensed
+                        activatedDevices = result["activatedDevices"] as? Int ?? 0
+                        maxDevices = result["maxDevices"] as? Int ?? 3
+                        remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
+                        startHeartbeat()
+                    }
+                case "pending", "registered":
+                    licenseStatus = .pending
+                    remainingMinutes = result["remainingMinutes"] as? Int ?? 15
+                    startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
                 default:
                     errorMessage = result["message"] as? String ?? "Unknown status"
                 }
@@ -449,7 +570,7 @@ class LicensingManager: ObservableObject {
 
     // MARK: - Network Helper
 
-    private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+    private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil, userEmail: String? = nil) async throws -> [String: Any] {
         guard let url = URL(string: apiBaseUrl + endpoint) else {
             throw URLError(.badURL)
         }
@@ -457,6 +578,11 @@ class LicensingManager: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Include user email for WHMCS authentication
+        if let email = userEmail {
+            request.setValue(email, forHTTPHeaderField: "X-User-Email")
+        }
 
         if let body = body {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)

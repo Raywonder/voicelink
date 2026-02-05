@@ -136,25 +136,13 @@ class AccessibilityManager {
         if (typeof window.nvdaController !== 'undefined' || typeof navigator.nvdaController !== 'undefined') {
             this.settings.nvda.available = true;
             console.log('NVDA Controller detected and available');
-        } else {
-            // Try to load NVDA Controller dynamically for Electron/Node.js environment
-            try {
-                if (typeof require !== 'undefined') {
-                    // For Electron applications
-                    const { ipcRenderer } = require('electron');
-                    if (ipcRenderer) {
-                        // Check if NVDA Controller is available in main process
-                        ipcRenderer.invoke('check-nvda-controller').then((available) => {
-                            this.settings.nvda.available = available;
-                            console.log('NVDA Controller availability:', available);
-                        }).catch(() => {
-                            console.log('NVDA Controller check failed');
-                        });
-                    }
-                }
-            } catch (error) {
-                console.log('NVDA Controller not available in this environment');
-            }
+        } else if (window.nativeAPI?.checkNvdaController) {
+            window.nativeAPI.checkNvdaController().then((available) => {
+                this.settings.nvda.available = available;
+                console.log('NVDA Controller availability:', available);
+            }).catch(() => {
+                console.log('NVDA Controller check failed');
+            });
         }
     }
 
@@ -519,16 +507,13 @@ class AccessibilityManager {
                 }
                 window.nvdaController.speakText(message);
             }
-            // For Electron/Node.js NVDA Controller
-            else if (typeof require !== 'undefined') {
-                const { ipcRenderer } = require('electron');
-                if (ipcRenderer) {
-                    ipcRenderer.invoke('nvda-speak', {
-                        message,
-                        interrupt: interrupt && this.settings.nvda.interrupt,
-                        priority: this.settings.nvda.priority
-                    });
-                }
+            // For native NVDA bridge
+            else if (window.nativeAPI?.nvdaSpeak) {
+                window.nativeAPI.nvdaSpeak({
+                    message,
+                    interrupt: interrupt && this.settings.nvda.interrupt,
+                    priority: this.settings.nvda.priority
+                });
             }
         } catch (error) {
             console.error('NVDA Controller error:', error);

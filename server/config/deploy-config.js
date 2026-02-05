@@ -228,9 +228,18 @@ const DEFAULT_CONFIG = {
         primaryColor: '#6364FF',
         secondaryColor: '#563ACC'
     },
+    whmcs: {
+        portalUrl: 'https://devine-creations.com/clientarea.php',
+        roles: {
+            adminGroups: [],
+            staffGroups: [],
+            adminAddons: [],
+            staffAddons: []
+        }
+    },
     ecripto: {
         enabled: false,
-        apiUrl: 'https://api.ecripto.io',
+        apiUrl: 'https://api.ecripto.app',
         networkId: null, // Ecripto network ID
         // Node operator configuration (for federation priority)
         nodeOperator: {

@@ -1282,6 +1282,13 @@ class VoiceLinkApp {
                     },
                     { type: 'separator' },
                     {
+                        label: 'Check for Updates...',
+                        click: () => {
+                            this.updateChecker.checkForUpdatesManual();
+                        }
+                    },
+                    { type: 'separator' },
+                    {
                         label: 'Exit',
                         accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
                         click: () => {
@@ -1336,13 +1343,6 @@ class VoiceLinkApp {
                         click: () => {
                             shell.openExternal('https://github.com/devinecreations/voicelink-local');
                         }
-                    },
-                    { type: 'separator' },
-                    {
-                        label: 'Check for Updates...',
-                        click: () => {
-                            this.updateChecker.checkForUpdatesManual();
-                        }
                     }
                 ]
             }
@@ -1354,6 +1354,13 @@ class VoiceLinkApp {
                 label: app.getName(),
                 submenu: [
                     { role: 'about' },
+                    { type: 'separator' },
+                    {
+                        label: 'Check for Updates...',
+                        click: () => {
+                            this.updateChecker.checkForUpdatesManual();
+                        }
+                    },
                     { type: 'separator' },
                     { role: 'services' },
                     { type: 'separator' },

@@ -755,30 +755,39 @@ class AudioEngine {
             }
 
             // Try to play audio file first
-            try {
-                this.currentTestAudio = new Audio('sounds/connected.wav');
-                this.isTestAudioPlaying = true;
+            const candidates = [
+                'sounds/your-sound-test.wav',
+                'assets/sounds/your-sound-test.wav',
+                'client/sounds/your-sound-test.wav',
+                'source/assets/sounds/your-sound-test.wav'
+            ];
 
-                // Set up event handlers
-                this.currentTestAudio.onended = () => {
-                    console.log('Speaker test audio completed');
+            for (const path of candidates) {
+                try {
+                    this.currentTestAudio = new Audio(path);
+                    this.isTestAudioPlaying = true;
+
+                    // Set up event handlers
+                    this.currentTestAudio.onended = () => {
+                        console.log('Speaker test audio completed');
+                        this.currentTestAudio = null;
+                        this.isTestAudioPlaying = false;
+                    };
+
+                    this.currentTestAudio.onerror = (error) => {
+                        console.error('Speaker test audio error:', error);
+                        this.currentTestAudio = null;
+                        this.isTestAudioPlaying = false;
+                    };
+
+                    await this.currentTestAudio.play();
+                    console.log(`Speaker test completed using audio file: ${path}`);
+                    return;
+                } catch (audioFileError) {
+                    console.log(`Audio file playback failed for ${path}, trying next...`);
                     this.currentTestAudio = null;
                     this.isTestAudioPlaying = false;
-                };
-
-                this.currentTestAudio.onerror = (error) => {
-                    console.error('Speaker test audio error:', error);
-                    this.currentTestAudio = null;
-                    this.isTestAudioPlaying = false;
-                };
-
-                await this.currentTestAudio.play();
-                console.log('Speaker test completed using audio file');
-                return;
-            } catch (audioFileError) {
-                console.log('Audio file playback failed, using generated tone...', audioFileError);
-                this.currentTestAudio = null;
-                this.isTestAudioPlaying = false;
+                }
             }
 
             // Fallback to generated tone

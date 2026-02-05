@@ -466,7 +466,7 @@ class WebRTCManager {
                 const label = muteBtn.querySelector('.btn-label');
 
                 if (icon) icon.textContent = muted ? '🔇' : '🎙️';
-                if (label) label.textContent = muted ? 'Mic: Off' : 'Mic: On';
+                if (label) label.textContent = muted ? 'Microphone: Off' : 'Microphone: On';
 
                 muteBtn.classList.toggle('active', muted);
                 muteBtn.setAttribute('aria-pressed', muted.toString());
@@ -478,7 +478,7 @@ class WebRTCManager {
             // Update status message
             const muteStatus = document.getElementById('mute-status');
             if (muteStatus) {
-                muteStatus.textContent = muted ? 'You are muted' : 'Microphone active';
+                muteStatus.textContent = muted ? 'Microphone muted' : 'Microphone active';
                 muteStatus.className = 'status-message ' + (muted ? 'muted' : 'active');
             }
 
@@ -501,20 +501,20 @@ class WebRTCManager {
             const icon = deafenBtn.querySelector('.btn-icon');
             const label = deafenBtn.querySelector('.btn-label');
 
-            if (icon) icon.textContent = deafened ? '🔇' : '🔊';
-            if (label) label.textContent = deafened ? 'Audio: Off' : 'Audio: On';
+                if (icon) icon.textContent = deafened ? '🔇' : '🔊';
+                if (label) label.textContent = deafened ? 'Output: Off' : 'Output: On';
 
             deafenBtn.classList.toggle('active', deafened);
             deafenBtn.setAttribute('aria-pressed', deafened.toString());
             deafenBtn.setAttribute('aria-label', deafened
-                ? 'Audio is off. Click to hear others.'
-                : 'Audio is on. Click to deafen.');
+                    ? 'Output is off. Click to hear others.'
+                    : 'Output is on. Click to mute output.');
         }
 
         // Update status message
         const deafenStatus = document.getElementById('deafen-status');
         if (deafenStatus) {
-            deafenStatus.textContent = deafened ? 'Audio deafened' : 'Hearing others';
+                deafenStatus.textContent = deafened ? 'Output muted' : 'Hearing others';
             deafenStatus.className = 'status-message ' + (deafened ? 'muted' : 'active');
         }
 

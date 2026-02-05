@@ -98,27 +98,35 @@
 
                     <!-- Auth Method Tabs -->
                     <div class="auth-tabs">
-                        <button class="auth-tab active" data-tab="email-login">Email</button>
-                        <button class="auth-tab" data-tab="mastodon-login">Mastodon</button>
+                        <button class="auth-tab" data-tab="whmcs-login">Client Portal</button>
+                        <button class="auth-tab active" data-tab="mastodon-login">Mastodon</button>
                         <button class="auth-tab" data-tab="wallet-login">Wallet</button>
                     </div>
 
                     <!-- Email Login Tab -->
-                    <div id="email-login-tab" class="auth-tab-content active">
-                        <form id="email-login-form" class="auth-form">
+                    <div id="whmcs-login-tab" class="auth-tab-content">
+                        <form id="whmcs-login-form" class="auth-form">
                             <div class="input-group">
-                                <label for="login-email">Email</label>
-                                <input type="email" id="login-email" placeholder="your@email.com" required>
+                                <label for="whmcs-login-email">Email</label>
+                                <input type="email" id="whmcs-login-email" placeholder="you@devinecreations.net" required>
                             </div>
                             <div class="input-group">
-                                <label for="login-password">Password</label>
-                                <input type="password" id="login-password" placeholder="Password" required>
+                                <label for="whmcs-login-password">Password</label>
+                                <input type="password" id="whmcs-login-password" placeholder="Client portal password" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-login-2fa">2FA Code (if enabled)</label>
+                                <input type="text" id="whmcs-login-2fa" placeholder="123 456">
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-mastodon-handle">Mastodon Handle (optional)</label>
+                                <input type="text" id="whmcs-mastodon-handle" placeholder="@name@instance.social">
                             </div>
                             <div class="auth-options">
                                 <label class="checkbox-label">
-                                    <input type="checkbox" id="remember-me"> Remember me
+                                    <input type="checkbox" id="whmcs-remember-me"> Remember me
                                 </label>
-                                <a href="#" id="forgot-password-link" class="auth-link">Forgot password?</a>
+                                <a href="https://devine-creations.com/pwreset.php" target="_blank" class="auth-link">Forgot password?</a>
                             </div>
                             <button type="submit" class="primary-btn auth-submit">Login</button>
                         </form>
@@ -127,34 +135,14 @@
                             <span>or</span>
                         </div>
 
-                        <button id="show-register-form" class="secondary-btn">Create Account</button>
-
-                        <!-- Registration Form (hidden by default) -->
-                        <form id="email-register-form" class="auth-form" style="display: none;">
-                            <h3>Create Account</h3>
-                            <div class="input-group">
-                                <label for="register-name">Display Name</label>
-                                <input type="text" id="register-name" placeholder="Your name" required>
-                            </div>
-                            <div class="input-group">
-                                <label for="register-email">Email</label>
-                                <input type="email" id="register-email" placeholder="your@email.com" required>
-                            </div>
-                            <div class="input-group">
-                                <label for="register-password">Password</label>
-                                <input type="password" id="register-password" placeholder="Min 8 characters" minlength="8" required>
-                            </div>
-                            <div class="input-group">
-                                <label for="register-confirm">Confirm Password</label>
-                                <input type="password" id="register-confirm" placeholder="Confirm password" required>
-                            </div>
-                            <button type="submit" class="primary-btn auth-submit">Create Account</button>
-                            <button type="button" id="back-to-login" class="secondary-btn">Back to Login</button>
-                        </form>
+                        <div class="auth-actions-row">
+                            <a href="https://devine-creations.com/register.php" target="_blank" class="secondary-btn">Create Account</a>
+                            <button id="whmcs-sso-btn" class="secondary-btn">Login via Client Portal</button>
+                        </div>
                     </div>
 
                     <!-- Mastodon Login Tab -->
-                    <div id="mastodon-login-tab" class="auth-tab-content">
+                    <div id="mastodon-login-tab" class="auth-tab-content active">
                         <p>Login with your Mastodon account for federated authentication:</p>
 
                         <div class="instance-input-group">
@@ -863,14 +851,14 @@
                         <div class="control-group">
                             <button id="mute-btn" class="control-btn" aria-label="Microphone is on. Click to mute." aria-pressed="false" role="switch">
                                 <span class="btn-icon">🎙️</span>
-                                <span class="btn-label">Mic: On</span>
+                                <span class="btn-label">Microphone: On</span>
                             </button>
                             <span id="mute-status" class="status-message" aria-live="polite"></span>
                         </div>
                         <div class="control-group">
-                            <button id="deafen-btn" class="control-btn" aria-label="Audio is on. Click to deafen." aria-pressed="false" role="switch">
+                            <button id="deafen-btn" class="control-btn" aria-label="Output is on. Click to mute output." aria-pressed="false" role="switch">
                                 <span class="btn-icon">🔊</span>
-                                <span class="btn-label">Audio: On</span>
+                                <span class="btn-label">Output: On</span>
                             </button>
                             <span id="deafen-status" class="status-message" aria-live="polite"></span>
                         </div>
@@ -881,6 +869,9 @@
                             </button>
                             <span id="ptt-status" class="status-message" aria-live="polite"></span>
                         </div>
+                    </div>
+                    <div class="audio-controls-help">
+                        Microphone mutes your voice input. Output mutes what you hear.
                     </div>
                 </div>
 
@@ -1037,7 +1028,7 @@
                             <select id="output-device-settings">
                                 <option value="default">Default Output</option>
                             </select>
-                            <button id="test-speakers" class="test-btn">Test</button>
+                            <button id="test-speakers" class="test-btn">Sound Test</button>
                         </div>
                     </div>
 

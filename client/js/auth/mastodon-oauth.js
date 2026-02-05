@@ -98,9 +98,9 @@ class MastodonOAuthManager {
         }
 
         // Determine redirect URI based on environment
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        const redirectUri = isElectron
-            ? 'urn:ietf:wg:oauth:2.0:oob'  // Out-of-band for Electron
+        const isNativeApp = !!window.nativeAPI;
+        const redirectUri = isNativeApp
+            ? 'urn:ietf:wg:oauth:2.0:oob'  // Out-of-band for native apps
             : `${window.location.origin}/oauth/callback`;
 
         try {
@@ -147,8 +147,8 @@ class MastodonOAuthManager {
     async startAuth(instanceUrl) {
         await this.registerApp(instanceUrl);
 
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        const redirectUri = isElectron
+        const isNativeApp = !!window.nativeAPI;
+        const redirectUri = isNativeApp
             ? 'urn:ietf:wg:oauth:2.0:oob'
             : `${window.location.origin}/oauth/callback`;
 
@@ -193,8 +193,8 @@ class MastodonOAuthManager {
             }
         }
 
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        const redirectUri = isElectron
+        const isNativeApp = !!window.nativeAPI;
+        const redirectUri = isNativeApp
             ? 'urn:ietf:wg:oauth:2.0:oob'
             : `${window.location.origin}/oauth/callback`;
 

@@ -42,8 +42,8 @@ class WhisperModeManager {
      */
     async loadSounds() {
         try {
-            // Try Electron app path first, then web path
-            const basePath = window.electronAPI ? '../source/assets/sounds/' : 'sounds/';
+            // Try native app path first, then web path
+            const basePath = window.nativeAPI ? '../source/assets/sounds/' : 'sounds/';
 
             this.sounds.whisperStart = new Audio(`${basePath}Whisper-start.wav`);
             this.sounds.whisperStop = new Audio(`${basePath}Whisper-Stop.wav`);

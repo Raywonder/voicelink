@@ -1,0 +1,23 @@
+Bug reports for VoiceLink,
+02-05-26
+Platform
+Macos
+Using Voiceover Screen Reader
+Making sure to keep all rules from systemrules.md in root of dev/ and other files mentioned in document in tact, this is what needs to be done.
+Also add to the bug tracker on voicelink.devinecreations.net/bugtracker
+Build a native windows installer as well if possible and fix and upload to pages and replace older windows versions with proper 1.0 build. Make sure to use latest versions of all Swift and other apis and coding langwages.
+1, When joining rooms, user that joins ends up in room more then once, also messages are duplicated.
+2, Only message send sound is playing, not joining and leaving sounds. Also click sounds are not playing when mute or unmute and Defin buttons are pressed, needs more proper descriptions of what the buttons do next to labels. Also proper announcements of states of mute and unmute for input and output. Renaming to Microphone or input mute and output mute button label is best.
+2.1, Creating rooms in app does not work in desktopp app, doe snot connect to api and create room and should show and use all room times available if authenticated properly and for guest user not logged in.
+Also Guests should be able to set a name, and logged-in users should display their Mastodon display name by default if configured in profile of mastodon. First name, last name, nickname or display name.
+3, Actions that are set for when focused on rooms, and users when in rooms are not accessible in UI that are used for performing tasks. On rooms or users when in rooms, such as sharing a room, or types of actions on user when in rooms and focused, like whisper, direct message, send file. etc.
+4., When whisper feature is enabled, holding down enter key and feature is enabled, whisper is used, and when key is no longer being held down, it deactivates. For iOS, would be double tap and hold and release when done. Proper FX should play.
+5, Messages are not clearing in desktop client when changing rooms.
+ Messages should only stay in rooms they are sent and received in.
+6, If accessing settings tab in app, user is kicked out of room. Some times happens when switching to another app then returning causing user to re join and become a duplicate user.
+7. Frontend web app client should be fixed so it’s accessible via Chrome and Safari browsers and not just desktop app.
+8, All fixes should be pushed to current 1.0 installed app that is connected to api, giving also time for testing auto-update patch features.
+Otherwise if not working, rebuild and with all features include working version with updater using the download checksums generated.
+9, Update checker should be in first menu where settings option is for app, not in help menu, and only should be one help menu not two.
+10, Including the sound test option in the audio settings tab after user changes out put devices should play the ‘your-sound-test.wav’ file in the assets/sounds folder. Button titled, Sound Test, or test my sound. If pressed once, plays, if pressed again, stops. Do not overlap playback and do not loop.
+11, Completing the copy party backend and client desktop app connection if possible should be done as well, seamless in client for use and pasting files in chat box if not using file transfer option for user or channel in menu is used should also work. Files are stored on mastodon instances if loge din and storing is possible, respects how mastodon hosts files. Fallback is storage paths on server and final is direct to each user via client p2p. Feature is not used in web app, hidden from web app users. Chatting is allowed but rate limited in web app to prevent spam, unless logedin and authenticated.

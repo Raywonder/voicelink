@@ -51,6 +51,29 @@ class WalletManager {
         }
     }
 
+    getDeviceId() {
+        const key = 'voicelink_wallet_device_id';
+        let id = localStorage.getItem(key);
+        if (!id) {
+            if (window.crypto?.randomUUID) {
+                id = window.crypto.randomUUID();
+            } else {
+                id = 'vl-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+            }
+            localStorage.setItem(key, id);
+        }
+        return id;
+    }
+
+    getDeviceName() {
+        const platform = navigator.platform || 'Web';
+        return `VoiceLink ${platform}`.trim();
+    }
+
+    getDeviceType() {
+        return 'web';
+    }
+
     /**
      * Save wallet state to localStorage
      */
@@ -329,7 +352,7 @@ class WalletManager {
         );
 
         // Could open install page
-        // window.open('https://ecripto.io/wallet', '_blank');
+        // window.open('https://ecripto.app/wallet', '_blank');
     }
 
     /**
@@ -514,6 +537,28 @@ class WalletManager {
 
             if (!result.verified) {
                 throw new Error('Server verification failed');
+            }
+
+            // Create an authenticated session for the wallet
+            try {
+                const authResponse = await fetch('/api/auth/ecripto/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deviceId: this.getDeviceId(),
+                        deviceName: this.getDeviceName(),
+                        deviceType: this.getDeviceType(),
+                        walletAddress: this.walletAddress,
+                        remember: true
+                    })
+                });
+
+                const authData = await authResponse.json();
+                if (authResponse.ok && authData.token) {
+                    localStorage.setItem('voicelink_ecripto_token', authData.token);
+                }
+            } catch (authError) {
+                console.warn('[WalletManager] Ecripto session setup failed:', authError.message);
             }
 
             return result;

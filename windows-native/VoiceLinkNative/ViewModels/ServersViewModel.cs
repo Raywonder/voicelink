@@ -177,7 +177,7 @@ public class ServersViewModel : INotifyPropertyChanged
     {
         if (!string.IsNullOrEmpty(MastodonInstance))
         {
-            var authUrl = _authManager.GetMastodonAuthUrl(MastodonInstance);
+            var authUrl = AuthenticationManager.GetMastodonAuthUrl(MastodonInstance);
             // Open browser for OAuth
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {

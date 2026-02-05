@@ -10,7 +10,7 @@ namespace VoiceLinkNative.Services;
 public class AdminServerManager : INotifyPropertyChanged
 {
     private readonly HttpClient _httpClient;
-    private string _serverBaseUrl = ServerManager.MainServer;
+    private string _serverBaseUrl = ServerManager.MainServerUrl;
 
     private bool _isAdmin;
     public bool IsAdmin

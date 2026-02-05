@@ -26,6 +26,12 @@ build/
 dist/
 *.zip
 
+# Windows build artifacts
+windows-native/obj/
+windows-native/bin/
+windows-native/VoiceLinkNative/obj/
+windows-native/VoiceLinkNative/bin/
+
 # Large audio files
 source/assets/sounds/ambience/*.wav
 source/assets/sounds/ambience/*.flac

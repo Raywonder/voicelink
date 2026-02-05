@@ -62,8 +62,8 @@ class VoiceLinkApp {
         try {
             // CRITICAL: Register IPC listener FIRST before any async operations
             // This ensures we don't miss network info updates from main process
-            if (window.electronAPI?.onNetworkInfoUpdated) {
-                window.electronAPI.onNetworkInfoUpdated((data) => {
+            if (window.nativeAPI?.onNetworkInfoUpdated) {
+                window.nativeAPI.onNetworkInfoUpdated((data) => {
                     console.log('Network info updated from main process:', data);
                     this.handleNetworkInfoUpdate(data);
                 });
@@ -351,12 +351,12 @@ class VoiceLinkApp {
 
     async connectToServer() {
         return new Promise((resolve, reject) => {
-            // Determine host - use page host for web access, localhost for Electron
+            // Determine host - use page host for web access, localhost for native apps
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-            const isWebProduction = !isElectron && (pageProtocol === 'https:' ||
+            const isNativeApp = !!window.nativeAPI;
+            const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
                 pageHost.includes('voicelink.devinecreations.net') ||
                 pageHost.includes('voicelink.tappedin.fm'));
 
@@ -394,8 +394,8 @@ class VoiceLinkApp {
                 return;
             }
 
-            // For Electron/local dev, use port sequence
-            const host = isElectron ? 'localhost' : pageHost;
+            // For native/local dev, use port sequence
+            const host = isNativeApp ? 'localhost' : pageHost;
             // If page was loaded from a specific port, try that first
             // Port sequence: page port (if any), 3010, 4004 (Electron), etc.
             const portSequence = pagePort ? [parseInt(pagePort), 3010, 4004, 4005, 4006] : [3010, 4004, 4005, 4006, 3000, 3001];
@@ -827,7 +827,7 @@ class VoiceLinkApp {
         document.getElementById('start-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('starting');
             try {
-                const result = await window.electronAPI?.startServer();
+                const result = await window.nativeAPI?.startServer();
                 if (result) {
                     console.log('Server started successfully');
                     // Status will be updated via connection success
@@ -844,7 +844,7 @@ class VoiceLinkApp {
         document.getElementById('stop-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('stopping');
             try {
-                const result = await window.electronAPI?.stopServer();
+                const result = await window.nativeAPI?.stopServer();
                 if (result) {
                     console.log('Server stopped successfully');
                     this.updateServerStatus('offline');
@@ -862,7 +862,7 @@ class VoiceLinkApp {
         document.getElementById('restart-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('restarting');
             try {
-                const result = await window.electronAPI?.restartServer();
+                const result = await window.nativeAPI?.restartServer();
                 if (result) {
                     console.log('Server restarted successfully');
                     // Status will be updated via connection success
@@ -916,7 +916,7 @@ class VoiceLinkApp {
         });
 
         // Desktop app controls (only available in Electron)
-        if (window.electronAPI) {
+        if (window.nativeAPI) {
             // Show desktop controls section
             const desktopControls = document.getElementById('desktop-controls');
             if (desktopControls) {
@@ -926,7 +926,7 @@ class VoiceLinkApp {
             // Minimize to tray button
             document.getElementById('minimize-to-tray-btn')?.addEventListener('click', async () => {
                 try {
-                    await window.electronAPI.minimizeToTray();
+                    await window.nativeAPI.minimizeToTray();
                 } catch (error) {
                     console.error('Failed to minimize to tray:', error);
                 }
@@ -935,7 +935,7 @@ class VoiceLinkApp {
             // Preferences button
             document.getElementById('preferences-btn')?.addEventListener('click', async () => {
                 try {
-                    await window.electronAPI.showPreferences();
+                    await window.nativeAPI.showPreferences();
                 } catch (error) {
                     console.error('Failed to show preferences:', error);
                 }
@@ -1113,10 +1113,10 @@ class VoiceLinkApp {
     }
 
     async updateNetworkInfo() {
-        if (!window.electronAPI) return;
+        if (!window.nativeAPI) return;
 
         try {
-            const info = await window.electronAPI.getServerInfo();
+            const info = await window.nativeAPI.getServerInfo();
             if (!info) return;
 
             // Update internet status
@@ -1240,10 +1240,10 @@ class VoiceLinkApp {
     }
 
     setupNetworkEventHandlers() {
-        // Detect if running in Electron desktop app
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+        // Detect if running in native desktop app
+        const isNativeApp = !!window.nativeAPI;
 
-        if (!isElectron) {
+        if (!isNativeApp) {
             // WEB BROWSER: Hide desktop-only elements
             document.getElementById('copy-local-url-btn')?.remove();
             document.getElementById('copy-localhost-url-btn')?.remove();
@@ -1258,8 +1258,8 @@ class VoiceLinkApp {
 
         // Copy URL buttons
         document.getElementById('copy-local-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('local');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('local');
                 if (result?.success) {
                     this.showToast('Local URL copied to clipboard');
                 }
@@ -1267,8 +1267,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('copy-public-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('public');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('public');
                 if (result?.success) {
                     this.showToast('Public URL copied (requires port forwarding)');
                 } else {
@@ -1278,8 +1278,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('copy-localhost-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('localhost');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('localhost');
                 if (result?.success) {
                     this.showToast('Localhost URL copied to clipboard');
                 }
@@ -1288,9 +1288,9 @@ class VoiceLinkApp {
 
         // Refresh network button
         document.getElementById('refresh-network-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
+            if (window.nativeAPI) {
                 this.showToast('Refreshing network info...');
-                await window.electronAPI.refreshNetworkInfo();
+                await window.nativeAPI.refreshNetworkInfo();
                 await this.updateNetworkInfo();
                 this.showToast('Network info refreshed');
             }
@@ -1377,9 +1377,9 @@ class VoiceLinkApp {
         const stopBtn = document.getElementById('stop-server-btn');
         const restartBtn = document.getElementById('restart-server-btn');
 
-        // Only show server control buttons in Electron app, not in browser
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        if (!isElectron) {
+        // Only show server control buttons in native app, not in browser
+        const isNativeApp = !!window.nativeAPI;
+        if (!isNativeApp) {
             // Hide all server control buttons for web visitors
             if (startBtn) startBtn.style.display = 'none';
             if (stopBtn) stopBtn.style.display = 'none';
@@ -1387,7 +1387,7 @@ class VoiceLinkApp {
             return;
         }
 
-        // Show/hide buttons based on status (Electron only)
+        // Show/hide buttons based on status (native only)
         if (startBtn && stopBtn && restartBtn) {
             switch (status) {
                 case 'online':
@@ -2563,7 +2563,7 @@ class VoiceLinkApp {
     }
 
     loadCurrentSettings() {
-        // This would load settings from localStorage or electron API
+        // This would load settings from localStorage or native API
         // For now, just set default values
         console.log('Loading current settings...');
     }
@@ -2592,21 +2592,21 @@ class VoiceLinkApp {
         });
 
         document.getElementById('show-qr-btn')?.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.showQRCode();
+            if (window.nativeAPI) {
+                window.nativeAPI.showQRCode();
             }
         });
 
         document.getElementById('restart-server-btn')?.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.restartServer();
+            if (window.nativeAPI) {
+                window.nativeAPI.restartServer();
             }
         });
     }
 
     loadServerInfo() {
-        if (window.electronAPI) {
-            window.electronAPI.getServerInfo().then(info => {
+        if (window.nativeAPI) {
+            window.nativeAPI.getServerInfo().then(info => {
                 this.updateServerInfoDisplay(info);
             }).catch(console.error);
         }
@@ -2704,7 +2704,7 @@ class VoiceLinkApp {
 
     saveAllSettings() {
         console.log('Saving all settings...');
-        // Implementation would save to localStorage or electron API
+        // Implementation would save to localStorage or native API
         alert('Settings saved successfully!');
     }
 
@@ -2715,8 +2715,8 @@ class VoiceLinkApp {
     }
 
     copyServerUrl() {
-        if (window.electronAPI) {
-            window.electronAPI.copyServerUrl();
+        if (window.nativeAPI) {
+            window.nativeAPI.copyServerUrl();
         } else {
             // Fallback for web
             const url = `http://${window.location.hostname}:3000`;
@@ -3002,13 +3002,12 @@ class VoiceLinkApp {
 
             const authUrl = await window.mastodonAuth.startAuth(instanceUrl);
 
-            // Check if we're in Electron (need manual code entry)
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+            const isNativeApp = !!window.nativeAPI;
 
-            if (isElectron) {
+            if (isNativeApp) {
                 // Open external browser and show code entry field
-                if (window.electronAPI?.openExternal) {
-                    window.electronAPI.openExternal(authUrl);
+                if (window.nativeAPI?.openExternal) {
+                    window.nativeAPI.openExternal(authUrl);
                 } else {
                     window.open(authUrl, '_blank');
                 }

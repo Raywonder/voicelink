@@ -171,3 +171,9 @@ public class LevelUpgrade
     public string NewLevel { get; set; } = "";
     public string? Benefits { get; set; }
 }
+
+public class SyncPushData
+{
+    public string Type { get; set; } = "";
+    public Dictionary<string, object>? Data { get; set; }
+}

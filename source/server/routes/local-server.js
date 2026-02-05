@@ -541,7 +541,7 @@ class VoiceLinkLocalServer {
 
             // User joins a room
             socket.on('join-room', (data) => {
-                const { roomId, userName, password } = data;
+                const { roomId, userName, username, password } = data;
                 const room = this.rooms.get(roomId);
 
                 if (!room) {
@@ -554,15 +554,42 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                if (room.users.length >= room.maxUsers) {
+                const existingUser = room.users.find(u => u.id === socket.id);
+                if (!existingUser && room.users.length >= room.maxUsers) {
                     socket.emit('error', { message: 'Room is full' });
+                    return;
+                }
+
+                // If user was previously in another room, clean up
+                const previous = this.users.get(socket.id);
+                if (previous && previous.roomId && previous.roomId !== roomId) {
+                    const prevRoom = this.rooms.get(previous.roomId);
+                    if (prevRoom) {
+                        prevRoom.users = prevRoom.users.filter(u => u.id !== socket.id);
+                        socket.to(previous.roomId).emit('user-left', { userId: socket.id });
+                        if (prevRoom.users.length === 0) {
+                            this.rooms.delete(previous.roomId);
+                            console.log(`Room ${prevRoom.name} deleted (empty)`);
+                        }
+                    }
+                    socket.leave(previous.roomId);
+                }
+
+                const desiredName = userName || username || `User ${socket.id.slice(0, 8)}`;
+
+                if (existingUser) {
+                    existingUser.name = desiredName;
+                    this.users.set(socket.id, { ...existingUser, roomId });
+                    socket.join(roomId);
+                    socket.emit('joined-room', { room, user: existingUser });
+                    console.log(`User ${existingUser.name} re-joined room ${room.name}`);
                     return;
                 }
 
                 // Add user to room
                 const user = {
                     id: socket.id,
-                    name: userName || `User ${socket.id.slice(0, 8)}`,
+                    name: desiredName,
                     joinedAt: new Date(),
                     audioSettings: {
                         muted: false,
@@ -659,6 +686,7 @@ class VoiceLinkLocalServer {
                 if (user) {
                     const message = {
                         id: uuidv4(),
+                        roomId: user.roomId,
                         userId: socket.id,
                         userName: user.name,
                         message: data.message,
@@ -667,6 +695,27 @@ class VoiceLinkLocalServer {
 
                     this.io.to(user.roomId).emit('chat-message', message);
                 }
+            });
+
+            // Explicit leave room handling
+            socket.on('leave-room', () => {
+                const user = this.users.get(socket.id);
+                if (!user) return;
+
+                const room = this.rooms.get(user.roomId);
+                if (room) {
+                    room.users = room.users.filter(u => u.id !== socket.id);
+                    socket.to(user.roomId).emit('user-left', { userId: socket.id });
+
+                    if (room.users.length === 0) {
+                        this.rooms.delete(user.roomId);
+                        console.log(`Room ${room.name} deleted (empty)`);
+                    }
+                }
+
+                socket.leave(user.roomId);
+                this.users.delete(socket.id);
+                this.audioRouting.delete(socket.id);
             });
 
             // Disconnect handling

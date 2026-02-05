@@ -4,7 +4,7 @@ import AuthenticationServices
 import Security
 
 // MARK: - Authentication Manager
-class AuthenticationManager: ObservableObject {
+class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = AuthenticationManager()
 
     @Published var currentUser: AuthenticatedUser?
@@ -15,6 +15,7 @@ class AuthenticationManager: ObservableObject {
     @Published var mastodonInstance: String = ""
     private var mastodonClientId: String?
     private var mastodonClientSecret: String?
+    private var authSession: ASWebAuthenticationSession?
 
     // Email verification state
     @Published var pendingEmailVerification: String?
@@ -27,8 +28,33 @@ class AuthenticationManager: ObservableObject {
         case error
     }
 
-    init() {
+    override init() {
+        super.init()
         loadStoredAuth()
+        setupOAuthCallbackListener()
+    }
+
+    private func setupOAuthCallbackListener() {
+        // Listen for OAuth callbacks from URL handler (fallback for external browser auth)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOAuthCallbackNotification(_:)),
+            name: .oauthCallback,
+            object: nil
+        )
+    }
+
+    @objc private func handleOAuthCallbackNotification(_ notification: Notification) {
+        guard let userInfo = notification.object as? [String: Any],
+              let code = userInfo["code"] as? String else {
+            return
+        }
+        handleMastodonCallback(code: code)
+    }
+
+    // ASWebAuthenticationPresentationContextProviding
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return NSApp.windows.first ?? ASPresentationAnchor()
     }
 
     // MARK: - Mastodon OAuth
@@ -109,11 +135,50 @@ class AuthenticationManager: ObservableObject {
             return
         }
 
-        // Open in default browser - app will handle callback via URL scheme
-        NSWorkspace.shared.open(url)
-
         // Store completion for callback handling
         pendingMastodonCompletion = completion
+
+        // Use ASWebAuthenticationSession for in-app authentication
+        // This shows the auth page in a secure sheet within the app
+        authSession = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "voicelink"
+        ) { [weak self] callbackURL, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    // Check if user cancelled
+                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        self?.authState = .unauthenticated
+                        self?.pendingMastodonCompletion?(false, "Authentication cancelled")
+                        self?.pendingMastodonCompletion = nil
+                    } else {
+                        self?.authState = .error
+                        self?.authError = error.localizedDescription
+                        self?.pendingMastodonCompletion?(false, error.localizedDescription)
+                        self?.pendingMastodonCompletion = nil
+                    }
+                    return
+                }
+
+                guard let callbackURL = callbackURL,
+                      let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+                      let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+                    self?.authState = .error
+                    self?.authError = "No authorization code received"
+                    self?.pendingMastodonCompletion?(false, "No authorization code received")
+                    self?.pendingMastodonCompletion = nil
+                    return
+                }
+
+                // Handle the OAuth callback with the code
+                self?.handleMastodonCallback(code: code)
+            }
+        }
+
+        // Set the presentation context and start the session
+        authSession?.presentationContextProvider = self
+        authSession?.prefersEphemeralWebBrowserSession = false // Allow persisting cookies for "remember me"
+        authSession?.start()
     }
 
     private var pendingMastodonCompletion: ((Bool, String?) -> Void)?
@@ -227,6 +292,148 @@ class AuthenticationManager: ObservableObject {
 
                 // Notify about reputation for room calculations
                 NotificationCenter.default.post(name: .mastodonAccountLoaded, object: user)
+            }
+        }.resume()
+    }
+
+    // MARK: - WHMCS Authentication
+
+    func authenticateWithWhmcs(email: String,
+                               password: String,
+                               twoFactorCode: String?,
+                               mastodonHandle: String?,
+                               remember: Bool,
+                               completion: @escaping (Bool, String?) -> Void) {
+        authState = .authenticating
+
+        let baseURL = ServerManager.shared.baseURL ?? ServerManager.mainServer
+        guard let url = URL(string: baseURL + "/api/auth/whmcs/login") else {
+            authState = .error
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "email": email,
+            "password": password,
+            "twoFactorCode": twoFactorCode ?? "",
+            "mastodonHandle": mastodonHandle ?? "",
+            "remember": remember
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.authState = .error
+                    completion(false, error.localizedDescription)
+                    return
+                }
+
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
+                let json = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]) ?? [:]
+
+                if statusCode >= 400 {
+                    if json["requires2FA"] as? Bool == true {
+                        self?.authState = .error
+                        completion(false, "Two-factor authentication required")
+                        return
+                    }
+                    let message = json["error"] as? String ?? "Login failed"
+                    self?.authState = .error
+                    completion(false, message)
+                    return
+                }
+
+                guard let token = json["token"] as? String,
+                      let userData = json["user"] as? [String: Any] else {
+                    self?.authState = .error
+                    completion(false, "Invalid login response")
+                    return
+                }
+
+                let displayName = userData["displayName"] as? String ?? email
+                let userId = userData["id"] as? String ?? UUID().uuidString
+                let role = userData["role"] as? String
+                let permissions = userData["permissions"] as? [String]
+
+                let user = AuthenticatedUser(
+                    id: userId,
+                    username: displayName,
+                    displayName: displayName,
+                    email: email,
+                    authMethod: .whmcs,
+                    mastodonInstance: nil,
+                    accessToken: token,
+                    avatarURL: nil,
+                    role: role,
+                    permissions: permissions
+                )
+
+                self?.currentUser = user
+                self?.authState = .authenticated
+                self?.authError = nil
+                self?.saveAuth(user: user)
+                completion(true, nil)
+            }
+        }.resume()
+    }
+
+    func startWhmcsPortalLogin(email: String,
+                               password: String,
+                               twoFactorCode: String?,
+                               remember: Bool,
+                               completion: @escaping (Bool, String?) -> Void) {
+        let baseURL = ServerManager.shared.baseURL ?? ServerManager.mainServer
+        guard let url = URL(string: baseURL + "/api/auth/whmcs/sso/start") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "email": email,
+            "password": password,
+            "twoFactorCode": twoFactorCode ?? "",
+            "remember": remember
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
+                let json = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]) ?? [:]
+
+                if statusCode >= 400 {
+                    if json["requires2FA"] as? Bool == true {
+                        completion(false, "Two-factor authentication required")
+                        return
+                    }
+                    completion(false, json["error"] as? String ?? "SSO failed")
+                    return
+                }
+
+                let redirectURL = (json["redirectUrl"] as? String) ?? (json["portalUrl"] as? String)
+                if let redirectURL, let url = URL(string: redirectURL) {
+                    NSWorkspace.shared.open(url)
+                    completion(true, nil)
+                } else {
+                    completion(false, "Missing portal URL")
+                }
             }
         }.resume()
     }
@@ -410,6 +617,8 @@ struct AuthenticatedUser: Codable, Identifiable {
     let mastodonInstance: String?
     var accessToken: String
     let avatarURL: String?
+    let role: String? = nil
+    let permissions: [String]? = nil
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0
@@ -532,12 +741,14 @@ enum AuthMethod: String, Codable {
     case pairingCode = "pairing"
     case mastodon = "mastodon"
     case email = "email"
+    case whmcs = "whmcs"
 
     var displayName: String {
         switch self {
         case .pairingCode: return "Pairing Code"
         case .mastodon: return "Mastodon"
         case .email: return "Email"
+        case .whmcs: return "Client Portal"
         }
     }
 
@@ -546,6 +757,7 @@ enum AuthMethod: String, Codable {
         case .pairingCode: return "number.circle"
         case .mastodon: return "at.circle"
         case .email: return "envelope.circle"
+        case .whmcs: return "person.badge.key"
         }
     }
 }

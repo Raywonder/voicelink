@@ -59,15 +59,29 @@ class VoiceLinkApp {
         }
     }
 
+    getNativeAPI() {
+        return window.nativeAPI || null;
+    }
+
+    async openExternal(url) {
+        const nativeAPI = this.getNativeAPI();
+        if (nativeAPI?.openExternal) {
+            return nativeAPI.openExternal(url);
+        }
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return null;
+    }
+
     async init() {
         console.log('Initializing VoiceLink Local...');
 
         // IMMEDIATE: Hide platform-specific elements based on environment
         // This must run FIRST to prevent flash of unwanted content
-        const isElectronApp = !!(window.electronAPI || window.nodeAPI?.versions?.electron || navigator.userAgent.toLowerCase().includes('electron'));
-        console.log('IMMEDIATE platform check:', { isElectronApp, hasElectronAPI: !!window.electronAPI });
+        const nativeAPI = window.nativeAPI || null;
+        const isNativeApp = !!nativeAPI;
+        console.log('IMMEDIATE platform check:', { isNativeApp });
 
-        if (isElectronApp) {
+        if (isNativeApp) {
             // Desktop app: hide web-only elements (download links, login benefits for guests)
             document.getElementById('login-benefits')?.remove();
             document.getElementById('download-app-section')?.remove();
@@ -87,7 +101,10 @@ class VoiceLinkApp {
 
             // Web browser: hide auth-required elements for guests (until they log in)
             // Check if user is authenticated via Mastodon OAuth
-            const isAuthenticated = localStorage.getItem('mastodon_access_token') || sessionStorage.getItem('mastodon_access_token');
+            const isAuthenticated = localStorage.getItem('mastodon_access_token') ||
+                sessionStorage.getItem('mastodon_access_token') ||
+                localStorage.getItem('voicelink_whmcs_token') ||
+                sessionStorage.getItem('voicelink_whmcs_token');
             if (!isAuthenticated) {
                 document.querySelectorAll('.auth-required').forEach(el => {
                     el.style.display = 'none';
@@ -111,8 +128,8 @@ class VoiceLinkApp {
         try {
             // CRITICAL: Register IPC listener FIRST before any async operations
             // This ensures we don't miss network info updates from main process
-            if (window.electronAPI?.onNetworkInfoUpdated) {
-                window.electronAPI.onNetworkInfoUpdated((data) => {
+            if (nativeAPI?.onNetworkInfoUpdated) {
+                nativeAPI.onNetworkInfoUpdated((data) => {
                     console.log('Network info updated from main process:', data);
                     this.handleNetworkInfoUpdate(data);
                 });
@@ -351,6 +368,12 @@ class VoiceLinkApp {
             console.log('User context menu initialized');
         }
 
+        // Initialize accessibility manager
+        if (typeof AccessibilityManager !== 'undefined') {
+            window.accessibilityManager = new AccessibilityManager();
+            console.log('Accessibility manager initialized');
+        }
+
         // Initialize keychain auth manager
         if (typeof KeychainAuthManager !== 'undefined') {
             window.keychainAuthManager = new KeychainAuthManager();
@@ -417,12 +440,12 @@ class VoiceLinkApp {
 
     async connectToServer() {
         return new Promise((resolve, reject) => {
-            // Determine host - use page host for web access, localhost for Electron
+            // Determine host - use page host for web access, localhost for native apps
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-            const isWebProduction = !isElectron && (pageProtocol === 'https:' ||
+            const isNativeApp = !!window.nativeAPI;
+            const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
                 pageHost.includes('voicelink.devinecreations.net') ||
                 pageHost.includes('voicelink.tappedin.fm'));
 
@@ -461,8 +484,8 @@ class VoiceLinkApp {
                 return;
             }
 
-            // For Electron/local dev, use port sequence
-            const host = isElectron ? 'localhost' : pageHost;
+            // For native/local dev, use port sequence
+            const host = isNativeApp ? 'localhost' : pageHost;
             // If page was loaded from a specific port, try that first
             // Port sequence: page port (if any), 3010, 4004 (Electron), etc.
             const portSequence = pagePort ? [parseInt(pagePort), 3010, 4004, 4005, 4006] : [3010, 4004, 4005, 4006, 3000, 3001];
@@ -906,7 +929,7 @@ class VoiceLinkApp {
         document.getElementById('start-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('starting');
             try {
-                const result = await window.electronAPI?.startServer();
+                const result = await window.nativeAPI?.startServer();
                 if (result) {
                     console.log('Server started successfully');
                     // Status will be updated via connection success
@@ -923,7 +946,7 @@ class VoiceLinkApp {
         document.getElementById('stop-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('stopping');
             try {
-                const result = await window.electronAPI?.stopServer();
+                const result = await window.nativeAPI?.stopServer();
                 if (result) {
                     console.log('Server stopped successfully');
                     this.updateServerStatus('offline');
@@ -941,7 +964,7 @@ class VoiceLinkApp {
         document.getElementById('restart-server-btn')?.addEventListener('click', async () => {
             this.setServerButtonState('restarting');
             try {
-                const result = await window.electronAPI?.restartServer();
+                const result = await window.nativeAPI?.restartServer();
                 if (result) {
                     console.log('Server restarted successfully');
                     // Status will be updated via connection success
@@ -1005,7 +1028,7 @@ class VoiceLinkApp {
         });
 
         // Desktop app controls (only available in Electron)
-        if (window.electronAPI) {
+        if (window.nativeAPI) {
             // Show desktop controls section
             const desktopControls = document.getElementById('desktop-controls');
             if (desktopControls) {
@@ -1015,7 +1038,7 @@ class VoiceLinkApp {
             // Minimize to tray button
             document.getElementById('minimize-to-tray-btn')?.addEventListener('click', async () => {
                 try {
-                    await window.electronAPI.minimizeToTray();
+                    await window.nativeAPI.minimizeToTray();
                 } catch (error) {
                     console.error('Failed to minimize to tray:', error);
                 }
@@ -1024,7 +1047,7 @@ class VoiceLinkApp {
             // Preferences button
             document.getElementById('preferences-btn')?.addEventListener('click', async () => {
                 try {
-                    await window.electronAPI.showPreferences();
+                    await window.nativeAPI.showPreferences();
                 } catch (error) {
                     console.error('Failed to show preferences:', error);
                 }
@@ -1077,6 +1100,8 @@ class VoiceLinkApp {
             const isMuted = this.webrtcManager?.isLocalMuted() || false;
             const newMutedState = !isMuted;
             this.webrtcManager?.setMuted(newMutedState);
+            this.playUiSound('button-click.wav');
+            this.announce(`Microphone ${newMutedState ? 'muted' : 'unmuted'}`, 'polite');
 
             // Play appropriate sound
             if (this.menuSoundManager) {
@@ -1093,6 +1118,8 @@ class VoiceLinkApp {
             const isDeafened = this.isDeafened || false;
             this.isDeafened = !isDeafened;
             this.webrtcManager?.setDeafened(this.isDeafened);
+            this.playUiSound('button-click.wav');
+            this.announce(`Output ${this.isDeafened ? 'muted' : 'unmuted'}`, 'polite');
 
             // Play appropriate sound
             if (this.menuSoundManager) {
@@ -1152,7 +1179,23 @@ class VoiceLinkApp {
         });
 
         document.getElementById('test-speakers')?.addEventListener('click', () => {
-            this.audioEngine.testSpeakers();
+            const btn = document.getElementById('test-speakers');
+            this.audioEngine.testSpeakers().finally(() => {
+                if (btn) {
+                    btn.textContent = this.audioEngine?.isTestAudioPlaying ? 'Stop Test' : 'Sound Test';
+                }
+            });
+        });
+
+        // Auto-play sound test after output device changes
+        const outputDeviceSettings = document.getElementById('output-device-settings');
+        outputDeviceSettings?.addEventListener('change', () => {
+            const btn = document.getElementById('test-speakers');
+            this.audioEngine.testSpeakers().finally(() => {
+                if (btn) {
+                    btn.textContent = this.audioEngine?.isTestAudioPlaying ? 'Stop Test' : 'Sound Test';
+                }
+            });
         });
 
         document.getElementById('save-audio-settings')?.addEventListener('click', () => {
@@ -1244,10 +1287,10 @@ class VoiceLinkApp {
     }
 
     async updateNetworkInfo() {
-        if (!window.electronAPI) return;
+        if (!window.nativeAPI) return;
 
         try {
-            const info = await window.electronAPI.getServerInfo();
+            const info = await window.nativeAPI.getServerInfo();
             if (!info) return;
 
             // Update internet status
@@ -1371,24 +1414,15 @@ class VoiceLinkApp {
     }
 
     setupNetworkEventHandlers() {
-        // Detect if running in Electron desktop app using multiple methods
-        // 1. Check window.electronAPI (exposed via preload)
-        // 2. Check window.nodeAPI (exposed via preload)
-        // 3. Check navigator.userAgent for Electron
-        const isElectron = !!(
-            window.electronAPI ||
-            window.nodeAPI?.versions?.electron ||
-            navigator.userAgent.toLowerCase().includes('electron')
-        );
+        // Detect if running in native desktop app
+        const isNativeApp = !!window.nativeAPI;
 
         console.log('Platform detection:', {
-            isElectron,
-            hasElectronAPI: !!window.electronAPI,
-            hasNodeAPI: !!window.nodeAPI,
-            userAgent: navigator.userAgent
+            isNativeApp,
+            hasNativeAPI: !!window.nativeAPI
         });
 
-        if (!isElectron) {
+        if (!isNativeApp) {
             // WEB BROWSER: Hide desktop-only elements
             document.getElementById('copy-local-url-btn')?.remove();
             document.getElementById('copy-localhost-url-btn')?.remove();
@@ -1412,8 +1446,8 @@ class VoiceLinkApp {
 
         // Copy URL buttons
         document.getElementById('copy-local-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('local');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('local');
                 if (result?.success) {
                     this.showToast('Local URL copied to clipboard');
                 }
@@ -1421,8 +1455,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('copy-public-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('public');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('public');
                 if (result?.success) {
                     this.showToast('Public URL copied (requires port forwarding)');
                 } else {
@@ -1432,8 +1466,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('copy-localhost-url-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                const result = await window.electronAPI.copyUrl('localhost');
+            if (window.nativeAPI) {
+                const result = await window.nativeAPI.copyUrl('localhost');
                 if (result?.success) {
                     this.showToast('Localhost URL copied to clipboard');
                 }
@@ -1442,9 +1476,9 @@ class VoiceLinkApp {
 
         // Refresh network button
         document.getElementById('refresh-network-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
+            if (window.nativeAPI) {
                 this.showToast('Refreshing network info...');
-                await window.electronAPI.refreshNetworkInfo();
+                await window.nativeAPI.refreshNetworkInfo();
                 await this.updateNetworkInfo();
                 this.showToast('Network info refreshed');
             }
@@ -1531,9 +1565,9 @@ class VoiceLinkApp {
         const stopBtn = document.getElementById('stop-server-btn');
         const restartBtn = document.getElementById('restart-server-btn');
 
-        // Only show server control buttons in Electron app, not in browser
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        if (!isElectron) {
+        // Only show server control buttons in native app, not in browser
+        const isNativeApp = !!this.getNativeAPI();
+        if (!isNativeApp) {
             // Hide all server control buttons for web visitors
             if (startBtn) startBtn.style.display = 'none';
             if (stopBtn) stopBtn.style.display = 'none';
@@ -1541,7 +1575,7 @@ class VoiceLinkApp {
             return;
         }
 
-        // Show/hide buttons based on status (Electron only)
+        // Show/hide buttons based on status (native only)
         if (startBtn && stopBtn && restartBtn) {
             switch (status) {
                 case 'online':
@@ -1880,6 +1914,15 @@ class VoiceLinkApp {
             </button>
         ` : '';
 
+        const shareButton = `
+            <button class="share-room-btn"
+                    onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
+                    title="Share room"
+                    aria-label="Share ${roomData.name}">
+                🔗 Share
+            </button>
+        `;
+
         // Determine if room is locked (private or password protected)
         const isLocked = roomData.privacyLevel === 'private' || roomData.hasPassword;
         const lockedClass = isLocked ? 'room-locked' : '';
@@ -1915,6 +1958,7 @@ class VoiceLinkApp {
                     </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
                     ${peekButton}
+                    ${shareButton}
                 </div>
             </div>
         `;
@@ -2724,7 +2768,19 @@ class VoiceLinkApp {
     }
 
     handleJoinedRoom(room, user) {
+        // Clear room-specific UI/state before switching
+        const chatMessages = document.getElementById('chat-messages');
+        if (chatMessages) {
+            chatMessages.innerHTML = '';
+        }
+        const userList = document.getElementById('user-list');
+        if (userList) {
+            userList.innerHTML = '';
+        }
+        this.users.clear();
+
         this.currentRoom = room;
+        this.currentRoomId = room?.id || room?.roomId || null;
         this.currentUser = user;
 
         // Update UI
@@ -2760,6 +2816,7 @@ class VoiceLinkApp {
         this.updateUserCount();
 
         this.addSystemMessage(`${user.name} joined the room`);
+        this.playUiSound('user-join.wav');
     }
 
     handleUserLeft(userId) {
@@ -2770,6 +2827,7 @@ class VoiceLinkApp {
             this.updateUserCount();
 
             this.addSystemMessage(`${user.name} left the room`);
+            this.playUiSound('user-leave.wav');
         }
     }
 
@@ -2780,6 +2838,7 @@ class VoiceLinkApp {
         const userElement = document.createElement('div');
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
+        userElement.setAttribute('data-user-name', user.name || 'Unknown');
 
         userElement.innerHTML = `
             <div class="user-info">
@@ -2791,6 +2850,7 @@ class VoiceLinkApp {
                 <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
                 <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Increase volume" aria-label="Increase volume for ${user.name}">Vol +</button>
                 <button onclick="app.toggleUserMute('${user.id}')" title="Mute user" aria-label="Mute ${user.name}">Mute</button>
+                <button onclick="window.userContextMenu?.showMenuForUser('${user.id}', this.closest('.user-item'))" title="User actions" aria-label="Actions for ${user.name}">Actions</button>
             </div>
         `;
 
@@ -2867,8 +2927,19 @@ class VoiceLinkApp {
         const chatMessages = document.getElementById('chat-messages');
         if (!chatMessages) return;
 
+        if (this.currentRoomId && message.roomId && message.roomId !== this.currentRoomId) {
+            return;
+        }
+
+        if (message.id && chatMessages.querySelector(`[data-message-id=\"${message.id}\"]`)) {
+            return;
+        }
+
         const messageElement = document.createElement('div');
         messageElement.className = 'chat-message';
+        if (message.id) {
+            messageElement.setAttribute('data-message-id', message.id);
+        }
 
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
 
@@ -2899,6 +2970,49 @@ class VoiceLinkApp {
 
         chatMessages.appendChild(messageElement);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    playUiSound(filename, volume = 0.6) {
+        try {
+            const candidates = [
+                `sounds/${filename}`,
+                `assets/sounds/${filename}`,
+                `client/sounds/${filename}`,
+                `source/assets/sounds/${filename}`
+            ];
+
+            const audio = new Audio();
+            audio.volume = volume;
+
+            const tryNext = (idx) => {
+                if (idx >= candidates.length) return;
+                audio.src = candidates[idx];
+                audio.onerror = () => tryNext(idx + 1);
+                audio.play().catch(() => tryNext(idx + 1));
+            };
+
+            tryNext(0);
+        } catch (error) {
+            console.warn('UI sound failed:', error);
+        }
+    }
+
+    announce(message, priority = 'polite') {
+        if (window.accessibilityManager && typeof window.accessibilityManager.announce === 'function') {
+            window.accessibilityManager.announce(message, priority, false);
+            return;
+        }
+        const liveRegionId = priority === 'assertive' ? 'app-live-assertive' : 'app-live-polite';
+        let region = document.getElementById(liveRegionId);
+        if (!region) {
+            region = document.createElement('div');
+            region.id = liveRegionId;
+            region.className = 'sr-only';
+            region.setAttribute('role', 'status');
+            region.setAttribute('aria-live', priority);
+            document.body.appendChild(region);
+        }
+        region.textContent = message;
     }
 
     toggleAudioRoutingPanel() {
@@ -2971,6 +3085,7 @@ class VoiceLinkApp {
         }
 
         if (this.socket) {
+            this.socket.emit('leave-room');
             this.socket.disconnect();
             this.socket = null;
         }
@@ -3393,7 +3508,7 @@ class VoiceLinkApp {
     }
 
     loadCurrentSettings() {
-        // This would load settings from localStorage or electron API
+        // This would load settings from localStorage or native API
         // For now, just set default values
         console.log('Loading current settings...');
     }
@@ -3428,21 +3543,21 @@ class VoiceLinkApp {
         });
 
         document.getElementById('show-qr-btn')?.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.showQRCode();
+            if (window.nativeAPI) {
+                window.nativeAPI.showQRCode();
             }
         });
 
         document.getElementById('restart-server-btn')?.addEventListener('click', () => {
-            if (window.electronAPI) {
-                window.electronAPI.restartServer();
+            if (window.nativeAPI) {
+                window.nativeAPI.restartServer();
             }
         });
     }
 
     loadServerInfo() {
-        if (window.electronAPI) {
-            window.electronAPI.getServerInfo().then(info => {
+        if (window.nativeAPI) {
+            window.nativeAPI.getServerInfo().then(info => {
                 this.updateServerInfoDisplay(info);
             }).catch(console.error);
         }
@@ -3540,7 +3655,7 @@ class VoiceLinkApp {
 
     saveAllSettings() {
         console.log('Saving all settings...');
-        // Implementation would save to localStorage or electron API
+        // Implementation would save to localStorage or native API
         alert('Settings saved successfully!');
     }
 
@@ -3551,8 +3666,8 @@ class VoiceLinkApp {
     }
 
     copyServerUrl() {
-        if (window.electronAPI) {
-            window.electronAPI.copyServerUrl();
+        if (window.nativeAPI) {
+            window.nativeAPI.copyServerUrl();
         } else {
             // Fallback for web
             const url = `http://${window.location.hostname}:3000`;
@@ -3770,49 +3885,30 @@ class VoiceLinkApp {
             });
         });
 
-        // Show/Hide Registration Form
-        document.getElementById('show-register-form')?.addEventListener('click', () => {
-            document.getElementById('email-login-form').style.display = 'none';
-            document.getElementById('show-register-form').style.display = 'none';
-            document.querySelector('.auth-divider').style.display = 'none';
-            document.getElementById('email-register-form').style.display = 'block';
-        });
-
-        document.getElementById('back-to-login')?.addEventListener('click', () => {
-            document.getElementById('email-register-form').style.display = 'none';
-            document.getElementById('email-login-form').style.display = 'block';
-            document.getElementById('show-register-form').style.display = 'block';
-            document.querySelector('.auth-divider').style.display = 'flex';
-        });
-
-        // Email Login Form Submit
-        document.getElementById('email-login-form')?.addEventListener('submit', async (e) => {
+        // WHMCS Login Form Submit
+        document.getElementById('whmcs-login-form')?.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const email = document.getElementById('login-email')?.value;
-            const password = document.getElementById('login-password')?.value;
-            const remember = document.getElementById('remember-me')?.checked;
+            const email = document.getElementById('whmcs-login-email')?.value;
+            const password = document.getElementById('whmcs-login-password')?.value;
+            const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
+            const mastodonHandle = document.getElementById('whmcs-mastodon-handle')?.value;
+            const remember = document.getElementById('whmcs-remember-me')?.checked;
 
             if (email && password) {
-                await this.handleEmailLogin(email, password, remember);
+                await this.handleWhmcsLogin(email, password, {
+                    twoFactorCode,
+                    mastodonHandle,
+                    remember
+                });
             }
         });
 
-        // Email Registration Form Submit
-        document.getElementById('email-register-form')?.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const name = document.getElementById('register-name')?.value;
-            const email = document.getElementById('register-email')?.value;
-            const password = document.getElementById('register-password')?.value;
-            const confirm = document.getElementById('register-confirm')?.value;
-
-            if (password !== confirm) {
-                this.showNotification('Passwords do not match', 'error');
-                return;
-            }
-
-            if (name && email && password) {
-                await this.handleEmailRegister(name, email, password);
-            }
+        document.getElementById('whmcs-sso-btn')?.addEventListener('click', async () => {
+            const email = document.getElementById('whmcs-login-email')?.value;
+            const password = document.getElementById('whmcs-login-password')?.value;
+            const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
+            const remember = document.getElementById('whmcs-remember-me')?.checked;
+            await this.handleWhmcsSsoLogin({ email, password, twoFactorCode, remember });
         });
 
         // Connect button (Mastodon)
@@ -3841,7 +3937,7 @@ class VoiceLinkApp {
             });
         });
 
-        // Manual OAuth code submit (for Electron)
+        // Manual OAuth code submit (for native apps that can't auto-callback)
         document.getElementById('oauth-code-submit')?.addEventListener('click', () => {
             const codeInput = document.getElementById('oauth-code-input');
             if (codeInput?.value) {
@@ -3866,6 +3962,8 @@ class VoiceLinkApp {
         // Check existing session
         if (window.mastodonAuth?.isAuthenticated()) {
             this.updateUIForAuthState(window.mastodonAuth.getUser());
+        } else {
+            this.restoreWhmcsSession();
         }
     }
 
@@ -3873,7 +3971,22 @@ class VoiceLinkApp {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
             modal.style.display = 'flex';
+            this.setActiveAuthTab('mastodon-login');
         }
+    }
+
+    setActiveAuthTab(tabId) {
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            if (tab.dataset.tab === tabId) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+        document.querySelectorAll('.auth-tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        document.getElementById(`${tabId}-tab`)?.classList.add('active');
     }
 
     hideMastodonLoginModal() {
@@ -3898,24 +4011,15 @@ class VoiceLinkApp {
 
             const authUrl = await window.mastodonAuth.startAuth(instanceUrl);
 
-            // Check if we're in Electron (need manual code entry)
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+            const isNativeApp = !!window.nativeAPI;
 
-            if (isElectron) {
-                // Open external browser and show code entry field
-                if (window.electronAPI?.openExternal) {
-                    window.electronAPI.openExternal(authUrl);
-                } else {
-                    window.open(authUrl, '_blank');
-                }
-
-                // Show code entry section
+            if (isNativeApp) {
+                await this.openExternal(authUrl);
                 const codeEntry = document.getElementById('oauth-code-entry');
                 if (codeEntry) {
                     codeEntry.style.display = 'block';
                 }
             } else {
-                // Web flow - redirect to auth page
                 window.location.href = authUrl;
             }
         } catch (error) {
@@ -3939,83 +4043,100 @@ class VoiceLinkApp {
     }
 
     /**
-     * Handle email/password login
+     * Handle WHMCS (Client Portal) login
      */
-    async handleEmailLogin(email, password, remember) {
+    async handleWhmcsLogin(email, password, options = {}) {
         try {
-            this.showNotification('Logging in...', 'info');
+            this.showNotification('Logging in to client portal...', 'info');
             const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch(`${apiBase}/api/auth/login`, {
+            const response = await fetch(`${apiBase}/api/auth/whmcs/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, remember })
+                body: JSON.stringify({
+                    email,
+                    password,
+                    twoFactorCode: options.twoFactorCode || null,
+                    remember: options.remember === true,
+                    mastodonHandle: options.mastodonHandle || null
+                })
             });
 
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.message || 'Login failed');
-            }
-
             const data = await response.json();
-
-            // Store auth token
-            if (remember) {
-                localStorage.setItem('voicelink_auth_token', data.token);
-            } else {
-                sessionStorage.setItem('voicelink_auth_token', data.token);
+            if (!response.ok) {
+                if (data?.requires2FA) {
+                    this.showNotification('2FA required. Enter your code and try again.', 'warning');
+                    return;
+                }
+                throw new Error(data.error || 'Login failed');
             }
 
-            // Update UI with user data
+            const tokenKey = 'voicelink_whmcs_token';
+            if (options.remember) {
+                localStorage.setItem(tokenKey, data.token);
+            } else {
+                sessionStorage.setItem(tokenKey, data.token);
+            }
+
             this.hideMastodonLoginModal();
             this.updateUIForAuthState(data.user);
             this.showNotification('Welcome back, ' + data.user.displayName + '!', 'success');
-
-            // Dispatch login event
             window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
-
         } catch (error) {
-            console.error('Email login failed:', error);
+            console.error('WHMCS login failed:', error);
             this.showNotification(error.message || 'Login failed', 'error');
         }
     }
 
-    /**
-     * Handle email/password registration
-     */
-    async handleEmailRegister(name, email, password) {
+    async handleWhmcsSsoLogin(options = {}) {
         try {
-            this.showNotification('Creating account...', 'info');
+            this.showNotification('Opening client portal...', 'info');
             const apiBase = this.getApiBaseUrl();
 
-            const response = await fetch(`${apiBase}/api/auth/register`, {
+            const response = await fetch(`${apiBase}/api/auth/whmcs/sso/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ displayName: name, email, password })
+                body: JSON.stringify({
+                    email: options.email,
+                    password: options.password,
+                    twoFactorCode: options.twoFactorCode || null,
+                    remember: options.remember === true
+                })
             });
 
+            const data = await response.json();
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.message || 'Registration failed');
+                if (data?.requires2FA) {
+                    this.showNotification('2FA required. Enter your code and try again.', 'warning');
+                    return;
+                }
+                throw new Error(data.error || 'SSO failed');
             }
 
-            const data = await response.json();
-
-            // Store auth token
-            localStorage.setItem('voicelink_auth_token', data.token);
-
-            // Update UI with user data
-            this.hideMastodonLoginModal();
-            this.updateUIForAuthState(data.user);
-            this.showNotification('Welcome to VoiceLink, ' + data.user.displayName + '!', 'success');
-
-            // Dispatch login event
-            window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
-
+            const redirectUrl = data.redirectUrl || data.portalUrl;
+            if (redirectUrl) {
+                await this.openExternal(redirectUrl);
+            }
         } catch (error) {
-            console.error('Email registration failed:', error);
-            this.showNotification(error.message || 'Registration failed', 'error');
+            console.error('WHMCS SSO failed:', error);
+            this.showNotification(error.message || 'SSO failed', 'error');
         }
+    }
+
+    restoreWhmcsSession() {
+        const tokenKey = 'voicelink_whmcs_token';
+        const token = localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
+        if (!token) return;
+
+        const apiBase = this.getApiBaseUrl();
+        fetch(`${apiBase}/api/auth/whmcs/session/${token}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data?.valid && data.user) {
+                    this.updateUIForAuthState(data.user);
+                }
+            })
+            .catch(() => {});
     }
 
     checkOAuthCallback() {
@@ -4063,6 +4184,7 @@ class VoiceLinkApp {
         const userName = document.getElementById('mastodon-user-name');
         const userHandle = document.getElementById('mastodon-user-handle');
         const userRole = document.getElementById('mastodon-user-role');
+        const joinNameInput = document.getElementById('user-name');
 
         if (user) {
             // Show logged-in state
@@ -4070,16 +4192,16 @@ class VoiceLinkApp {
             if (userInfo) userInfo.style.display = 'flex';
 
             if (avatar) avatar.src = user.avatar || user.avatarStatic || '';
-            if (userName) userName.textContent = user.displayName;
-            if (userHandle) userHandle.textContent = user.fullHandle;
+            if (userName) userName.textContent = user.displayName || user.username || 'VoiceLink User';
+            if (userHandle) userHandle.textContent = user.fullHandle || user.email || user.username || '';
 
-            // Show role badge
+            const roleValue = user.role || (user.isAdmin ? 'admin' : user.isModerator ? 'staff' : 'user');
             if (userRole) {
-                if (user.isAdmin) {
+                if (roleValue === 'admin') {
                     userRole.textContent = 'Admin';
                     userRole.className = 'user-role admin';
-                } else if (user.isModerator) {
-                    userRole.textContent = 'Moderator';
+                } else if (roleValue === 'staff' || roleValue === 'moderator') {
+                    userRole.textContent = 'Staff';
                     userRole.className = 'user-role moderator';
                 } else {
                     userRole.textContent = 'User';
@@ -4089,6 +4211,14 @@ class VoiceLinkApp {
 
             // Update role-based UI
             this.updateRoleBasedUI(user);
+
+            // Default the join name to Mastodon display name if empty or placeholder
+            if (joinNameInput) {
+                const currentValue = joinNameInput.value?.trim();
+                if (!currentValue || currentValue === 'Room Creator' || currentValue.startsWith('User')) {
+                    joinNameInput.value = user.displayName || user.username || currentValue;
+                }
+            }
         } else {
             // Show logged-out state
             if (loginPrompt) loginPrompt.style.display = 'block';
@@ -4100,8 +4230,9 @@ class VoiceLinkApp {
     }
 
     updateRoleBasedUI(user) {
-        const isAdmin = user?.isAdmin === true;
-        const isModerator = user?.isModerator === true || isAdmin;
+        const role = user?.role;
+        const isAdmin = user?.isAdmin === true || role === 'admin' || user?.permissions?.includes('admin');
+        const isModerator = user?.isModerator === true || role === 'staff' || user?.permissions?.includes('staff') || isAdmin;
 
         // Server control buttons - only for admins
         const serverControls = document.querySelector('.server-control-buttons');

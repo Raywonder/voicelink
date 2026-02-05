@@ -56,6 +56,9 @@ class VoiceLinkLocalServer {
         this.rooms = new Map();
         this.users = new Map();
         this.audioRouting = new Map();
+        this.whmcsAuthSessions = new Map(); // token -> { user, expiresAt }
+        this.whmcsLoginStates = new Map(); // state -> { email, clientId, createdAt, confirmed }
+        this.ecriptoAuthSessions = new Map(); // token -> { user, expiresAt }
 
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
@@ -117,6 +120,108 @@ class VoiceLinkLocalServer {
         this.setupSocketHandlers();
         this.loadPersistedRooms();
         this.start();
+    }
+
+    getWhmcsConfig() {
+        const moduleConfig = this.moduleRegistry?.getModule('whmcs-integration')?.config || {};
+        const deployWhmcs = deployConfig.get('whmcs') || {};
+        return {
+            apiUrl: moduleConfig.apiUrl || deployWhmcs.apiUrl || process.env.WHMCS_API_URL || 'https://devine-creations.com/includes/api.php',
+            identifier: moduleConfig.identifier || process.env.WHMCS_API_IDENTIFIER,
+            secret: moduleConfig.secret || process.env.WHMCS_API_SECRET,
+            accessKey: moduleConfig.accessKey || process.env.WHMCS_ACCESS_KEY,
+            portalUrl: moduleConfig.portalUrl || deployWhmcs.portalUrl || process.env.WHMCS_PORTAL_URL || 'https://devine-creations.com/clientarea.php'
+        };
+    }
+
+    async whmcsRequest(action, params = {}) {
+        const config = this.getWhmcsConfig();
+        if (!config.identifier || !config.secret) {
+            throw new Error('WHMCS API credentials not configured');
+        }
+
+        const body = new URLSearchParams({
+            identifier: config.identifier,
+            secret: config.secret,
+            action,
+            responsetype: 'json',
+            ...params
+        });
+
+        if (config.accessKey) {
+            body.append('accesskey', config.accessKey);
+        }
+
+        const response = await fetch(config.apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString()
+        });
+
+        const result = await response.json();
+        if (result.result !== 'success') {
+            const message = result.message || result.error || 'WHMCS request failed';
+            throw new Error(message);
+        }
+        return result;
+    }
+
+    deriveWhmcsRole(client, services = []) {
+        const roleConfig = deployConfig.get('whmcs')?.roles || {};
+        const adminGroups = new Set(roleConfig.adminGroups || []);
+        const staffGroups = new Set(roleConfig.staffGroups || []);
+        const adminAddons = (roleConfig.adminAddons || []).map(a => a.toLowerCase());
+        const staffAddons = (roleConfig.staffAddons || []).map(a => a.toLowerCase());
+
+        const groupId = client?.groupid ? Number(client.groupid) : null;
+        const groupName = (client?.groupname || '').toLowerCase();
+
+        let role = 'client';
+        if (groupId && adminGroups.has(groupId)) role = 'admin';
+        else if (groupId && staffGroups.has(groupId)) role = 'staff';
+        else if (groupName.includes('admin')) role = 'admin';
+        else if (groupName.includes('staff')) role = 'staff';
+
+        const addonNames = [];
+        services.forEach(service => {
+            if (Array.isArray(service.addons)) {
+                service.addons.forEach(addon => {
+                    if (addon?.name) addonNames.push(addon.name.toLowerCase());
+                });
+            }
+        });
+
+        if (adminAddons.length && addonNames.some(name => adminAddons.includes(name))) {
+            role = 'admin';
+        } else if (staffAddons.length && addonNames.some(name => staffAddons.includes(name))) {
+            role = role === 'admin' ? 'admin' : 'staff';
+        }
+
+        const permissions = role === 'admin'
+            ? ['admin', 'staff', 'client']
+            : role === 'staff'
+                ? ['staff', 'client']
+                : ['client'];
+
+        return { role, permissions };
+    }
+
+    createAuthSession(store, prefix, user, remember = false) {
+        const token = `${prefix}_${uuidv4()}_${Date.now().toString(36)}`;
+        const ttlMs = remember ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 24;
+        const expiresAt = new Date(Date.now() + ttlMs);
+        store.set(token, { user, expiresAt, createdAt: new Date() });
+        return { token, expiresAt };
+    }
+
+    getAuthSession(store, token) {
+        const session = store.get(token);
+        if (!session) return null;
+        if (new Date() > session.expiresAt) {
+            store.delete(token);
+            return null;
+        }
+        return session;
     }
 
     /**
@@ -351,6 +456,265 @@ class VoiceLinkLocalServer {
                 rooms: this.rooms.size,
                 users: this.users.size
             });
+        });
+
+        // ============================================
+        // WHMCS AUTHENTICATION
+        // ============================================
+
+        const normalizeEmail = (value) => (value || '').trim().toLowerCase();
+        const isTwoFactorError = (message = '') => message.toLowerCase().includes('two factor');
+
+        this.app.post('/api/auth/whmcs/login', async (req, res) => {
+            const email = normalizeEmail(req.body.email);
+            const password = req.body.password || req.body.password2;
+            const twoFactorCode = req.body.twoFactorCode || req.body.twofa || null;
+            const remember = req.body.remember === true;
+            const mastodonHandle = req.body.mastodonHandle || null;
+
+            if (!email || !password) {
+                return res.status(400).json({ success: false, error: 'Email and password required' });
+            }
+
+            try {
+                let clientDetails = null;
+                try {
+                    const clientResponse = await this.whmcsRequest('GetClientsDetails', { email });
+                    clientDetails = clientResponse.client || clientResponse.clientdetails || null;
+                } catch (error) {
+                    console.warn('[WHMCS] Client lookup failed:', error.message);
+                }
+
+                if (clientDetails?.twofactorenabled && !twoFactorCode) {
+                    return res.status(401).json({
+                        success: false,
+                        requires2FA: true,
+                        message: 'Two-factor authentication code required'
+                    });
+                }
+
+                try {
+                    await this.whmcsRequest('ValidateLogin', {
+                        email,
+                        password2: password,
+                        ...(twoFactorCode ? { twofa: twoFactorCode } : {})
+                    });
+                } catch (error) {
+                    if (isTwoFactorError(error.message) && !twoFactorCode) {
+                        return res.status(401).json({
+                            success: false,
+                            requires2FA: true,
+                            message: 'Two-factor authentication code required'
+                        });
+                    }
+                    throw error;
+                }
+
+                if (!clientDetails) {
+                    const clientResponse = await this.whmcsRequest('GetClientsDetails', { email });
+                    clientDetails = clientResponse.client || clientResponse.clientdetails || null;
+                }
+
+                if (!clientDetails) {
+                    return res.status(404).json({ success: false, error: 'Client not found' });
+                }
+
+                let services = [];
+                try {
+                    const servicesResponse = await this.whmcsRequest('GetClientsProducts', { clientid: clientDetails.id });
+                    services = servicesResponse.products?.product || [];
+                } catch (error) {
+                    console.warn('[WHMCS] Services lookup failed:', error.message);
+                }
+
+                const { role, permissions } = this.deriveWhmcsRole(clientDetails, services);
+                const displayName = [clientDetails.firstname, clientDetails.lastname].filter(Boolean).join(' ').trim()
+                    || clientDetails.companyname
+                    || clientDetails.email
+                    || 'VoiceLink User';
+
+                const user = {
+                    id: `whmcs:${clientDetails.id}`,
+                    whmcsClientId: clientDetails.id,
+                    email: clientDetails.email || email,
+                    displayName,
+                    fullHandle: clientDetails.email || email,
+                    role,
+                    permissions,
+                    isAdmin: role === 'admin',
+                    isModerator: role === 'staff',
+                    authProvider: 'whmcs',
+                    mastodonHandle
+                };
+
+                const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
+                res.json({ success: true, token: session.token, expiresAt: session.expiresAt, user });
+            } catch (error) {
+                console.error('[WHMCS] Login failed:', error.message);
+                res.status(401).json({ success: false, error: error.message || 'Login failed' });
+            }
+        });
+
+        this.app.get('/api/auth/whmcs/session/:token', (req, res) => {
+            const session = this.getAuthSession(this.whmcsAuthSessions, req.params.token);
+            if (!session) {
+                return res.status(401).json({ valid: false });
+            }
+            res.json({ valid: true, user: session.user, expiresAt: session.expiresAt });
+        });
+
+        this.app.post('/api/auth/whmcs/logout', (req, res) => {
+            const { token } = req.body;
+            if (token) {
+                this.whmcsAuthSessions.delete(token);
+            }
+            res.json({ success: true });
+        });
+
+        this.app.post('/api/auth/whmcs/sso/start', async (req, res) => {
+            const token = req.body.token;
+            const destination = req.body.destination || 'clientarea:home';
+            let session = token ? this.getAuthSession(this.whmcsAuthSessions, token) : null;
+
+            try {
+                if (!session) {
+                    const email = normalizeEmail(req.body.email);
+                    const password = req.body.password || req.body.password2;
+                    const twoFactorCode = req.body.twoFactorCode || req.body.twofa || null;
+                    if (!email || !password) {
+                        return res.status(400).json({ success: false, error: 'Email and password required' });
+                    }
+
+                    try {
+                        await this.whmcsRequest('ValidateLogin', {
+                            email,
+                            password2: password,
+                            ...(twoFactorCode ? { twofa: twoFactorCode } : {})
+                        });
+                    } catch (error) {
+                        if (isTwoFactorError(error.message) && !twoFactorCode) {
+                            return res.status(401).json({
+                                success: false,
+                                requires2FA: true,
+                                message: 'Two-factor authentication code required'
+                            });
+                        }
+                        throw error;
+                    }
+
+                    const clientResponse = await this.whmcsRequest('GetClientsDetails', { email });
+                    const clientDetails = clientResponse.client || clientResponse.clientdetails;
+                    if (!clientDetails) {
+                        return res.status(404).json({ success: false, error: 'Client not found' });
+                    }
+
+                    const { role, permissions } = this.deriveWhmcsRole(clientDetails, []);
+                    const displayName = [clientDetails.firstname, clientDetails.lastname].filter(Boolean).join(' ').trim()
+                        || clientDetails.companyname
+                        || clientDetails.email
+                        || 'VoiceLink User';
+
+                    const user = {
+                        id: `whmcs:${clientDetails.id}`,
+                        whmcsClientId: clientDetails.id,
+                        email: clientDetails.email || email,
+                        displayName,
+                        fullHandle: clientDetails.email || email,
+                        role,
+                        permissions,
+                        isAdmin: role === 'admin',
+                        isModerator: role === 'staff',
+                        authProvider: 'whmcs'
+                    };
+
+                    const created = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, req.body.remember === true);
+                    session = { user, expiresAt: created.expiresAt };
+                    session.token = created.token;
+                }
+
+                const ssoResult = await this.whmcsRequest('CreateSsoToken', {
+                    client_id: session.user.whmcsClientId,
+                    destination
+                });
+
+                res.json({
+                    success: true,
+                    redirectUrl: ssoResult.redirect_url || ssoResult.redirecturl || ssoResult.redirectUrl,
+                    token: token || session.token,
+                    portalUrl: this.getWhmcsConfig().portalUrl
+                });
+            } catch (error) {
+                console.error('[WHMCS] SSO failed:', error.message);
+                res.status(500).json({ success: false, error: error.message || 'SSO failed' });
+            }
+        });
+
+        // ============================================
+        // ECRIPTO WALLET AUTHENTICATION
+        // ============================================
+
+        this.app.post('/api/auth/ecripto/login', async (req, res) => {
+            const { deviceId, deviceName, deviceType, walletAddress, remember } = req.body;
+            const config = deployConfig.get('ecripto') || {};
+
+            if (!config.apiUrl) {
+                return res.status(400).json({ success: false, error: 'Ecripto API not configured' });
+            }
+
+            if (!deviceId) {
+                return res.status(400).json({ success: false, error: 'Device ID required' });
+            }
+
+            try {
+                const response = await fetch(`${config.apiUrl}/api/client/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deviceId, deviceName, deviceType, walletAddress })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Ecripto API error (${response.status})`);
+                }
+
+                const result = await response.json();
+                if (!result?.token) {
+                    throw new Error('Ecripto authentication failed');
+                }
+
+                const user = {
+                    id: `ecripto:${walletAddress || deviceId}`,
+                    walletAddress: walletAddress || null,
+                    deviceId,
+                    deviceName,
+                    deviceType,
+                    authProvider: 'ecripto',
+                    ecriptoToken: result.token,
+                    role: 'client',
+                    permissions: ['client']
+                };
+
+                const session = this.createAuthSession(this.ecriptoAuthSessions, 'ecripto', user, remember === true);
+                res.json({ success: true, token: session.token, expiresAt: session.expiresAt, user });
+            } catch (error) {
+                console.error('[Ecripto] Login failed:', error.message);
+                res.status(401).json({ success: false, error: error.message || 'Wallet login failed' });
+            }
+        });
+
+        this.app.get('/api/auth/ecripto/session/:token', (req, res) => {
+            const session = this.getAuthSession(this.ecriptoAuthSessions, req.params.token);
+            if (!session) {
+                return res.status(401).json({ valid: false });
+            }
+            res.json({ valid: true, user: session.user, expiresAt: session.expiresAt });
+        });
+
+        this.app.post('/api/auth/ecripto/logout', (req, res) => {
+            const { token } = req.body;
+            if (token) {
+                this.ecriptoAuthSessions.delete(token);
+            }
+            res.json({ success: true });
         });
 
         this.app.get('/api/rooms', async (req, res) => {

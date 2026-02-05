@@ -462,8 +462,10 @@ class WebRTCManager {
             // Update UI
             const muteBtn = document.getElementById('mute-btn');
             if (muteBtn) {
-                muteBtn.textContent = muted ? '🔇 Muted' : '🎙️ Unmuted';
+                muteBtn.textContent = muted ? 'Microphone: Off' : 'Microphone: On';
                 muteBtn.classList.toggle('active', muted);
+                muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+                muteBtn.setAttribute('aria-label', muted ? 'Microphone muted' : 'Microphone unmuted');
             }
 
             console.log('Local audio', muted ? 'muted' : 'unmuted');
@@ -479,8 +481,10 @@ class WebRTCManager {
         // Update UI
         const deafenBtn = document.getElementById('deafen-btn');
         if (deafenBtn) {
-            deafenBtn.textContent = deafened ? '🔇 Deafened' : '🔊 Hearing';
+            deafenBtn.textContent = deafened ? 'Output: Off' : 'Output: On';
             deafenBtn.classList.toggle('active', deafened);
+            deafenBtn.setAttribute('aria-pressed', deafened ? 'true' : 'false');
+            deafenBtn.setAttribute('aria-label', deafened ? 'Output muted' : 'Output unmuted');
         }
 
         console.log('Audio output', deafened ? 'deafened' : 'enabled');

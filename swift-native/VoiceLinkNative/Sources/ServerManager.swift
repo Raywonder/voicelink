@@ -21,9 +21,75 @@ class ServerManager: ObservableObject {
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
 
+    // Public accessor for the current server URL
+    var baseURL: String? {
+        currentServerURL.isEmpty ? nil : currentServerURL
+    }
+
     init() {
         // Default to main server
         self.currentServerURL = ServerManager.mainServer
+        setupMessageNotifications()
+    }
+
+    private func setupMessageNotifications() {
+        // Listen for outgoing messages from MessagingManager
+        NotificationCenter.default.addObserver(
+            forName: .sendMessageToServer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo else { return }
+            let content = data["content"] as? String ?? ""
+            let isDirect = data["isDirect"] as? Bool ?? false
+            let recipientId = data["recipientId"] as? String
+            let replyToId = data["replyToId"] as? String
+
+            if isDirect, let recipient = recipientId {
+                // Direct message
+                var msgData: [String: Any] = [
+                    "targetUserId": recipient,
+                    "message": content
+                ]
+                if let reply = replyToId {
+                    msgData["replyTo"] = reply
+                }
+                self?.socket?.emit("direct-message", msgData)
+            } else {
+                // Room message
+                var msgData: [String: Any] = ["message": content]
+                if let reply = replyToId {
+                    msgData["replyTo"] = reply
+                }
+                self?.socket?.emit("chat-message", msgData)
+            }
+        }
+
+        // Typing indicator
+        NotificationCenter.default.addObserver(
+            forName: .sendTypingIndicator,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo,
+                  let typing = data["typing"] as? Bool else { return }
+            self?.socket?.emit("typing", ["typing": typing])
+        }
+
+        // Message reactions
+        NotificationCenter.default.addObserver(
+            forName: .sendReactionToServer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo,
+                  let messageId = data["messageId"] as? String,
+                  let emoji = data["emoji"] as? String else { return }
+            self?.socket?.emit("message-reaction", [
+                "messageId": messageId,
+                "reaction": emoji
+            ])
+        }
     }
 
     func connect(toMain: Bool = true) {
@@ -197,11 +263,18 @@ class ServerManager: ObservableObject {
             self?.getRooms()
         }
 
-        // Room joined response
-        socket.on("room-joined") { [weak self] data, ack in
+        // Room joined response (server sends "joined-room")
+        socket.on("joined-room") { [weak self] data, ack in
             print("Joined room: \(data)")
-            if let roomData = data[0] as? [String: Any] {
-                // Handle room join success
+            if let responseData = data[0] as? [String: Any],
+               let roomData = responseData["room"] as? [String: Any] {
+                // Extract users from room data
+                if let usersData = roomData["users"] as? [[String: Any]] {
+                    let users = usersData.compactMap { RoomUser(from: $0) }
+                    DispatchQueue.main.async {
+                        self?.currentRoomUsers = users
+                    }
+                }
                 NotificationCenter.default.post(name: .roomJoined, object: roomData)
             }
         }
@@ -214,6 +287,7 @@ class ServerManager: ObservableObject {
                 DispatchQueue.main.async {
                     if !self!.currentRoomUsers.contains(where: { $0.id == user.id }) {
                         self?.currentRoomUsers.append(user)
+                        AppSoundManager.shared.playSound(.userJoin)
                     }
                 }
             }
@@ -223,9 +297,10 @@ class ServerManager: ObservableObject {
         socket.on("user-left") { [weak self] data, ack in
             print("User left: \(data)")
             if let userData = data[0] as? [String: Any],
-               let odId = userData["odId"] as? String {
+               let odId = userData["userId"] as? String {
                 DispatchQueue.main.async {
-                    self?.currentRoomUsers.removeAll { $0.odId == odId }
+                    self?.currentRoomUsers.removeAll { $0.id == odId }
+                    AppSoundManager.shared.playSound(.userLeave)
                 }
             }
         }
@@ -233,7 +308,20 @@ class ServerManager: ObservableObject {
         // Room users list
         socket.on("room-users") { [weak self] data, ack in
             print("Room users: \(data)")
-            if let usersData = data[0] as? [[String: Any]] {
+            if let responseData = data[0] as? [String: Any],
+               let usersData = responseData["users"] as? [[String: Any]] {
+                let users = usersData.compactMap { RoomUser(from: $0) }
+                DispatchQueue.main.async {
+                    self?.currentRoomUsers = users
+                }
+            }
+        }
+
+        // Room user count update (broadcast when users join/leave)
+        socket.on("room-user-count") { [weak self] data, ack in
+            print("Room user count update: \(data)")
+            if let responseData = data[0] as? [String: Any],
+               let usersData = responseData["users"] as? [[String: Any]] {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self?.currentRoomUsers = users
@@ -354,6 +442,62 @@ class ServerManager: ObservableObject {
                 )
             }
         }
+
+        // Chat message received
+        socket.on("chat-message") { data, ack in
+            print("Chat message received: \(data)")
+            if let msgData = data[0] as? [String: Any] {
+                let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
+                let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
+                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+                let messageType = msgData["type"] as? String ?? "text"
+
+                NotificationCenter.default.post(
+                    name: .incomingChatMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": senderId,
+                        "senderName": senderName,
+                        "content": content,
+                        "type": messageType
+                    ]
+                )
+            }
+        }
+
+        // Direct message received
+        socket.on("direct-message") { data, ack in
+            print("Direct message received: \(data)")
+            if let msgData = data[0] as? [String: Any] {
+                let senderId = msgData["senderId"] as? String ?? ""
+                let senderName = msgData["senderName"] as? String ?? "Unknown"
+                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+
+                NotificationCenter.default.post(
+                    name: .incomingDirectMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": senderId,
+                        "senderName": senderName,
+                        "content": content
+                    ]
+                )
+            }
+        }
+
+        // Typing indicator
+        socket.on("user-typing") { data, ack in
+            if let typingData = data[0] as? [String: Any] {
+                let userId = typingData["userId"] as? String ?? ""
+                let typing = typingData["typing"] as? Bool ?? false
+
+                NotificationCenter.default.post(
+                    name: .userTypingIndicator,
+                    object: nil,
+                    userInfo: ["userId": userId, "typing": typing]
+                )
+            }
+        }
     }
 
     // MARK: - API Methods
@@ -362,22 +506,69 @@ class ServerManager: ObservableObject {
         socket?.emit("get-rooms")
     }
 
-    func createRoom(name: String, description: String, isPrivate: Bool, password: String? = nil) {
-        var roomData: [String: Any] = [
+    func createRoom(
+        name: String,
+        description: String,
+        isPrivate: Bool,
+        password: String? = nil,
+        durationMs: Int? = nil,
+        visibility: String = "public",
+        accessType: String = "hybrid",
+        isAuthenticated: Bool = false,
+        creatorHandle: String? = nil,
+        completion: ((Result<String, Error>) -> Void)? = nil
+    ) {
+        guard let baseURL = baseURL, let url = URL(string: "\(baseURL)/api/rooms") else {
+            completion?(.failure(NSError(domain: "VoiceLink", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server URL"])))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
             "name": name,
             "description": description,
-            "isPrivate": isPrivate
+            "password": password as Any,
+            "visibility": visibility,
+            "accessType": accessType,
+            "duration": durationMs as Any,
+            "isAuthenticated": isAuthenticated,
+            "creatorHandle": creatorHandle as Any,
+            "visibleToGuests": visibility == "public" && accessType != "hidden"
         ]
-        if let password = password {
-            roomData["password"] = password
-        }
-        socket?.emit("create-room", roomData)
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion?(.failure(error))
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    completion?(.failure(NSError(domain: "VoiceLink", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])))
+                    return
+                }
+
+                if let roomId = json["roomId"] as? String {
+                    completion?(.success(roomId))
+                } else if let errorMessage = json["error"] as? String ?? json["message"] as? String {
+                    completion?(.failure(NSError(domain: "VoiceLink", code: -3, userInfo: [NSLocalizedDescriptionKey: errorMessage])))
+                } else {
+                    completion?(.failure(NSError(domain: "VoiceLink", code: -4, userInfo: [NSLocalizedDescriptionKey: "Room creation failed"])))
+                }
+            }
+        }.resume()
     }
 
     func joinRoom(roomId: String, username: String, password: String? = nil) {
         var joinData: [String: Any] = [
             "roomId": roomId,
-            "username": username
+            "userName": username
         ]
         if let password = password {
             joinData["password"] = password
@@ -389,6 +580,7 @@ class ServerManager: ObservableObject {
         socket?.emit("leave-room")
         DispatchQueue.main.async {
             self.currentRoomUsers = []
+            MessagingManager.shared.clearMessages()
         }
     }
 

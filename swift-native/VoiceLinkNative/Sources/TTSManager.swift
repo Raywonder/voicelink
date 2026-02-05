@@ -156,8 +156,8 @@ enum TTSAudioEffect: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Announcement
-struct Announcement: Identifiable {
+// MARK: - TTS Announcement
+struct TTSAnnouncement: Identifiable {
     let id: String
     let type: AnnouncementType
     var text: String
@@ -237,9 +237,9 @@ class TTSManager: NSObject, ObservableObject {
     @Published var selectedVoice: TTSVoice?
 
     // Queue
-    @Published var announcementQueue: [Announcement] = []
+    @Published var announcementQueue: [TTSAnnouncement] = []
     @Published var isAnnouncing: Bool = false
-    @Published var currentAnnouncement: Announcement?
+    @Published var currentAnnouncement: TTSAnnouncement?
 
     // Predefined announcements
     let predefinedAnnouncements: [PredefinedAnnouncement]
@@ -323,7 +323,7 @@ class TTSManager: NSObject, ObservableObject {
 
     // MARK: - Announcement Queue
 
-    func queueAnnouncement(_ announcement: Announcement) {
+    func queueAnnouncement(_ announcement: TTSAnnouncement) {
         announcementQueue.append(announcement)
 
         if !isAnnouncing {
@@ -332,7 +332,7 @@ class TTSManager: NSObject, ObservableObject {
     }
 
     func queuePredefined(_ predefined: PredefinedAnnouncement, delivery: DeliveryMethod = .global) {
-        let announcement = Announcement(
+        let announcement = TTSAnnouncement(
             id: "\(predefined.id)_\(Date().timeIntervalSince1970)",
             type: predefined.type,
             text: predefined.text,
@@ -363,7 +363,7 @@ class TTSManager: NSObject, ObservableObject {
         speak(announcement)
     }
 
-    private func speak(_ announcement: Announcement) {
+    private func speak(_ announcement: TTSAnnouncement) {
         let utterance = AVSpeechUtterance(string: announcement.fullText)
 
         // Configure voice
@@ -771,7 +771,7 @@ struct TTSAnnouncementView: View {
     }
 
     private func sendCustomAnnouncement() {
-        let announcement = Announcement(
+        let announcement = TTSAnnouncement(
             type: announcementType,
             text: customText,
             effect: selectedEffect,

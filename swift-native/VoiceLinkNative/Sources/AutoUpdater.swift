@@ -7,12 +7,12 @@ import SwiftUI
 class AutoUpdater: ObservableObject {
     static let shared = AutoUpdater()
 
-    // Current app version
-    static let currentVersion = "1.0.0"
+    // Current app version - stays at 1.0 until major changes needed
+    static let currentVersion = "1.0"
     static let buildNumber = 1
 
     // Update server configuration
-    private let updateServerURL = "https://voicelink.devinecreations.net/api/updates"
+    private let downloadBaseURL = "https://voicelink.devinecreations.net/downloads"
     private let platform = "macos"
 
     @Published var updateAvailable: Bool = false
@@ -61,7 +61,8 @@ class AutoUpdater: ObservableObject {
 
         updateState = .checking
 
-        guard let url = URL(string: "\(updateServerURL)/check") else {
+        // Fetch latest-mac.yml to check for updates
+        guard let url = URL(string: "\(downloadBaseURL)/latest-mac.yml") else {
             if !silent {
                 updateState = .error("Invalid update server URL")
             } else {
@@ -71,25 +72,14 @@ class AutoUpdater: ObservableObject {
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "platform": platform,
-            "currentVersion": AutoUpdater.currentVersion,
-            "buildNumber": AutoUpdater.buildNumber,
-            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString
-        ]
-
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 self?.lastChecked = Date()
                 self?.saveLastChecked()
 
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                guard let data = data, let yamlString = String(data: data, encoding: .utf8) else {
                     if !silent {
                         self?.updateState = .error(error?.localizedDescription ?? "Failed to check for updates")
                     } else {
@@ -98,21 +88,124 @@ class AutoUpdater: ObservableObject {
                     return
                 }
 
-                if let hasUpdate = json["updateAvailable"] as? Bool, hasUpdate {
-                    let newVersion = json["version"] as? String ?? "Unknown"
-                    self?.latestVersion = newVersion
-                    self?.releaseNotes = json["releaseNotes"] as? String
-                    if let downloadURL = json["downloadURL"] as? String {
-                        self?.updateURL = URL(string: downloadURL)
-                    }
-                    self?.updateAvailable = true
-                    self?.updateState = .available(version: newVersion)
-                } else {
-                    self?.updateAvailable = false
-                    self?.updateState = .idle
-                }
+                // Parse YAML (simple parsing for our format)
+                self?.parseUpdateYAML(yamlString, silent: silent)
             }
         }.resume()
+    }
+
+    private func parseUpdateYAML(_ yaml: String, silent: Bool) {
+        var version: String?
+        var path: String?
+        var notes: String?
+        var inReleaseNotes = false
+        var releaseNotesLines: [String] = []
+
+        for line in yaml.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if inReleaseNotes {
+                if trimmed.hasPrefix("- ") || trimmed.isEmpty {
+                    releaseNotesLines.append(trimmed)
+                    continue
+                } else if !line.hasPrefix(" ") && !line.hasPrefix("\t") {
+                    inReleaseNotes = false
+                } else {
+                    releaseNotesLines.append(trimmed)
+                    continue
+                }
+            }
+
+            if trimmed.hasPrefix("version:") {
+                version = trimmed.replacingOccurrences(of: "version:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("path:") {
+                path = trimmed.replacingOccurrences(of: "path:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("releaseNotes:") {
+                inReleaseNotes = true
+            }
+        }
+
+        if !releaseNotesLines.isEmpty {
+            notes = releaseNotesLines.joined(separator: "\n")
+        }
+
+        guard let serverVersion = version else {
+            if !silent {
+                updateState = .error("Could not parse update information")
+            } else {
+                updateState = .idle
+            }
+            return
+        }
+
+        // Parse sha512 hash from YAML
+        var serverHash: String?
+        for line in yaml.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("sha512:") && !trimmed.contains("files:") {
+                serverHash = trimmed.replacingOccurrences(of: "sha512:", with: "").trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+
+        // Compare by hash (allows updates even if version stays at 1.0)
+        let installedHash = UserDefaults.standard.string(forKey: "installedBuildHash") ?? ""
+        let hasNewBuild = serverHash != nil && serverHash != installedHash && !installedHash.isEmpty
+
+        // Also check version for fresh installs
+        let hasNewerVersion = isNewerVersion(serverVersion, than: AutoUpdater.currentVersion)
+
+        if hasNewBuild || hasNewerVersion {
+            latestVersion = serverVersion
+            releaseNotes = notes
+
+            if let downloadPath = path {
+                updateURL = URL(string: "\(downloadBaseURL)/\(downloadPath)")
+            }
+
+            updateAvailable = true
+            updateState = .available(version: serverVersion)
+
+            // Store server hash for comparison after install
+            if let hash = serverHash {
+                UserDefaults.standard.set(hash, forKey: "pendingBuildHash")
+            }
+
+            // Post notification
+            NotificationCenter.default.post(name: .updateAvailable, object: serverVersion)
+        } else {
+            // If no installed hash, store current server hash (first run)
+            if installedHash.isEmpty, let hash = serverHash {
+                UserDefaults.standard.set(hash, forKey: "installedBuildHash")
+            }
+            updateAvailable = false
+            updateState = .idle
+        }
+    }
+
+    /// Call after successful update to mark new hash as installed
+    func markUpdateInstalled() {
+        if let pendingHash = UserDefaults.standard.string(forKey: "pendingBuildHash") {
+            UserDefaults.standard.set(pendingHash, forKey: "installedBuildHash")
+            UserDefaults.standard.removeObject(forKey: "pendingBuildHash")
+        }
+    }
+
+    private func isNewerVersion(_ new: String, than current: String) -> Bool {
+        let newParts = new.components(separatedBy: ".").compactMap { Int($0) }
+        let currentParts = current.components(separatedBy: ".").compactMap { Int($0) }
+
+        for i in 0..<max(newParts.count, currentParts.count) {
+            let newPart = i < newParts.count ? newParts[i] : 0
+            let currentPart = i < currentParts.count ? currentParts[i] : 0
+
+            if newPart > currentPart {
+                return true
+            } else if newPart < currentPart {
+                return false
+            }
+        }
+        return false
     }
 
     // MARK: - Download Update
@@ -148,15 +241,67 @@ class AutoUpdater: ObservableObject {
             return
         }
 
-        // For macOS, we typically:
-        // 1. Verify the downloaded DMG/PKG
-        // 2. Open it for the user to install
-        // 3. Quit the app so the installer can run
+        // For ZIP files, unzip and open the app
+        if fileURL.pathExtension == "zip" {
+            unzipAndInstall(fileURL)
+        } else {
+            // For DMG/PKG, just open it
+            NSWorkspace.shared.open(fileURL)
+            NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
+        }
+    }
 
-        NSWorkspace.shared.open(fileURL)
+    private func unzipAndInstall(_ zipURL: URL) {
+        let fileManager = FileManager.default
+        let downloadsDir = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let extractDir = downloadsDir.appendingPathComponent("VoiceLink-Update")
 
-        // Post notification that app should quit
-        NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
+        // Clean up previous extraction
+        try? fileManager.removeItem(at: extractDir)
+
+        // Unzip using ditto (preserves permissions and code signing)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-xk", zipURL.path, extractDir.path]
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            if process.terminationStatus == 0 {
+                // Find the .app bundle
+                let contents = try fileManager.contentsOfDirectory(at: extractDir, includingPropertiesForKeys: nil)
+                if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
+                    // Open Finder to show the new app
+                    NSWorkspace.shared.selectFile(appBundle.path, inFileViewerRootedAtPath: extractDir.path)
+
+                    // Show instructions
+                    DispatchQueue.main.async {
+                        self.showInstallInstructions(appBundle)
+                    }
+                } else {
+                    updateState = .error("Could not find app in downloaded archive")
+                }
+            } else {
+                updateState = .error("Failed to extract update")
+            }
+        } catch {
+            updateState = .error("Failed to extract update: \(error.localizedDescription)")
+        }
+    }
+
+    private func showInstallInstructions(_ appURL: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Update Downloaded"
+        alert.informativeText = "The new version has been downloaded to your Downloads folder.\n\nTo complete the update:\n1. Quit VoiceLink\n2. Move the new VoiceLink.app to your Applications folder\n3. Open the new VoiceLink"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open Downloads Folder")
+        alert.addButton(withTitle: "Later")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.selectFile(appURL.path, inFileViewerRootedAtPath: appURL.deletingLastPathComponent().path)
+        }
     }
 
     // MARK: - Persistence
@@ -181,14 +326,16 @@ class AutoUpdater: ObservableObject {
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            // Move downloaded file to a permanent location
             let fileManager = FileManager.default
             let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-            let fileName = "VoiceLinkNative-\(updater?.latestVersion ?? "update").dmg"
+
+            // Determine file extension from URL
+            let originalURL = downloadTask.originalRequest?.url
+            let ext = originalURL?.pathExtension ?? "zip"
+            let fileName = "VoiceLink-\(updater?.latestVersion ?? "update").\(ext)"
             let destinationURL = downloadsURL.appendingPathComponent(fileName)
 
             do {
-                // Remove existing file if present
                 if fileManager.fileExists(atPath: destinationURL.path) {
                     try fileManager.removeItem(at: destinationURL)
                 }
@@ -257,7 +404,6 @@ struct UpdateSettingsView: View {
 
                 Spacer()
 
-                // Update status badge
                 if updater.updateAvailable {
                     Text("Update Available")
                         .font(.caption)
@@ -269,7 +415,7 @@ struct UpdateSettingsView: View {
                 }
             }
             .padding()
-            .background(Color.white.opacity(0.05))
+            .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(12)
 
             // Update State
@@ -350,7 +496,7 @@ struct UpdateSettingsView: View {
                     .font(.caption)
                     .foregroundColor(.gray)
                     .padding()
-                    .background(Color.black.opacity(0.2))
+                    .background(Color(NSColor.controlBackgroundColor))
                     .cornerRadius(8)
             }
 
@@ -409,7 +555,7 @@ struct UpdateSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Update Downloaded")
                         .fontWeight(.semibold)
-                    Text("Ready to install. The app will close to complete installation.")
+                    Text("Click Install to extract and view the new version.")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
@@ -420,7 +566,7 @@ struct UpdateSettingsView: View {
             }) {
                 HStack {
                     Image(systemName: "arrow.uturn.forward")
-                    Text("Install and Restart")
+                    Text("Install Update")
                 }
             }
             .buttonStyle(.borderedProminent)

@@ -46,7 +46,7 @@ class WalletManager: ObservableObject {
     }
 
     // Server API base URL
-    private let ecryptoAPIBase = "https://ecrypto.devinecreations.net/api"
+    private let ecryptoAPIBase = "https://api.ecripto.app/api"
 
     init() {
         loadWalletData()
@@ -362,6 +362,221 @@ class WalletManager: ObservableObject {
         static let extraDevice = FeaturePrice(feature: "extra_device", price: 1.0, description: "Extra Device Slot")
         static let extraRoom = FeaturePrice(feature: "extra_room", price: 0.5, description: "Extra Room Slot")
         static let serverHosting = FeaturePrice(feature: "server_hosting", price: 10.0, description: "Server Hosting (monthly)")
+        static let roomMint = FeaturePrice(feature: "room_mint", price: 2.0, description: "Mint Room as NFT")
+        static let serverMint = FeaturePrice(feature: "server_mint", price: 15.0, description: "Mint Server as NFT")
+    }
+
+    // MARK: - Room Minting (eCrypto NFT)
+
+    /// Mint a room as an NFT on the eCrypto blockchain
+    /// This creates an on-chain ownership record for the room
+    func mintRoom(roomId: String, roomName: String, metadata: [String: Any] = [:], completion: @escaping (Bool, String?, String?) -> Void) {
+        guard let address = walletAddress else {
+            completion(false, nil, "No wallet connected")
+            return
+        }
+
+        guard canAfford(amount: FeaturePrice.roomMint.price) else {
+            completion(false, nil, "Insufficient balance")
+            return
+        }
+
+        guard let url = URL(string: "\(ecryptoAPIBase)/nft/mint") else {
+            completion(false, nil, "Invalid API URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var nftMetadata: [String: Any] = [
+            "name": roomName,
+            "description": "VoiceLink Room NFT - \(roomName)",
+            "type": "room",
+            "roomId": roomId,
+            "createdAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        nftMetadata.merge(metadata) { _, new in new }
+
+        let body: [String: Any] = [
+            "ownerAddress": address,
+            "appId": "voicelink",
+            "assetType": "room",
+            "assetId": roomId,
+            "metadata": nftMetadata,
+            "price": FeaturePrice.roomMint.price,
+            "useTestCoins": testCoinsBalance >= FeaturePrice.roomMint.price
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let success = json["success"] as? Bool else {
+                DispatchQueue.main.async {
+                    completion(false, nil, error?.localizedDescription ?? "Minting failed")
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                if success {
+                    let tokenId = json["tokenId"] as? String
+                    let txHash = json["transactionHash"] as? String
+
+                    // Deduct cost
+                    let usedTestCoins = json["usedTestCoins"] as? Bool ?? false
+                    if usedTestCoins {
+                        self?.testCoinsBalance -= FeaturePrice.roomMint.price
+                    } else {
+                        self?.walletBalance -= FeaturePrice.roomMint.price
+                    }
+                    self?.saveWalletData()
+
+                    completion(true, tokenId, nil)
+
+                    // Notify about successful mint
+                    NotificationCenter.default.post(name: .roomMinted, object: [
+                        "roomId": roomId,
+                        "tokenId": tokenId ?? "",
+                        "txHash": txHash ?? ""
+                    ])
+                } else {
+                    let error = json["error"] as? String ?? "Minting failed"
+                    completion(false, nil, error)
+                }
+            }
+        }.resume()
+    }
+
+    /// Mint a server as an NFT on the eCrypto blockchain
+    func mintServer(serverId: String, serverName: String, metadata: [String: Any] = [:], completion: @escaping (Bool, String?, String?) -> Void) {
+        guard let address = walletAddress else {
+            completion(false, nil, "No wallet connected")
+            return
+        }
+
+        guard canAfford(amount: FeaturePrice.serverMint.price) else {
+            completion(false, nil, "Insufficient balance")
+            return
+        }
+
+        guard let url = URL(string: "\(ecryptoAPIBase)/nft/mint") else {
+            completion(false, nil, "Invalid API URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var nftMetadata: [String: Any] = [
+            "name": serverName,
+            "description": "VoiceLink Server NFT - \(serverName)",
+            "type": "server",
+            "serverId": serverId,
+            "createdAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        nftMetadata.merge(metadata) { _, new in new }
+
+        let body: [String: Any] = [
+            "ownerAddress": address,
+            "appId": "voicelink",
+            "assetType": "server",
+            "assetId": serverId,
+            "metadata": nftMetadata,
+            "price": FeaturePrice.serverMint.price,
+            "useTestCoins": testCoinsBalance >= FeaturePrice.serverMint.price
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let success = json["success"] as? Bool else {
+                DispatchQueue.main.async {
+                    completion(false, nil, error?.localizedDescription ?? "Minting failed")
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                if success {
+                    let tokenId = json["tokenId"] as? String
+                    let txHash = json["transactionHash"] as? String
+
+                    // Deduct cost
+                    let usedTestCoins = json["usedTestCoins"] as? Bool ?? false
+                    if usedTestCoins {
+                        self?.testCoinsBalance -= FeaturePrice.serverMint.price
+                    } else {
+                        self?.walletBalance -= FeaturePrice.serverMint.price
+                    }
+                    self?.saveWalletData()
+
+                    completion(true, tokenId, nil)
+
+                    // Notify about successful mint
+                    NotificationCenter.default.post(name: .serverMinted, object: [
+                        "serverId": serverId,
+                        "tokenId": tokenId ?? "",
+                        "txHash": txHash ?? ""
+                    ])
+                } else {
+                    let error = json["error"] as? String ?? "Minting failed"
+                    completion(false, nil, error)
+                }
+            }
+        }.resume()
+    }
+
+    /// Transfer a minted NFT to another wallet
+    func transferNFT(tokenId: String, toAddress: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let address = walletAddress else {
+            completion(false, "No wallet connected")
+            return
+        }
+
+        guard let url = URL(string: "\(ecryptoAPIBase)/nft/transfer") else {
+            completion(false, "Invalid API URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "tokenId": tokenId,
+            "fromAddress": address,
+            "toAddress": toAddress,
+            "appId": "voicelink"
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let success = json["success"] as? Bool else {
+                DispatchQueue.main.async {
+                    completion(false, error?.localizedDescription ?? "Transfer failed")
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                if success {
+                    completion(true, nil)
+                } else {
+                    let error = json["error"] as? String ?? "Transfer failed"
+                    completion(false, error)
+                }
+            }
+        }.resume()
     }
 
     // MARK: - Persistence
@@ -414,6 +629,8 @@ class WalletManager: ObservableObject {
 extension Notification.Name {
     static let walletConnected = Notification.Name("walletConnected")
     static let walletDisconnected = Notification.Name("walletDisconnected")
+    static let roomMinted = Notification.Name("roomMinted")
+    static let serverMinted = Notification.Name("serverMinted")
 }
 
 // MARK: - Wallet Setup View

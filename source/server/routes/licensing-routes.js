@@ -2,7 +2,9 @@
  * VoiceLink Licensing API Routes
  *
  * Handles node registration, license validation, and device management.
- * Syncs with hubnode API and api_monitor for centralized management.
+ * Syncs with hubnode API, WHMCS, and api_monitor for centralized management.
+ *
+ * IMPORTANT: Users must be logged in (WHMCS authenticated) to get a license.
  */
 
 const express = require('express');
@@ -28,13 +30,183 @@ class LicensingRoutes {
             apiKey: options.apiMonitorKey || process.env.API_MONITOR_KEY
         };
 
+        // WHMCS API configuration - required for user authentication
+        this.whmcsConfig = {
+            apiUrl: options.whmcsApiUrl || process.env.WHMCS_API_URL || 'https://devine-creations.com/includes/api.php',
+            identifier: options.whmcsIdentifier || process.env.WHMCS_API_IDENTIFIER,
+            secret: options.whmcsSecret || process.env.WHMCS_API_SECRET,
+            accessKey: options.whmcsAccessKey || process.env.WHMCS_ACCESS_KEY
+        };
+
         this.setupRoutes();
         this.startHubNodeSync();
     }
 
+    /**
+     * Validate user session with WHMCS
+     * Users must be logged in to get a license
+     * Supports 2FA if enabled on the WHMCS account
+     */
+    async validateWhmcsUser(email, sessionToken, twoFactorCode = null) {
+        if (!this.whmcsConfig.identifier || !this.whmcsConfig.secret) {
+            console.warn('[Licensing] WHMCS not configured, skipping auth validation');
+            return { valid: false, error: 'WHMCS not configured' };
+        }
+
+        try {
+            // First, get client details
+            const params = new URLSearchParams({
+                identifier: this.whmcsConfig.identifier,
+                secret: this.whmcsConfig.secret,
+                action: 'GetClientsDetails',
+                email: email,
+                responsetype: 'json'
+            });
+
+            if (this.whmcsConfig.accessKey) {
+                params.append('accesskey', this.whmcsConfig.accessKey);
+            }
+
+            const response = await fetch(this.whmcsConfig.apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: params.toString()
+            });
+
+            const result = await response.json();
+
+            if (result.result === 'success' && result.client) {
+                const client = result.client;
+
+                // Check if 2FA is enabled for this user
+                const twoFactorEnabled = client.twofactorenabled === 'true' || client.twofactorenabled === true;
+
+                if (twoFactorEnabled && !twoFactorCode) {
+                    return {
+                        valid: false,
+                        requires2FA: true,
+                        userId: client.id,
+                        error: '2FA code required',
+                        message: 'This account has 2FA enabled. Please provide the 2FA code.'
+                    };
+                }
+
+                // If 2FA is required, validate the code
+                if (twoFactorEnabled && twoFactorCode) {
+                    const twoFAValid = await this.validate2FACode(client.id, twoFactorCode);
+                    if (!twoFAValid.valid) {
+                        return {
+                            valid: false,
+                            requires2FA: true,
+                            error: 'Invalid 2FA code',
+                            message: 'The 2FA code provided is invalid or expired.'
+                        };
+                    }
+                }
+
+                return {
+                    valid: true,
+                    userId: client.id,
+                    email: client.email,
+                    firstName: client.firstname,
+                    lastName: client.lastname,
+                    status: client.status,
+                    twoFactorEnabled
+                };
+            }
+
+            return { valid: false, error: 'User not found or invalid session' };
+        } catch (e) {
+            console.error('[Licensing] WHMCS validation error:', e.message);
+            return { valid: false, error: e.message };
+        }
+    }
+
+    /**
+     * Validate 2FA code with WHMCS
+     */
+    async validate2FACode(clientId, code) {
+        try {
+            const params = new URLSearchParams({
+                identifier: this.whmcsConfig.identifier,
+                secret: this.whmcsConfig.secret,
+                action: 'ValidateLogin',
+                clientid: clientId,
+                twofa: code,
+                responsetype: 'json'
+            });
+
+            if (this.whmcsConfig.accessKey) {
+                params.append('accesskey', this.whmcsConfig.accessKey);
+            }
+
+            const response = await fetch(this.whmcsConfig.apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: params.toString()
+            });
+
+            const result = await response.json();
+
+            // WHMCS returns success if 2FA code is valid
+            return { valid: result.result === 'success' };
+        } catch (e) {
+            console.error('[Licensing] 2FA validation error:', e.message);
+            return { valid: false, error: e.message };
+        }
+    }
+
+    /**
+     * Middleware: Require WHMCS authentication (with 2FA support)
+     */
+    requireAuth() {
+        return async (req, res, next) => {
+            const email = req.body.email || req.headers['x-user-email'];
+            const sessionToken = req.headers['x-session-token'] || req.headers.authorization?.replace('Bearer ', '');
+            const twoFactorCode = req.body.twoFactorCode || req.headers['x-2fa-code'];
+
+            if (!email) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required',
+                    message: 'You must be logged in to get a license. Please provide your email.'
+                });
+            }
+
+            const validation = await this.validateWhmcsUser(email, sessionToken, twoFactorCode);
+
+            // Handle 2FA required response
+            if (validation.requires2FA) {
+                return res.status(401).json({
+                    success: false,
+                    error: validation.error,
+                    requires2FA: true,
+                    userId: validation.userId,
+                    message: validation.message
+                });
+            }
+
+            if (!validation.valid) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Invalid credentials',
+                    message: 'Please log in with your VoiceLink account to get a license.'
+                });
+            }
+
+            // Attach user info to request
+            req.whmcsUser = validation;
+            next();
+        };
+    }
+
     setupRoutes() {
-        // Register a node (starts delay timer)
-        this.router.post('/register', express.json(), (req, res) => {
+        // Register a node (starts delay timer) - REQUIRES LOGIN
+        this.router.post('/register', express.json(), this.requireAuth(), async (req, res) => {
             try {
                 const { nodeId, serverId, nodeUrl, version, deviceInfo } = req.body;
 
@@ -45,16 +217,24 @@ class LicensingRoutes {
                     });
                 }
 
+                // Include WHMCS user info in registration
                 const result = this.licensing.registerNode({
                     nodeId,
                     serverId,
                     nodeUrl,
                     version,
-                    deviceInfo
+                    deviceInfo,
+                    whmcsUser: req.whmcsUser
                 });
 
-                // Sync to hubnode
-                this.syncToHubNode('register', { nodeId, serverId, result });
+                // Sync to hubnode with user info
+                this.syncToHubNode('register', {
+                    nodeId,
+                    serverId,
+                    userId: req.whmcsUser?.userId,
+                    userEmail: req.whmcsUser?.email,
+                    result
+                });
 
                 res.json(result);
             } catch (e) {

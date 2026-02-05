@@ -565,6 +565,13 @@ body {
     margin-top: auto;
 }
 
+.audio-controls-help {
+    margin-top: 0.5rem;
+    text-align: center;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
 /* Chat Panel */
 .chat-panel {
     background: rgba(255, 255, 255, 0.1);
@@ -3081,6 +3088,18 @@ body {
     padding: 0 15px;
     color: #666;
     font-size: 12px;
+}
+
+.auth-actions-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.auth-actions-row .secondary-btn {
+    flex: 1 1 160px;
+    text-align: center;
 }
 
 /* Mastodon Benefits */
