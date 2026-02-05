@@ -55,6 +55,7 @@ class ConnectionHealthMonitor: ObservableObject {
     struct ConnectionDetails {
         var localServerReachable: Bool = false
         var mainServerReachable: Bool = false
+        var communityServerReachable: Bool = false
         var apiResponsive: Bool = false
         var websocketConnected: Bool = false
         var latencyMs: Int = 0
@@ -75,6 +76,7 @@ class ConnectionHealthMonitor: ObservableObject {
             case lan = "LAN"
             case remote = "Remote"
             case main = "Main Server"
+            case community = "Community Server"
         }
     }
 
@@ -130,6 +132,23 @@ class ConnectionHealthMonitor: ObservableObject {
                     name: "Main Server",
                     url: "voicelink.devinecreations.net",
                     type: .main,
+                    isOnline: true,
+                    latencyMs: latency,
+                    lastSeen: Date()
+                ))
+            }
+            group.leave()
+        }
+
+        // Check community server
+        group.enter()
+        checkServer(url: "https://vps1.tappedin.fm") { reachable, latency in
+            details.communityServerReachable = reachable
+            if reachable {
+                nodes.append(DetectedNode(
+                    name: "Community Server",
+                    url: "vps1.tappedin.fm",
+                    type: .community,
                     isOnline: true,
                     latencyMs: latency,
                     lastSeen: Date()

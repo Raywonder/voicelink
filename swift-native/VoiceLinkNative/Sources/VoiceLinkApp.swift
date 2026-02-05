@@ -1505,6 +1505,8 @@ struct VoiceControlButton: View {
 // MARK: - Sync Mode Enum
 enum SyncMode: String, CaseIterable, Identifiable {
     case all = "all"
+    case mainServer = "main_server"
+    case communityServer = "community_server"
     case federation = "federation"
     case personalFederated = "personal_federated"
     case personalRooms = "personal_rooms"
@@ -1515,6 +1517,8 @@ enum SyncMode: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .all: return "All Servers"
+        case .mainServer: return "Main Server"
+        case .communityServer: return "Community Server"
         case .federation: return "Main Federation"
         case .personalFederated: return "Personal Federated"
         case .personalRooms: return "Personal Rooms (Hidden)"
@@ -1525,6 +1529,8 @@ enum SyncMode: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .all: return "Show all available servers and rooms"
+        case .mainServer: return "Only rooms from the main server"
+        case .communityServer: return "Only rooms from the community server"
         case .federation: return "Main VoiceLink federation network"
         case .personalFederated: return "Your personal federated servers"
         case .personalRooms: return "Private rooms not visible publicly"
@@ -1535,6 +1541,8 @@ enum SyncMode: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .all: return "globe"
+        case .mainServer: return "dot.radiowaves.left.and.right"
+        case .communityServer: return "person.3.fill"
         case .federation: return "network"
         case .personalFederated: return "person.3.fill"
         case .personalRooms: return "lock.shield"

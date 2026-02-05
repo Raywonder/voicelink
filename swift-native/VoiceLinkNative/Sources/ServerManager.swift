@@ -16,10 +16,18 @@ class ServerManager: ObservableObject {
 
     // Server options
     static let mainServer = "https://voicelink.devinecreations.net"
+    static let communityServer = "https://vps1.tappedin.fm"
     static let localServer = "http://localhost:4004"
 
+    private enum ConnectionMode {
+        case main
+        case community
+        case local
+        case custom
+    }
+
     private var currentServerURL: String = ""
-    private var useMainServer: Bool = true
+    private var connectionMode: ConnectionMode = .main
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -98,7 +106,7 @@ class ServerManager: ObservableObject {
 
         // Choose server
         currentServerURL = toMain ? ServerManager.mainServer : ServerManager.localServer
-        useMainServer = toMain
+        connectionMode = toMain ? .main : .local
 
         guard let url = URL(string: currentServerURL) else {
             DispatchQueue.main.async {
@@ -133,6 +141,38 @@ class ServerManager: ObservableObject {
         connect(toMain: false)
     }
 
+    func connectToCommunityServer() {
+        // Disconnect existing connection
+        socket?.disconnect()
+
+        currentServerURL = ServerManager.communityServer
+        connectionMode = .community
+
+        guard let url = URL(string: currentServerURL) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid server URL"
+            }
+            return
+        }
+
+        print("Connecting to server: \(currentServerURL)")
+
+        manager = SocketManager(socketURL: url, config: [
+            .log(true),
+            .compress,
+            .forceWebsockets(true),
+            .reconnects(true),
+            .reconnectWait(3),
+            .reconnectAttempts(5),
+            .secure(currentServerURL.hasPrefix("https"))
+        ])
+
+        socket = manager?.defaultSocket
+
+        setupEventHandlers()
+        socket?.connect()
+    }
+
     func tryLocalThenMain() {
         // Try main/remote server first (primary), fallback to local
         print("Connecting to main server (primary)...")
@@ -141,7 +181,7 @@ class ServerManager: ObservableObject {
         // Set up a timeout to try local server if main fails
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self = self else { return }
-            if !self.isConnected && self.useMainServer {
+            if !self.isConnected && self.connectionMode == .main {
                 print("Main server not available, trying local server...")
                 self.connect(toMain: false)
             }
@@ -175,7 +215,7 @@ class ServerManager: ObservableObject {
         }
 
         currentServerURL = serverURL
-        useMainServer = false
+        connectionMode = .custom
 
         guard let url = URL(string: serverURL) else {
             DispatchQueue.main.async {
@@ -214,7 +254,16 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self.isConnected = true
                 self.serverStatus = "Connected"
-                self.connectedServer = self.useMainServer ? "Federation" : "Local Server"
+                switch self.connectionMode {
+                case .main:
+                    self.connectedServer = "Main Server"
+                case .community:
+                    self.connectedServer = "Community Server"
+                case .local:
+                    self.connectedServer = "Local Server"
+                case .custom:
+                    self.connectedServer = self.currentServerURL
+                }
                 self.errorMessage = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
