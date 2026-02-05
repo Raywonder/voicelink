@@ -58,7 +58,6 @@ struct LoginView: View {
                         TextField("mastodon.social", text: $mastodonInstance)
                             .textFieldStyle(.roundedBorder)
                             .disableAutocorrection(true)
-                            .textInputAutocapitalization(.never)
                             .disabled(isLoading)
 
                         Text("Enter your Mastodon instance domain (e.g., mastodon.social)")
@@ -94,7 +93,6 @@ struct LoginView: View {
                         TextField("you@devinecreations.net", text: $whmcsEmail)
                             .textFieldStyle(.roundedBorder)
                             .textContentType(.username)
-                            .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                             .disabled(isLoading)
                     }
@@ -118,7 +116,6 @@ struct LoginView: View {
                         TextField("123 456", text: $whmcsTwoFactor)
                             .textFieldStyle(.roundedBorder)
                             .textContentType(.oneTimeCode)
-                            .textInputAutocapitalization(.never)
                             .disabled(isLoading)
                     }
 
@@ -129,7 +126,6 @@ struct LoginView: View {
 
                         TextField("@name@instance.social", text: $whmcsMastodonHandle)
                             .textFieldStyle(.roundedBorder)
-                            .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                             .disabled(isLoading)
                     }

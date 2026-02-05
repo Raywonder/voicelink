@@ -327,10 +327,11 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            Task { @MainActor in
+                let authManager = AuthenticationManager.shared
                 if let error = error {
-                    self?.authState = .error
+                    authManager.authState = .error
                     completion(false, error.localizedDescription)
                     return
                 }
@@ -340,19 +341,19 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
                 if statusCode >= 400 {
                     if json["requires2FA"] as? Bool == true {
-                        self?.authState = .error
+                        authManager.authState = .error
                         completion(false, "Two-factor authentication required")
                         return
                     }
                     let message = json["error"] as? String ?? "Login failed"
-                    self?.authState = .error
+                    authManager.authState = .error
                     completion(false, message)
                     return
                 }
 
                 guard let token = json["token"] as? String,
                       let userData = json["user"] as? [String: Any] else {
-                    self?.authState = .error
+                    authManager.authState = .error
                     completion(false, "Invalid login response")
                     return
                 }
@@ -375,10 +376,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     permissions: permissions
                 )
 
-                self?.currentUser = user
-                self?.authState = .authenticated
-                self?.authError = nil
-                self?.saveAuth(user: user)
+                authManager.currentUser = user
+                authManager.authState = .authenticated
+                authManager.authError = nil
+                authManager.saveAuth(user: user)
                 completion(true, nil)
             }
         }.resume()
@@ -617,14 +618,36 @@ struct AuthenticatedUser: Codable, Identifiable {
     let mastodonInstance: String?
     var accessToken: String
     let avatarURL: String?
-    let role: String? = nil
-    let permissions: [String]? = nil
+    let role: String?
+    let permissions: [String]?
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0
     var followingCount: Int = 0
     var statusesCount: Int = 0
     var accountCreatedAt: Date?
+
+    init(id: String,
+         username: String,
+         displayName: String,
+         email: String?,
+         authMethod: AuthMethod,
+         mastodonInstance: String?,
+         accessToken: String,
+         avatarURL: String?,
+         role: String? = nil,
+         permissions: [String]? = nil) {
+        self.id = id
+        self.username = username
+        self.displayName = displayName
+        self.email = email
+        self.authMethod = authMethod
+        self.mastodonInstance = mastodonInstance
+        self.accessToken = accessToken
+        self.avatarURL = avatarURL
+        self.role = role
+        self.permissions = permissions
+    }
 
     var fullHandle: String {
         if authMethod == .mastodon, let instance = mastodonInstance {
@@ -1262,6 +1285,7 @@ struct DeviceCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
+        case .whmcs: return .orange
         }
     }
 

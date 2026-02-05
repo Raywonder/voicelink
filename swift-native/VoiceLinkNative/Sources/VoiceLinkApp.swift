@@ -377,6 +377,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - App State
+@MainActor
 class AppState: ObservableObject {
     @Published var currentScreen: Screen = .mainMenu
     @Published var isConnected: Bool = false
