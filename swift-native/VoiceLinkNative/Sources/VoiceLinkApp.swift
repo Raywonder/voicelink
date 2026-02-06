@@ -409,7 +409,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hideMainWindow() {
         for window in NSApp.windows {
-            window.close()
+            window.orderOut(nil)
+        }
+    }
+}
+
+// MARK: - Window Close Handling (minimize to menubar)
+final class WindowCloseDelegate: NSObject, NSWindowDelegate {
+    static let shared = WindowCloseDelegate()
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+}
+
+struct WindowAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                window.isReleasedWhenClosed = false
+                window.delegate = WindowCloseDelegate.shared
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                window.isReleasedWhenClosed = false
+                window.delegate = WindowCloseDelegate.shared
+            }
         }
     }
 }
@@ -740,6 +772,7 @@ struct ContentView: View {
                 LoginView()
             }
         }
+        .background(WindowAccessor())
     }
 }
 
@@ -1244,6 +1277,7 @@ struct VoiceChatView: View {
     @State private var isDeafened = false
     @State private var messageText = ""
     @State private var showChat = true
+    @State private var showUserAudioControls = true
 
     var body: some View {
         HSplitView {
@@ -1289,12 +1323,32 @@ struct VoiceChatView: View {
 
                             // Show other users from server
                             ForEach(appState.serverManager.currentRoomUsers) { user in
-                                UserRow(username: user.username, isMuted: user.isMuted, isDeafened: user.isDeafened, isSpeaking: user.isSpeaking)
+                                RoomUserRow(user: user)
                             }
                         }
                     }
                 }
                 .padding(.horizontal)
+
+                // Per-user audio controls
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("User Audio Controls")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button(showUserAudioControls ? "Hide" : "Show") {
+                            showUserAudioControls.toggle()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if showUserAudioControls {
+                        UserVolumeControlPanel()
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
 
                 Spacer()
 
@@ -1578,6 +1632,50 @@ enum SyncMode: String, CaseIterable, Identifiable {
         case .personalRooms: return "lock.shield"
         case .allRoomTypes: return "square.grid.2x2"
         }
+    }
+}
+
+struct RoomUserRow: View {
+    let user: RoomUser
+    @ObservedObject var audioControl = UserAudioControlManager.shared
+
+    var isSoloed: Bool {
+        audioControl.soloedUserId == user.odId
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Speaking indicator
+            Circle()
+                .fill(user.isSpeaking ? Color.green : Color.gray.opacity(0.3))
+                .frame(width: 10, height: 10)
+
+            Text(user.username)
+                .foregroundColor(.white)
+
+            Spacer()
+
+            InlineUserVolumeControl(userId: user.odId)
+
+            Button(isSoloed ? "Soloed" : "Solo") {
+                audioControl.toggleSolo(for: user.odId)
+            }
+            .buttonStyle(.bordered)
+            .tint(isSoloed ? .yellow : .gray)
+
+            if user.isMuted {
+                Image(systemName: "mic.slash.fill")
+                    .foregroundColor(.red)
+            }
+            if user.isDeafened {
+                Image(systemName: "speaker.slash.fill")
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(8)
     }
 }
 
@@ -1938,6 +2036,7 @@ struct SettingsView: View {
         case profile = "Profile"
         case privacy = "Privacy"
         case mastodon = "Mastodon"
+        case updates = "Updates"
         case advanced = "Advanced"
     }
 
@@ -2022,6 +2121,8 @@ struct SettingsView: View {
                             privacySettings
                         case .mastodon:
                             mastodonSettings
+                        case .updates:
+                            UpdateSettingsView()
                         case .advanced:
                             advancedSettings
                         }
@@ -2049,6 +2150,7 @@ struct SettingsView: View {
         case .profile: return "person.crop.circle"
         case .privacy: return "lock.shield"
         case .mastodon: return "bubble.left.and.bubble.right"
+        case .updates: return "arrow.down.circle"
         case .advanced: return "gear"
         }
     }

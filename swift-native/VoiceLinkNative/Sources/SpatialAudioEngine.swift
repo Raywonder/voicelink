@@ -108,6 +108,7 @@ class SpatialAudioEngine: ObservableObject {
     init() {
         setupAudioEngine()
         loadHRTFDatabase()
+        setupAudioControlObservers()
     }
 
     // MARK: - Setup
@@ -169,6 +170,42 @@ class SpatialAudioEngine: ObservableObject {
         print("[SpatialAudio] HRTF database loaded")
     }
 
+    private func setupAudioControlObservers() {
+        NotificationCenter.default.addObserver(
+            forName: .userVolumeChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let userId = notification.userInfo?["userId"] as? String else { return }
+            self?.applyUserVolume(userId: userId)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .userMuteChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let userId = notification.userInfo?["userId"] as? String else { return }
+            self?.applyUserVolume(userId: userId)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .userSoloChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyAllUserVolumes()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .userMasterVolumeChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyAllUserVolumes()
+        }
+    }
+
     // MARK: - User Audio Management
 
     /// Add a user's audio stream to the spatial environment
@@ -198,6 +235,8 @@ class SpatialAudioEngine: ObservableObject {
             playerNode.play()
         }
 
+        applyUserVolume(userId: userId)
+
         // Update position
         updateUserPosition(userId: userId)
 
@@ -223,6 +262,32 @@ class SpatialAudioEngine: ObservableObject {
         }
 
         userPositions.removeValue(forKey: userId)
+    }
+
+    // MARK: - Volume / Mute / Solo
+
+    private func applyAllUserVolumes() {
+        for userId in spatialMixers.keys {
+            applyUserVolume(userId: userId)
+        }
+    }
+
+    private func applyUserVolume(userId: String) {
+        guard let mixerNode = spatialMixers[userId] else { return }
+        let audioControl = UserAudioControlManager.shared
+
+        let isMuted = audioControl.isMuted(userId)
+        let baseVolume = audioControl.getVolume(for: userId) * audioControl.masterVolume
+        let soloedId = audioControl.soloedUserId
+
+        let effectiveVolume: Float
+        if let soloedId = soloedId {
+            effectiveVolume = (soloedId == userId && !isMuted) ? baseVolume : 0.0
+        } else {
+            effectiveVolume = isMuted ? 0.0 : baseVolume
+        }
+
+        mixerNode.outputVolume = max(0.0, min(2.0, effectiveVolume))
     }
 
     // MARK: - Position Management
