@@ -50,6 +50,15 @@ struct VoiceLinkApp: App {
                 }
                 .keyboardShortcut("j", modifiers: .command)
 
+                Button("Set Nickname...") {
+                    appState.currentScreen = .settings
+                    NotificationCenter.default.post(
+                        name: .openSettingsTab,
+                        object: "Profile"
+                    )
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+
                 Divider()
 
                 Button("Leave Room") {
@@ -138,7 +147,13 @@ struct VoiceLinkApp: App {
                     serverManager.connectToMainServer()
                     UserDefaults.standard.set("main", forKey: "lastConnectedServer")
                 }
-                .disabled(serverManager.isConnected && serverManager.connectedServer == "Federation")
+                .disabled(serverManager.isConnected && serverManager.connectedServer == "Main Server")
+
+                Button("Connect to Community Server") {
+                    serverManager.connectToCommunityServer()
+                    UserDefaults.standard.set("community", forKey: "lastConnectedServer")
+                }
+                .disabled(serverManager.isConnected && serverManager.connectedServer == "Community Server")
 
                 Button("Connect to Local Server") {
                     serverManager.connectToLocalServer()
@@ -285,6 +300,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func autoConnectOnLaunch() {
         let serverManager = ServerManager.shared
+        let settings = SettingsManager.shared
 
         // Check if already connected
         if serverManager.isConnected {
@@ -292,19 +308,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Check saved server preference
-        let savedServer = UserDefaults.standard.string(forKey: "lastConnectedServer") ?? "main"
-
-        print("[AppDelegate] Auto-connecting to server: \(savedServer)")
-
-        if savedServer == "local" {
-            serverManager.connectToLocalServer()
-        } else if savedServer.hasPrefix("http") {
-            serverManager.connectToURL(savedServer)
-        } else {
-            // Default: try main server first, fallback to local
-            serverManager.tryMainThenLocal()
+        guard settings.autoConnect else {
+            print("[AppDelegate] Auto-connect disabled")
+            return
         }
+
+        connectUsingPreference()
 
         // Set up auto-reconnect observer
         setupAutoReconnect()
@@ -324,9 +333,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if !serverManager.isConnected {
                         print("[AppDelegate] Auto-reconnecting...")
-                        serverManager.tryMainThenLocal()
+                        self?.connectUsingPreference()
                     }
                 }
+            }
+        }
+    }
+
+    private func connectUsingPreference() {
+        let serverManager = ServerManager.shared
+        let settings = SettingsManager.shared
+
+        switch settings.connectionPreference {
+        case .main:
+            print("[AppDelegate] Auto-connecting to main server")
+            serverManager.connectToMainServer()
+        case .community:
+            print("[AppDelegate] Auto-connecting to community server")
+            serverManager.connectToCommunityServer()
+        case .local:
+            print("[AppDelegate] Auto-connecting to local server")
+            serverManager.connectToLocalServer()
+        case .lastUsed:
+            let savedServer = UserDefaults.standard.string(forKey: "lastConnectedServer") ?? "main"
+            print("[AppDelegate] Auto-connecting to last server: \(savedServer)")
+            if savedServer == "local" {
+                serverManager.connectToLocalServer()
+            } else if savedServer.hasPrefix("http") {
+                serverManager.connectToURL(savedServer)
+            } else if savedServer == "community" {
+                serverManager.connectToCommunityServer()
+            } else {
+                serverManager.connectToMainServer()
             }
         }
     }
@@ -800,16 +838,7 @@ struct MainMenuView: View {
                 }
                 .padding(.horizontal, 40)
 
-                // Display name / guest name
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Your name")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                    TextField("Display name", text: $appState.username)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 320)
-                }
-                .padding(.horizontal, 40)
+                // Display name moved to Settings → Profile
 
             // Error message
             if let error = appState.errorMessage {
@@ -1552,6 +1581,34 @@ enum SyncMode: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Connection Preference
+enum ConnectionPreference: String, CaseIterable, Identifiable {
+    case main = "main"
+    case community = "community"
+    case local = "local"
+    case lastUsed = "last_used"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .main: return "Main Server"
+        case .community: return "Community Server"
+        case .local: return "Local Server"
+        case .lastUsed: return "Last Used"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .main: return "Always connect to the main server"
+        case .community: return "Always connect to the community server"
+        case .local: return "Always connect to a local server if found"
+        case .lastUsed: return "Reconnect to the last server you used"
+        }
+    }
+}
+
 // MARK: - File Receive Mode
 enum FileReceiveMode: String, CaseIterable {
     case autoReceive = "auto"
@@ -1600,9 +1657,30 @@ class SettingsManager: ObservableObject {
     }
 
     // Connection Settings
-    @Published var autoConnect: Bool = true
-    @Published var preferLocalServer: Bool = true
-    @Published var reconnectOnDisconnect: Bool = true
+    @Published var autoConnect: Bool = true {
+        didSet { UserDefaults.standard.set(autoConnect, forKey: "autoConnect") }
+    }
+    @Published var preferLocalServer: Bool = true {
+        didSet { UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer") }
+    }
+    @Published var reconnectOnDisconnect: Bool = true {
+        didSet { UserDefaults.standard.set(reconnectOnDisconnect, forKey: "reconnectOnDisconnect") }
+    }
+    @Published var connectionPreference: ConnectionPreference = .main {
+        didSet {
+            UserDefaults.standard.set(connectionPreference.rawValue, forKey: "connectionPreference")
+            switch connectionPreference {
+            case .main:
+                UserDefaults.standard.set("main", forKey: "lastConnectedServer")
+            case .community:
+                UserDefaults.standard.set("community", forKey: "lastConnectedServer")
+            case .local:
+                UserDefaults.standard.set("local", forKey: "lastConnectedServer")
+            case .lastUsed:
+                break
+            }
+        }
+    }
     @Published var connectionTimeout: Double = 30
 
     // PTT Settings
@@ -1661,6 +1739,11 @@ class SettingsManager: ObservableObject {
         autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
         autoConnect = UserDefaults.standard.bool(forKey: "autoConnect")
         preferLocalServer = UserDefaults.standard.bool(forKey: "preferLocalServer")
+        reconnectOnDisconnect = UserDefaults.standard.bool(forKey: "reconnectOnDisconnect")
+        if let preference = UserDefaults.standard.string(forKey: "connectionPreference"),
+           let connectionPreference = ConnectionPreference(rawValue: preference) {
+            self.connectionPreference = connectionPreference
+        }
         pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
         spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
 
@@ -1698,6 +1781,7 @@ class SettingsManager: ObservableObject {
             allowDirectMessages = true
             spatialAudioEnabled = true
             reconnectOnDisconnect = true
+            connectionPreference = .main
             UserDefaults.standard.set(true, forKey: "settingsInitialized")
         }
     }
@@ -1791,6 +1875,7 @@ class SettingsManager: ObservableObject {
 
 extension Notification.Name {
     static let syncModeChanged = Notification.Name("syncModeChanged")
+    static let openSettingsTab = Notification.Name("openSettingsTab")
 }
 
 // MARK: - Settings View
@@ -1804,6 +1889,7 @@ struct SettingsView: View {
         case sync = "Sync & Filters"
         case fileSharing = "File Sharing"
         case notifications = "Notifications"
+        case profile = "Profile"
         case privacy = "Privacy"
         case mastodon = "Mastodon"
         case advanced = "Advanced"
@@ -1882,6 +1968,8 @@ struct SettingsView: View {
                             fileSharingSettings
                         case .notifications:
                             notificationSettings
+                        case .profile:
+                            profileSettings
                         case .privacy:
                             privacySettings
                         case .mastodon:
@@ -1895,6 +1983,12 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openSettingsTab)) { notification in
+            if let tabName = notification.object as? String,
+               let tab = SettingsTab(rawValue: tabName) {
+                selectedTab = tab
+            }
+        }
     }
 
     func iconForTab(_ tab: SettingsTab) -> String {
@@ -1903,6 +1997,7 @@ struct SettingsView: View {
         case .sync: return "arrow.triangle.2.circlepath"
         case .fileSharing: return "folder.badge.person.crop"
         case .notifications: return "bell"
+        case .profile: return "person.crop.circle"
         case .privacy: return "lock.shield"
         case .mastodon: return "bubble.left.and.bubble.right"
         case .advanced: return "gear"
@@ -2010,10 +2105,43 @@ struct SettingsView: View {
             }
         }
 
+        SettingsSection(title: "Connection") {
+            Toggle("Auto-connect on launch", isOn: $settings.autoConnect)
+            Toggle("Reconnect if disconnected", isOn: $settings.reconnectOnDisconnect)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Preferred Connection")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Picker("Preferred Connection", selection: $settings.connectionPreference) {
+                    ForEach(ConnectionPreference.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                Text(settings.connectionPreference.description)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+        }
+
         SettingsSection(title: "Room Visibility") {
             Toggle("Show private rooms I'm a member of", isOn: .constant(true))
             Toggle("Show federated rooms", isOn: .constant(true))
             Toggle("Show local-only rooms", isOn: .constant(true))
+        }
+    }
+
+    // MARK: - Profile Settings
+    @ViewBuilder
+    var profileSettings: some View {
+        SettingsSection(title: "Display Name") {
+            Text("Set the name shown when you join rooms")
+                .font(.caption)
+                .foregroundColor(.gray)
+            TextField("Display name", text: $appState.username)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 360)
         }
     }
 
