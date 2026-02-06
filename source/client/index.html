@@ -961,6 +961,7 @@
                     <button class="tab-btn active" data-tab="audio">Audio</button>
                     <button class="tab-btn" data-tab="app">Application</button>
                     <button class="tab-btn" data-tab="network">Network</button>
+                    <button class="tab-btn" data-tab="connections">Connections</button>
                     <button class="tab-btn" data-tab="streaming">Streaming</button>
                     <button class="tab-btn" data-tab="privacy">Privacy</button>
                     <button class="tab-btn" data-tab="advanced">Advanced</button>
@@ -1125,6 +1126,45 @@
                             <button id="copy-url-btn" class="secondary-btn">Copy URL</button>
                             <button id="show-qr-btn" class="secondary-btn">QR Code</button>
                             <button id="restart-server-btn" class="secondary-btn">Restart Server</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connections Settings Tab -->
+                <div id="connections-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Multi-Device Sessions</h3>
+                        <div class="setting-item">
+                            <label>When another device logs in:</label>
+                            <select id="multi-device-behavior">
+                                <option value="prompt">Ask Every Time</option>
+                                <option value="keep">Keep Both Devices</option>
+                                <option value="join_other_room">Join Other Device Room</option>
+                                <option value="leave_other_room">Ask Other to Leave Room</option>
+                                <option value="disconnect_other">Disconnect Other Device</option>
+                                <option value="warn_other">Warn Other Device</option>
+                            </select>
+                            <span class="setting-desc">Choose how VoiceLink responds when you sign in elsewhere.</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="auto-quit-on-other-login">
+                                Auto-quit this device when another device logs in
+                            </label>
+                            <span class="setting-desc">Shows a session switch page with options to reconnect or exit.</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Session Status</h3>
+                        <div id="multi-device-status" class="multi-device-status">
+                            <div class="status-title">No other active devices detected.</div>
+                            <div class="status-details">You are the only active session.</div>
+                        </div>
+                        <div class="button-group">
+                            <button id="multi-device-reconnect" class="primary-btn">Reconnect</button>
+                            <button id="multi-device-disconnect" class="danger-btn">Exit</button>
+                            <button id="multi-device-keep" class="secondary-btn">Keep Both</button>
                         </div>
                     </div>
                 </div>

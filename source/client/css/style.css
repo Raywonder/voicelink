@@ -5003,6 +5003,26 @@ a:focus-visible {
     margin-bottom: 20px;
 }
 
+/* Multi-device status */
+.multi-device-status {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 12px;
+    padding: 16px;
+    color: #e2e8f0;
+    margin-bottom: 12px;
+}
+
+.multi-device-status .status-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.multi-device-status .status-details {
+    font-size: 0.9rem;
+    color: rgba(226, 232, 240, 0.7);
+}
+
 .input-group {
     margin-bottom: 16px;
 }

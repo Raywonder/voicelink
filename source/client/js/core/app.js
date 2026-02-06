@@ -13,6 +13,10 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users = new Map();
+        this.multiDeviceState = {
+            activeDevices: [],
+            lastEvent: null
+        };
 
         // Audio playback management
         this.currentAudio = null;
@@ -468,6 +472,7 @@ class VoiceLinkApp {
                         }));
                     }
                     this.setupSocketEventListeners();
+                    this.registerSession();
                     resolve();
                 });
 
@@ -532,6 +537,7 @@ class VoiceLinkApp {
                     }
 
                     this.setupSocketEventListeners();
+                    this.registerSession();
                     resolve();
                 });
 
@@ -561,6 +567,9 @@ class VoiceLinkApp {
             'error', 'room-expiring', 'room-expired', 'forced-leave', 'background-stream'
         ];
         events.forEach(event => this.socket.off(event));
+        this.socket.off('multi-device-login');
+        this.socket.off('multi-device-active');
+        this.socket.off('multi-device-command');
 
         // Room events
         this.socket.on('joined-room', (data) => {
@@ -615,6 +624,279 @@ class VoiceLinkApp {
         this.socket.on('background-stream', (data) => {
             this.handleBackgroundStream(data);
         });
+
+        // Multi-device session events
+        this.socket.on('multi-device-login', (data) => {
+            this.handleMultiDeviceLogin(data);
+        });
+
+        this.socket.on('multi-device-active', (data) => {
+            this.handleMultiDeviceActive(data);
+        });
+
+        this.socket.on('multi-device-command', (data) => {
+            this.handleMultiDeviceCommand(data);
+        });
+    }
+
+    // ========================================
+    // MULTI-DEVICE SESSIONS
+    // ========================================
+
+    getClientId() {
+        const key = 'voicelink_client_id';
+        let clientId = localStorage.getItem(key);
+        if (!clientId) {
+            clientId = 'dev_' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem(key, clientId);
+        }
+        return clientId;
+    }
+
+    getMultiDeviceSettings() {
+        return {
+            behavior: localStorage.getItem('voicelink_multi_device_behavior') || 'prompt',
+            autoQuit: localStorage.getItem('voicelink_auto_quit_other') === 'true'
+        };
+    }
+
+    setMultiDeviceSettings(settings = {}) {
+        if (settings.behavior) {
+            localStorage.setItem('voicelink_multi_device_behavior', settings.behavior);
+        }
+        if (typeof settings.autoQuit === 'boolean') {
+            localStorage.setItem('voicelink_auto_quit_other', settings.autoQuit ? 'true' : 'false');
+        }
+    }
+
+    getAuthContext() {
+        const whmcsToken = localStorage.getItem('voicelink_whmcs_token') ||
+            sessionStorage.getItem('voicelink_whmcs_token');
+        const ecriptoToken = localStorage.getItem('voicelink_ecripto_token') ||
+            sessionStorage.getItem('voicelink_ecripto_token');
+        const mastodonToken = localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token');
+        const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+
+        if (whmcsToken) {
+            return { provider: 'whmcs', token: whmcsToken, user };
+        }
+        if (ecriptoToken) {
+            return { provider: 'ecripto', token: ecriptoToken, user };
+        }
+        if (mastodonToken && user) {
+            return { provider: 'mastodon', token: mastodonToken, user };
+        }
+        return null;
+    }
+
+    registerSession() {
+        if (!this.socket || !this.socket.connected) return;
+        const authContext = this.getAuthContext();
+        if (!authContext) return;
+
+        const payload = {
+            token: authContext.token,
+            provider: authContext.provider,
+            deviceId: this.getClientId(),
+            deviceName: navigator.platform || 'Web Client',
+            deviceType: 'web',
+            clientVersion: '1.0.0',
+            appVersion: '1.0.0',
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+            locale: navigator.language || '',
+            locationHint: Intl.DateTimeFormat().resolvedOptions().locale || '',
+            user: authContext.user
+        };
+
+        this.socket.emit('register-session', payload);
+    }
+
+    handleMultiDeviceActive(payload) {
+        if (!payload || !payload.activeDevices) return;
+        this.multiDeviceState.activeDevices = payload.activeDevices || [];
+        this.updateMultiDeviceStatusUI();
+    }
+
+    handleMultiDeviceLogin(payload) {
+        if (!payload) return;
+        const data = Array.isArray(payload) ? payload[0] : payload;
+        const newDevice = data?.newDevice || {};
+        this.multiDeviceState.lastEvent = newDevice;
+        this.multiDeviceState.activeDevices = data?.activeDevices || [];
+
+        const settings = this.getMultiDeviceSettings();
+        this.updateMultiDeviceStatusUI();
+
+        const deviceName = newDevice.deviceName || 'Another device';
+        const locationHint = newDevice.locationHint ? ` • ${newDevice.locationHint}` : '';
+        const roomName = newDevice.currentRoomName ? `Room: ${newDevice.currentRoomName}` : 'No room joined';
+
+        if (settings.autoQuit) {
+            this.showMultiDeviceStatusModal(deviceName, roomName);
+            this.disconnectForMultiDevice();
+            return;
+        }
+
+        switch (settings.behavior) {
+        case 'keep':
+            this.showNotification(`Signed in on ${deviceName}${locationHint}`, 'info');
+            break;
+        case 'join_other_room':
+            if (newDevice.currentRoomId) {
+                this.joinRoomById(newDevice.currentRoomId, newDevice.currentRoomName);
+            }
+            break;
+        case 'leave_other_room':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'leave_room');
+            break;
+        case 'disconnect_other':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'disconnect');
+            break;
+        case 'warn_other':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'warn_feedback');
+            break;
+        case 'prompt':
+        default:
+            this.showMultiDeviceStatusModal(deviceName, roomName, newDevice);
+            break;
+        }
+    }
+
+    handleMultiDeviceCommand(payload) {
+        const data = Array.isArray(payload) ? payload[0] : payload;
+        if (!data) return;
+        switch (data.action) {
+        case 'leave_room':
+            this.leaveRoom();
+            break;
+        case 'disconnect':
+            this.disconnectForMultiDevice();
+            break;
+        case 'warn_feedback':
+            this.showNotification('Another device is signed in. Consider closing one copy to prevent feedback.', 'warning');
+            break;
+        default:
+            break;
+        }
+    }
+
+    sendMultiDeviceCommand(targetDeviceId, action) {
+        if (!this.socket || !targetDeviceId) return;
+        this.socket.emit('multi-device-command', {
+            targetDeviceId,
+            action
+        });
+    }
+
+    joinRoomById(roomId, roomName = '') {
+        const userNameInput = document.getElementById('user-name');
+        if (userNameInput && !userNameInput.value) {
+            userNameInput.value = this.currentUser?.displayName || 'VoiceLink User';
+        }
+        const joinRoomInput = document.getElementById('join-room-id');
+        if (joinRoomInput) {
+            joinRoomInput.value = roomId;
+        }
+        if (roomName) {
+            const nameEl = document.getElementById('join-room-name');
+            if (nameEl) nameEl.textContent = roomName;
+        }
+        this.showScreen('join-room-screen');
+        this.joinRoom();
+    }
+
+    disconnectForMultiDevice() {
+        if (this.socket) {
+            this.socket.disconnect();
+            this.socket = null;
+        }
+        this.updateServerStatus('offline');
+        this.showScreen('main-menu');
+    }
+
+    showMultiDeviceStatusModal(deviceName, roomName, newDevice = {}) {
+        this.showScreen('settings-screen');
+        this.openSettingsTab('connections');
+        this.updateMultiDeviceStatusUI();
+
+        const existing = document.getElementById('multi-device-modal');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'multi-device-modal';
+        overlay.className = 'modal-overlay';
+
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+
+        content.innerHTML = `
+            <h3>Signed in on another device</h3>
+            <p style="color: rgba(255,255,255,0.7); margin-bottom: 16px;">
+                ${deviceName} • ${roomName}
+            </p>
+            <div class="button-group">
+                <button id="multi-device-join-btn" class="primary-btn">Join That Room</button>
+                <button id="multi-device-leave-btn" class="secondary-btn">Ask Other to Leave</button>
+                <button id="multi-device-keep-btn" class="secondary-btn">Keep Both</button>
+            </div>
+        `;
+
+        overlay.appendChild(content);
+        document.body.appendChild(overlay);
+
+        document.getElementById('multi-device-join-btn')?.addEventListener('click', () => {
+            overlay.remove();
+            if (newDevice.currentRoomId) {
+                this.joinRoomById(newDevice.currentRoomId, newDevice.currentRoomName);
+            }
+        });
+
+        document.getElementById('multi-device-leave-btn')?.addEventListener('click', () => {
+            overlay.remove();
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'leave_room');
+        });
+
+        document.getElementById('multi-device-keep-btn')?.addEventListener('click', () => {
+            overlay.remove();
+        });
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+    }
+
+    updateMultiDeviceStatusUI() {
+        const statusEl = document.getElementById('multi-device-status');
+        if (!statusEl) return;
+        const devices = this.multiDeviceState.activeDevices || [];
+        if (devices.length <= 1) {
+            statusEl.innerHTML = `
+                <div class="status-title">No other active devices detected.</div>
+                <div class="status-details">You are the only active session.</div>
+            `;
+            return;
+        }
+        const otherDevices = devices.filter(d => d.deviceId !== this.getClientId());
+        const deviceLines = otherDevices.map(device => {
+            const room = device.currentRoomName ? ` • ${device.currentRoomName}` : '';
+            const location = device.locationHint ? ` • ${device.locationHint}` : '';
+            return `<div>${device.deviceName || 'Device'}${room}${location}</div>`;
+        }).join('');
+        statusEl.innerHTML = `
+            <div class="status-title">Other active devices detected:</div>
+            <div class="status-details">${deviceLines || 'Another device is active.'}</div>
+        `;
+    }
+
+    openSettingsTab(tabId) {
+        const tabBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        const tabContent = document.getElementById(`${tabId}-tab`);
+        if (!tabBtn || !tabContent) return;
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.settings-tab').forEach(tab => tab.classList.remove('active'));
+        tabBtn.classList.add('active');
+        tabContent.classList.add('active');
     }
 
     /**
@@ -3442,6 +3724,16 @@ class VoiceLinkApp {
         // This would load settings from localStorage or native API
         // For now, just set default values
         console.log('Loading current settings...');
+
+        const behaviorSelect = document.getElementById('multi-device-behavior');
+        const autoQuitToggle = document.getElementById('auto-quit-on-other-login');
+        if (behaviorSelect) {
+            behaviorSelect.value = localStorage.getItem('voicelink_multi_device_behavior') || 'prompt';
+        }
+        if (autoQuitToggle) {
+            autoQuitToggle.checked = localStorage.getItem('voicelink_auto_quit_other') === 'true';
+        }
+        this.updateMultiDeviceStatusUI();
     }
 
     setupSettingsEventListeners() {
@@ -3483,6 +3775,32 @@ class VoiceLinkApp {
             if (window.nativeAPI) {
                 window.nativeAPI.restartServer();
             }
+        });
+
+        // Multi-device settings
+        document.getElementById('multi-device-behavior')?.addEventListener('change', (e) => {
+            this.setMultiDeviceSettings({ behavior: e.target.value });
+        });
+
+        document.getElementById('auto-quit-on-other-login')?.addEventListener('change', (e) => {
+            this.setMultiDeviceSettings({ autoQuit: e.target.checked });
+        });
+
+        document.getElementById('multi-device-reconnect')?.addEventListener('click', () => {
+            this.connectToServer().then(() => {
+                this.registerSession();
+                this.showNotification('Reconnected', 'success');
+            }).catch(() => {
+                this.showNotification('Reconnect failed', 'error');
+            });
+        });
+
+        document.getElementById('multi-device-disconnect')?.addEventListener('click', () => {
+            this.disconnectForMultiDevice();
+        });
+
+        document.getElementById('multi-device-keep')?.addEventListener('click', () => {
+            this.showNotification('Keeping both devices active', 'info');
         });
     }
 
@@ -4117,6 +4435,8 @@ class VoiceLinkApp {
         const userRole = document.getElementById('mastodon-user-role');
         const joinNameInput = document.getElementById('user-name');
 
+        this.currentUser = user || null;
+
         if (user) {
             // Show logged-in state
             if (loginPrompt) loginPrompt.style.display = 'none';
@@ -4142,6 +4462,7 @@ class VoiceLinkApp {
 
             // Update role-based UI
             this.updateRoleBasedUI(user);
+            this.registerSession();
 
             // Default the join name to Mastodon display name if empty or placeholder
             if (joinNameInput) {
