@@ -1609,6 +1609,40 @@ enum ConnectionPreference: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Multi-Device Behavior
+enum MultiDeviceBehavior: String, CaseIterable, Identifiable {
+    case prompt = "prompt"
+    case keep = "keep"
+    case joinOtherRoom = "join_other_room"
+    case leaveOtherRoom = "leave_other_room"
+    case disconnectOther = "disconnect_other"
+    case warnOther = "warn_other"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .prompt: return "Ask Every Time"
+        case .keep: return "Keep Both Devices"
+        case .joinOtherRoom: return "Join Other Device Room"
+        case .leaveOtherRoom: return "Ask Other to Leave Room"
+        case .disconnectOther: return "Disconnect Other Device"
+        case .warnOther: return "Warn Other Device"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .prompt: return "Show a prompt when another device logs in"
+        case .keep: return "Allow both devices with no changes"
+        case .joinOtherRoom: return "Join the room the other device is in"
+        case .leaveOtherRoom: return "Tell the other device to leave its room"
+        case .disconnectOther: return "Ask the other device to disconnect"
+        case .warnOther: return "Send a warning to close one device"
+        }
+    }
+}
+
 // MARK: - File Receive Mode
 enum FileReceiveMode: String, CaseIterable {
     case autoReceive = "auto"
@@ -1681,6 +1715,9 @@ class SettingsManager: ObservableObject {
             }
         }
     }
+    @Published var multiDeviceBehavior: MultiDeviceBehavior = .prompt {
+        didSet { UserDefaults.standard.set(multiDeviceBehavior.rawValue, forKey: "multiDeviceBehavior") }
+    }
     @Published var connectionTimeout: Double = 30
 
     // PTT Settings
@@ -1744,6 +1781,10 @@ class SettingsManager: ObservableObject {
            let connectionPreference = ConnectionPreference(rawValue: preference) {
             self.connectionPreference = connectionPreference
         }
+        if let behavior = UserDefaults.standard.string(forKey: "multiDeviceBehavior"),
+           let multiDeviceBehavior = MultiDeviceBehavior(rawValue: behavior) {
+            self.multiDeviceBehavior = multiDeviceBehavior
+        }
         pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
         spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
 
@@ -1782,6 +1823,7 @@ class SettingsManager: ObservableObject {
             spatialAudioEnabled = true
             reconnectOnDisconnect = true
             connectionPreference = .main
+            multiDeviceBehavior = .prompt
             UserDefaults.standard.set(true, forKey: "settingsInitialized")
         }
     }
@@ -1795,6 +1837,9 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
         UserDefaults.standard.set(autoConnect, forKey: "autoConnect")
         UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer")
+        UserDefaults.standard.set(reconnectOnDisconnect, forKey: "reconnectOnDisconnect")
+        UserDefaults.standard.set(connectionPreference.rawValue, forKey: "connectionPreference")
+        UserDefaults.standard.set(multiDeviceBehavior.rawValue, forKey: "multiDeviceBehavior")
         UserDefaults.standard.set(pttEnabled, forKey: "pttEnabled")
         UserDefaults.standard.set(spatialAudioEnabled, forKey: "spatialAudioEnabled")
 
@@ -1887,6 +1932,7 @@ struct SettingsView: View {
     enum SettingsTab: String, CaseIterable {
         case audio = "Audio"
         case sync = "Sync & Filters"
+        case connections = "Connections"
         case fileSharing = "File Sharing"
         case notifications = "Notifications"
         case profile = "Profile"
@@ -1964,6 +2010,8 @@ struct SettingsView: View {
                             audioSettings
                         case .sync:
                             syncSettings
+                        case .connections:
+                            connectionsSettings
                         case .fileSharing:
                             fileSharingSettings
                         case .notifications:
@@ -1995,6 +2043,7 @@ struct SettingsView: View {
         switch tab {
         case .audio: return "speaker.wave.2"
         case .sync: return "arrow.triangle.2.circlepath"
+        case .connections: return "network"
         case .fileSharing: return "folder.badge.person.crop"
         case .notifications: return "bell"
         case .profile: return "person.crop.circle"
@@ -2105,6 +2154,16 @@ struct SettingsView: View {
             }
         }
 
+        SettingsSection(title: "Room Visibility") {
+            Toggle("Show private rooms I'm a member of", isOn: .constant(true))
+            Toggle("Show federated rooms", isOn: .constant(true))
+            Toggle("Show local-only rooms", isOn: .constant(true))
+        }
+    }
+
+    // MARK: - Connections Settings
+    @ViewBuilder
+    var connectionsSettings: some View {
         SettingsSection(title: "Connection") {
             Toggle("Auto-connect on launch", isOn: $settings.autoConnect)
             Toggle("Reconnect if disconnected", isOn: $settings.reconnectOnDisconnect)
@@ -2125,10 +2184,19 @@ struct SettingsView: View {
             }
         }
 
-        SettingsSection(title: "Room Visibility") {
-            Toggle("Show private rooms I'm a member of", isOn: .constant(true))
-            Toggle("Show federated rooms", isOn: .constant(true))
-            Toggle("Show local-only rooms", isOn: .constant(true))
+        SettingsSection(title: "Multi-Device Sessions") {
+            Text("If you sign in on multiple devices, choose how VoiceLink responds.")
+                .font(.caption)
+                .foregroundColor(.gray)
+            Picker("Multi-Device Behavior", selection: $settings.multiDeviceBehavior) {
+                ForEach(MultiDeviceBehavior.allCases) { behavior in
+                    Text(behavior.displayName).tag(behavior)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(settings.multiDeviceBehavior.description)
+                .font(.caption2)
+                .foregroundColor(.gray)
         }
     }
 

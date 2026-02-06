@@ -1,5 +1,6 @@
 import Foundation
 import SocketIO
+import AppKit
 
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
@@ -11,6 +12,8 @@ class ServerManager: ObservableObject {
     @Published var serverStatus: String = "Disconnected"
     @Published var rooms: [ServerRoom] = []
     @Published var currentRoomUsers: [RoomUser] = []
+    @Published var currentRoomId: String?
+    @Published var currentRoomName: String?
     @Published var errorMessage: String?
     @Published var connectedServer: String = ""
 
@@ -267,6 +270,7 @@ class ServerManager: ObservableObject {
                 self.errorMessage = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
+            self.sendSessionRegistration()
             // Request room list after connecting
             self.getRooms()
         }
@@ -317,6 +321,8 @@ class ServerManager: ObservableObject {
             print("Joined room: \(data)")
             if let responseData = data[0] as? [String: Any],
                let roomData = responseData["room"] as? [String: Any] {
+                self?.currentRoomId = roomData["id"] as? String ?? roomData["roomId"] as? String
+                self?.currentRoomName = roomData["name"] as? String
                 // Extract users from room data
                 if let usersData = roomData["users"] as? [[String: Any]] {
                     let users = usersData.compactMap { RoomUser(from: $0) }
@@ -351,6 +357,24 @@ class ServerManager: ObservableObject {
                     self?.currentRoomUsers.removeAll { $0.id == odId }
                     AppSoundManager.shared.playSound(.userLeave)
                 }
+            }
+        }
+
+        socket.on("multi-device-login") { [weak self] data, ack in
+            guard let self else { return }
+            if let payload = data.first as? [String: Any] {
+                self.handleMultiDeviceLogin(payload)
+            }
+        }
+
+        socket.on("multi-device-active") { data, ack in
+            print("Multi-device active sessions: \(data)")
+        }
+
+        socket.on("multi-device-command") { [weak self] data, ack in
+            guard let self else { return }
+            if let payload = data.first as? [String: Any] {
+                self.handleMultiDeviceCommand(payload)
             }
         }
 
@@ -549,6 +573,146 @@ class ServerManager: ObservableObject {
         }
     }
 
+    // MARK: - Multi-Device Sessions
+
+    private func getClientId() -> String {
+        if let clientId = UserDefaults.standard.string(forKey: "clientId") {
+            return clientId
+        }
+        let newId = "dev_" + UUID().uuidString.prefix(8)
+        UserDefaults.standard.set(String(newId), forKey: "clientId")
+        return String(newId)
+    }
+
+    private func currentDisplayName() -> String {
+        if let user = AuthenticationManager.shared.currentUser {
+            return user.displayName
+        }
+        if let stored = UserDefaults.standard.string(forKey: "displayName"), !stored.isEmpty {
+            return stored
+        }
+        return Host.current().localizedName ?? "VoiceLink User"
+    }
+
+    private func sendSessionRegistration() {
+        guard let socket = socket else { return }
+        guard let user = AuthenticationManager.shared.currentUser else { return }
+
+        let payload: [String: Any] = [
+            "token": user.accessToken,
+            "provider": user.authMethod.rawValue,
+            "deviceId": getClientId(),
+            "deviceName": Host.current().localizedName ?? "Mac",
+            "deviceType": "macos",
+            "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
+            "appVersion": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1",
+            "timeZone": TimeZone.current.identifier,
+            "locale": Locale.current.identifier,
+            "locationHint": Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? "",
+            "user": [
+                "id": user.id,
+                "username": user.username,
+                "displayName": user.displayName,
+                "email": user.email ?? "",
+                "role": user.role ?? "user",
+                "permissions": user.permissions ?? [],
+                "authProvider": user.authMethod.rawValue
+            ]
+        ]
+
+        socket.emit("register-session", payload)
+    }
+
+    private func handleMultiDeviceLogin(_ payload: [String: Any]) {
+        let settings = SettingsManager.shared
+        let newDevice = payload["newDevice"] as? [String: Any] ?? [:]
+        let deviceName = newDevice["deviceName"] as? String ?? "Another device"
+        let deviceType = newDevice["deviceType"] as? String ?? "device"
+        let locationHint = newDevice["locationHint"] as? String ?? ""
+        let currentRoomId = newDevice["currentRoomId"] as? String
+        let roomName = newDevice["currentRoomName"] as? String
+
+        let detailParts = [
+            deviceName,
+            deviceType,
+            locationHint
+        ].filter { !$0.isEmpty }
+
+        let message = detailParts.isEmpty ? "Signed in on another device." : "Signed in on another device: \(detailParts.joined(separator: " • "))"
+
+        switch settings.multiDeviceBehavior {
+        case .keep:
+            print("[MultiDevice] \(message)")
+        case .joinOtherRoom:
+            if let roomId = currentRoomId {
+                let username = currentDisplayName()
+                joinRoom(roomId: roomId, username: username, password: nil)
+                print("[MultiDevice] Joining other device room \(roomId)")
+            }
+        case .leaveOtherRoom:
+            sendMultiDeviceCommand(targetDeviceId: newDevice["deviceId"] as? String, action: "leave_room", payload: [:])
+        case .disconnectOther:
+            sendMultiDeviceCommand(targetDeviceId: newDevice["deviceId"] as? String, action: "disconnect", payload: [:])
+        case .warnOther:
+            sendMultiDeviceCommand(targetDeviceId: newDevice["deviceId"] as? String, action: "warn_feedback", payload: [:])
+        case .prompt:
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Signed in on another device"
+                if let roomName, !roomName.isEmpty {
+                    alert.informativeText = "\(message)\nOther device is in room: \(roomName)"
+                } else {
+                    alert.informativeText = message
+                }
+                alert.addButton(withTitle: "Join Room")
+                alert.addButton(withTitle: "Ask Other to Leave")
+                alert.addButton(withTitle: "Keep Both")
+
+                let response = alert.runModal()
+                switch response {
+                case .alertFirstButtonReturn:
+                    if let roomId = currentRoomId {
+                        let username = self.currentDisplayName()
+                        self.joinRoom(roomId: roomId, username: username, password: nil)
+                    }
+                case .alertSecondButtonReturn:
+                    self.sendMultiDeviceCommand(targetDeviceId: newDevice["deviceId"] as? String, action: "leave_room", payload: [:])
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func handleMultiDeviceCommand(_ payload: [String: Any]) {
+        let action = payload["action"] as? String ?? ""
+        switch action {
+        case "leave_room":
+            leaveRoom()
+        case "disconnect":
+            disconnect()
+        case "warn_feedback":
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Multiple devices detected"
+                alert.informativeText = "Another device is signed in. To prevent audio feedback, consider closing one copy or leaving the room."
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        default:
+            break
+        }
+    }
+
+    private func sendMultiDeviceCommand(targetDeviceId: String?, action: String, payload: [String: Any]) {
+        guard let socket = socket, let targetDeviceId = targetDeviceId else { return }
+        socket.emit("multi-device-command", [
+            "targetDeviceId": targetDeviceId,
+            "action": action,
+            "payload": payload
+        ])
+    }
+
     // MARK: - API Methods
 
     func getRooms() {
@@ -629,6 +793,8 @@ class ServerManager: ObservableObject {
         socket?.emit("leave-room")
         DispatchQueue.main.async {
             self.currentRoomUsers = []
+            self.currentRoomId = nil
+            self.currentRoomName = nil
             MessagingManager.shared.clearMessages()
         }
     }

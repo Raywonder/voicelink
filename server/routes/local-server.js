@@ -55,6 +55,9 @@ class VoiceLinkLocalServer {
         this.audioRouting = new Map();
         this.whmcsAuthSessions = new Map(); // token -> { user, expiresAt }
         this.ecriptoAuthSessions = new Map(); // token -> { user, expiresAt }
+        this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
+        this.socketSessions = new Map(); // socketId -> sessionInfo
+        this.deviceSessions = new Map(); // deviceId -> socketId
 
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
@@ -6011,10 +6014,10 @@ class VoiceLinkLocalServer {
             return crypto.createHash('sha256').update(password + 'voicelink-salt').digest('hex');
         };
 
-        // Helper to compare versions
-        this.compareVersions = (v1, v2) => {
-            const parts1 = v1.split('.').map(Number);
-            const parts2 = v2.split('.').map(Number);
+    // Helper to compare versions
+    this.compareVersions = (v1, v2) => {
+        const parts1 = v1.split('.').map(Number);
+        const parts2 = v2.split('.').map(Number);
             for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
                 const p1 = parts1[i] || 0;
                 const p2 = parts2[i] || 0;
@@ -6025,9 +6028,147 @@ class VoiceLinkLocalServer {
         };
     }
 
+    registerSocketSession(socket, sessionInfo) {
+        if (!sessionInfo || !sessionInfo.userId) return;
+        if (!this.activeSessionsByUser.has(sessionInfo.userId)) {
+            this.activeSessionsByUser.set(sessionInfo.userId, new Map());
+        }
+        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
+        userSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
+        this.socketSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
+        if (sessionInfo.deviceId) {
+            this.deviceSessions.set(sessionInfo.deviceId, socket.id);
+        }
+    }
+
+    unregisterSocketSession(socketId) {
+        const sessionInfo = this.socketSessions.get(socketId);
+        if (!sessionInfo) return;
+        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
+        if (userSessions) {
+            userSessions.delete(socketId);
+            if (userSessions.size === 0) {
+                this.activeSessionsByUser.delete(sessionInfo.userId);
+            }
+        }
+        if (sessionInfo.deviceId) {
+            this.deviceSessions.delete(sessionInfo.deviceId);
+        }
+        this.socketSessions.delete(socketId);
+    }
+
+    getUserSessions(userId) {
+        const sessions = this.activeSessionsByUser.get(userId);
+        if (!sessions) return [];
+        return Array.from(sessions.values());
+    }
+
+    getOtherUserSessions(userId, socketId) {
+        const sessions = this.activeSessionsByUser.get(userId);
+        if (!sessions) return [];
+        return Array.from(sessions.values()).filter((session) => session.socketId !== socketId);
+    }
+
     setupSocketHandlers() {
         this.io.on('connection', (socket) => {
             console.log(`User connected: ${socket.id}`);
+
+            socket.on('register-session', (data = {}) => {
+                try {
+                    const {
+                        token,
+                        provider,
+                        deviceId,
+                        deviceName,
+                        deviceType,
+                        clientVersion,
+                        appVersion,
+                        timeZone,
+                        locale,
+                        locationHint
+                    } = data;
+
+                    let user = null;
+                    if (provider === 'whmcs') {
+                        const session = this.getAuthSession(this.whmcsAuthSessions, token);
+                        if (!session) {
+                            socket.emit('auth_failed', { message: 'Invalid or expired WHMCS session' });
+                            return;
+                        }
+                        user = session.user;
+                    } else if (provider === 'ecripto') {
+                        const session = this.getAuthSession(this.ecriptoAuthSessions, token);
+                        if (!session) {
+                            socket.emit('auth_failed', { message: 'Invalid or expired wallet session' });
+                            return;
+                        }
+                        user = session.user;
+                    } else if (provider === 'email' || provider === 'mastodon') {
+                        if (data.user && data.user.id) {
+                            user = data.user;
+                        }
+                    }
+
+                    if (!user || !user.id) {
+                        socket.emit('auth_failed', { message: 'Authentication required' });
+                        return;
+                    }
+
+                    const sessionInfo = {
+                        userId: user.id,
+                        username: user.username || user.displayName || user.email || 'Unknown',
+                        provider: provider || user.authProvider || 'unknown',
+                        deviceId: deviceId || null,
+                        deviceName: deviceName || 'Unknown Device',
+                        deviceType: deviceType || 'unknown',
+                        clientVersion: clientVersion || appVersion || null,
+                        timeZone: timeZone || null,
+                        locale: locale || null,
+                        locationHint: locationHint || null,
+                        ip: socket.handshake.address,
+                        userAgent: socket.handshake.headers['user-agent'] || '',
+                        connectedAt: new Date()
+                    };
+
+                    this.registerSocketSession(socket, sessionInfo);
+                    this.authenticatedUsers.set(socket.id, user);
+
+                    const otherSessions = this.getOtherUserSessions(user.id, socket.id);
+                    if (otherSessions.length > 0) {
+                        otherSessions.forEach((session) => {
+                            this.io.to(session.socketId).emit('multi-device-login', {
+                                userId: user.id,
+                                newDevice: sessionInfo,
+                                activeDevices: this.getUserSessions(user.id)
+                            });
+                        });
+                        socket.emit('multi-device-active', {
+                            userId: user.id,
+                            activeDevices: this.getUserSessions(user.id)
+                        });
+                    }
+
+                    socket.emit('auth_success', {
+                        role: user.role || 'user',
+                        permissions: user.permissions || []
+                    });
+                } catch (err) {
+                    socket.emit('auth_failed', { message: err.message || 'Authentication failed' });
+                }
+            });
+
+            socket.on('multi-device-command', (data = {}) => {
+                const { targetDeviceId, action, payload } = data;
+                if (!targetDeviceId || !action) return;
+                const targetSocketId = this.deviceSessions.get(targetDeviceId);
+                if (targetSocketId) {
+                    this.io.to(targetSocketId).emit('multi-device-command', {
+                        action,
+                        fromDeviceId: this.socketSessions.get(socket.id)?.deviceId || null,
+                        payload: payload || {}
+                    });
+                }
+            });
 
             // User joins a room
             socket.on('join-room', (data) => {
@@ -6078,6 +6219,12 @@ class VoiceLinkLocalServer {
                     existingUser.isAuthenticated = isAuthenticated;
                     existingUser.authInfo = authUser || existingUser.authInfo || null;
                     this.users.set(socket.id, { ...existingUser, roomId });
+                    const session = this.socketSessions.get(socket.id);
+                    if (session) {
+                        session.currentRoomId = roomId;
+                        session.currentRoomName = room.name;
+                        session.lastSeen = new Date();
+                    }
 
                     socket.join(roomId);
                     socket.emit('joined-room', { room, user: existingUser });
@@ -6102,6 +6249,12 @@ class VoiceLinkLocalServer {
 
                 room.users.push(user);
                 this.users.set(socket.id, { ...user, roomId });
+                const session = this.socketSessions.get(socket.id);
+                if (session) {
+                    session.currentRoomId = roomId;
+                    session.currentRoomName = room.name;
+                    session.lastSeen = new Date();
+                }
 
                 socket.join(roomId);
                 socket.emit('joined-room', { room, user });
@@ -6418,6 +6571,13 @@ class VoiceLinkLocalServer {
                 socket.leave(user.roomId);
                 this.users.delete(socket.id);
                 this.audioRouting.delete(socket.id);
+
+                const session = this.socketSessions.get(socket.id);
+                if (session) {
+                    session.currentRoomId = null;
+                    session.currentRoomName = null;
+                    session.lastSeen = new Date();
+                }
             });
 
             // Disconnect handling
@@ -6446,6 +6606,7 @@ class VoiceLinkLocalServer {
                 }
                 this.audioRelayEnabled.delete(socket.id);
                 this.audioBuffers.delete(socket.id);
+                this.unregisterSocketSession(socket.id);
 
                 console.log(`User disconnected: ${socket.id}`);
             });
