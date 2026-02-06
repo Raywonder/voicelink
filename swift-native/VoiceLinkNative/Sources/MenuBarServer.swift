@@ -210,11 +210,6 @@ struct MenuBarView: View {
             }
             .disabled(serverManager.isConnected && serverManager.connectedServer == "Main Server")
 
-            Button("Community Server (vps1.tappedin.fm)") {
-                serverManager.connectToCommunityServer()
-            }
-            .disabled(serverManager.isConnected && serverManager.connectedServer == "Community Server")
-
             // Local server option (if found)
             if localDiscovery.localServerFound {
                 Button("Local Server (\(localDiscovery.localServerName ?? "localhost"))") {
@@ -265,6 +260,10 @@ struct MenuBarView: View {
                 }
             }
             .keyboardShortcut("o", modifiers: [.command])
+
+            Button("Check for Updates...") {
+                AutoUpdater.shared.checkForUpdates()
+            }
 
             Divider()
 

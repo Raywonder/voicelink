@@ -1044,7 +1044,6 @@ struct LinkedServerCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
-        case .whmcs: return .orange
         }
     }
 }

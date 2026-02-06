@@ -10,7 +10,6 @@ class UserAudioControlManager: ObservableObject {
     @Published var userVolumes: [String: Float] = [:]      // userId -> volume (0.0 to 2.0, 1.0 = normal)
     @Published var userMuted: [String: Bool] = [:]         // userId -> isMuted
     @Published var focusedUserId: String?                   // Currently focused user for keyboard control
-    @Published var soloedUserId: String?                    // Single-user solo (others muted)
 
     // Global settings
     @Published var masterVolume: Float = 1.0
@@ -50,13 +49,6 @@ class UserAudioControlManager: ObservableObject {
             userInfo: ["userId": userId, "volume": clampedVolume * masterVolume]
         )
 
-        saveSettings()
-    }
-
-    /// Set master volume (applies to all users)
-    func setMasterVolume(_ volume: Float) {
-        masterVolume = max(0.0, min(1.5, volume))
-        NotificationCenter.default.post(name: .userMasterVolumeChanged, object: nil)
         saveSettings()
     }
 
@@ -109,21 +101,6 @@ class UserAudioControlManager: ObservableObject {
         )
 
         saveSettings()
-    }
-
-    // MARK: - Solo Control
-
-    func toggleSolo(for userId: String) {
-        if soloedUserId == userId {
-            soloedUserId = nil
-        } else {
-            soloedUserId = userId
-        }
-        NotificationCenter.default.post(
-            name: .userSoloChanged,
-            object: nil,
-            userInfo: ["userId": soloedUserId as Any]
-        )
     }
 
     /// Mute all users
@@ -332,8 +309,6 @@ class UserAudioControlManager: ObservableObject {
 extension Notification.Name {
     static let userVolumeChanged = Notification.Name("userVolumeChanged")
     static let userMuteChanged = Notification.Name("userMuteChanged")
-    static let userSoloChanged = Notification.Name("userSoloChanged")
-    static let userMasterVolumeChanged = Notification.Name("userMasterVolumeChanged")
 }
 
 // MARK: - SwiftUI Views
@@ -487,7 +462,7 @@ struct UserVolumeControlPanel: View {
                 Slider(
                     value: Binding(
                         get: { Double(audioControl.masterVolume) },
-                        set: { audioControl.setMasterVolume(Float($0)) }
+                        set: { audioControl.masterVolume = Float($0) }
                     ),
                     in: 0...1.5
                 )

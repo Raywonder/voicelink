@@ -46,7 +46,7 @@ class WalletManager: ObservableObject {
     }
 
     // Server API base URL
-    private let ecryptoAPIBase = "https://api.ecripto.app/api"
+    private let ecryptoAPIBase = "https://ecrypto.devinecreations.net/api"
 
     init() {
         loadWalletData()

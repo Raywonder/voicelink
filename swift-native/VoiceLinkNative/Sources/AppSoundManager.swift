@@ -59,6 +59,9 @@ class AppSoundManager: ObservableObject {
         case toggleOn = "switch_button_push_small_04"
         case toggleOff = "switch_button_push_small_05"
 
+        // Test sounds
+        case soundTest = "your-sound-test"
+
         var fileExtension: String {
             switch self {
             case .peekIn, .peekOut, .pttStart, .pttStop, .doorbell,
@@ -99,6 +102,7 @@ class AppSoundManager: ObservableObject {
             case .uiDisappear: return "UI element disappeared"
             case .toggleOn: return "Toggle on"
             case .toggleOff: return "Toggle off"
+            case .soundTest: return "Sound test"
             }
         }
     }
@@ -129,8 +133,11 @@ class AppSoundManager: ObservableObject {
     private func loadSound(_ soundType: SoundType) {
         // Try multiple locations for sound files
         let locations = [
+            ("sounds/ui-sounds", soundType.rawValue, soundType.fileExtension),
             ("sounds", soundType.rawValue, soundType.fileExtension),
             (nil, soundType.rawValue, soundType.fileExtension),
+            ("sounds/ui-sounds", soundType.rawValue, "mp3"),
+            ("sounds/ui-sounds", soundType.rawValue, "flac"),
             ("sounds", soundType.rawValue, "mp3"),
             ("sounds", soundType.rawValue, "flac")
         ]
@@ -181,6 +188,18 @@ class AppSoundManager: ObservableObject {
                 playSystemSound(for: soundType)
             }
         }
+    }
+
+    func stopSound(_ soundType: SoundType) {
+        if let player = audioPlayers[soundType] {
+            player.stop()
+            player.currentTime = 0
+            print("AppSoundManager: Stopped \(soundType.description)")
+        }
+    }
+
+    func isSoundPlaying(_ soundType: SoundType) -> Bool {
+        return audioPlayers[soundType]?.isPlaying ?? false
     }
 
     private func playSystemSound(for soundType: SoundType) {

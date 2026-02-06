@@ -296,149 +296,6 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         }.resume()
     }
 
-    // MARK: - WHMCS Authentication
-
-    func authenticateWithWhmcs(email: String,
-                               password: String,
-                               twoFactorCode: String?,
-                               mastodonHandle: String?,
-                               remember: Bool,
-                               completion: @escaping (Bool, String?) -> Void) {
-        authState = .authenticating
-
-        let baseURL = ServerManager.shared.baseURL ?? ServerManager.mainServer
-        guard let url = URL(string: baseURL + "/api/auth/whmcs/login") else {
-            authState = .error
-            completion(false, "Invalid server URL")
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "email": email,
-            "password": password,
-            "twoFactorCode": twoFactorCode ?? "",
-            "mastodonHandle": mastodonHandle ?? "",
-            "remember": remember
-        ]
-
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            Task { @MainActor in
-                let authManager = AuthenticationManager.shared
-                if let error = error {
-                    authManager.authState = .error
-                    completion(false, error.localizedDescription)
-                    return
-                }
-
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
-                let json = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]) ?? [:]
-
-                if statusCode >= 400 {
-                    if json["requires2FA"] as? Bool == true {
-                        authManager.authState = .error
-                        completion(false, "Two-factor authentication required")
-                        return
-                    }
-                    let message = json["error"] as? String ?? "Login failed"
-                    authManager.authState = .error
-                    completion(false, message)
-                    return
-                }
-
-                guard let token = json["token"] as? String,
-                      let userData = json["user"] as? [String: Any] else {
-                    authManager.authState = .error
-                    completion(false, "Invalid login response")
-                    return
-                }
-
-                let displayName = userData["displayName"] as? String ?? email
-                let userId = userData["id"] as? String ?? UUID().uuidString
-                let role = userData["role"] as? String
-                let permissions = userData["permissions"] as? [String]
-
-                let user = AuthenticatedUser(
-                    id: userId,
-                    username: displayName,
-                    displayName: displayName,
-                    email: email,
-                    authMethod: .whmcs,
-                    mastodonInstance: nil,
-                    accessToken: token,
-                    avatarURL: nil,
-                    role: role,
-                    permissions: permissions
-                )
-
-                authManager.currentUser = user
-                authManager.authState = .authenticated
-                authManager.authError = nil
-                authManager.saveAuth(user: user)
-                completion(true, nil)
-            }
-        }.resume()
-    }
-
-    func startWhmcsPortalLogin(email: String,
-                               password: String,
-                               twoFactorCode: String?,
-                               remember: Bool,
-                               completion: @escaping (Bool, String?) -> Void) {
-        let baseURL = ServerManager.shared.baseURL ?? ServerManager.mainServer
-        guard let url = URL(string: baseURL + "/api/auth/whmcs/sso/start") else {
-            completion(false, "Invalid server URL")
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "email": email,
-            "password": password,
-            "twoFactorCode": twoFactorCode ?? "",
-            "remember": remember
-        ]
-
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    completion(false, error.localizedDescription)
-                    return
-                }
-
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
-                let json = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any]) ?? [:]
-
-                if statusCode >= 400 {
-                    if json["requires2FA"] as? Bool == true {
-                        completion(false, "Two-factor authentication required")
-                        return
-                    }
-                    completion(false, json["error"] as? String ?? "SSO failed")
-                    return
-                }
-
-                let redirectURL = (json["redirectUrl"] as? String) ?? (json["portalUrl"] as? String)
-                if let redirectURL, let url = URL(string: redirectURL) {
-                    NSWorkspace.shared.open(url)
-                    completion(true, nil)
-                } else {
-                    completion(false, "Missing portal URL")
-                }
-            }
-        }.resume()
-    }
-
     // MARK: - Email Verification
 
     func requestEmailVerification(email: String, serverURL: String, completion: @escaping (Bool, String?) -> Void) {
@@ -618,36 +475,12 @@ struct AuthenticatedUser: Codable, Identifiable {
     let mastodonInstance: String?
     var accessToken: String
     let avatarURL: String?
-    let role: String?
-    let permissions: [String]?
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0
     var followingCount: Int = 0
     var statusesCount: Int = 0
     var accountCreatedAt: Date?
-
-    init(id: String,
-         username: String,
-         displayName: String,
-         email: String?,
-         authMethod: AuthMethod,
-         mastodonInstance: String?,
-         accessToken: String,
-         avatarURL: String?,
-         role: String? = nil,
-         permissions: [String]? = nil) {
-        self.id = id
-        self.username = username
-        self.displayName = displayName
-        self.email = email
-        self.authMethod = authMethod
-        self.mastodonInstance = mastodonInstance
-        self.accessToken = accessToken
-        self.avatarURL = avatarURL
-        self.role = role
-        self.permissions = permissions
-    }
 
     var fullHandle: String {
         if authMethod == .mastodon, let instance = mastodonInstance {
@@ -764,14 +597,12 @@ enum AuthMethod: String, Codable {
     case pairingCode = "pairing"
     case mastodon = "mastodon"
     case email = "email"
-    case whmcs = "whmcs"
 
     var displayName: String {
         switch self {
         case .pairingCode: return "Pairing Code"
         case .mastodon: return "Mastodon"
         case .email: return "Email"
-        case .whmcs: return "Client Portal"
         }
     }
 
@@ -780,7 +611,6 @@ enum AuthMethod: String, Codable {
         case .pairingCode: return "number.circle"
         case .mastodon: return "at.circle"
         case .email: return "envelope.circle"
-        case .whmcs: return "person.badge.key"
         }
     }
 }
@@ -1285,7 +1115,6 @@ struct DeviceCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
-        case .whmcs: return .orange
         }
     }
 

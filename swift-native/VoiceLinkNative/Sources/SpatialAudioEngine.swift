@@ -108,7 +108,6 @@ class SpatialAudioEngine: ObservableObject {
     init() {
         setupAudioEngine()
         loadHRTFDatabase()
-        setupAudioControlObservers()
     }
 
     // MARK: - Setup
@@ -170,42 +169,6 @@ class SpatialAudioEngine: ObservableObject {
         print("[SpatialAudio] HRTF database loaded")
     }
 
-    private func setupAudioControlObservers() {
-        NotificationCenter.default.addObserver(
-            forName: .userVolumeChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let userId = notification.userInfo?["userId"] as? String else { return }
-            self?.applyUserVolume(userId: userId)
-        }
-
-        NotificationCenter.default.addObserver(
-            forName: .userMuteChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let userId = notification.userInfo?["userId"] as? String else { return }
-            self?.applyUserVolume(userId: userId)
-        }
-
-        NotificationCenter.default.addObserver(
-            forName: .userSoloChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.applyAllUserVolumes()
-        }
-
-        NotificationCenter.default.addObserver(
-            forName: .userMasterVolumeChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.applyAllUserVolumes()
-        }
-    }
-
     // MARK: - User Audio Management
 
     /// Add a user's audio stream to the spatial environment
@@ -235,8 +198,6 @@ class SpatialAudioEngine: ObservableObject {
             playerNode.play()
         }
 
-        applyUserVolume(userId: userId)
-
         // Update position
         updateUserPosition(userId: userId)
 
@@ -264,30 +225,57 @@ class SpatialAudioEngine: ObservableObject {
         userPositions.removeValue(forKey: userId)
     }
 
-    // MARK: - Volume / Mute / Solo
+    // MARK: - Audio Data Reception
 
-    private func applyAllUserVolumes() {
-        for userId in spatialMixers.keys {
-            applyUserVolume(userId: userId)
+    /// Receive and play audio data from a remote user via server relay
+    func receiveAudioData(from userId: String, data: Data, timestamp: Double, sampleRate: Double) {
+        guard let engine = audioEngine, isEnabled else { return }
+
+        // Ensure player node exists for this user
+        if playerNodes[userId] == nil {
+            let playerNode = AVAudioPlayerNode()
+            let mixerNode = AVAudioMixerNode()
+
+            engine.attach(playerNode)
+            engine.attach(mixerNode)
+
+            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+            if let fmt = format {
+                engine.connect(playerNode, to: mixerNode, format: fmt)
+                engine.connect(mixerNode, to: environmentNode ?? engine.mainMixerNode, format: fmt)
+            }
+
+            playerNodes[userId] = playerNode
+            spatialMixers[userId] = mixerNode
+
+            // Set default position if none set
+            if userPositions[userId] == nil {
+                userPositions[userId] = SIMD3<Float>(0, 0, -2)
+                updateUserPosition(userId: userId)
+            }
+
+            playerNode.play()
+            print("[SpatialAudio] Created player node for user: \(userId)")
         }
-    }
 
-    private func applyUserVolume(userId: String) {
-        guard let mixerNode = spatialMixers[userId] else { return }
-        let audioControl = UserAudioControlManager.shared
+        // Convert Data to AVAudioPCMBuffer
+        let frameCount = UInt32(data.count) / 4 // 4 bytes per Float32 sample
+        guard frameCount > 0 else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
 
-        let isMuted = audioControl.isMuted(userId)
-        let baseVolume = audioControl.getVolume(for: userId) * audioControl.masterVolume
-        let soloedId = audioControl.soloedUserId
-
-        let effectiveVolume: Float
-        if let soloedId = soloedId {
-            effectiveVolume = (soloedId == userId && !isMuted) ? baseVolume : 0.0
-        } else {
-            effectiveVolume = isMuted ? 0.0 : baseVolume
+        // Copy audio data into buffer
+        data.withUnsafeBytes { ptr in
+            if let baseAddress = ptr.baseAddress, let channelData = buffer.floatChannelData {
+                memcpy(channelData[0], baseAddress, min(data.count, Int(frameCount) * 4))
+                buffer.frameLength = AVAudioFrameCount(frameCount)
+            }
         }
 
-        mixerNode.outputVolume = max(0.0, min(2.0, effectiveVolume))
+        // Schedule buffer for playback
+        if let playerNode = playerNodes[userId] {
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        }
     }
 
     // MARK: - Position Management
