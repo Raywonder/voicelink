@@ -773,6 +773,58 @@ class VoiceLinkLocalServer {
             res.json(mergedRooms);
         });
 
+        // Public rooms alias (compatibility with older clients)
+        this.app.get('/api/rooms/public', async (req, res) => {
+            const source = req.query.source || 'app';
+
+            let mainServerRooms = [];
+            try {
+                mainServerRooms = await this.fetchMainServerRooms();
+            } catch (e) {
+                console.error('[LocalServer] Error fetching main server rooms:', e.message);
+            }
+
+            let localRooms = Array.from(this.rooms.values());
+            localRooms = localRooms.filter(room => {
+                if (room.accessType === 'hidden') return false;
+                if (source === 'app' && !room.showInApp) return false;
+                if (source === 'web' && !room.allowEmbed) return false;
+                return true;
+            });
+
+            const localRoomList = localRooms.map(room => ({
+                id: room.id,
+                name: room.name,
+                description: room.description || '',
+                users: room.users.length,
+                maxUsers: room.maxUsers,
+                hasPassword: !!room.password,
+                visibility: room.visibility,
+                accessType: room.accessType,
+                allowEmbed: room.allowEmbed,
+                visibleToGuests: room.visibleToGuests,
+                isDefault: room.isDefault || false,
+                template: room.template || null,
+                serverSource: 'local',
+                locked: room.locked || false,
+                lockedAt: room.lockedAt || null,
+                canJoin: !room.locked
+            }));
+
+            const mainRoomIds = new Set(mainServerRooms.map(r => r.id));
+            const mergedRooms = [
+                ...mainServerRooms,
+                ...localRoomList.filter(r => !mainRoomIds.has(r.id))
+            ];
+
+            const publicRooms = mergedRooms.filter(room =>
+                room.visibility === 'public' && room.visibleToGuests !== false
+            );
+
+            console.log(`[LocalServer] Returning ${publicRooms.length} public rooms`);
+            res.json(publicRooms);
+        });
+
         this.app.post('/api/rooms', (req, res) => {
             const {
                 name,
