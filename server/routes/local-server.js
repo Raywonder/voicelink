@@ -194,6 +194,76 @@ class VoiceLinkLocalServer {
         return { role, permissions };
     }
 
+    normalizeWhmcsOptionValue(value) {
+        if (value === null || value === undefined) return null;
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value;
+        const text = String(value).trim();
+        if (!text) return null;
+        const lower = text.toLowerCase();
+        if (['yes', 'true', 'on', 'enabled', 'allow', 'allowed'].includes(lower)) return true;
+        if (['no', 'false', 'off', 'disabled', 'deny', 'denied'].includes(lower)) return false;
+        if (!Number.isNaN(Number(text))) return Number(text);
+        return text;
+    }
+
+    extractServiceOptions(services = []) {
+        const options = {};
+        services.forEach(service => {
+            const collect = (entry) => {
+                if (!entry) return;
+                if (Array.isArray(entry)) {
+                    entry.forEach(item => {
+                        const name = item?.name || item?.optionname;
+                        const value = item?.value ?? item?.optionvalue ?? item?.qty ?? item?.optionid;
+                        if (name) options[name] = this.normalizeWhmcsOptionValue(value);
+                    });
+                } else if (typeof entry === 'object') {
+                    Object.keys(entry).forEach(key => {
+                        options[key] = this.normalizeWhmcsOptionValue(entry[key]);
+                    });
+                }
+            };
+            collect(service.configoptions);
+            collect(service.customfields);
+            collect(service.configurableoptions);
+        });
+        return options;
+    }
+
+    deriveWhmcsEntitlements(client, services = []) {
+        const defaults = deployConfig.get('whmcs')?.entitlements || {};
+        const optionMap = this.extractServiceOptions(services);
+
+        const readOption = (...keys) => {
+            for (const key of keys) {
+                if (Object.prototype.hasOwnProperty.call(optionMap, key)) {
+                    return optionMap[key];
+                }
+            }
+            return null;
+        };
+
+        const deviceTier = readOption('Device Tier', 'VoiceLink Device Tier', 'Device tier', 'DeviceTier')
+            || defaults.deviceTier
+            || 'standard';
+
+        const maxDevicesRaw = readOption('Max Devices', 'Device Slots', 'VoiceLink Max Devices', 'MaxDeviceSlots');
+        const maxDevices = Number.isFinite(maxDevicesRaw) ? Number(maxDevicesRaw) : (defaults.maxDevices ?? null);
+
+        const allowMultiDeviceSettings = readOption('Allow Multi-Device Settings', 'Allow Multi Device Settings', 'Enable Multi-Device Settings');
+        const allowDeviceList = readOption('Allow Device List', 'Enable Device List', 'Allow Device Management');
+        const requiresIapApple = readOption('Require Apple IAP', 'Require iOS IAP', 'Apple IAP Required');
+
+        return {
+            deviceTier,
+            maxDevices,
+            allowMultiDeviceSettings: allowMultiDeviceSettings === null ? (defaults.allowMultiDeviceSettings ?? true) : !!allowMultiDeviceSettings,
+            allowDeviceList: allowDeviceList === null ? (defaults.allowDeviceList ?? true) : !!allowDeviceList,
+            requiresIapApple: requiresIapApple === null ? (defaults.requiresIapApple ?? false) : !!requiresIapApple
+        };
+    }
+
     createAuthSession(store, prefix, user, remember = false) {
         const token = `${prefix}_${uuidv4()}_${Date.now().toString(36)}`;
         const ttlMs = remember ? 1000 * 60 * 60 * 24 * 30 : 1000 * 60 * 60 * 24;
@@ -513,6 +583,7 @@ class VoiceLinkLocalServer {
                 }
 
                 const { role, permissions } = this.deriveWhmcsRole(clientDetails, services);
+                const entitlements = this.deriveWhmcsEntitlements(clientDetails, services);
                 const displayName = [clientDetails.firstname, clientDetails.lastname].filter(Boolean).join(' ').trim()
                     || clientDetails.companyname
                     || clientDetails.email
@@ -529,6 +600,9 @@ class VoiceLinkLocalServer {
                     isAdmin: role === 'admin',
                     isModerator: role === 'staff',
                     authProvider: 'whmcs',
+                    entitlements,
+                    deviceTier: entitlements.deviceTier,
+                    maxDevices: entitlements.maxDevices,
                     mastodonHandle
                 };
 
@@ -594,6 +668,7 @@ class VoiceLinkLocalServer {
                     }
 
                     const { role, permissions } = this.deriveWhmcsRole(clientDetails, []);
+                    const entitlements = this.deriveWhmcsEntitlements(clientDetails, []);
                     const displayName = [clientDetails.firstname, clientDetails.lastname].filter(Boolean).join(' ').trim()
                         || clientDetails.companyname
                         || clientDetails.email
@@ -609,7 +684,10 @@ class VoiceLinkLocalServer {
                         permissions,
                         isAdmin: role === 'admin',
                         isModerator: role === 'staff',
-                        authProvider: 'whmcs'
+                        authProvider: 'whmcs',
+                        entitlements,
+                        deviceTier: entitlements.deviceTier,
+                        maxDevices: entitlements.maxDevices
                     };
 
                     const created = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, req.body.remember === true);

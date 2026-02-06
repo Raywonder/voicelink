@@ -4463,6 +4463,7 @@ class VoiceLinkApp {
             // Update role-based UI
             this.updateRoleBasedUI(user);
             this.registerSession();
+            this.applyEntitlementVisibility(user);
 
             // Default the join name to Mastodon display name if empty or placeholder
             if (joinNameInput) {
@@ -4478,7 +4479,19 @@ class VoiceLinkApp {
 
             // Hide admin controls
             this.hideAdminControls();
+            this.applyEntitlementVisibility(null);
         }
+    }
+
+    applyEntitlementVisibility(user) {
+        const connectionsTabBtn = document.querySelector('.tab-btn[data-tab="connections"]');
+        const connectionsTab = document.getElementById('connections-tab');
+        const allowByRole = user?.permissions?.includes('admin') || user?.permissions?.includes('staff') || user?.permissions?.includes('client');
+        const allowByEntitlement = user?.entitlements?.allowMultiDeviceSettings !== false;
+        const allowConnections = !!user && allowByRole && allowByEntitlement;
+
+        if (connectionsTabBtn) connectionsTabBtn.style.display = allowConnections ? '' : 'none';
+        if (connectionsTab) connectionsTab.style.display = allowConnections ? '' : 'none';
     }
 
     updateRoleBasedUI(user) {
