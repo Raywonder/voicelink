@@ -925,9 +925,15 @@ class VoiceLinkLocalServer {
                 autoLock = null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoplayMusic = false,
                 autoplayPlaylist = null,
-                isAuthenticated = false
+                isAuthenticated = false,
+                entitlements,
+                deviceTier
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
+            let roomMaxUsers = Number(maxUsers) || 10;
+            let roomVisibility = visibility;
+            let roomAccessType = accessType;
+            let roomDuration = duration;
 
             // Enforce guest restrictions
             if (!isAuthenticated) {
@@ -964,10 +970,33 @@ class VoiceLinkLocalServer {
                 }
             }
 
+            // Free tier with license restrictions
+            const tier = entitlements?.deviceTier || deviceTier || null;
+            if (isAuthenticated && tier === 'free') {
+                if (roomVisibility !== 'public') {
+                    return res.status(403).json({
+                        error: 'Free tier can only create public rooms.',
+                        requiresUpgrade: true
+                    });
+                }
+
+                if (roomAccessType === 'hidden') {
+                    return res.status(403).json({
+                        error: 'Free tier rooms cannot be hidden.',
+                        requiresUpgrade: true
+                    });
+                }
+
+                roomMaxUsers = Math.min(roomMaxUsers, 5);
+                if (!roomDuration || roomDuration > 1800000) {
+                    roomDuration = 1800000;
+                }
+            }
+
             // Calculate expiration if duration is set
             let expiresAt = null;
-            if (duration && typeof duration === 'number') {
-                expiresAt = new Date(Date.now() + duration);
+            if (roomDuration && typeof roomDuration === 'number') {
+                expiresAt = new Date(Date.now() + roomDuration);
             }
 
             // Access type determines where the room is accessible:
@@ -982,14 +1011,14 @@ class VoiceLinkLocalServer {
                 description: description || '',
                 password,
                 hasPassword: !!password,
-                maxUsers,
+                maxUsers: roomMaxUsers,
                 users: [],
-                visibility,  // 'public', 'unlisted', 'private'
-                visibleToGuests: accessType === 'hidden' ? false : visibleToGuests,
-                accessType,
-                allowEmbed: accessType === 'web-only' || accessType === 'hybrid',
-                showInApp: accessType === 'app-only' || accessType === 'hybrid',
-                privacyLevel: privacyLevel || visibility,
+                visibility: roomVisibility,  // 'public', 'unlisted', 'private'
+                visibleToGuests: roomAccessType === 'hidden' ? false : visibleToGuests,
+                accessType: roomAccessType,
+                allowEmbed: roomAccessType === 'web-only' || roomAccessType === 'hybrid',
+                showInApp: roomAccessType === 'app-only' || roomAccessType === 'hybrid',
+                privacyLevel: privacyLevel || roomVisibility,
                 encrypted: encrypted || false,
                 creatorHandle,
                 isDefault: isDefault || false,
