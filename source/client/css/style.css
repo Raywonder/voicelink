@@ -1524,6 +1524,63 @@ body {
     text-transform: lowercase;
 }
 
+.room-actions-menu {
+    position: relative;
+    margin-top: 6px;
+}
+
+.room-actions-summary {
+    list-style: none;
+    cursor: pointer;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.room-actions-summary::-webkit-details-marker {
+    display: none;
+}
+
+.room-actions-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 8px;
+    background: rgba(12, 16, 34, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.room-action-btn {
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    text-align: left;
+    padding: 7px 9px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.room-action-btn:hover,
+.room-action-btn:focus {
+    background: rgba(99, 100, 255, 0.55);
+    outline: none;
+}
+
 /* Default Rooms Management Modal */
 .default-rooms-modal {
     border: none;

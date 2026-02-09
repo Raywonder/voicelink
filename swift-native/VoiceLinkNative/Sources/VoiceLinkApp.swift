@@ -820,6 +820,13 @@ struct MainMenuView: View {
                                 )
                                 appState.currentRoom = room
                                 appState.currentScreen = .voiceChat
+                            } onPreview: {
+                                PeekManager.shared.peekIntoRoom(room)
+                            } onShare: {
+                                let roomURL = "https://voicelink.devinecreations.net/client/#/room/\(room.id)"
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(roomURL, forType: .string)
+                                AppSoundManager.shared.playSound(.success)
                             }
                         }
 
@@ -962,6 +969,8 @@ struct MainMenuView: View {
 struct RoomCard: View {
     let room: Room
     let onJoin: () -> Void
+    var onPreview: () -> Void = {}
+    var onShare: () -> Void = {}
 
     var body: some View {
         HStack {
@@ -992,11 +1001,39 @@ struct RoomCard: View {
             .foregroundColor(.white.opacity(0.6))
             .font(.caption)
 
-            Button("Join") {
-                onJoin()
+            HStack(spacing: 8) {
+                Menu {
+                    Button("Join Room") {
+                        onJoin()
+                    }
+
+                    if room.userCount > 0 {
+                        Button("Preview Room Audio") {
+                            onPreview()
+                        }
+                    }
+
+                    Button("Share Room Link") {
+                        onShare()
+                    }
+
+                    Button("Copy Room ID") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(room.id, forType: .string)
+                    }
+                } label: {
+                    Label("Actions", systemImage: "ellipsis.circle")
+                        .labelStyle(.titleAndIcon)
+                }
+                .menuStyle(.borderlessButton)
+                .foregroundColor(.white.opacity(0.9))
+
+                Button("Join") {
+                    onJoin()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
         }
         .padding()
         .background(Color.white.opacity(0.1))

@@ -2242,24 +2242,31 @@ class VoiceLinkApp {
                 ? '1 user'
                 : `${roomData.users} users`;
 
-        // Show peek button only for rooms with active users
+        // Action menu (accessible for keyboard/screen reader users)
         const showPeekButton = roomData.users > 0;
-        const peekButton = showPeekButton ? `
-            <button class="peek-room-btn"
-                    onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
-                    title="Preview room audio (5-20 seconds)"
-                    aria-label="Peek into ${roomData.name} - hear room audio preview">
-                👁️ Peek In
-            </button>
-        ` : '';
-
-        const shareButton = `
-            <button class="share-room-btn"
-                    onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
-                    title="Share room"
-                    aria-label="Share ${roomData.name}">
-                🔗 Share
-            </button>
+        const actionMenu = `
+            <details class="room-actions-menu" onclick="event.stopPropagation();">
+                <summary class="room-actions-summary" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
+                <div class="room-actions-list" role="menu" onclick="event.stopPropagation();">
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
+                            aria-label="Join ${roomData.name}">
+                        🎧 Join
+                    </button>
+                    ${showPeekButton ? `
+                        <button class="room-action-btn"
+                                onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
+                                aria-label="Preview audio for ${roomData.name}">
+                            👁️ Peek In
+                        </button>
+                    ` : ''}
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
+                            aria-label="Share ${roomData.name}">
+                        🔗 Share
+                    </button>
+                </div>
+            </details>
         `;
 
         return `
@@ -2285,8 +2292,7 @@ class VoiceLinkApp {
                         ${this.getRoomDurationDisplay(room)}
                     </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
-                    ${peekButton}
-                    ${shareButton}
+                    ${actionMenu}
                 </div>
             </div>
         `;
@@ -3701,7 +3707,14 @@ class VoiceLinkApp {
             }
         } catch (error) {
             console.error('Audio test failed:', error);
-            alert('Audio test failed. Please check your audio settings and ensure audio permissions are granted.');
+            const name = error?.name || '';
+            if (name === 'NotAllowedError' || name === 'SecurityError') {
+                alert('Microphone access is blocked by browser/site policy. Check Chrome site settings and OS microphone privacy settings.');
+            } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+                alert('Audio test failed because the selected audio device is unavailable. Choose a different input/output device and try again.');
+            } else {
+                alert('Audio test failed. Check your audio devices and browser settings, then try again.');
+            }
         }
     }
 
