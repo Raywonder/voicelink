@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using SocketIOClient;
 
 namespace VoiceLinkNative.Services
@@ -17,6 +18,7 @@ namespace VoiceLinkNative.Services
         private string _serverUrl = "http://localhost:3010";
         private string _connectedServer = "";
         private string _serverStatus = "Disconnected";
+        private CancellationTokenSource? _domainRecoveryCts;
 
         public const string MainServerUrl = "https://voicelink.devinecreations.net";
         public const string LocalServerUrl = "http://localhost:3010";
@@ -85,6 +87,7 @@ namespace VoiceLinkNative.Services
                 ConnectedServer = serverUrl;
                 OnPropertyChanged(nameof(IsConnected));
                 Connected?.Invoke(this, EventArgs.Empty);
+                StartDomainRecoveryMonitor(serverUrl);
                 // Request rooms on connect
                 _socket.EmitAsync("get-rooms");
             };
@@ -92,6 +95,7 @@ namespace VoiceLinkNative.Services
             _socket.OnDisconnected += (s, e) =>
             {
                 Console.WriteLine("Disconnected from server");
+                StopDomainRecoveryMonitor();
                 ServerStatus = "Disconnected";
                 OnPropertyChanged(nameof(IsConnected));
                 Disconnected?.Invoke(this, EventArgs.Empty);
@@ -145,6 +149,7 @@ namespace VoiceLinkNative.Services
         public void Disconnect()
         {
             _socket?.DisconnectAsync();
+            StopDomainRecoveryMonitor();
             ServerStatus = "Disconnected";
             ConnectedServer = "";
             OnPropertyChanged(nameof(IsConnected));
@@ -195,17 +200,21 @@ namespace VoiceLinkNative.Services
         public static IReadOnlyList<string> GetApiBaseCandidates(string? preferred = null)
         {
             var results = new List<string>();
-            if (!string.IsNullOrWhiteSpace(preferred))
-            {
-                results.Add(preferred.Trim().TrimEnd('/'));
-            }
-
             foreach (var baseUrl in MainServerFallbackUrls)
             {
                 var normalized = baseUrl.Trim().TrimEnd('/');
                 if (!results.Contains(normalized, StringComparer.OrdinalIgnoreCase))
                 {
                     results.Add(normalized);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(preferred))
+            {
+                var normalizedPreferred = preferred.Trim().TrimEnd('/');
+                if (!results.Contains(normalizedPreferred, StringComparer.OrdinalIgnoreCase))
+                {
+                    results.Add(normalizedPreferred);
                 }
             }
 
@@ -232,6 +241,72 @@ namespace VoiceLinkNative.Services
             }
 
             return MainServerUrl;
+        }
+
+        private void StartDomainRecoveryMonitor(string activeServerUrl)
+        {
+            StopDomainRecoveryMonitor();
+            if (!activeServerUrl.StartsWith("https://64.20.46.", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _domainRecoveryCts = new CancellationTokenSource();
+            var token = _domainRecoveryCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(45), token);
+                        if (token.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
+                        if (await IsEndpointReachableAsync(MainServerUrl) &&
+                            !string.Equals(_serverUrl, MainServerUrl, StringComparison.OrdinalIgnoreCase))
+                        {
+                            await ConnectAsync(MainServerUrl);
+                            break;
+                        }
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Keep retrying.
+                    }
+                }
+            }, token);
+        }
+
+        private void StopDomainRecoveryMonitor()
+        {
+            if (_domainRecoveryCts != null)
+            {
+                _domainRecoveryCts.Cancel();
+                _domainRecoveryCts.Dispose();
+                _domainRecoveryCts = null;
+            }
+        }
+
+        private static async Task<bool> IsEndpointReachableAsync(string endpoint)
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            try
+            {
+                var response = await httpClient.GetAsync($"{endpoint}/api/health");
+                return (int)response.StatusCode < 500;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 

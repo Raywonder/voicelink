@@ -16,11 +16,11 @@ enum APIEndpointResolver {
 
     static func mainBaseCandidates(preferred: String? = nil) -> [String] {
         var candidates: [String] = []
+        candidates.append(canonicalMainBase)
+        candidates.append(contentsOf: mainFallbackBases)
         if let preferred, !preferred.isEmpty {
             candidates.append(normalize(preferred))
         }
-        candidates.append(canonicalMainBase)
-        candidates.append(contentsOf: mainFallbackBases)
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }

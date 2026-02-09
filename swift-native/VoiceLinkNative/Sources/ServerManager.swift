@@ -21,6 +21,7 @@ class ServerManager: ObservableObject {
 
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
+    private var domainRecoveryTimer: Timer?
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -138,6 +139,7 @@ class ServerManager: ObservableObject {
 
     func disconnect() {
         socket?.disconnect()
+        stopDomainRecoveryTimer()
         DispatchQueue.main.async {
             self.isConnected = false
             self.serverStatus = "Disconnected"
@@ -246,6 +248,34 @@ class ServerManager: ObservableObject {
         }
     }
 
+    private func scheduleDomainRecoveryIfNeeded() {
+        stopDomainRecoveryTimer()
+        guard useMainServer else { return }
+        guard APIEndpointResolver.normalize(currentServerURL) != APIEndpointResolver.canonicalMainBase else { return }
+
+        domainRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard self.isConnected, self.useMainServer else {
+                self.stopDomainRecoveryTimer()
+                return
+            }
+
+            Task { @MainActor in
+                let canonical = APIEndpointResolver.canonicalMainBase
+                if APIEndpointResolver.normalize(self.currentServerURL) != canonical,
+                   await self.isReachableServer(canonical) {
+                    print("Domain reachable again, restoring connection to canonical domain")
+                    self.connectSocket(to: canonical, asMain: true)
+                }
+            }
+        }
+    }
+
+    private func stopDomainRecoveryTimer() {
+        domainRecoveryTimer?.invalidate()
+        domainRecoveryTimer = nil
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
@@ -262,12 +292,14 @@ class ServerManager: ObservableObject {
                 self.errorMessage = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
+            self.scheduleDomainRecoveryIfNeeded()
             // Request room list after connecting
             self.getRooms()
         }
 
         socket.on(clientEvent: .disconnect) { [weak self] data, ack in
             print("Disconnected from server")
+            self?.stopDomainRecoveryTimer()
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
