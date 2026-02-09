@@ -120,15 +120,15 @@ class ConnectionHealthMonitor: ObservableObject {
             group.leave()
         }
 
-        // Check main server
+        // Check main server (domain first, then IP fallback)
         group.enter()
-        checkServer(url: "https://voicelink.devinecreations.net") { reachable, latency in
+        checkMainServerWithFallback { reachable, latency, nodeURL in
             details.mainServerReachable = reachable
             details.latencyMs = latency
             if reachable {
                 nodes.append(DetectedNode(
                     name: "Main Server",
-                    url: "voicelink.devinecreations.net",
+                    url: nodeURL,
                     type: .main,
                     isOnline: true,
                     latencyMs: latency,
@@ -138,9 +138,9 @@ class ConnectionHealthMonitor: ObservableObject {
             group.leave()
         }
 
-        // Check API
+        // Check API (domain first, then IP fallback)
         group.enter()
-        checkAPI(url: "https://voicelink.devinecreations.net/api/info") { responsive in
+        checkMainAPIWithFallback { responsive in
             details.apiResponsive = responsive
             group.leave()
         }
@@ -190,6 +190,46 @@ class ConnectionHealthMonitor: ObservableObject {
                 data != nil
             completion(success)
         }.resume()
+    }
+
+    private func checkMainServerWithFallback(completion: @escaping (Bool, Int, String) -> Void) {
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL)
+        checkServerCandidate(candidates, completion: completion)
+    }
+
+    private func checkServerCandidate(_ candidates: [String], completion: @escaping (Bool, Int, String) -> Void) {
+        guard let candidate = candidates.first else {
+            completion(false, 0, "main-server-unavailable")
+            return
+        }
+
+        checkServer(url: candidate) { reachable, latency in
+            if reachable {
+                completion(true, latency, candidate.replacingOccurrences(of: "https://", with: ""))
+            } else {
+                self.checkServerCandidate(Array(candidates.dropFirst()), completion: completion)
+            }
+        }
+    }
+
+    private func checkMainAPIWithFallback(completion: @escaping (Bool) -> Void) {
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL)
+        checkAPICandidate(candidates, completion: completion)
+    }
+
+    private func checkAPICandidate(_ candidates: [String], completion: @escaping (Bool) -> Void) {
+        guard let candidate = candidates.first else {
+            completion(false)
+            return
+        }
+
+        checkAPI(url: "\(candidate)/api/info") { responsive in
+            if responsive {
+                completion(true)
+            } else {
+                self.checkAPICandidate(Array(candidates.dropFirst()), completion: completion)
+            }
+        }
     }
 
     private func calculateOverallHealth(details: ConnectionDetails) {

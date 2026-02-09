@@ -108,13 +108,22 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{_serverBaseUrl}/api/admin/status");
-            if (!string.IsNullOrEmpty(authToken))
+            var response = await SendWithFallbackAsync(baseUrl =>
             {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken);
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/admin/status");
+                if (!string.IsNullOrEmpty(authToken))
+                {
+                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken);
+                }
+                return request;
+            });
+
+            if (response == null)
+            {
+                IsAdmin = false;
+                return;
             }
 
-            var response = await _httpClient.SendAsync(request);
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<AdminStatusResponse>();
@@ -142,7 +151,11 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var response = await _httpClient.GetAsync($"{_serverBaseUrl}/api/admin/stats");
+            var response = await GetWithFallbackAsync("/api/admin/stats");
+            if (response == null)
+            {
+                return;
+            }
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<ServerStatsResponse>();
@@ -171,7 +184,11 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var response = await _httpClient.GetAsync($"{_serverBaseUrl}/api/admin/users");
+            var response = await GetWithFallbackAsync("/api/admin/users");
+            if (response == null)
+            {
+                return;
+            }
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<List<AdminUser>>();
@@ -194,7 +211,11 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var response = await _httpClient.GetAsync($"{_serverBaseUrl}/api/admin/rooms");
+            var response = await GetWithFallbackAsync("/api/admin/rooms");
+            if (response == null)
+            {
+                return;
+            }
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<List<AdminRoom>>();
@@ -217,7 +238,11 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var response = await _httpClient.GetAsync($"{_serverBaseUrl}/api/admin/config");
+            var response = await GetWithFallbackAsync("/api/admin/config");
+            if (response == null)
+            {
+                return;
+            }
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<ServerConfig>();
@@ -239,11 +264,16 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             IsLoading = true;
-
-            var json = JsonSerializer.Serialize(config);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/admin/config", content);
+            var response = await PostWithFallbackAsync("/api/admin/config", () =>
+            {
+                var json = JsonSerializer.Serialize(config);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null)
+            {
+                ErrorMessage = "Failed to update config: no available endpoint";
+                return false;
+            }
             if (response.IsSuccessStatusCode)
             {
                 Config = config;
@@ -270,10 +300,12 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             var data = new { odId, reason };
-            var json = JsonSerializer.Serialize(data);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/admin/users/kick", content);
+            var response = await PostWithFallbackAsync("/api/admin/users/kick", () =>
+            {
+                var json = JsonSerializer.Serialize(data);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -288,10 +320,12 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             var data = new { odId, reason, duration };
-            var json = JsonSerializer.Serialize(data);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/admin/users/ban", content);
+            var response = await PostWithFallbackAsync("/api/admin/users/ban", () =>
+            {
+                var json = JsonSerializer.Serialize(data);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -306,10 +340,12 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             var data = new { roomId };
-            var json = JsonSerializer.Serialize(data);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/admin/rooms/close", content);
+            var response = await PostWithFallbackAsync("/api/admin/rooms/close", () =>
+            {
+                var json = JsonSerializer.Serialize(data);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -326,7 +362,11 @@ public class AdminServerManager : INotifyPropertyChanged
         {
             IsLoading = true;
 
-            var response = await _httpClient.GetAsync($"{_serverBaseUrl}/api/nodes");
+            var response = await GetWithFallbackAsync("/api/nodes");
+            if (response == null)
+            {
+                return;
+            }
             if (response.IsSuccessStatusCode)
             {
                 var data = await response.Content.ReadFromJsonAsync<NodesResponse>();
@@ -347,7 +387,8 @@ public class AdminServerManager : INotifyPropertyChanged
     {
         try
         {
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/nodes/{nodeId}/restart", null);
+            var response = await PostWithFallbackAsync($"/api/nodes/{nodeId}/restart", () => new StringContent(""));
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -362,10 +403,12 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             var data = new { delayMinutes, reason = "Scheduled via admin panel" };
-            var json = JsonSerializer.Serialize(data);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/nodes/{nodeId}/schedule-restart", content);
+            var response = await PostWithFallbackAsync($"/api/nodes/{nodeId}/schedule-restart", () =>
+            {
+                var json = JsonSerializer.Serialize(data);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -380,10 +423,12 @@ public class AdminServerManager : INotifyPropertyChanged
         try
         {
             var broadcastData = new { eventName, data, nodeType };
-            var json = JsonSerializer.Serialize(broadcastData);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync($"{_serverBaseUrl}/api/nodes/broadcast", content);
+            var response = await PostWithFallbackAsync("/api/nodes/broadcast", () =>
+            {
+                var json = JsonSerializer.Serialize(broadcastData);
+                return new StringContent(json, Encoding.UTF8, "application/json");
+            });
+            if (response == null) return false;
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -397,6 +442,43 @@ public class AdminServerManager : INotifyPropertyChanged
     protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private async Task<HttpResponseMessage?> GetWithFallbackAsync(string path)
+    {
+        return await SendWithFallbackAsync(baseUrl => new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{path}"));
+    }
+
+    private async Task<HttpResponseMessage?> PostWithFallbackAsync(string path, Func<HttpContent> contentFactory)
+    {
+        return await SendWithFallbackAsync(baseUrl =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}{path}");
+            request.Content = contentFactory();
+            return request;
+        });
+    }
+
+    private async Task<HttpResponseMessage?> SendWithFallbackAsync(Func<string, HttpRequestMessage> requestFactory)
+    {
+        foreach (var candidate in ServerManager.GetApiBaseCandidates(_serverBaseUrl))
+        {
+            using var request = requestFactory(candidate);
+            try
+            {
+                var response = await _httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    _serverBaseUrl = candidate;
+                    return response;
+                }
+            }
+            catch
+            {
+                // Try next endpoint.
+            }
+        }
+        return null;
     }
 }
 

@@ -46,7 +46,7 @@ class SyncManager: ObservableObject {
 
     // Server API endpoints
     private var primaryServerURL: String {
-        pairingManager.linkedServers.first?.url ?? "https://voicelink.devinecreations.net"
+        ServerManager.shared.baseURL ?? pairingManager.linkedServers.first?.url ?? APIEndpointResolver.canonicalMainBase
     }
 
     init() {

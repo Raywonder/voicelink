@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using SocketIOClient;
 
@@ -18,6 +20,12 @@ namespace VoiceLinkNative.Services
 
         public const string MainServerUrl = "https://voicelink.devinecreations.net";
         public const string LocalServerUrl = "http://localhost:3010";
+        public static readonly string[] MainServerFallbackUrls =
+        {
+            MainServerUrl,
+            "https://64.20.46.178",
+            "https://64.20.46.179"
+        };
 
         public event EventHandler<SyncPushData>? SyncPushReceived;
         public event EventHandler? Connected;
@@ -120,7 +128,8 @@ namespace VoiceLinkNative.Services
 
         public async Task ConnectToMainServerAsync()
         {
-            await ConnectAsync(MainServerUrl);
+            var resolvedUrl = await ResolveBestMainServerAsync();
+            await ConnectAsync(resolvedUrl);
         }
 
         public async Task ConnectToLocalServerAsync()
@@ -181,6 +190,48 @@ namespace VoiceLinkNative.Services
         public static void OnConnected()
         {
             Console.WriteLine("Connected to server");
+        }
+
+        public static IReadOnlyList<string> GetApiBaseCandidates(string? preferred = null)
+        {
+            var results = new List<string>();
+            if (!string.IsNullOrWhiteSpace(preferred))
+            {
+                results.Add(preferred.Trim().TrimEnd('/'));
+            }
+
+            foreach (var baseUrl in MainServerFallbackUrls)
+            {
+                var normalized = baseUrl.Trim().TrimEnd('/');
+                if (!results.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+                {
+                    results.Add(normalized);
+                }
+            }
+
+            return results;
+        }
+
+        private static async Task<string> ResolveBestMainServerAsync()
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            foreach (var candidate in GetApiBaseCandidates())
+            {
+                try
+                {
+                    var response = await httpClient.GetAsync($"{candidate}/api/health");
+                    if ((int)response.StatusCode < 500)
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                    // Try next candidate.
+                }
+            }
+
+            return MainServerUrl;
         }
     }
 

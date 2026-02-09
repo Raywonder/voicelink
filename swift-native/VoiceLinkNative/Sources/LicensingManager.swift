@@ -74,7 +74,7 @@ class LicensingManager: ObservableObject {
     private init() {
         // Get API URL from config or use default
         self.apiBaseUrl = ProcessInfo.processInfo.environment["LICENSING_API_URL"]
-            ?? "https://voicelink.devinecreations.net/api/licensing"
+            ?? "\(APIEndpointResolver.canonicalMainBase)/api/licensing"
 
         // Generate device info
         self.deviceInfo = Self.generateDeviceInfo()
@@ -288,28 +288,33 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
-            var request = URLRequest(url: URL(string: apiBaseUrl + "/register")!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(email, forHTTPHeaderField: "X-User-Email")
-            request.setValue(twoFactorCode, forHTTPHeaderField: "X-2FA-Code")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            var result: [String: Any]?
+            for base in licensingBaseCandidates() {
+                guard let registerURL = URL(string: base + "/register") else { continue }
+                var request = URLRequest(url: registerURL)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(email, forHTTPHeaderField: "X-User-Email")
+                request.setValue(twoFactorCode, forHTTPHeaderField: "X-2FA-Code")
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode) else {
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let error = json["error"] as? String {
-                    errorMessage = error
+                do {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200...299).contains(httpResponse.statusCode) else {
+                        continue
+                    }
+                    result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    if result != nil {
+                        break
+                    }
+                } catch {
+                    continue
                 }
-                licenseStatus = .error
-                isChecking = false
-                return
             }
 
-            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                errorMessage = "Invalid response from server"
+            guard let result else {
+                errorMessage = "Licensing endpoint unavailable"
                 licenseStatus = .error
                 isChecking = false
                 return
@@ -571,42 +576,62 @@ class LicensingManager: ObservableObject {
     // MARK: - Network Helper
 
     private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil, userEmail: String? = nil) async throws -> [String: Any] {
-        guard let url = URL(string: apiBaseUrl + endpoint) else {
-            throw URLError(.badURL)
-        }
+        var lastError: Error = URLError(.cannotFindHost)
 
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for base in licensingBaseCandidates() {
+            guard let url = URL(string: base + endpoint) else { continue }
 
-        // Include user email for WHMCS authentication
-        if let email = userEmail {
-            request.setValue(email, forHTTPHeaderField: "X-User-Email")
-        }
+            var request = URLRequest(url: url)
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        if let body = body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        }
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let error = json["error"] as? String {
-                throw NSError(domain: "LicensingError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: error])
+            if let email = userEmail {
+                request.setValue(email, forHTTPHeaderField: "X-User-Email")
             }
-            throw URLError(.badServerResponse)
+
+            if let body = body {
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastError = URLError(.badServerResponse)
+                    continue
+                }
+
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let error = json["error"] as? String {
+                        lastError = NSError(domain: "LicensingError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: error])
+                    } else {
+                        lastError = URLError(.badServerResponse)
+                    }
+                    continue
+                }
+
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    lastError = URLError(.cannotParseResponse)
+                    continue
+                }
+
+                return json
+            } catch {
+                lastError = error
+            }
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw URLError(.cannotParseResponse)
-        }
+        throw lastError
+    }
 
-        return json
+    private func licensingBaseCandidates() -> [String] {
+        var candidates: [String] = [apiBaseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))]
+        candidates.append(contentsOf: APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL).map {
+            "\($0)/api/licensing"
+        })
+
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0).inserted }
     }
 }
 

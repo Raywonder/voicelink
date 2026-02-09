@@ -16,8 +16,8 @@ class ServerManager: ObservableObject {
     @Published var connectedServer: String = ""
 
     // Server options
-    static let mainServer = "https://voicelink.devinecreations.net"
-    static let localServer = "http://localhost:4004"
+    static let mainServer = APIEndpointResolver.canonicalMainBase
+    static let localServer = APIEndpointResolver.localBase
 
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
@@ -97,33 +97,15 @@ class ServerManager: ObservableObject {
         // Disconnect existing connection
         socket?.disconnect()
 
-        // Choose server
-        currentServerURL = toMain ? ServerManager.mainServer : ServerManager.localServer
-        useMainServer = toMain
-
-        guard let url = URL(string: currentServerURL) else {
-            DispatchQueue.main.async {
-                self.errorMessage = "Invalid server URL"
+        if toMain {
+            Task { @MainActor in
+                let resolvedMain = await self.resolveBestMainServer()
+                self.connectSocket(to: resolvedMain, asMain: true)
             }
             return
         }
 
-        print("Connecting to server: \(currentServerURL)")
-
-        manager = SocketManager(socketURL: url, config: [
-            .log(true),
-            .compress,
-            .forceWebsockets(true),
-            .reconnects(true),
-            .reconnectWait(3),
-            .reconnectAttempts(5),
-            .secure(currentServerURL.hasPrefix("https"))
-        ])
-
-        socket = manager?.defaultSocket
-
-        setupEventHandlers()
-        socket?.connect()
+        connectSocket(to: ServerManager.localServer, asMain: false)
     }
 
     func connectToMainServer() {
@@ -203,6 +185,64 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.serverStatus = "Connecting..."
             self.connectedServer = serverURL
+        }
+    }
+
+    private func connectSocket(to serverURL: String, asMain: Bool) {
+        currentServerURL = serverURL
+        useMainServer = asMain
+
+        guard let url = URL(string: serverURL) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid server URL"
+            }
+            return
+        }
+
+        print("Connecting to server: \(serverURL)")
+
+        manager = SocketManager(socketURL: url, config: [
+            .log(true),
+            .compress,
+            .forceWebsockets(true),
+            .reconnects(true),
+            .reconnectWait(3),
+            .reconnectAttempts(5),
+            .secure(serverURL.hasPrefix("https"))
+        ])
+
+        socket = manager?.defaultSocket
+
+        setupEventHandlers()
+        socket?.connect()
+    }
+
+    private func resolveBestMainServer() async -> String {
+        for candidate in APIEndpointResolver.mainBaseCandidates(preferred: currentServerURL) {
+            if await isReachableServer(candidate) {
+                return candidate
+            }
+        }
+        return ServerManager.mainServer
+    }
+
+    private func isReachableServer(_ base: String) async -> Bool {
+        guard let healthURL = APIEndpointResolver.url(base: base, path: "/api/health") else {
+            return false
+        }
+
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 3
+        request.httpMethod = "GET"
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            return (200...499).contains(httpResponse.statusCode)
+        } catch {
+            return false
         }
     }
 

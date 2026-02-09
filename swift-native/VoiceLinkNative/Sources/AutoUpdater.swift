@@ -12,7 +12,10 @@ class AutoUpdater: ObservableObject {
     static let buildNumber = 1
 
     // Update server configuration
-    private let downloadBaseURL = "https://voicelink.devinecreations.net/downloads"
+    private var downloadBaseURL: String {
+        let current = ServerManager.shared.baseURL ?? APIEndpointResolver.canonicalMainBase
+        return "\(current)/downloads"
+    }
     private let platform = "macos"
 
     @Published var updateAvailable: Bool = false
@@ -61,40 +64,53 @@ class AutoUpdater: ObservableObject {
 
         updateState = .checking
 
-        // Fetch latest-mac.yml to check for updates
-        guard let url = URL(string: "\(downloadBaseURL)/latest-mac.yml") else {
-            if !silent {
-                updateState = .error("Invalid update server URL")
-            } else {
-                updateState = .idle
+        Task {
+            let ymlCandidates = APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL)
+                .map { "\($0)/downloads/latest-mac.yml" }
+
+            var selectedBaseForDownloadPath: String?
+            var yamlString: String?
+            var lastError: Error?
+
+            for candidate in ymlCandidates {
+                guard let url = URL(string: candidate) else { continue }
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                do {
+                    let (data, _) = try await URLSession.shared.data(for: request)
+                    if let yaml = String(data: data, encoding: .utf8) {
+                        yamlString = yaml
+                        selectedBaseForDownloadPath = candidate.replacingOccurrences(of: "/latest-mac.yml", with: "")
+                        break
+                    }
+                } catch {
+                    lastError = error
+                }
             }
-            return
-        }
 
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+            let finalYamlString = yamlString
+            let finalError = lastError
+            let finalDownloadBase = selectedBaseForDownloadPath ?? self.downloadBaseURL
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                self?.lastChecked = Date()
-                self?.saveLastChecked()
+            await MainActor.run {
+                self.lastChecked = Date()
+                self.saveLastChecked()
 
-                guard let data = data, let yamlString = String(data: data, encoding: .utf8) else {
+                guard let yaml = finalYamlString else {
                     if !silent {
-                        self?.updateState = .error(error?.localizedDescription ?? "Failed to check for updates")
+                        self.updateState = .error(finalError?.localizedDescription ?? "Failed to check for updates")
                     } else {
-                        self?.updateState = .idle
+                        self.updateState = .idle
                     }
                     return
                 }
 
-                // Parse YAML (simple parsing for our format)
-                self?.parseUpdateYAML(yamlString, silent: silent)
+                self.parseUpdateYAML(yaml, silent: silent, resolvedDownloadBaseURL: finalDownloadBase)
             }
-        }.resume()
+        }
     }
 
-    private func parseUpdateYAML(_ yaml: String, silent: Bool) {
+    private func parseUpdateYAML(_ yaml: String, silent: Bool, resolvedDownloadBaseURL: String) {
         var version: String?
         var path: String?
         var notes: String?
@@ -160,7 +176,7 @@ class AutoUpdater: ObservableObject {
             releaseNotes = notes
 
             if let downloadPath = path {
-                updateURL = URL(string: "\(downloadBaseURL)/\(downloadPath)")
+                updateURL = URL(string: "\(resolvedDownloadBaseURL)/\(downloadPath)")
             }
 
             updateAvailable = true
