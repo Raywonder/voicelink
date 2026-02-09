@@ -669,6 +669,22 @@ class VoiceLinkApp {
         }
     }
 
+    getAudioBehaviorSettings() {
+        return {
+            autoEnableMic: localStorage.getItem('voicelink_audio_auto_enable_mic') !== 'false',
+            alwaysEnableMedia: localStorage.getItem('voicelink_audio_always_enable_media') !== 'false'
+        };
+    }
+
+    setAudioBehaviorSettings(settings = {}) {
+        if (typeof settings.autoEnableMic === 'boolean') {
+            localStorage.setItem('voicelink_audio_auto_enable_mic', settings.autoEnableMic ? 'true' : 'false');
+        }
+        if (typeof settings.alwaysEnableMedia === 'boolean') {
+            localStorage.setItem('voicelink_audio_always_enable_media', settings.alwaysEnableMedia ? 'true' : 'false');
+        }
+    }
+
     getAuthContext() {
         const whmcsToken = localStorage.getItem('voicelink_whmcs_token') ||
             sessionStorage.getItem('voicelink_whmcs_token');
@@ -2526,6 +2542,7 @@ class VoiceLinkApp {
         const roomId = document.getElementById('join-room-id').value;
         const userName = document.getElementById('user-name').value;
         const password = document.getElementById('join-room-password').value;
+        const audioBehavior = this.getAudioBehaviorSettings();
 
         if (!roomId || !userName) {
             this.showError('Please enter room ID and your name');
@@ -2533,9 +2550,6 @@ class VoiceLinkApp {
         }
 
         try {
-            // Initialize local stream first
-            await this.audioEngine.getUserMedia();
-
             // Initialize WebRTC manager
             this.webrtcManager = new WebRTCManager(
                 this.socket,
@@ -2543,7 +2557,9 @@ class VoiceLinkApp {
                 this.spatialAudio
             );
 
-            await this.webrtcManager.initializeLocalStream();
+            await this.webrtcManager.initializeLocalStream({
+                autoEnableMic: audioBehavior.autoEnableMic
+            });
 
             // Setup push-to-talk
             this.webrtcManager.setupPushToTalk('Space');
@@ -2558,9 +2574,13 @@ class VoiceLinkApp {
                 password
             });
 
+            if (!audioBehavior.autoEnableMic) {
+                this.showNotification('Joined in listen-only mode. Enable microphone in Audio settings to talk.', 'info');
+            }
+
         } catch (error) {
             console.error('Failed to join room:', error);
-            this.showError('Failed to access microphone or join room');
+            this.showError('Failed to join room');
         }
     }
 
@@ -3733,6 +3753,16 @@ class VoiceLinkApp {
         if (autoQuitToggle) {
             autoQuitToggle.checked = localStorage.getItem('voicelink_auto_quit_other') === 'true';
         }
+
+        const audioBehavior = this.getAudioBehaviorSettings();
+        const autoEnableMicToggle = document.getElementById('auto-enable-mic-setting');
+        const alwaysEnableMediaToggle = document.getElementById('always-enable-media-setting');
+        if (autoEnableMicToggle) {
+            autoEnableMicToggle.checked = audioBehavior.autoEnableMic;
+        }
+        if (alwaysEnableMediaToggle) {
+            alwaysEnableMediaToggle.checked = audioBehavior.alwaysEnableMedia;
+        }
         this.updateMultiDeviceStatusUI();
     }
 
@@ -3784,6 +3814,14 @@ class VoiceLinkApp {
 
         document.getElementById('auto-quit-on-other-login')?.addEventListener('change', (e) => {
             this.setMultiDeviceSettings({ autoQuit: e.target.checked });
+        });
+
+        document.getElementById('auto-enable-mic-setting')?.addEventListener('change', (e) => {
+            this.setAudioBehaviorSettings({ autoEnableMic: e.target.checked });
+        });
+
+        document.getElementById('always-enable-media-setting')?.addEventListener('change', (e) => {
+            this.setAudioBehaviorSettings({ alwaysEnableMedia: e.target.checked });
         });
 
         document.getElementById('multi-device-reconnect')?.addEventListener('click', () => {
@@ -3904,13 +3942,19 @@ class VoiceLinkApp {
 
     saveAllSettings() {
         console.log('Saving all settings...');
-        // Implementation would save to localStorage or native API
+        const autoEnableMic = document.getElementById('auto-enable-mic-setting')?.checked;
+        const alwaysEnableMedia = document.getElementById('always-enable-media-setting')?.checked;
+        this.setAudioBehaviorSettings({
+            autoEnableMic: typeof autoEnableMic === 'boolean' ? autoEnableMic : true,
+            alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
+        });
         alert('Settings saved successfully!');
     }
 
     resetAllSettings() {
         console.log('Resetting all settings...');
-        // Implementation would reset to defaults
+        localStorage.removeItem('voicelink_audio_auto_enable_mic');
+        localStorage.removeItem('voicelink_audio_always_enable_media');
         alert('Settings reset to defaults!');
     }
 

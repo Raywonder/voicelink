@@ -219,6 +219,8 @@ class AudioEngine {
         const finalConstraints = constraints || defaultConstraints;
 
         try {
+            await this.resumeAudioContext();
+
             if (this.localStream) {
                 this.localStream.getTracks().forEach(track => track.stop());
             }
@@ -227,6 +229,23 @@ class AudioEngine {
             this.setupInputProcessing();
             return this.localStream;
         } catch (error) {
+            // Device-specific constraints can fail if hardware changes.
+            if (constraints == null && this.selectedInputDevice) {
+                console.warn('Selected input device unavailable, retrying with default microphone');
+                const fallbackConstraints = {
+                    audio: {
+                        echoCancellation: this.settings.echoCancellation,
+                        noiseSuppression: this.settings.noiseSuppression,
+                        autoGainControl: this.settings.autoGainControl,
+                        sampleRate: 48000,
+                        channelCount: 1
+                    },
+                    video: false
+                };
+                this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+                this.setupInputProcessing();
+                return this.localStream;
+            }
             console.error('Failed to get user media:', error);
             throw error;
         }

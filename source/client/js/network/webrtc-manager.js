@@ -210,14 +210,31 @@ class WebRTCManager {
         });
     }
 
-    async initializeLocalStream() {
+    async initializeLocalStream(options = {}) {
+        const {
+            autoEnableMic = true
+        } = options;
+
         try {
+            if (!autoEnableMic) {
+                this.localStream = new MediaStream();
+                console.log('Local microphone disabled by setting; joining in listen-only mode');
+                return this.localStream;
+            }
+
+            if (this.audioEngine?.localStream) {
+                this.localStream = this.audioEngine.localStream;
+                console.log('Using existing local stream from audio engine');
+                return this.localStream;
+            }
+
             this.localStream = await this.audioEngine.getUserMedia();
             console.log('Local stream initialized');
             return this.localStream;
         } catch (error) {
-            console.error('Failed to initialize local stream:', error);
-            throw error;
+            console.warn('Failed to initialize local stream, continuing in listen-only mode:', error);
+            this.localStream = new MediaStream();
+            return this.localStream;
         }
     }
 
@@ -234,12 +251,17 @@ class WebRTCManager {
             this.closePeerConnection(userId);
         }
 
-        const peer = new SimplePeer({
+        const peerOptions = {
             initiator: shouldOffer,
             config: this.iceConfig,
-            stream: this.localStream,
             trickle: true
-        });
+        };
+
+        if (this.localStream && this.localStream.getTracks().length > 0) {
+            peerOptions.stream = this.localStream;
+        }
+
+        const peer = new SimplePeer(peerOptions);
 
         this.peers.set(userId, peer);
         this.connectionStates.set(userId, 'connecting');

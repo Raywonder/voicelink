@@ -231,6 +231,14 @@ struct VoiceLinkApp: App {
 
                 Divider()
 
+                Button("Check for Updates...") {
+                    AutoUpdater.shared.checkForUpdates(silent: false)
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .help("Check for a new desktop app version")
+
+                Divider()
+
                 Button("VoiceLink Help") {
                     if let url = URL(string: "https://voicelink.devinecreations.net/help") {
                         NSWorkspace.shared.open(url)

@@ -101,6 +101,12 @@ class SpatialAudioEngine {
             const gainNode = this.audioContext.createGain();
             gainNode.gain.value = 1.0;
 
+            // Dry/wet split so voice remains clearly audible
+            const dryGain = this.audioContext.createGain();
+            dryGain.gain.value = 1.0;
+            const reverbSend = this.audioContext.createGain();
+            reverbSend.gain.value = 0.25;
+
             // Create filter for distance effects
             const filter = this.audioContext.createBiquadFilter();
             filter.type = 'lowpass';
@@ -110,12 +116,17 @@ class SpatialAudioEngine {
             source.connect(gainNode);
             gainNode.connect(filter);
             filter.connect(panner);
-            panner.connect(this.convolver);
+            panner.connect(dryGain);
+            panner.connect(reverbSend);
+            dryGain.connect(this.masterGain);
+            reverbSend.connect(this.convolver);
 
             const spatialNode = {
                 source,
                 panner,
                 gainNode,
+                dryGain,
+                reverbSend,
                 filter,
                 userId
             };
@@ -215,6 +226,8 @@ class SpatialAudioEngine {
         if (spatialNode) {
             spatialNode.source.disconnect();
             spatialNode.gainNode.disconnect();
+            spatialNode.dryGain.disconnect();
+            spatialNode.reverbSend.disconnect();
             spatialNode.filter.disconnect();
             spatialNode.panner.disconnect();
         }
