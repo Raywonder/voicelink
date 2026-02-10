@@ -424,6 +424,12 @@ class VoiceLinkApp {
             console.log('Jukebox manager initialized');
         }
 
+        // Initialize wallet manager for Ecripto login/minting flows
+        if (typeof WalletManager !== 'undefined') {
+            window.walletManager = new WalletManager(this);
+            console.log('Wallet manager initialized');
+        }
+
         console.log('Advanced systems initialized');
     }
 
@@ -2431,6 +2437,9 @@ class VoiceLinkApp {
                 ? '1 user'
                 : `${roomData.users} users`;
 
+        const isCurrentRoom = !!this.currentRoom && (this.currentRoom.id === roomData.id || this.currentRoom.roomId === roomData.id);
+        const canManageGlobalMedia = this.isCurrentUserAdmin();
+
         // Action menu (accessible for keyboard/screen reader users)
         const previewAvailability = this.getRoomPreviewAvailability(roomData);
         const actionMenu = `
@@ -2455,6 +2464,20 @@ class VoiceLinkApp {
                             aria-label="Share ${roomData.name}">
                         🔗 Share
                     </button>
+                    <button class="room-action-btn"
+                            ${isCurrentRoom
+                                ? `onclick="event.stopPropagation(); app.openRoomJukeboxFromMenu('${roomData.id}')"`
+                                : 'disabled'}
+                            title="${isCurrentRoom ? 'Manage room media playback' : 'Join this room first to manage room media playback'}"
+                            aria-label="Manage room media playback for ${roomData.name}">
+                        🎵 Room Jukebox
+                    </button>
+                    ${canManageGlobalMedia ? `
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.openGlobalMediaManagement()"
+                            aria-label="Open global media server controls">
+                        🌐 Global Media
+                    </button>` : ''}
                 </div>
             </details>
         `;
@@ -2644,6 +2667,58 @@ class VoiceLinkApp {
         const previewBtn = actionsMenu.querySelector('.room-action-btn[aria-label^="Preview room audio"]');
         const joinBtn = actionsMenu.querySelector('.room-action-btn');
         (previewBtn || joinBtn)?.focus();
+    }
+
+    isCurrentUserAdmin() {
+        const user = this.currentUser || {};
+        const role = String(user.role || '').toLowerCase();
+        return user.isAdmin === true ||
+            role === 'admin' ||
+            (Array.isArray(user.permissions) && user.permissions.includes('admin'));
+    }
+
+    openRoomJukeboxFromMenu(roomId) {
+        const inSelectedRoom = !!this.currentRoom && (this.currentRoom.id === roomId || this.currentRoom.roomId === roomId);
+        if (!inSelectedRoom) {
+            this.showNotification('Join this room first, then open Room Jukebox controls.', 'info');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            window.jukeboxManager.enable();
+            window.jukeboxManager.openPanel();
+            this.showNotification('Opened room Jukebox controls.', 'success');
+            return;
+        }
+
+        if (window.mediaStreamingInterface) {
+            window.mediaStreamingInterface.show();
+            this.showNotification('Opened media controls.', 'success');
+            return;
+        }
+
+        this.showNotification('Media controls are not available in this build.', 'error');
+    }
+
+    openGlobalMediaManagement() {
+        if (!this.isCurrentUserAdmin()) {
+            this.showNotification('Admin role required for global media settings.', 'error');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            window.jukeboxManager.openServerConfig();
+            this.showNotification('Opened global media server settings.', 'success');
+            return;
+        }
+
+        if (window.mediaStreamingInterface) {
+            window.mediaStreamingInterface.show();
+            this.showNotification('Opened global media settings.', 'success');
+            return;
+        }
+
+        this.showNotification('Global media settings are not available in this build.', 'error');
     }
 
     getRoomStatusLabels(roomData) {
@@ -3440,7 +3515,7 @@ class VoiceLinkApp {
                     <span class="user-name">${user.name}</span>
                     <span class="audio-indicator" style="display: none;">[Speaking]</span>
                 </div>
-                <button class="user-audio-toggle-btn" onclick="app.toggleUserAudioControls('${user.id}', this)" title="Show or hide audio controls for ${user.name}" aria-label="Show or hide audio controls for ${user.name}">Show Audio Controls</button>
+                <button class="user-audio-toggle-btn" onclick="app.toggleUserAudioControls('${user.id}', this)" title="Show or hide user audio controls for ${user.name}" aria-label="Show or hide user audio controls for ${user.name}">Show User Audio Controls</button>
             </div>
             <div class="user-controls hidden">
                 <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
@@ -3487,7 +3562,7 @@ class VoiceLinkApp {
 
         const isHidden = controls.classList.toggle('hidden');
         if (buttonEl) {
-            buttonEl.textContent = isHidden ? 'Show Audio Controls' : 'Hide Audio Controls';
+            buttonEl.textContent = isHidden ? 'Show User Audio Controls' : 'Hide User Audio Controls';
             buttonEl.setAttribute('aria-expanded', String(!isHidden));
         }
     }
@@ -4178,6 +4253,13 @@ class VoiceLinkApp {
             sendLogsToggle.checked = enabled;
             this.logCaptureEnabled = enabled;
         }
+        const savedDisplayName = localStorage.getItem('voicelink_auth_display_name') || '';
+        const savedMastodonHandle = localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '';
+        const authDisplayNameInput = document.getElementById('auth-display-name');
+        const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
+        if (authDisplayNameInput) authDisplayNameInput.value = savedDisplayName;
+        if (authPreferredHandleInput) authPreferredHandleInput.value = savedMastodonHandle;
+        this.applySavedIdentityPreferences();
         this.refreshAuthenticationSettingsPanel();
         this.updateMultiDeviceStatusUI();
     }
@@ -4220,8 +4302,18 @@ class VoiceLinkApp {
             this.setActiveAuthTab('wallet-login');
         });
 
+        document.getElementById('auth-open-admin-btn')?.addEventListener('click', () => {
+            this.showAdminPanel();
+        });
+
         document.getElementById('auth-logout-btn')?.addEventListener('click', () => {
             this.handleMastodonLogout();
+        });
+        document.getElementById('auth-display-name')?.addEventListener('change', () => {
+            this.applySavedIdentityPreferences();
+        });
+        document.getElementById('auth-preferred-mastodon-handle')?.addEventListener('change', () => {
+            this.applySavedIdentityPreferences();
         });
 
         document.getElementById('check-updates-btn')?.addEventListener('click', () => {
@@ -4395,11 +4487,16 @@ class VoiceLinkApp {
         const autoEnableMic = document.getElementById('auto-enable-mic-setting')?.checked;
         const alwaysEnableMedia = document.getElementById('always-enable-media-setting')?.checked;
         const sendSupportLogs = document.getElementById('send-support-logs-setting')?.checked;
+        const authDisplayName = (document.getElementById('auth-display-name')?.value || '').trim();
+        const authPreferredMastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || '').trim();
         this.setAudioBehaviorSettings({
             autoEnableMic: typeof autoEnableMic === 'boolean' ? autoEnableMic : true,
             alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
         });
         this.setSupportLogSendingEnabled(!!sendSupportLogs);
+        localStorage.setItem('voicelink_auth_display_name', authDisplayName);
+        localStorage.setItem('voicelink_auth_preferred_mastodon_handle', authPreferredMastodonHandle);
+        this.applySavedIdentityPreferences();
         alert('Settings saved successfully!');
     }
 
@@ -4408,8 +4505,32 @@ class VoiceLinkApp {
         localStorage.removeItem('voicelink_audio_auto_enable_mic');
         localStorage.removeItem('voicelink_audio_always_enable_media');
         localStorage.removeItem('voicelink_send_support_logs');
+        localStorage.removeItem('voicelink_auth_display_name');
+        localStorage.removeItem('voicelink_auth_preferred_mastodon_handle');
+        const authDisplayNameInput = document.getElementById('auth-display-name');
+        const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
+        if (authDisplayNameInput) authDisplayNameInput.value = '';
+        if (authPreferredHandleInput) authPreferredHandleInput.value = '';
+        this.applySavedIdentityPreferences();
         this.logCaptureEnabled = false;
         alert('Settings reset to defaults!');
+    }
+
+    applySavedIdentityPreferences() {
+        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || '').trim();
+        const mastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '').trim();
+        const joinNameInput = document.getElementById('user-name');
+        const whmcsMastodonHandleInput = document.getElementById('whmcs-mastodon-handle');
+
+        if (joinNameInput && displayName) {
+            const currentName = joinNameInput.value?.trim();
+            if (!currentName || currentName === 'Room Creator' || /^User\d{0,4}$/i.test(currentName)) {
+                joinNameInput.value = displayName;
+            }
+        }
+        if (whmcsMastodonHandleInput && mastodonHandle && !whmcsMastodonHandleInput.value?.trim()) {
+            whmcsMastodonHandleInput.value = mastodonHandle;
+        }
     }
 
     setupLogCapture() {
@@ -4723,6 +4844,7 @@ class VoiceLinkApp {
         // WHMCS Login Form Submit
         document.getElementById('whmcs-login-form')?.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
             const email = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
@@ -4731,6 +4853,7 @@ class VoiceLinkApp {
 
             if (email && password) {
                 await this.handleWhmcsLogin(email, password, {
+                    portalSite,
                     twoFactorCode,
                     mastodonHandle,
                     remember
@@ -4739,11 +4862,17 @@ class VoiceLinkApp {
         });
 
         document.getElementById('whmcs-sso-btn')?.addEventListener('click', async () => {
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
             const email = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
-            await this.handleWhmcsSsoLogin({ email, password, twoFactorCode, remember });
+            await this.handleWhmcsSsoLogin({ portalSite, email, password, twoFactorCode, remember });
+        });
+
+        document.getElementById('wp-sso-btn')?.addEventListener('click', async () => {
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
+            await this.openWordPressAutheliaLogin(portalSite);
         });
 
         // Connect button (Mastodon)
@@ -4889,6 +5018,7 @@ class VoiceLinkApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    portalSite: this.normalizePortalSite(options.portalSite),
                     email,
                     password,
                     twoFactorCode: options.twoFactorCode || null,
@@ -4932,6 +5062,7 @@ class VoiceLinkApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    portalSite: this.normalizePortalSite(options.portalSite),
                     email: options.email,
                     password: options.password,
                     twoFactorCode: options.twoFactorCode || null,
@@ -4956,6 +5087,48 @@ class VoiceLinkApp {
             console.error('WHMCS SSO failed:', error);
             this.showNotification(error.message || 'SSO failed', 'error');
         }
+    }
+
+    normalizePortalSite(site) {
+        const raw = String(site || '').trim().toLowerCase();
+        if (!raw) return 'tappedin.fm';
+        const withoutProtocol = raw.replace(/^https?:\/\//, '');
+        const host = withoutProtocol.split('/')[0];
+        if (!host) return 'tappedin.fm';
+        const normalizedHost = host.replace(/\.+$/, '');
+        const allowedHosts = new Set([
+            'tappedin.fm',
+            'www.tappedin.fm',
+            'ecripto.app',
+            'www.ecripto.app',
+            'ecripto.token',
+            'www.ecripto.token'
+        ]);
+        if (allowedHosts.has(normalizedHost)) return normalizedHost;
+        if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
+        return 'tappedin.fm';
+    }
+
+    async openWordPressAutheliaLogin(site) {
+        const host = this.normalizePortalSite(site);
+        const candidates = [
+            `https://${host}/authelia/login`,
+            `https://${host}/authelia`,
+            `https://${host}/wp-login.php`,
+            `https://${host}/wp-admin`
+        ];
+
+        for (const url of candidates) {
+            try {
+                await this.openExternal(url);
+                this.showNotification(`Opened login for ${host}`, 'info');
+                return;
+            } catch (_) {
+                // try next candidate
+            }
+        }
+
+        this.showNotification(`Unable to open WordPress/Authelia login for ${host}`, 'error');
     }
 
     restoreWhmcsSession() {
@@ -5050,6 +5223,11 @@ class VoiceLinkApp {
             this.updateRoleBasedUI(user);
             this.registerSession();
             this.applyEntitlementVisibility(user);
+            if (window.walletManager?.connected) {
+                window.walletManager.linkToAccount().catch((err) => {
+                    console.warn('[WalletManager] Auto-link after auth failed:', err?.message || err);
+                });
+            }
 
             // Default the join name to Mastodon display name if empty or placeholder
             if (joinNameInput) {
@@ -5162,6 +5340,11 @@ class VoiceLinkApp {
             adminPanelBtn.remove();
         }
 
+        const authAdminBtn = document.getElementById('auth-open-admin-btn');
+        if (authAdminBtn) {
+            authAdminBtn.style.display = isAdmin ? '' : 'none';
+        }
+
         // Show share room button for all authenticated users
         this.updateShareButtons(!!user);
 
@@ -5177,6 +5360,11 @@ class VoiceLinkApp {
         const adminPanelBtn = document.getElementById('admin-panel-btn');
         if (adminPanelBtn) {
             adminPanelBtn.remove();
+        }
+
+        const authAdminBtn = document.getElementById('auth-open-admin-btn');
+        if (authAdminBtn) {
+            authAdminBtn.style.display = 'none';
         }
     }
 

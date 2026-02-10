@@ -74,6 +74,12 @@ class WalletManager {
         return 'web';
     }
 
+    getApiUrl(pathname) {
+        const base = this.app?.getApiBaseUrl ? this.app.getApiBaseUrl() : '';
+        const normalizedPath = String(pathname || '').startsWith('/') ? pathname : `/${pathname}`;
+        return `${base}${normalizedPath}`;
+    }
+
     /**
      * Save wallet state to localStorage
      */
@@ -276,7 +282,7 @@ class WalletManager {
             this.app.showNotification('Wallet connected successfully!', 'success');
 
             // Link to existing account if logged in
-            if (this.app.currentUser && !this.linkedAccount) {
+            if (this.app.currentUser && (!this.linkedAccount || this.linkedAccount.id !== this.app.currentUser.id)) {
                 await this.linkToAccount();
             }
 
@@ -347,7 +353,7 @@ class WalletManager {
      */
     showWalletInstallPrompt() {
         this.app.showNotification(
-            'No Ecripto wallet found. Install the Ecripto browser extension to continue.',
+            'No Ecripto wallet found. Install from ecripto.app or ecripto.token to continue.',
             'warning'
         );
 
@@ -431,7 +437,7 @@ class WalletManager {
                 this.clearState();
 
                 // Notify server
-                await fetch('/api/ecripto/unlink-wallet', {
+                await fetch(this.getApiUrl('/api/ecripto/unlink-wallet'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -465,7 +471,7 @@ class WalletManager {
      */
     async handleMintedRoomsOnDisconnect(action) {
         try {
-            const response = await fetch('/api/ecripto/handle-disconnect', {
+            const response = await fetch(this.getApiUrl('/api/ecripto/handle-disconnect'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -523,7 +529,7 @@ class WalletManager {
             }
 
             // Send to server for verification
-            const response = await fetch('/api/ecripto/verify-wallet', {
+            const response = await fetch(this.getApiUrl('/api/ecripto/verify-wallet'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -541,7 +547,7 @@ class WalletManager {
 
             // Create an authenticated session for the wallet
             try {
-                const authResponse = await fetch('/api/auth/ecripto/login', {
+                const authResponse = await fetch(this.getApiUrl('/api/auth/ecripto/login'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -576,7 +582,7 @@ class WalletManager {
 
         try {
             // Fetch minted rooms
-            const roomsResponse = await fetch('/api/rooms/filter?minted=true&mintOwner=' + encodeURIComponent(this.walletAddress));
+            const roomsResponse = await fetch(this.getApiUrl('/api/rooms/filter?minted=true&mintOwner=' + encodeURIComponent(this.walletAddress)));
             const roomsData = await roomsResponse.json();
             this.mintedRooms = roomsData.rooms || [];
 
@@ -595,7 +601,7 @@ class WalletManager {
         if (!this.app.currentUser) return;
 
         try {
-            const response = await fetch('/api/auth/link-wallet', {
+            const response = await fetch(this.getApiUrl('/api/auth/link-wallet'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -791,7 +797,7 @@ class WalletManager {
         }
 
         // Call server to create access pass
-        const response = await fetch('/api/ecripto/purchase-access', {
+        const response = await fetch(this.getApiUrl('/api/ecripto/purchase-access'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -819,7 +825,7 @@ class WalletManager {
         }
 
         // Create payment intent on server
-        const response = await fetch('/api/stripe/create-payment-intent', {
+        const response = await fetch(this.getApiUrl('/api/stripe/create-payment-intent'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -857,7 +863,7 @@ class WalletManager {
             }
 
             // Get publishable key from server
-            const response = await fetch('/api/stripe/config');
+            const response = await fetch(this.getApiUrl('/api/stripe/config'));
             const data = await response.json();
 
             if (!data.publishableKey) {
@@ -914,7 +920,7 @@ class WalletManager {
         try {
             this.app.showNotification('Preparing to mint room...', 'info');
 
-            const response = await fetch('/api/ecripto/mint-room', {
+            const response = await fetch(this.getApiUrl('/api/ecripto/mint-room'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -950,9 +956,9 @@ class WalletManager {
         }
 
         try {
-            const response = await fetch(
+            const response = await fetch(this.getApiUrl(
                 '/api/ecripto/check-access/' + encodeURIComponent(roomId) + '?walletAddress=' + encodeURIComponent(this.walletAddress)
-            );
+            ));
             return await response.json();
         } catch (error) {
             console.error('[WalletManager] Access check error:', error);
@@ -965,7 +971,7 @@ class WalletManager {
      */
     async getStatus() {
         try {
-            const response = await fetch('/api/ecripto/status');
+            const response = await fetch(this.getApiUrl('/api/ecripto/status'));
             return await response.json();
         } catch (error) {
             return { enabled: false };

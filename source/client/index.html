@@ -79,7 +79,7 @@
 
                     <!-- Auth Method Tabs -->
                     <div class="auth-tabs">
-                        <button class="auth-tab" data-tab="whmcs-login">Client Portal</button>
+                        <button class="auth-tab" data-tab="whmcs-login">TappedIn / WordPress</button>
                         <button class="auth-tab active" data-tab="mastodon-login">Mastodon</button>
                         <button class="auth-tab" data-tab="wallet-login">Wallet</button>
                     </div>
@@ -88,8 +88,17 @@
                     <div id="whmcs-login-tab" class="auth-tab-content">
                         <form id="whmcs-login-form" class="auth-form">
                             <div class="input-group">
+                                <label for="whmcs-portal-site">Portal Site</label>
+                                <input type="text" id="whmcs-portal-site" placeholder="tappedin.fm" value="tappedin.fm" list="portal-site-options">
+                                <datalist id="portal-site-options">
+                                    <option value="tappedin.fm"></option>
+                                    <option value="ecripto.app"></option>
+                                    <option value="ecripto.token"></option>
+                                </datalist>
+                            </div>
+                            <div class="input-group">
                                 <label for="whmcs-login-email">Email</label>
-                                <input type="email" id="whmcs-login-email" placeholder="you@devinecreations.net" required>
+                                <input type="email" id="whmcs-login-email" placeholder="you@tappedin.fm" required>
                             </div>
                             <div class="input-group">
                                 <label for="whmcs-login-password">Password</label>
@@ -107,7 +116,7 @@
                                 <label class="checkbox-label">
                                     <input type="checkbox" id="whmcs-remember-me"> Remember me
                                 </label>
-                                <a href="https://devine-creations.com/pwreset.php" target="_blank" class="auth-link">Forgot password?</a>
+                                <a href="https://tappedin.fm/pwreset.php" target="_blank" class="auth-link">Forgot password?</a>
                             </div>
                             <button type="submit" class="primary-btn auth-submit">Login</button>
                         </form>
@@ -117,8 +126,9 @@
                         </div>
 
                         <div class="auth-actions-row">
-                            <a href="https://devine-creations.com/register.php" target="_blank" class="secondary-btn">Create Account</a>
-                            <button id="whmcs-sso-btn" class="secondary-btn">Login via Client Portal</button>
+                            <a href="https://tappedin.fm/register.php" target="_blank" class="secondary-btn">Create Account</a>
+                            <button id="whmcs-sso-btn" class="secondary-btn">Login via Portal SSO</button>
+                            <button id="wp-sso-btn" class="secondary-btn">WordPress / Authelia</button>
                         </div>
                     </div>
 
@@ -179,7 +189,7 @@
                         <div class="wallet-login-content">
                             <div class="wallet-icon-large">💎</div>
                             <h3>Connect with Ecripto Wallet</h3>
-                            <p class="wallet-description">Connect your Ecripto wallet to unlock premium features and mint rooms as NFTs.</p>
+                            <p class="wallet-description">Connect your Ecripto wallet to unlock premium features and mint rooms as NFTs on ecripto.app and ecripto.token.</p>
 
                             <button id="connect-ecripto-wallet-btn" class="primary-btn wallet-connect-btn">
                                 <span class="wallet-icon">🔗</span> Connect Ecripto Wallet
@@ -1110,6 +1120,19 @@
                 <!-- Authentication Settings Tab -->
                 <div id="authentication-tab" class="settings-tab">
                     <div class="settings-section">
+                        <h3>Identity & Profile</h3>
+                        <div class="setting-item">
+                            <label>Display Name:</label>
+                            <input type="text" id="auth-display-name" placeholder="How your name appears in rooms">
+                        </div>
+                        <div class="setting-item">
+                            <label>Preferred Mastodon Handle:</label>
+                            <input type="text" id="auth-preferred-mastodon-handle" placeholder="@name@instance.social">
+                            <span class="setting-desc">Used to prefill linked account prompts.</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
                         <h3>Profile & Account</h3>
                         <div class="setting-item">
                             <label>Current User:</label>
@@ -1135,6 +1158,7 @@
                             <button id="auth-open-login-btn" class="primary-btn">Open Authentication</button>
                             <button id="auth-link-mastodon-btn" class="secondary-btn">Link Mastodon</button>
                             <button id="auth-link-wallet-btn" class="secondary-btn">Link Wallet</button>
+                            <button id="auth-open-admin-btn" class="secondary-btn" style="display: none;">Administration Controls</button>
                             <button id="auth-logout-btn" class="danger-btn">Logout</button>
                         </div>
                     </div>
@@ -1732,7 +1756,8 @@
     <script src="js/integrations/wordpress-integration.js"></script>
     <script src="js/accessible-dropdown.js"></script>
     <script src="js/auth/mastodon-oauth.js"></script>
-    <script src="/js/core/app.js?v=20260210b"></script>
+    <script src="js/auth/wallet-manager.js"></script>
+    <script src="/js/core/app.js?v=20260210d"></script>
 
     <!-- Audio Processing -->
     <script src="js/audio/spatial-audio.js"></script>

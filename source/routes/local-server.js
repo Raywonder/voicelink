@@ -59,6 +59,7 @@ class VoiceLinkLocalServer {
         this.whmcsAuthSessions = new Map(); // token -> { user, expiresAt }
         this.whmcsLoginStates = new Map(); // state -> { email, clientId, createdAt, confirmed }
         this.ecriptoAuthSessions = new Map(); // token -> { user, expiresAt }
+        this.walletLinks = new Map(); // walletAddress -> { userId, linkedAt, provider }
         this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
         this.socketSessions = new Map(); // socketId -> sessionInfo
         this.deviceSessions = new Map(); // deviceId -> socketId
@@ -135,6 +136,47 @@ class VoiceLinkLocalServer {
             accessKey: moduleConfig.accessKey || process.env.WHMCS_ACCESS_KEY,
             portalUrl: moduleConfig.portalUrl || deployWhmcs.portalUrl || process.env.WHMCS_PORTAL_URL || 'https://devine-creations.com/clientarea.php'
         };
+    }
+
+    normalizePortalSite(portalSite) {
+        const raw = String(portalSite || '').trim().toLowerCase();
+        if (!raw) return 'tappedin.fm';
+        const withoutProtocol = raw.replace(/^https?:\/\//, '');
+        const host = withoutProtocol.split('/')[0];
+        if (!host) return 'tappedin.fm';
+        const normalizedHost = host.replace(/\.+$/, '');
+        const allowedHosts = new Set([
+            'tappedin.fm',
+            'www.tappedin.fm',
+            'ecripto.app',
+            'www.ecripto.app',
+            'ecripto.token',
+            'www.ecripto.token'
+        ]);
+        if (allowedHosts.has(normalizedHost)) return normalizedHost;
+        if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
+        return 'tappedin.fm';
+    }
+
+    getPortalUrlForSite(portalSite) {
+        const host = this.normalizePortalSite(portalSite);
+        return `https://${host}/clientarea.php`;
+    }
+
+    getEcriptoApiCandidates() {
+        const config = deployConfig.get('ecripto') || {};
+        const candidates = [
+            config.apiUrl,
+            process.env.ECRIPTO_API_URL,
+            'https://api.ecripto.app',
+            'https://ecripto.app',
+            'https://api.ecripto.token',
+            'https://ecripto.token'
+        ]
+            .filter(Boolean)
+            .map((value) => String(value).trim())
+            .map((value) => value.replace(/\/+$/, ''));
+        return [...new Set(candidates)];
     }
 
     async whmcsRequest(action, params = {}) {
@@ -539,6 +581,7 @@ class VoiceLinkLocalServer {
         const isTwoFactorError = (message = '') => message.toLowerCase().includes('two factor');
 
         this.app.post('/api/auth/whmcs/login', async (req, res) => {
+            const portalSite = this.normalizePortalSite(req.body.portalSite);
             const email = normalizeEmail(req.body.email);
             const password = req.body.password || req.body.password2;
             const twoFactorCode = req.body.twoFactorCode || req.body.twofa || null;
@@ -618,6 +661,7 @@ class VoiceLinkLocalServer {
                     isAdmin: role === 'admin',
                     isModerator: role === 'staff',
                     authProvider: 'whmcs',
+                    portalSite,
                     entitlements,
                     deviceTier: entitlements.deviceTier,
                     maxDevices: entitlements.maxDevices,
@@ -625,7 +669,13 @@ class VoiceLinkLocalServer {
                 };
 
                 const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
-                res.json({ success: true, token: session.token, expiresAt: session.expiresAt, user });
+                res.json({
+                    success: true,
+                    token: session.token,
+                    expiresAt: session.expiresAt,
+                    portalUrl: this.getPortalUrlForSite(portalSite),
+                    user
+                });
             } catch (error) {
                 console.error('[WHMCS] Login failed:', error.message);
                 res.status(401).json({ success: false, error: error.message || 'Login failed' });
@@ -649,6 +699,7 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/auth/whmcs/sso/start', async (req, res) => {
+            const portalSite = this.normalizePortalSite(req.body.portalSite);
             const token = req.body.token;
             const destination = req.body.destination || 'clientarea:home';
             let session = token ? this.getAuthSession(this.whmcsAuthSessions, token) : null;
@@ -703,6 +754,7 @@ class VoiceLinkLocalServer {
                         isAdmin: role === 'admin',
                         isModerator: role === 'staff',
                         authProvider: 'whmcs',
+                        portalSite,
                         entitlements,
                         deviceTier: entitlements.deviceTier,
                         maxDevices: entitlements.maxDevices
@@ -720,9 +772,9 @@ class VoiceLinkLocalServer {
 
                 res.json({
                     success: true,
-                    redirectUrl: ssoResult.redirect_url || ssoResult.redirecturl || ssoResult.redirectUrl,
+                    redirectUrl: ssoResult.redirect_url || ssoResult.redirecturl || ssoResult.redirectUrl || this.getPortalUrlForSite(portalSite),
                     token: token || session.token,
-                    portalUrl: this.getWhmcsConfig().portalUrl
+                    portalUrl: this.getPortalUrlForSite(portalSite)
                 });
             } catch (error) {
                 console.error('[WHMCS] SSO failed:', error.message);
@@ -736,9 +788,8 @@ class VoiceLinkLocalServer {
 
         this.app.post('/api/auth/ecripto/login', async (req, res) => {
             const { deviceId, deviceName, deviceType, walletAddress, remember } = req.body;
-            const config = deployConfig.get('ecripto') || {};
-
-            if (!config.apiUrl) {
+            const apiCandidates = this.getEcriptoApiCandidates();
+            if (!apiCandidates.length) {
                 return res.status(400).json({ success: false, error: 'Ecripto API not configured' });
             }
 
@@ -747,14 +798,30 @@ class VoiceLinkLocalServer {
             }
 
             try {
-                const response = await fetch(`${config.apiUrl}/api/client/register`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ deviceId, deviceName, deviceType, walletAddress })
-                });
+                let response = null;
+                let selectedApiBase = null;
+                let lastError = null;
+                for (const apiBase of apiCandidates) {
+                    try {
+                        const candidateResponse = await fetch(`${apiBase}/api/client/register`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ deviceId, deviceName, deviceType, walletAddress })
+                        });
+                        if (!candidateResponse.ok) {
+                            lastError = new Error(`Ecripto API error (${candidateResponse.status}) from ${apiBase}`);
+                            continue;
+                        }
+                        response = candidateResponse;
+                        selectedApiBase = apiBase;
+                        break;
+                    } catch (error) {
+                        lastError = error;
+                    }
+                }
 
-                if (!response.ok) {
-                    throw new Error(`Ecripto API error (${response.status})`);
+                if (!response) {
+                    throw lastError || new Error('Ecripto API not reachable');
                 }
 
                 const result = await response.json();
@@ -765,6 +832,7 @@ class VoiceLinkLocalServer {
                 const user = {
                     id: `ecripto:${walletAddress || deviceId}`,
                     walletAddress: walletAddress || null,
+                    linkedUserId: walletAddress ? (this.walletLinks.get(String(walletAddress).toLowerCase())?.userId || null) : null,
                     deviceId,
                     deviceName,
                     deviceType,
@@ -775,7 +843,13 @@ class VoiceLinkLocalServer {
                 };
 
                 const session = this.createAuthSession(this.ecriptoAuthSessions, 'ecripto', user, remember === true);
-                res.json({ success: true, token: session.token, expiresAt: session.expiresAt, user });
+                res.json({
+                    success: true,
+                    token: session.token,
+                    expiresAt: session.expiresAt,
+                    ecriptoApi: selectedApiBase,
+                    user
+                });
             } catch (error) {
                 console.error('[Ecripto] Login failed:', error.message);
                 res.status(401).json({ success: false, error: error.message || 'Wallet login failed' });
@@ -4993,6 +5067,64 @@ class VoiceLinkLocalServer {
                 tokens: [],
                 message: 'Wallet verification requires Ecripto API integration'
             });
+        });
+
+        // Link wallet address to an authenticated VoiceLink user
+        this.app.post('/api/auth/link-wallet', (req, res) => {
+            const walletAddress = String(req.body.walletAddress || '').trim();
+            const userId = String(req.body.userId || '').trim();
+            if (!walletAddress || !userId) {
+                return res.status(400).json({ success: false, error: 'walletAddress and userId are required' });
+            }
+
+            this.walletLinks.set(walletAddress.toLowerCase(), {
+                userId,
+                provider: 'ecripto',
+                linkedAt: new Date().toISOString()
+            });
+
+            res.json({ success: true, walletAddress, userId });
+        });
+
+        // Remove wallet association
+        this.app.post('/api/ecripto/unlink-wallet', (req, res) => {
+            const walletAddress = String(req.body.walletAddress || '').trim().toLowerCase();
+            if (!walletAddress) {
+                return res.status(400).json({ success: false, error: 'walletAddress is required' });
+            }
+            this.walletLinks.delete(walletAddress);
+            res.json({ success: true });
+        });
+
+        // Handle disconnect actions for minted rooms
+        this.app.post('/api/ecripto/handle-disconnect', (req, res) => {
+            const walletAddress = String(req.body.walletAddress || '').trim().toLowerCase();
+            const action = String(req.body.action || 'keep-active').trim();
+            const fallbackUserId = String(req.body.fallbackAccount?.id || '').trim();
+
+            if (!walletAddress) {
+                return res.status(400).json({ success: false, error: 'walletAddress is required' });
+            }
+
+            const affected = [];
+            for (const [roomId, mintData] of this.mintedRooms.entries()) {
+                if (String(mintData.owner || '').toLowerCase() !== walletAddress) continue;
+                const room = this.rooms.get(roomId);
+                if (!room) continue;
+
+                if (action === 'mark-inactive') {
+                    room.mintedActive = false;
+                } else if (action === 'transfer-fallback' && fallbackUserId) {
+                    room.mintOwnerUserId = fallbackUserId;
+                } else if (action === 'delegate-admin') {
+                    room.mintOwnerUserId = 'admin:delegated';
+                }
+
+                this.rooms.set(roomId, room);
+                affected.push(roomId);
+            }
+
+            res.json({ success: true, action, affectedRoomIds: affected });
         });
 
         // Purchase access tier for a room
