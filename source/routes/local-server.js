@@ -1405,30 +1405,37 @@ class VoiceLinkLocalServer {
         // Updates check endpoint for native clients
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
+            const normalizedPlatform = (platform || 'macos').toLowerCase();
 
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
-                    version: '1.0.0',
-                    buildNumber: 1,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                    releaseNotes: 'Initial release with full SwiftUI native support:\n• Spatial audio engine\n• Multi-channel audio\n• Push-to-talk\n• Jellyfin integration\n• Auto-updates\n• TTS announcements\n• Whisper mode'
+                    version: '1.0.1',
+                    buildNumber: 101,
+                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VOICELINKMACOS.ZIP',
+                    releaseNotes: 'Mandatory update:\n• Audio send/receive reliability improvements for room sessions\n• iOS/Safari media permission handling fixes\n• Authentication settings consolidation\n• UI cleanup and update-path improvements',
+                    forceUpdate: true,
+                    minSupportedVersion: '1.0.1'
                 },
                 windows: {
                     version: '1.0.3',
                     buildNumber: 3,
                     downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.'
+                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.',
+                    forceUpdate: false,
+                    minSupportedVersion: '1.0.0'
                 },
                 linux: {
                     version: '1.0.3',
                     buildNumber: 3,
                     downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.3-linux.AppImage',
-                    releaseNotes: 'Linux release with AppImage support.'
+                    releaseNotes: 'Linux release with AppImage support.',
+                    forceUpdate: false,
+                    minSupportedVersion: '1.0.0'
                 }
             };
 
-            const platformInfo = latestVersions[platform] || latestVersions.macos;
+            const platformInfo = latestVersions[normalizedPlatform] || latestVersions.macos;
 
             // Compare versions
             const compareVersions = (v1, v2) => {
@@ -1444,16 +1451,57 @@ class VoiceLinkLocalServer {
             };
 
             const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
+            const mandatoryUpdate = normalizedPlatform === 'macos' ? true : !!platformInfo.forceUpdate;
+            const shouldUpdate = hasUpdate || mandatoryUpdate;
 
             res.json({
-                updateAvailable: hasUpdate,
+                updateAvailable: shouldUpdate,
+                mandatory: mandatoryUpdate,
+                forceUpdate: mandatoryUpdate,
+                minSupportedVersion: platformInfo.minSupportedVersion || platformInfo.version,
                 version: platformInfo.version,
                 buildNumber: platformInfo.buildNumber,
-                downloadURL: hasUpdate ? platformInfo.downloadURL : null,
-                releaseNotes: hasUpdate ? platformInfo.releaseNotes : null,
+                downloadURL: shouldUpdate ? platformInfo.downloadURL : null,
+                releaseNotes: shouldUpdate ? platformInfo.releaseNotes : null,
                 platform: platform || 'unknown',
                 currentVersion: currentVersion || 'unknown'
             });
+        });
+
+        // Support diagnostics log ingestion
+        this.app.post('/api/support/logs', (req, res) => {
+            try {
+                const payload = req.body || {};
+                const logs = Array.isArray(payload.logs) ? payload.logs.slice(-300) : [];
+                const entry = {
+                    receivedAt: new Date().toISOString(),
+                    id: `log_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                    reason: payload.reason || 'manual',
+                    clientId: payload.clientId || 'unknown',
+                    appVersion: payload.appVersion || 'unknown',
+                    platform: payload.platform || 'unknown',
+                    userAgent: payload.userAgent || '',
+                    room: payload.room || null,
+                    user: payload.user || null,
+                    logCount: logs.length,
+                    logs
+                };
+
+                const dataDir = path.join(__dirname, '../../data');
+                const supportDir = path.join(dataDir, 'support');
+                const logsFile = path.join(supportDir, 'client-logs.jsonl');
+                fs.mkdirSync(supportDir, { recursive: true });
+                fs.appendFileSync(logsFile, JSON.stringify(entry) + '\n', 'utf8');
+
+                res.json({
+                    success: true,
+                    id: entry.id,
+                    stored: logs.length
+                });
+            } catch (error) {
+                console.error('[SupportLogs] Failed to store client logs:', error.message);
+                res.status(500).json({ success: false, error: 'Failed to store logs' });
+            }
         });
 
         // Get all available downloads

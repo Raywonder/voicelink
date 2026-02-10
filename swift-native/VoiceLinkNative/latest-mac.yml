@@ -1,0 +1,17 @@
+version: 1.0.5
+releaseDate: 2026-02-10T01:31:22.000Z
+files:
+  - url: https://voicelink.devinecreations.net/downloads/VoiceLink-macOS.zip
+    sha512: 
+    size: 
+path: VoiceLink-macOS.zip
+sha512: 
+required: false
+minimumSupportedVersion: 1.0.0
+requiredReason: "Update required only when API compatibility policy is enforced"
+enforcedAfter: 2026-12-31T23:59:59Z
+releaseNotes: |
+  VoiceLink 1.0.5
+  - Desktop updater detection fixed (new release version and manifest sync)
+  - iOS/iPadOS navigation style preserved separately from desktop
+  - Server/client sync fixes for latest web and desktop behavior

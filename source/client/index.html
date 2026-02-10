@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceLink Local - P2P Voice Chat</title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260210b">
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
@@ -43,7 +43,7 @@
                         <p class="benefits-title">Login to unlock full features:</p>
                         <ul class="benefits-list">
                             <li>Create and manage permanent rooms</li>
-                            <li>Access Jellyfin jukebox with 3D spatial audio</li>
+                            <li>Access Jukebox with 3D spatial audio</li>
                             <li>Save audio preferences across sessions</li>
                             <li>Full admin controls for your rooms</li>
                             <li>Priority connection to federated servers</li>
@@ -796,7 +796,7 @@
                 <div class="header-controls">
                     <button id="share-room-btn" class="icon-btn" title="Share Room Link" aria-label="Copy room link to share" style="display: none;">🔗</button>
                     <button id="room-settings-btn" class="icon-btn desktop-only" title="Room Settings" aria-label="Open room settings">⚙️</button>
-                    <button id="room-jukebox-btn" class="icon-btn" title="Jukebox - Play music for the room" aria-label="Open Jellyfin jukebox">📻</button>
+                    <button id="room-jukebox-btn" class="icon-btn" title="Jukebox - Play music for the room" aria-label="Open Jukebox">📻</button>
                     <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio Settings" aria-label="Quick audio device selection">🎧</button>
                     <button id="leave-room-btn" class="icon-btn danger" title="Leave Room" aria-label="Leave this room">🚪</button>
                 </div>
@@ -954,6 +954,7 @@
                 <div class="settings-tabs">
                     <button class="tab-btn active" data-tab="audio">Audio</button>
                     <button class="tab-btn" data-tab="app">Application</button>
+                    <button class="tab-btn" data-tab="authentication">Authentication</button>
                     <button class="tab-btn" data-tab="network">Network</button>
                     <button class="tab-btn" data-tab="connections">Connections</button>
                     <button class="tab-btn" data-tab="streaming">Streaming</button>
@@ -1103,6 +1104,39 @@
                             <span class="setting-desc">Get notified of new versions</span>
                         </div>
                         <button id="check-updates-btn" class="secondary-btn">Check Now</button>
+                    </div>
+                </div>
+
+                <!-- Authentication Settings Tab -->
+                <div id="authentication-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Profile & Account</h3>
+                        <div class="setting-item">
+                            <label>Current User:</label>
+                            <span id="auth-current-user" class="info-value">Not logged in</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Provider:</label>
+                            <span id="auth-current-provider" class="info-value">Guest</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Role:</label>
+                            <span id="auth-current-role" class="info-value">Guest</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Wallet:</label>
+                            <span id="auth-wallet-status" class="info-value">Disconnected</span>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Mastodon & Linked Authentication</h3>
+                        <div class="button-group">
+                            <button id="auth-open-login-btn" class="primary-btn">Open Authentication</button>
+                            <button id="auth-link-mastodon-btn" class="secondary-btn">Link Mastodon</button>
+                            <button id="auth-link-wallet-btn" class="secondary-btn">Link Wallet</button>
+                            <button id="auth-logout-btn" class="danger-btn">Logout</button>
+                        </div>
                     </div>
                 </div>
 
@@ -1648,8 +1682,17 @@
 
                     <div class="settings-section">
                         <h3>Debug & Testing</h3>
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="send-support-logs-setting">
+                                Send diagnostic logs to support
+                            </label>
+                            <span class="setting-desc">When enabled, errors and diagnostics can be uploaded for troubleshooting.</span>
+                        </div>
                         <div class="button-group">
                             <button id="test-audio-advanced" class="test-btn">🧪 Audio Test</button>
+                            <button id="send-logs-now-btn" class="secondary-btn">📤 Send Logs Now</button>
+                            <button id="clear-local-logs-btn" class="secondary-btn">🧹 Clear Local Logs</button>
                             <button id="open-dev-tools" class="test-btn">🔧 Dev Tools</button>
                             <button id="reset-settings" class="danger-btn">Reset All Settings</button>
                         </div>
@@ -1689,7 +1732,7 @@
     <script src="js/integrations/wordpress-integration.js"></script>
     <script src="js/accessible-dropdown.js"></script>
     <script src="js/auth/mastodon-oauth.js"></script>
-    <script src="js/core/app.js"></script>
+    <script src="/js/core/app.js?v=20260210b"></script>
 
     <!-- Audio Processing -->
     <script src="js/audio/spatial-audio.js"></script>

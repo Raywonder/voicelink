@@ -73,18 +73,23 @@ class AudioEngine {
 
     async enumerateDevices() {
         try {
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
             // First check if we have microphone permission for full device labels
             let hasPermission = false;
             try {
-                const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
-                hasPermission = permissionStatus.state === 'granted';
+                if (navigator.permissions?.query) {
+                    const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
+                    hasPermission = permissionStatus.state === 'granted';
+                }
             } catch (e) {
                 // Permission API might not be available, try anyway
             }
 
             // If no permission, request temporary stream to unlock device labels
             let tempStream = null;
-            if (!hasPermission) {
+            if (!hasPermission && !isIOS) {
                 try {
                     tempStream = await navigator.mediaDevices.getUserMedia({
                         audio: true,

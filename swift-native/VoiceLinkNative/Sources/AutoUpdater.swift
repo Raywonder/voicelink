@@ -7,9 +7,14 @@ import SwiftUI
 class AutoUpdater: ObservableObject {
     static let shared = AutoUpdater()
 
-    // Current app version - stays at 1.0 until major changes needed
-    static let currentVersion = "1.0"
-    static let buildNumber = 1
+    // Current app version/build from bundle metadata
+    static var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+    static var buildNumber: Int {
+        let raw = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return Int(raw) ?? 1
+    }
 
     // Update server configuration
     private var downloadBaseURL: String {

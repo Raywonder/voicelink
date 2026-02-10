@@ -483,8 +483,15 @@ body {
     padding: 0.75rem;
     margin: 0.5rem 0;
     display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.user-header-row {
+    display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.5rem;
 }
 
 .user-info {
@@ -511,6 +518,21 @@ body {
 .user-controls {
     display: flex;
     gap: 0.25rem;
+    flex-wrap: wrap;
+}
+
+.user-controls.hidden {
+    display: none;
+}
+
+.user-audio-toggle-btn {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
 }
 
 .user-controls button {

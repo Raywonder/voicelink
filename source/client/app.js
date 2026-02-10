@@ -13,10 +13,20 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users = new Map();
+        this.navigationSystemInitialized = false;
+        this.lastEscapePressAt = 0;
+        this.escapeDoublePressWindowMs = 1300;
+        this.escapeMenuOpen = false;
 
         // Audio playback management
         this.currentAudio = null;
         this.isAudioPlaying = false;
+        this.clientLogs = [];
+        this.maxClientLogs = 500;
+        this.logCaptureEnabled = false;
+        this.logCaptureInitialized = false;
+        this.lastLogSendAt = 0;
+        this.logFlushTimer = null;
 
         this.ui = {
             currentScreen: 'loading-screen',
@@ -58,6 +68,8 @@ class VoiceLinkApp {
 
     async init() {
         console.log('Initializing VoiceLink Local...');
+        this.setupLogCapture();
+        this.setupGlobalErrorLogHooks();
 
         try {
             // CRITICAL: Register IPC listener FIRST before any async operations
@@ -1060,6 +1072,171 @@ class VoiceLinkApp {
 
         // Check for OAuth callback
         this.checkOAuthCallback();
+        this.setupNavigationSystem();
+    }
+
+    setupNavigationSystem() {
+        if (this.navigationSystemInitialized) return;
+        this.navigationSystemInitialized = true;
+
+        if (this.isIOSOrIPadOS()) {
+            this.setupIOSNavigationSystem();
+            return;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            this.handleNavigationKeydown(e);
+        });
+    }
+
+    isIOSOrIPadOS() {
+        if (window.iosCompatibility?.isIOS) return true;
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    setupIOSNavigationSystem() {
+        const existing = document.getElementById('ios-nav-menu-btn');
+        if (existing) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'ios-nav-menu-btn';
+        btn.className = 'secondary-btn';
+        btn.textContent = 'Menu';
+        btn.style.position = 'fixed';
+        btn.style.right = '16px';
+        btn.style.bottom = 'calc(16px + var(--safe-area-inset-bottom, 0px))';
+        btn.style.zIndex = '9999';
+        btn.style.minWidth = '76px';
+        btn.style.borderRadius = '999px';
+        btn.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+        btn.addEventListener('click', () => this.openEscapeOptionsMenu('ios'));
+        document.body.appendChild(btn);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (this.escapeMenuOpen) {
+                    this.closeEscapeOptionsMenu();
+                } else {
+                    this.openEscapeOptionsMenu('ios');
+                }
+            }
+        });
+    }
+
+    handleNavigationKeydown(e) {
+        const activeTag = document.activeElement?.tagName;
+        const isTypingContext = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag) || document.activeElement?.isContentEditable;
+
+        if (e.altKey && String(e.key).toLowerCase() === 'm') {
+            e.preventDefault();
+            this.openEscapeOptionsMenu();
+            return;
+        }
+
+        if (e.key !== 'Escape') return;
+        if (isTypingContext) return;
+
+        if (this.escapeMenuOpen) {
+            e.preventDefault();
+            this.closeEscapeOptionsMenu();
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastEscapePressAt <= this.escapeDoublePressWindowMs) {
+            e.preventDefault();
+            this.lastEscapePressAt = 0;
+            this.openEscapeOptionsMenu();
+        } else {
+            this.lastEscapePressAt = now;
+            this.showNotification('Press Escape again to open menu options', 'info');
+        }
+    }
+
+    openEscapeOptionsMenu(source = 'keyboard') {
+        this.closeEscapeOptionsMenu();
+        this.escapeMenuOpen = true;
+        const isIOSMenu = source === 'ios';
+
+        const inRoom = !!this.currentRoom && this.ui.currentScreen === 'voice-chat-screen';
+        const options = inRoom ? [
+            { id: 'return', label: 'Return to Room', action: () => this.closeEscapeOptionsMenu() },
+            { id: 'mute', label: this.webrtcManager?.isLocalMuted() ? 'Unmute Mic' : 'Mute Mic', action: () => {
+                const isMuted = this.webrtcManager?.isLocalMuted() || false;
+                this.webrtcManager?.setMuted(!isMuted);
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'deafen', label: this.isDeafened ? 'Undeafen Audio' : 'Deafen Audio', action: () => {
+                const isDeafened = this.isDeafened || false;
+                this.isDeafened = !isDeafened;
+                this.webrtcManager?.setDeafened(this.isDeafened);
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'settings', label: 'Open Settings', action: () => {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'leave', label: 'Leave Room Now', danger: true, action: () => {
+                this.closeEscapeOptionsMenu();
+                this.leaveRoom();
+            }}
+        ] : [
+            { id: 'main', label: 'Main Menu', action: () => {
+                this.showScreen('main-menu');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'join', label: 'Join Room', action: () => {
+                this.showScreen('join-room-screen');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'create', label: 'Create Room', action: () => {
+                this.showScreen('create-room-screen');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'settings', label: 'Open Settings', action: () => {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+                this.closeEscapeOptionsMenu();
+            }}
+        ];
+
+        const overlay = document.createElement('div');
+        overlay.id = 'escape-options-menu';
+        overlay.className = 'modal';
+        overlay.style.display = 'flex';
+        overlay.innerHTML = `
+            <div class="modal-content" style="${isIOSMenu ? 'max-width: 560px; width: 94%; border-radius: 18px 18px 0 0; margin-top: auto; margin-bottom: 0; padding-bottom: calc(1rem + var(--safe-area-inset-bottom, 0px));' : 'max-width: 420px; width: 90%;'}">
+                <h3 style="margin-top:0;">Navigation Menu</h3>
+                <p style="opacity:.8; margin-top:0;">${isIOSMenu ? 'Tap an option below.' : 'Double Escape opened this menu. Press Escape to close.'}</p>
+                <div class="button-group" id="escape-options-actions"></div>
+            </div>
+        `;
+
+        const actionsContainer = overlay.querySelector('#escape-options-actions');
+        options.forEach((opt) => {
+            const btn = document.createElement('button');
+            btn.className = opt.danger ? 'danger-btn' : 'secondary-btn';
+            btn.textContent = opt.label;
+            btn.addEventListener('click', opt.action);
+            actionsContainer.appendChild(btn);
+        });
+
+        overlay.addEventListener('click', (evt) => {
+            if (evt.target === overlay) {
+                this.closeEscapeOptionsMenu();
+            }
+        });
+
+        document.body.appendChild(overlay);
+    }
+
+    closeEscapeOptionsMenu() {
+        const existing = document.getElementById('escape-options-menu');
+        if (existing) existing.remove();
+        this.escapeMenuOpen = false;
     }
 
     showScreen(screenId) {
@@ -1890,7 +2067,12 @@ class VoiceLinkApp {
 
         } catch (error) {
             console.error('Failed to join room:', error);
-            this.showError('Failed to access microphone or join room');
+            const errorName = error?.name || '';
+            if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
+                this.showError('Microphone permission is blocked. You can still join in listen-only mode or allow mic access in browser/site settings.');
+            } else {
+                this.showError('Failed to access microphone or join room');
+            }
         }
     }
 
@@ -1955,12 +2137,15 @@ class VoiceLinkApp {
         userElement.setAttribute('data-user-id', user.id);
 
         userElement.innerHTML = `
-            <div class="user-info">
-                <div class="user-status connected" title="Connected"></div>
-                <span class="user-name">${user.name}</span>
-                <span class="audio-indicator" style="display: none;">[Speaking]</span>
+            <div class="user-header-row">
+                <div class="user-info">
+                    <div class="user-status connected" title="Connected"></div>
+                    <span class="user-name">${user.name}</span>
+                    <span class="audio-indicator" style="display: none;">[Speaking]</span>
+                </div>
+                <button class="user-audio-toggle-btn" onclick="app.toggleUserAudioControls('${user.id}', this)" title="Show or hide audio controls for ${user.name}" aria-label="Show or hide audio controls for ${user.name}">Show Audio Controls</button>
             </div>
-            <div class="user-controls">
+            <div class="user-controls hidden">
                 <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
                 <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Increase volume" aria-label="Increase volume for ${user.name}">Vol +</button>
                 <button onclick="app.toggleUserMute('${user.id}')" title="Mute user" aria-label="Mute ${user.name}">Mute</button>
@@ -1971,6 +2156,18 @@ class VoiceLinkApp {
 
         // Update audio routing panel
         this.updateAudioRoutingPanel();
+    }
+
+    toggleUserAudioControls(userId, buttonEl) {
+        const userElement = document.querySelector(`[data-user-id=\"${userId}\"]`);
+        const controls = userElement?.querySelector('.user-controls');
+        if (!controls) return;
+
+        const isHidden = controls.classList.toggle('hidden');
+        if (buttonEl) {
+            buttonEl.textContent = isHidden ? 'Show Audio Controls' : 'Hide Audio Controls';
+            buttonEl.setAttribute('aria-expanded', String(!isHidden));
+        }
     }
 
     removeUserFromUI(userId) {
@@ -2566,6 +2763,13 @@ class VoiceLinkApp {
         // This would load settings from localStorage or native API
         // For now, just set default values
         console.log('Loading current settings...');
+        const sendLogsToggle = document.getElementById('send-support-logs-setting');
+        if (sendLogsToggle) {
+            const enabled = localStorage.getItem('voicelink_send_support_logs') === 'true';
+            sendLogsToggle.checked = enabled;
+            this.logCaptureEnabled = enabled;
+        }
+        this.refreshAuthenticationSettingsPanel();
     }
 
     setupSettingsEventListeners() {
@@ -2584,6 +2788,40 @@ class VoiceLinkApp {
             if (confirm('Are you sure you want to reset all settings to defaults?')) {
                 this.resetAllSettings();
             }
+        });
+
+        document.getElementById('auth-open-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+        });
+
+        document.getElementById('auth-link-mastodon-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+            this.setActiveAuthTab('mastodon-login');
+        });
+
+        document.getElementById('auth-link-wallet-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+            this.setActiveAuthTab('wallet-login');
+        });
+
+        document.getElementById('auth-logout-btn')?.addEventListener('click', () => {
+            this.handleMastodonLogout();
+        });
+
+        document.getElementById('check-updates-btn')?.addEventListener('click', () => {
+            this.checkForAppUpdates();
+        });
+
+        document.getElementById('send-support-logs-setting')?.addEventListener('change', (e) => {
+            this.setSupportLogSendingEnabled(!!e.target.checked);
+        });
+
+        document.getElementById('send-logs-now-btn')?.addEventListener('click', () => {
+            this.sendSupportLogs('manual');
+        });
+
+        document.getElementById('clear-local-logs-btn')?.addEventListener('click', () => {
+            this.clearLocalLogs();
         });
 
         // Network buttons
@@ -2705,13 +2943,151 @@ class VoiceLinkApp {
     saveAllSettings() {
         console.log('Saving all settings...');
         // Implementation would save to localStorage or native API
+        const sendSupportLogs = document.getElementById('send-support-logs-setting')?.checked;
+        this.setSupportLogSendingEnabled(!!sendSupportLogs);
         alert('Settings saved successfully!');
     }
 
     resetAllSettings() {
         console.log('Resetting all settings...');
         // Implementation would reset to defaults
+        localStorage.removeItem('voicelink_send_support_logs');
+        this.logCaptureEnabled = false;
         alert('Settings reset to defaults!');
+    }
+
+    setupLogCapture() {
+        if (this.logCaptureInitialized) return;
+        this.logCaptureInitialized = true;
+
+        const levels = ['log', 'warn', 'error', 'info'];
+        this.originalConsole = this.originalConsole || {};
+        levels.forEach((level) => {
+            if (typeof console[level] !== 'function') return;
+            const original = console[level].bind(console);
+            this.originalConsole[level] = original;
+            console[level] = (...args) => {
+                original(...args);
+                this.captureClientLog(level, args);
+            };
+        });
+    }
+
+    setupGlobalErrorLogHooks() {
+        window.addEventListener('error', (event) => {
+            this.captureClientLog('error', [
+                'window.error',
+                event.message || 'Unknown error',
+                event.filename || '',
+                event.lineno || 0,
+                event.colno || 0
+            ]);
+            this.scheduleSupportLogUpload('window-error');
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            const reason = event.reason?.message || event.reason || 'Unhandled promise rejection';
+            this.captureClientLog('error', ['unhandledrejection', reason]);
+            this.scheduleSupportLogUpload('unhandledrejection');
+        });
+    }
+
+    captureClientLog(level, args = []) {
+        if (!this.logCaptureEnabled) return;
+        const entry = {
+            ts: new Date().toISOString(),
+            level,
+            message: args.map((arg) => this.serializeLogArg(arg)).join(' ').slice(0, 2500)
+        };
+        this.clientLogs.push(entry);
+        if (this.clientLogs.length > this.maxClientLogs) {
+            this.clientLogs.splice(0, this.clientLogs.length - this.maxClientLogs);
+        }
+    }
+
+    serializeLogArg(arg) {
+        if (arg === null || arg === undefined) return String(arg);
+        if (typeof arg === 'string') return arg;
+        if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+        if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+        try {
+            return JSON.stringify(arg);
+        } catch (e) {
+            return Object.prototype.toString.call(arg);
+        }
+    }
+
+    setSupportLogSendingEnabled(enabled) {
+        this.logCaptureEnabled = !!enabled;
+        localStorage.setItem('voicelink_send_support_logs', this.logCaptureEnabled ? 'true' : 'false');
+        if (this.logCaptureEnabled) {
+            this.captureClientLog('info', ['Support log sending enabled']);
+            this.showNotification('Support log sending enabled', 'info');
+        } else {
+            this.showNotification('Support log sending disabled', 'info');
+        }
+    }
+
+    clearLocalLogs() {
+        this.clientLogs = [];
+        this.showNotification('Local diagnostic logs cleared', 'info');
+    }
+
+    scheduleSupportLogUpload(reason) {
+        if (!this.logCaptureEnabled) return;
+        const now = Date.now();
+        if (now - this.lastLogSendAt < 2 * 60 * 1000) return;
+        clearTimeout(this.logFlushTimer);
+        this.logFlushTimer = setTimeout(() => this.sendSupportLogs(reason, true), 1500);
+    }
+
+    getClientId() {
+        const key = 'voicelink_client_id';
+        let clientId = localStorage.getItem(key);
+        if (!clientId) {
+            clientId = 'dev_' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem(key, clientId);
+        }
+        return clientId;
+    }
+
+    async sendSupportLogs(reason = 'manual', silent = false) {
+        if (!this.logCaptureEnabled) {
+            if (!silent) this.showNotification('Enable "Send diagnostic logs to support" first.', 'error');
+            return;
+        }
+
+        const logs = this.clientLogs.slice(-200);
+        const payload = {
+            reason,
+            clientId: this.getClientId(),
+            appVersion: document.getElementById('app-version')?.textContent || 'unknown',
+            platform: navigator.platform || 'unknown',
+            userAgent: navigator.userAgent || '',
+            room: this.currentRoom ? { id: this.currentRoom.id, name: this.currentRoom.name } : null,
+            user: this.currentUser ? { id: this.currentUser.id || '', username: this.currentUser.username || this.currentUser.displayName || '' } : null,
+            logCount: logs.length,
+            logs
+        };
+
+        try {
+            const response = await fetch(`${this.getApiBaseUrl()}/api/support/logs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Upload failed (${response.status})`);
+            }
+
+            this.lastLogSendAt = Date.now();
+            if (!silent) this.showNotification('Logs sent to support', 'success');
+        } catch (error) {
+            if (!silent) {
+                this.showNotification(`Failed to send logs: ${error.message}`, 'error');
+            }
+        }
     }
 
     copyServerUrl() {
@@ -2855,53 +3231,14 @@ class VoiceLinkApp {
 
     // Button click audio system
     initializeButtonAudio() {
+        // Intentionally disable global click sounds.
+        // Only explicit, feature-specific sounds should play.
         this.buttonAudio = {
             clickSound: null,
-            init: async () => {
-                try {
-                    // Try different audio file paths
-                    const possiblePaths = [
-                        'sounds/connected.wav',
-                        'client/sounds/connected.wav',
-                        'assets/audio/test-audio/connected.wav'
-                    ];
-
-                    for (const path of possiblePaths) {
-                        try {
-                            this.buttonAudio.clickSound = new Audio(path);
-                            this.buttonAudio.clickSound.volume = 0.3;
-                            await new Promise((resolve, reject) => {
-                                this.buttonAudio.clickSound.addEventListener('canplaythrough', resolve);
-                                this.buttonAudio.clickSound.addEventListener('error', reject);
-                                this.buttonAudio.clickSound.load();
-                            });
-                            console.log(`Button click audio loaded from: ${path}`);
-                            break;
-                        } catch (e) {
-                            console.log(`Failed to load audio from ${path}`);
-                        }
-                    }
-                } catch (error) {
-                    console.log('Button click audio not available, using fallback');
-                }
-            },
-            playClick: () => {
-                if (this.buttonAudio.clickSound) {
-                    this.buttonAudio.clickSound.currentTime = 0;
-                    this.buttonAudio.clickSound.play().catch(e => console.log('Click sound failed'));
-                }
-            }
+            init: async () => {},
+            playClick: () => {}
         };
-
-        // Initialize button audio
-        this.buttonAudio.init();
-
-        // Add click sound to all buttons
-        document.addEventListener('click', (e) => {
-            if (e.target.tagName === 'BUTTON' || e.target.classList.contains('btn')) {
-                this.buttonAudio.playClick();
-            }
-        });
+        console.log('Global button click sounds disabled');
     }
 
     // ========================================
@@ -3080,6 +3417,8 @@ class VoiceLinkApp {
     }
 
     updateUIForAuthState(user) {
+        this.currentUser = user || null;
+
         const loginPrompt = document.getElementById('mastodon-login-prompt');
         const userInfo = document.getElementById('mastodon-user-info');
         const avatar = document.getElementById('mastodon-user-avatar');
@@ -3119,6 +3458,68 @@ class VoiceLinkApp {
 
             // Hide admin controls
             this.hideAdminControls();
+        }
+
+        this.refreshAuthenticationSettingsPanel();
+    }
+
+    refreshAuthenticationSettingsPanel() {
+        const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+        const currentUser = document.getElementById('auth-current-user');
+        const currentProvider = document.getElementById('auth-current-provider');
+        const currentRole = document.getElementById('auth-current-role');
+        const walletStatus = document.getElementById('auth-wallet-status');
+
+        if (currentUser) {
+            currentUser.textContent = user ? (user.displayName || user.username || user.email || 'Authenticated User') : 'Not logged in';
+        }
+
+        if (currentProvider) {
+            const provider = user?.provider || (window.mastodonAuth?.isAuthenticated() ? 'mastodon' : 'guest');
+            currentProvider.textContent = String(provider).toUpperCase();
+        }
+
+        if (currentRole) {
+            const roleValue = user?.role || (user?.isAdmin ? 'admin' : user?.isModerator ? 'moderator' : (user ? 'user' : 'guest'));
+            currentRole.textContent = roleValue.charAt(0).toUpperCase() + roleValue.slice(1);
+        }
+
+        if (walletStatus) {
+            const hasWallet = !!(localStorage.getItem('voicelink_ecripto_token') || sessionStorage.getItem('voicelink_ecripto_token'));
+            walletStatus.textContent = hasWallet ? 'Connected' : 'Disconnected';
+        }
+    }
+
+    async checkForAppUpdates() {
+        try {
+            this.showNotification('Checking for updates...', 'info');
+
+            if (window.nativeAPI?.checkForUpdates) {
+                const nativeResult = await window.nativeAPI.checkForUpdates();
+                if (nativeResult?.updateAvailable) {
+                    this.showNotification(`Update available: ${nativeResult.version || 'new version'}`, 'success');
+                } else {
+                    this.showNotification('You are up to date.', 'info');
+                }
+                return;
+            }
+
+            const platform = /Mac/i.test(navigator.platform) ? 'macos' : /Win/i.test(navigator.platform) ? 'windows' : 'linux';
+            const response = await fetch(`${this.getApiBaseUrl()}/api/updates/check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ platform, currentVersion: this.appVersion || '0.0.0' })
+            });
+
+            const result = await response.json();
+            if (result?.updateAvailable) {
+                this.showNotification(`Update available: v${result.version}`, 'success');
+            } else {
+                this.showNotification('You are up to date.', 'info');
+            }
+        } catch (error) {
+            console.error('Failed to check updates:', error);
+            this.showNotification('Could not check for updates right now.', 'error');
         }
     }
 

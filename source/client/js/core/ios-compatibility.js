@@ -305,6 +305,8 @@ class iOSCompatibility {
         if (this.unlocked) return;
 
         try {
+            let microphoneGranted = false;
+
             // Create or resume audio context
             if (window.audioEngine && window.audioEngine.audioContext) {
                 await window.audioEngine.audioContext.resume();
@@ -321,11 +323,35 @@ class iOSCompatibility {
                 source.start(0);
             }
 
+            // Request microphone permission on explicit user interaction.
+            // iOS Safari requires a gesture-bound getUserMedia call.
+            if (navigator.mediaDevices?.getUserMedia) {
+                try {
+                    const permissionStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        },
+                        video: false
+                    });
+                    microphoneGranted = true;
+                    permissionStream.getTracks().forEach(track => track.stop());
+                    if (window.audioEngine?.enumerateDevices) {
+                        await window.audioEngine.enumerateDevices();
+                    }
+                } catch (micError) {
+                    console.warn('iOS microphone permission not granted during unlock:', micError?.name || micError);
+                }
+            }
+
             this.unlocked = true;
             console.log('iOS audio unlocked');
 
             // Notify the app that audio is ready
-            window.dispatchEvent(new CustomEvent('audioUnlocked'));
+            window.dispatchEvent(new CustomEvent('audioUnlocked', {
+                detail: { microphoneGranted }
+            }));
 
             // Remove unlock overlay if it exists
             const overlay = document.getElementById('ios-audio-unlock');
