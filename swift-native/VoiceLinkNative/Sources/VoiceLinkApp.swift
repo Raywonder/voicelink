@@ -3,6 +3,7 @@ import AVFoundation
 import AppKit
 import SocketIO
 import CoreAudio
+import Combine
 
 @main
 struct VoiceLinkApp: App {
@@ -59,6 +60,8 @@ struct VoiceLinkApp: App {
                 .disabled(appState.currentRoom == nil)
             }
             CommandMenu("Audio") {
+                let settings = SettingsManager.shared
+
                 Button("Toggle Mute") {
                     NotificationCenter.default.post(name: .toggleMute, object: nil)
                 }
@@ -68,6 +71,64 @@ struct VoiceLinkApp: App {
                     NotificationCenter.default.post(name: .toggleDeafen, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: .command)
+
+                Divider()
+
+                Button(settings.noiseSuppression ? "Disable Noise Suppression" : "Enable Noise Suppression") {
+                    settings.noiseSuppression.toggle()
+                    settings.saveSettings()
+                }
+
+                Button(settings.echoCancellation ? "Disable Echo Cancellation" : "Enable Echo Cancellation") {
+                    settings.echoCancellation.toggle()
+                    settings.saveSettings()
+                }
+
+                Button(settings.autoGainControl ? "Disable Auto Gain Control" : "Enable Auto Gain Control") {
+                    settings.autoGainControl.toggle()
+                    settings.saveSettings()
+                }
+
+                Button(settings.spatialAudioEnabled ? "Disable Spatial Audio" : "Enable Spatial Audio") {
+                    settings.spatialAudioEnabled.toggle()
+                    settings.saveSettings()
+                }
+
+                Divider()
+
+                Menu("Input Device") {
+                    ForEach(settings.availableInputDevices, id: \.self) { device in
+                        Button(device) {
+                            settings.inputDevice = device
+                            settings.saveSettings()
+                        }
+                    }
+                }
+
+                Menu("Output Device") {
+                    ForEach(settings.availableOutputDevices, id: \.self) { device in
+                        Button(device) {
+                            settings.outputDevice = device
+                            settings.saveSettings()
+                        }
+                    }
+                }
+
+                Button("Refresh Audio Devices") {
+                    settings.detectAudioDevices()
+                }
+
+                Button("Test Sound") {
+                    AppSoundManager.shared.playSound(.soundTest)
+                }
+
+                Divider()
+
+                Button("Audio Settings...") {
+                    appState.currentScreen = .settings
+                    NotificationCenter.default.post(name: .openAudioSettings, object: nil)
+                }
+                .keyboardShortcut("a", modifiers: [.command, .option])
             }
 
             CommandMenu("Account") {
@@ -240,7 +301,7 @@ struct VoiceLinkApp: App {
                 Divider()
 
                 Button("VoiceLink Help") {
-                    if let url = URL(string: "https://voicelink.devinecreations.net/help") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/docs/index.html") {
                         NSWorkspace.shared.open(url)
                     }
                 }
@@ -258,6 +319,7 @@ extension Notification.Name {
     static let discoverServers = Notification.Name("discoverServers")
     static let goToMainMenu = Notification.Name("goToMainMenu")
     static let openProfileSettings = Notification.Name("openProfileSettings")
+    static let openAudioSettings = Notification.Name("openAudioSettings")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -387,6 +449,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - App State
+@MainActor
 class AppState: ObservableObject {
     @Published var currentScreen: Screen = .mainMenu
     @Published var isConnected: Bool = false
@@ -401,6 +464,7 @@ class AppState: ObservableObject {
 
     let serverManager = ServerManager.shared
     let licensing = LicensingManager.shared
+    private var cancellables: Set<AnyCancellable> = []
 
     enum Screen {
         case mainMenu
@@ -422,8 +486,10 @@ class AppState: ObservableObject {
         detectLocalIP()
         connectToServer()
         setupServerObservers()
+        setupAdminObservers()
         initializeLicensing()
         setupURLObservers()
+        refreshAdminCapabilities()
     }
 
     private func setupURLObservers() {
@@ -576,6 +642,14 @@ class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .assign(to: &$errorMessage)
 
+        // Keep admin capabilities in sync with active server connection.
+        serverManager.$isConnected
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshAdminCapabilities()
+            }
+            .store(in: &cancellables)
+
         // Listen for room joined notification
         NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: .main) { [weak self] notification in
             if let roomData = notification.object as? [String: Any],
@@ -591,6 +665,39 @@ class AppState: ObservableObject {
         // Listen for navigation back to main menu
         NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
             self?.currentScreen = .mainMenu
+        }
+    }
+
+    private func setupAdminObservers() {
+        // Refresh admin capabilities after Mastodon auth completes.
+        NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshAdminCapabilities()
+        }
+
+        // Refresh when server endpoint changes (switch, disconnect, reconnect).
+        NotificationCenter.default.addObserver(forName: .serverConnectionChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshAdminCapabilities()
+        }
+
+        // Email and persisted auth sessions don't emit mastodonAccountLoaded.
+        AuthenticationManager.shared.$currentUser
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshAdminCapabilities()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func refreshAdminCapabilities() {
+        guard let serverURL = serverManager.baseURL, !serverURL.isEmpty else {
+            AdminServerManager.shared.isAdmin = false
+            AdminServerManager.shared.adminRole = .none
+            return
+        }
+
+        let token = AuthenticationManager.shared.currentUser?.accessToken
+        Task {
+            await AdminServerManager.shared.checkAdminStatus(serverURL: serverURL, token: token)
         }
     }
 
@@ -1997,6 +2104,9 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProfileSettings)) { _ in
             selectedTab = .profile
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openAudioSettings)) { _ in
+            selectedTab = .audio
         }
     }
 

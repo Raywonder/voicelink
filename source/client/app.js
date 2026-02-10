@@ -2135,6 +2135,10 @@ class VoiceLinkApp {
         const userElement = document.createElement('div');
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
+        userElement.setAttribute('data-user-name', user.name || 'Unknown');
+        userElement.tabIndex = 0;
+        userElement.setAttribute('role', 'button');
+        userElement.setAttribute('aria-label', `${user.name}. Right click or use keyboard context menu for user actions.`);
 
         userElement.innerHTML = `
             <div class="user-header-row">
@@ -2152,10 +2156,35 @@ class VoiceLinkApp {
             </div>
         `;
 
+        this.bindUserContextMenuHandlers(userElement, user.id);
+
         userList.appendChild(userElement);
 
         // Update audio routing panel
         this.updateAudioRoutingPanel();
+    }
+
+    bindUserContextMenuHandlers(userElement, userId) {
+        if (!userElement) return;
+
+        userElement.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+
+        userElement.addEventListener('keydown', (event) => {
+            const isKeyboardContextMenu =
+                event.key === 'ContextMenu' ||
+                (event.shiftKey && event.key === 'F10');
+            if (!isKeyboardContextMenu) return;
+
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+    }
+
+    showUserContextMenuForElement(userId, anchorEl) {
+        window.userContextMenu?.showMenuForUser(userId, anchorEl);
     }
 
     toggleUserAudioControls(userId, buttonEl) {

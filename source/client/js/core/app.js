@@ -2399,6 +2399,12 @@ class VoiceLinkApp {
             template: room.template || null,
             privacyLevel: room.privacyLevel || 'public',
             encrypted: room.encrypted || false,
+            previewEnabled: room.previewEnabled,
+            allowPreview: room.allowPreview,
+            previewDisabled: room.previewDisabled,
+            previewPolicy: room.previewPolicy || null,
+            ownerId: room.ownerId || room.creatorId || room.createdBy || room.owner?.id || null,
+            ownerName: room.ownerName || room.creatorName || room.owner?.name || room.owner || '',
             isDefault: isDefault,
             isFederated: isDefault || room.isFederated || false
         };
@@ -2426,7 +2432,7 @@ class VoiceLinkApp {
                 : `${roomData.users} users`;
 
         // Action menu (accessible for keyboard/screen reader users)
-        const showPeekButton = roomData.users > 0;
+        const previewAvailability = this.getRoomPreviewAvailability(roomData);
         const actionMenu = `
             <details class="room-actions-menu" onclick="event.stopPropagation();">
                 <summary class="room-actions-summary" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
@@ -2436,13 +2442,14 @@ class VoiceLinkApp {
                             aria-label="Join ${roomData.name}">
                         🎧 Join
                     </button>
-                    ${showPeekButton ? `
-                        <button class="room-action-btn"
-                                onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
-                                aria-label="Preview audio for ${roomData.name}">
-                            👁️ Peek In
-                        </button>
-                    ` : ''}
+                    <button class="room-action-btn"
+                            ${previewAvailability.enabled
+                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}', '${roomData.name}')"`
+                                : 'disabled'}
+                            title="${previewAvailability.reason || 'Preview room audio'}"
+                            aria-label="Preview room audio for ${roomData.name}">
+                        👁️ Preview Room
+                    </button>
                     <button class="room-action-btn"
                             onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
                             aria-label="Share ${roomData.name}">
@@ -2456,6 +2463,8 @@ class VoiceLinkApp {
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
                  data-room-id="${roomData.id}"
                  onclick="app.quickJoinRoom('${roomData.id}')"
+                 oncontextmenu="app.openFocusedRoomContextMenu(event, '${roomData.id}')"
+                 onkeydown="app.handleFocusedRoomContextKey(event, '${roomData.id}')"
                  role="button"
                  tabindex="0"
                  aria-label="${roomData.name}, ${descriptionText}, ${userCountText} of ${roomData.maxUsers} max">
@@ -2479,6 +2488,162 @@ class VoiceLinkApp {
                 </div>
             </div>
         `;
+    }
+
+    getRoomPreviewAvailability(roomData) {
+        if (!roomData) {
+            return { enabled: false, reason: 'Preview is not available for this room.' };
+        }
+
+        const explicitDisabled = roomData.previewEnabled === false ||
+            roomData.allowPreview === false ||
+            roomData.previewDisabled === true ||
+            roomData.previewPolicy === 'disabled';
+        if (explicitDisabled) {
+            return { enabled: false, reason: 'Preview disabled by room creator/admin.', reasonCode: 'privacy_disabled' };
+        }
+
+        const creatorAdminOnly = roomData.previewPolicy === 'creator_admin_only';
+        if (creatorAdminOnly && !this.canManageRoomPreview(roomData)) {
+            return { enabled: false, reason: 'Preview restricted to room creator/admin.', reasonCode: 'creator_admin_only' };
+        }
+
+        if ((roomData.users || 0) <= 0) {
+            return { enabled: false, reason: 'No active room audio to preview yet.', reasonCode: 'no_audio' };
+        }
+
+        return { enabled: true, reason: '', reasonCode: 'ok' };
+    }
+
+    canManageRoomPreview(roomData) {
+        const currentUser = this.currentUser || {};
+        const role = String(currentUser.role || '').toLowerCase();
+        const isAdmin = currentUser.isAdmin === true ||
+            role === 'admin' ||
+            (Array.isArray(currentUser.permissions) && currentUser.permissions.includes('admin'));
+        if (isAdmin) return true;
+
+        const ownerId = roomData?.ownerId;
+        return !!ownerId && ownerId === currentUser.id;
+    }
+
+    requestRoomPreview(roomId, roomName = 'this room') {
+        const roomData = this.roomDataCache.get(roomId);
+        const availability = this.getRoomPreviewAvailability(roomData);
+        if (!availability.enabled) {
+            const blockedMessage = this.getRandomPreviewBlockedMessage(roomData, availability);
+            this.showNotification(blockedMessage, 'info');
+            return;
+        }
+        this.peekIntoRoom(roomId, roomName);
+    }
+
+    getRandomPreviewBlockedMessage(roomData, availability) {
+        const owner = roomData?.ownerName ? String(roomData.ownerName).trim() : '';
+        const ownerText = owner ? `${owner}` : 'this room owner';
+        const code = availability?.reasonCode || 'privacy_disabled';
+        const intro = [
+            'No peeking.',
+            'Preview blocked.',
+            'Access denied for preview.',
+            'Room preview is locked.',
+            'Hold up.',
+            'Heads up.',
+            'Privacy notice.',
+            'Restricted action.',
+            'Preview unavailable.',
+            'Not allowed.'
+        ];
+        const privacyReason = [
+            'This room is private.',
+            'Preview is disabled for this room.',
+            `${ownerText} requested privacy for this room.`,
+            'Room owner privacy settings are active.',
+            'This room does not allow listener previews.',
+            'Preview is turned off by policy.',
+            'This room is protected from peeking.',
+            'Room privacy mode blocks previews.',
+            'This room is currently marked as no-preview.',
+            'Peeking is disabled for this channel.'
+        ];
+        const creatorAdminReason = [
+            'Only the room creator can preview this room.',
+            'Only admins can preview this room.',
+            'Preview is restricted to room creator/admin.',
+            `${ownerText} restricted preview to trusted roles.`,
+            'Moderator policy requires elevated access for preview.',
+            'Preview rights are limited to owner/admin users.',
+            'Creator-admin preview mode is enabled.',
+            'This room allows preview for management roles only.',
+            'Room control policy blocks general preview access.',
+            'Only room operators can listen before joining.'
+        ];
+        const noAudioReason = [
+            'No active participants are speaking right now.',
+            'No live room audio was detected.',
+            'This room is quiet at the moment.',
+            'There is nothing to preview yet.',
+            'Audio preview source is currently idle.',
+            'No active stream is available right now.',
+            'Room audio is not available for preview yet.',
+            'No participant audio is currently present.',
+            'Preview found no current voice activity.',
+            'Live room audio is temporarily unavailable.'
+        ];
+        const actionHint = [
+            'Join the room to listen live.',
+            'Try again in a moment.',
+            'You can join to hear full room audio.',
+            'Ask the room owner to enable preview.',
+            'Check room settings and try again.',
+            'Use Join Room for direct entry.',
+            'Wait for participants, then retry preview.',
+            'Preview may return when activity starts.',
+            'Use context menu actions to join directly.',
+            'If needed, contact room admin for access.'
+        ];
+        const tone = [
+            'Thanks for respecting privacy.',
+            'Your request was safely blocked.',
+            'Access rules are working as expected.',
+            'Room protections are active.',
+            'Privacy controls are currently enforced.',
+            'Security settings are applied.',
+            'Visibility restrictions are in effect.',
+            'This behavior is intentional.',
+            'Room policy is being enforced.',
+            'Preview protections remain enabled.'
+        ];
+
+        const reasonPool = code === 'creator_admin_only'
+            ? creatorAdminReason
+            : code === 'no_audio'
+                ? noAudioReason
+                : privacyReason;
+
+        const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        return `${pick(intro)} ${pick(reasonPool)} ${pick(actionHint)} ${pick(tone)}`;
+    }
+
+    handleFocusedRoomContextKey(event, roomId) {
+        const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+        if (!isContextKey) return;
+        this.openFocusedRoomContextMenu(event, roomId);
+    }
+
+    openFocusedRoomContextMenu(event, roomId) {
+        event?.preventDefault();
+        event?.stopPropagation();
+
+        const roomItem = document.querySelector(`.room-item[data-room-id="${roomId}"]`);
+        const actionsMenu = roomItem?.querySelector('.room-actions-menu');
+        if (!actionsMenu) return;
+
+        actionsMenu.open = true;
+
+        const previewBtn = actionsMenu.querySelector('.room-action-btn[aria-label^="Preview room audio"]');
+        const joinBtn = actionsMenu.querySelector('.room-action-btn');
+        (previewBtn || joinBtn)?.focus();
     }
 
     getRoomStatusLabels(roomData) {
@@ -2818,12 +2983,11 @@ class VoiceLinkApp {
 
             // Show peek button if room has users
             const peekBtn = document.getElementById('join-peek-btn');
-            if (roomData.users > 0) {
-                peekBtn.style.display = 'inline-block';
-                peekBtn.onclick = () => this.peekIntoRoom(roomId, roomData.name);
-            } else {
-                peekBtn.style.display = 'none';
-            }
+            const previewAvailability = this.getRoomPreviewAvailability(roomData);
+            peekBtn.style.display = 'inline-block';
+            peekBtn.disabled = !previewAvailability.enabled;
+            peekBtn.title = previewAvailability.reason || 'Preview room audio';
+            peekBtn.onclick = () => this.requestRoomPreview(roomId, roomData.name);
         } else {
             // Fallback for manual room ID entry
             document.getElementById('join-room-name').textContent = 'Join Room';
@@ -2831,7 +2995,9 @@ class VoiceLinkApp {
             document.getElementById('join-room-users').textContent = '';
             document.getElementById('join-room-privacy').textContent = '';
             document.getElementById('join-password-group').style.display = 'block'; // Show password just in case
-            document.getElementById('join-peek-btn').style.display = 'none';
+            const peekBtn = document.getElementById('join-peek-btn');
+            peekBtn.style.display = 'none';
+            peekBtn.disabled = true;
         }
 
         // Set default username if not already set
@@ -3263,6 +3429,9 @@ class VoiceLinkApp {
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
         userElement.setAttribute('data-user-name', user.name || 'Unknown');
+        userElement.tabIndex = 0;
+        userElement.setAttribute('role', 'button');
+        userElement.setAttribute('aria-label', `${user.name}. Right click or use keyboard context menu for user actions.`);
 
         userElement.innerHTML = `
             <div class="user-header-row">
@@ -3277,14 +3446,38 @@ class VoiceLinkApp {
                 <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
                 <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Increase volume" aria-label="Increase volume for ${user.name}">Vol +</button>
                 <button onclick="app.toggleUserMute('${user.id}')" title="Mute user" aria-label="Mute ${user.name}">Mute</button>
-                <button onclick="window.userContextMenu?.showMenuForUser('${user.id}', this.closest('.user-item'))" title="User actions" aria-label="Actions for ${user.name}">Actions</button>
             </div>
         `;
+
+        this.bindUserContextMenuHandlers(userElement, user.id);
 
         userList.appendChild(userElement);
 
         // Update audio routing panel
         this.updateAudioRoutingPanel();
+    }
+
+    bindUserContextMenuHandlers(userElement, userId) {
+        if (!userElement) return;
+
+        userElement.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+
+        userElement.addEventListener('keydown', (event) => {
+            const isKeyboardContextMenu =
+                event.key === 'ContextMenu' ||
+                (event.shiftKey && event.key === 'F10');
+            if (!isKeyboardContextMenu) return;
+
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+    }
+
+    showUserContextMenuForElement(userId, anchorEl) {
+        window.userContextMenu?.showMenuForUser(userId, anchorEl);
     }
 
     toggleUserAudioControls(userId, buttonEl) {
