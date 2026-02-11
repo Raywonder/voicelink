@@ -1,0 +1,30 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master.swiftconstvalues",
+    "dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master.d",
+    "diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master.dia",
+    "emit-module-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller-master.swiftdeps"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/ContentView.swift" : {
+    "index-unit-output-path" : "/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/ContentView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/ContentView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/ContentView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/InstallerSteps.swift" : {
+    "index-unit-output-path" : "/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/InstallerSteps.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/InstallerSteps.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/InstallerSteps.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/OpenLinkInstaller.swift" : {
+    "index-unit-output-path" : "/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstaller.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/OpenLinkInstallerApp.swift" : {
+    "index-unit-output-path" : "/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstallerApp.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstallerApp.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/build/Build/Intermediates.noindex/OpenLinkInstaller.build/Release/OpenLinkInstaller.build/Objects-normal/x86_64/OpenLinkInstallerApp.o"
+  }
+}

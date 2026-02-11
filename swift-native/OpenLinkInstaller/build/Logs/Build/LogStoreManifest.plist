@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>11</integer>
+	<key>logs</key>
+	<dict>
+		<key>808C7D9F-3DA5-4B3D-84EB-16D3F211109A</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>808C7D9F-3DA5-4B3D-84EB-16D3F211109A.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>W</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>1</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>OpenLinkInstaller</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>OpenLinkInstaller</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Building workspace OpenLinkInstaller with scheme OpenLinkInstaller and configuration Release</string>
+			<key>timeStartedRecording</key>
+			<real>789930860.13395</real>
+			<key>timeStoppedRecording</key>
+			<real>789930985.11971104</real>
+			<key>title</key>
+			<string>Building workspace OpenLinkInstaller with scheme OpenLinkInstaller and configuration Release</string>
+			<key>uniqueIdentifier</key>
+			<string>808C7D9F-3DA5-4B3D-84EB-16D3F211109A</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

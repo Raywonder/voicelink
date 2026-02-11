@@ -2536,6 +2536,25 @@ body {
     box-shadow: 0 4px 15px rgba(99, 100, 255, 0.4);
 }
 
+.auth-btn.sso-btn {
+    background: linear-gradient(135deg, #1d7a7a 0%, #0f5f73 100%);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+}
+
+.auth-btn.sso-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(15, 95, 115, 0.4);
+}
+
 .mastodon-icon {
     font-size: 18px;
 }

@@ -1,0 +1,10 @@
+version: "Apple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)"
+options: "20131e36224ae22380faea7cbb1f1ff1a77680df3d5d1df3709b57735d69095a"
+build_start_time: [1768240166, 916484000]
+build_end_time: [1768240407, 597307000]
+inputs:
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/LicensingManager.swift": [1768212655, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/LicensingView.swift": [1768212655, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/OpenLinkApp.swift": [1768240143, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/OpenLinkService.swift": [1768239255, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/RemoteControlManager.swift": [1768200638, 0]

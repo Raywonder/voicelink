@@ -1,0 +1,47 @@
+version: "Apple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)"
+options: "29849b2a88e620e191b02f557f10ce9a6a48825a0e5e6d07b675b8895ed72a6b"
+build_start_time: [1768262442, 993700000]
+build_end_time: [1768262480, 599279000]
+inputs:
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/DerivedSources/resource_bundle_accessor.swift"
+  : [1768262428, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Compression/Compression.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Compression/WSCompression.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/DataBytes/Data+Extensions.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/Engine.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/NativeEngine.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/WSEngine.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FoundationHTTPHandler.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FoundationHTTPServerHandler.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FrameCollector.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/Framer.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/HTTPHandler.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/StringHTTPHandler.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Security/FoundationSecurity.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Security/Security.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Server/Server.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Server/WebSocketServer.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Starscream/WebSocket.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/FoundationTransport.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/TCPTransport.swift"
+  : [1768262418, 0]
+  ? "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/Transport.swift"
+  : [1768262418, 0]

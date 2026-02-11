@@ -1,0 +1,130 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.swiftconstvalues",
+    "dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.d",
+    "diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.dia",
+    "emit-module-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.swiftdeps"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Ack/SocketAckEmitter.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckEmitter.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckEmitter.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckEmitter.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Ack/SocketAckManager.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAckManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketAnyEvent.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAnyEvent.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAnyEvent.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketAnyEvent.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketEventHandler.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEventHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEventHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEventHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketIOClient.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClient.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClient.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClient.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketIOClientConfiguration.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientConfiguration.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientConfiguration.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientConfiguration.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketIOClientOption.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientOption.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientOption.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientOption.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketIOClientSpec.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientSpec.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientSpec.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOClientSpec.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketIOStatus.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOStatus.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOStatus.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIOStatus.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Client/SocketRawView.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketRawView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketRawView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketRawView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEngine.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngine.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngine.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngine.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEngineClient.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineClient.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineClient.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineClient.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEnginePacketType.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePacketType.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePacketType.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePacketType.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEnginePollable.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePollable.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePollable.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEnginePollable.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEngineSpec.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineSpec.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineSpec.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineSpec.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Engine/SocketEngineWebsocket.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineWebsocket.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineWebsocket.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketEngineWebsocket.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Manager/SocketManager.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Manager/SocketManagerSpec.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManagerSpec.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManagerSpec.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketManagerSpec.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Parse/SocketPacket.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketPacket.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketPacket.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketPacket.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Parse/SocketParsable.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketParsable.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketParsable.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketParsable.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Util/SocketExtensions.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketExtensions.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketExtensions.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketExtensions.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Util/SocketLogger.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketLogger.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketLogger.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketLogger.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Util/SocketStringReader.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketStringReader.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketStringReader.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketStringReader.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Util/SocketTypes.swift" : {
+    "index-unit-output-path" : "/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketTypes.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketTypes.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketTypes.o"
+  }
+}

@@ -39,3 +39,13 @@ npm-debug.log*
 source/assets/sounds/ambience/*.wav
 source/assets/sounds/ambience/*.flac
 source/assets/sounds/ambience/*.mp3
+
+# Desktop native build artifacts
+swift-native/**/.build/
+swift-native/**/*.zip
+swift-native/**/*.dmg
+windows-native/**/bin/
+windows-native/**/obj/
+windows-native/**/*.zip
+windows-native/**/*.msi
+windows-native/**/*.exe

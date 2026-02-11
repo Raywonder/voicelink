@@ -1,0 +1,9 @@
+version: "Apple Swift version 6.1.2 (swiftlang-6.1.2.1.2 clang-1700.0.13.5)"
+options: "52b2b1cedaadd466aa178e237073505f3efba1e188e707f6ac2c13cbbdf86f1b"
+build_start_time: [1768238087, 686296000]
+build_end_time: [1768238185, 826000]
+inputs:
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/ContentView.swift": [1768199325, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/InstallerSteps.swift": [1768200809, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/OpenLinkInstaller.swift": [1768200827, 0]
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLinkInstaller/Sources/OpenLinkInstallerApp.swift": [1768200790, 0]

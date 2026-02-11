@@ -1,0 +1,63 @@
+{
+  "buildCommand" : {
+    "command" : "build",
+    "skipDependencies" : false,
+    "style" : "buildOnly"
+  },
+  "configuredTargets" : [
+    {
+      "guid" : "PACKAGE-PRODUCT:OpenLink"
+    }
+  ],
+  "containerPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink",
+  "continueBuildingAfterErrors" : false,
+  "dependencyScope" : "workspace",
+  "enableIndexBuildArena" : false,
+  "hideShellScriptEnvironment" : false,
+  "parameters" : {
+    "action" : "build",
+    "activeArchitecture" : "x86_64",
+    "activeRunDestination" : {
+      "disableOnlyActiveArch" : false,
+      "platform" : "macosx",
+      "sdk" : "macosx15.5",
+      "sdkVariant" : "macos",
+      "supportedArchitectures" : [
+        "x86_64h",
+        "x86_64"
+      ],
+      "targetArchitecture" : "x86_64"
+    },
+    "arenaInfo" : {
+      "buildIntermediatesPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex",
+      "buildProductsPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Products",
+      "derivedDataPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build",
+      "indexDataStoreFolderPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Index.noindex/DataStore",
+      "indexEnableDataStore" : true,
+      "indexPCHPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Index.noindex/PrecompiledHeaders",
+      "pchPath" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/PrecompiledHeaders"
+    },
+    "configurationName" : "Release",
+    "overrides" : {
+      "commandLine" : {
+        "table" : {
+
+        }
+      },
+      "synthesized" : {
+        "table" : {
+          "ACTION" : "build",
+          "ENABLE_PREVIEWS" : "NO",
+          "ENABLE_XOJIT_PREVIEWS" : "YES",
+          "ONLY_ACTIVE_ARCH" : "YES"
+        }
+      }
+    }
+  },
+  "schemeCommand" : "launch",
+  "showNonLoggedProgress" : true,
+  "useDryRun" : false,
+  "useImplicitDependencies" : true,
+  "useLegacyBuildLocations" : false,
+  "useParallelTargets" : true
+}

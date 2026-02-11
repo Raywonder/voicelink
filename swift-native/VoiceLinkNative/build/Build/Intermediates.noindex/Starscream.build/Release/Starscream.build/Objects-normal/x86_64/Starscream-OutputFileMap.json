@@ -1,0 +1,115 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master.swiftconstvalues",
+    "dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master.d",
+    "diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master.dia",
+    "emit-module-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Starscream-master.swiftdeps"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/DerivedSources/resource_bundle_accessor.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/resource_bundle_accessor.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/resource_bundle_accessor.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/resource_bundle_accessor.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Compression/Compression.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Compression.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Compression.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Compression.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Compression/WSCompression.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSCompression.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSCompression.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSCompression.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/DataBytes/Data+Extensions.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Data+Extensions.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Data+Extensions.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Data+Extensions.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/Engine.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Engine.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Engine.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Engine.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/NativeEngine.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/NativeEngine.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/NativeEngine.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/NativeEngine.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Engine/WSEngine.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSEngine.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSEngine.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WSEngine.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FoundationHTTPHandler.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FoundationHTTPServerHandler.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPServerHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPServerHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationHTTPServerHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/FrameCollector.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FrameCollector.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FrameCollector.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FrameCollector.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/Framer.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Framer.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Framer.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Framer.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/HTTPHandler.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/HTTPHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/HTTPHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/HTTPHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Framer/StringHTTPHandler.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/StringHTTPHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/StringHTTPHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/StringHTTPHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Security/FoundationSecurity.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationSecurity.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationSecurity.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationSecurity.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Security/Security.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Security.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Security.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Security.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Server/Server.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Server.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Server.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Server.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Server/WebSocketServer.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocketServer.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocketServer.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocketServer.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Starscream/WebSocket.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocket.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocket.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/WebSocket.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/FoundationTransport.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationTransport.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationTransport.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/FoundationTransport.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/TCPTransport.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/TCPTransport.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/TCPTransport.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/TCPTransport.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/Starscream/Sources/Transport/Transport.swift" : {
+    "index-unit-output-path" : "/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Transport.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Transport.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/Starscream.build/Release/Starscream.build/Objects-normal/x86_64/Transport.o"
+  }
+}

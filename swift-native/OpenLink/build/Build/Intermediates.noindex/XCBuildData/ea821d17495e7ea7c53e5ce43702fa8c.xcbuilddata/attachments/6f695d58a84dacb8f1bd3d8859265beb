@@ -1,0 +1,35 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master.swiftconstvalues",
+    "dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master.d",
+    "diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master.dia",
+    "emit-module-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLink-master.swiftdeps"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/LicensingManager.swift" : {
+    "index-unit-output-path" : "/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/LicensingView.swift" : {
+    "index-unit-output-path" : "/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/LicensingView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/OpenLinkApp.swift" : {
+    "index-unit-output-path" : "/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkApp.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkApp.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkApp.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/OpenLinkService.swift" : {
+    "index-unit-output-path" : "/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkService.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkService.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/OpenLinkService.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/Sources/RemoteControlManager.swift" : {
+    "index-unit-output-path" : "/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/RemoteControlManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/RemoteControlManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/OpenLink/build/Build/Intermediates.noindex/OpenLink.build/Release/OpenLink.build/Objects-normal/x86_64/RemoteControlManager.o"
+  }
+}

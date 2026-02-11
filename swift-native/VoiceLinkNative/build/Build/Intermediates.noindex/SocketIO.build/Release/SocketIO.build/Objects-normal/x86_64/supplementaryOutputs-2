@@ -1,0 +1,9 @@
+"/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/SourcePackages/checkouts/socket.io-client-swift/Source/SocketIO/Ack/SocketAckEmitter.swift":
+  swiftmodule: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO.swiftmodule"
+  dependencies: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.d"
+  swiftsourceinfo: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO.swiftsourceinfo"
+  objc-header: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-Swift.h"
+  const-values: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.swiftconstvalues"
+  swiftdoc: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO.swiftdoc"
+  abi-baseline-json: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO.abi.json"
+  diagnostics: "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/SocketIO.build/Release/SocketIO.build/Objects-normal/x86_64/SocketIO-master.dia"

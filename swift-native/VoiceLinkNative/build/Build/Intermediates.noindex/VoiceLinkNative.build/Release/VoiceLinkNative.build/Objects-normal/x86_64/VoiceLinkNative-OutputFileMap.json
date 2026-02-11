@@ -1,0 +1,145 @@
+{
+  "" : {
+    "const-values" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master.swiftconstvalues",
+    "dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master.d",
+    "diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master.dia",
+    "emit-module-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkNative-master.swiftdeps"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/AdminServerManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminServerManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminServerManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminServerManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/AdminSettingsView.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminSettingsView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminSettingsView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AdminSettingsView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/AppSoundManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AppSoundManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AppSoundManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AppSoundManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/AuthenticationManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AuthenticationManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AuthenticationManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AuthenticationManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/AutoUpdater.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AutoUpdater.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AutoUpdater.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/AutoUpdater.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/ConnectionHealth.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ConnectionHealth.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ConnectionHealth.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ConnectionHealth.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/EscortManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/EscortManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/EscortManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/EscortManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/FileTransferManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/FileTransferManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/FileTransferManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/FileTransferManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/LicensingManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/LicensingView.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/LicensingView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/MenuBarServer.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MenuBarServer.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MenuBarServer.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MenuBarServer.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/MessagingManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MessagingManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MessagingManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/MessagingManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/PATransmissionManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PATransmissionManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PATransmissionManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PATransmissionManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/PTTManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PTTManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PTTManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PTTManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/PairingManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PairingManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PairingManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/PairingManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/RoomActionMenu.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomActionMenu.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomActionMenu.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomActionMenu.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/RoomManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/RoomManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/ServerExitManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerExitManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerExitManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerExitManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/ServerManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServerManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/ServersView.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServersView.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServersView.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/ServersView.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/StatusManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/StatusManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/StatusManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/StatusManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/SyncManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/SyncManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/SyncManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/SyncManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/URLHandler.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/URLHandler.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/URLHandler.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/URLHandler.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/UserAudioControlManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/UserAudioControlManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/UserAudioControlManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/UserAudioControlManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/VoiceLinkApp.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkApp.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkApp.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/VoiceLinkApp.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/WalletManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WalletManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WalletManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WalletManager.o"
+  },
+  "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/Sources/WhisperModeManager.swift" : {
+    "index-unit-output-path" : "/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WhisperModeManager.o",
+    "llvm-bc" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WhisperModeManager.bc",
+    "object" : "/Volumes/Rayray/dev/apps/voicelink-local/swift-native/VoiceLinkNative/build/Build/Intermediates.noindex/VoiceLinkNative.build/Release/VoiceLinkNative.build/Objects-normal/x86_64/WhisperModeManager.o"
+  }
+}
