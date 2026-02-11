@@ -1,6 +1,53 @@
 # VoiceLink Local - P2P Voice Chat System
 
-A comprehensive voice chat application built with Electron, featuring 3D binaural audio, multi-channel support, VST plugin streaming, and advanced security features.
+A comprehensive voice chat application with native desktop clients (not Electron), featuring 3D binaural audio, multi-channel support, VST plugin streaming, and advanced security features.
+
+## Platform Priority Policy
+
+- Desktop app is the primary VoiceLink experience.
+- Desktop clients are native apps (macOS/Windows), not Electron.
+- iOS builds should include the same desktop features as much as possible.
+- Web app is secondary and receives a subset of features.
+- Features not implemented for web must be hidden for web users.
+- New feature work should target desktop first, then web support where practical.
+
+## Current Implementation Status (Audit: 2026-02-11)
+
+- Active native desktop source is currently maintained in `../voicelink-local/swift-native/VoiceLinkNative/Sources` and `../voicelink-local/windows-native/VoiceLinkNative`.
+- This repo currently still contains Electron build/runtime scripts in `package.json` for legacy compatibility and web-runtime packaging paths.
+- In this repo, `swift-native/VoiceLinkNative` currently contains build artifacts and packaged outputs, not full source files.
+- In this repo, `windows-native/VoiceLinkNative` currently contains build output/intermediate files, not full source files.
+
+## Desktop + API Parity Checklist
+
+Status labels:
+- `[x]` implemented in active workspace (`../voicelink-local`)
+- `[ ]` not yet synced/verified in this repo
+
+### Desktop UX and Room Controls
+
+- `[x]` Room preview/peek flow with privacy handling (`../voicelink-local/source/client/js/core/app.js`)
+- `[x]` Double-Escape room actions menu (`../voicelink-local/source/client/js/core/app.js`)
+- `[x]` Room lock/unlock actions and API calls (`../voicelink-local/source/client/js/core/app.js`, `../voicelink-local/source/routes/local-server.js`)
+- `[x]` Room jukebox integration and controls (`../voicelink-local/source/client/js/core/app.js`, `../voicelink-local/source/client/js/media/jellyfin-manager.js`)
+- `[x]` Auto-update check UX/settings for desktop (`../voicelink-local/source/client/index.html`, `../voicelink-local/swift-native/VoiceLinkNative/Sources/AutoUpdater.swift`)
+- `[ ]` Sync these exact desktop UX flows into this repo's native source tree
+
+### API Endpoints Required by Desktop
+
+- `[x]` Auth/Authelia endpoints (`../voicelink-local/source/routes/local-server.js`)
+- `[x]` Update check + downloads metadata endpoints (`../voicelink-local/source/routes/local-server.js`)
+- `[x]` Room actions endpoints (lock/unlock/visibility/status) (`../voicelink-local/source/routes/local-server.js`)
+- `[x]` Jellyfin/Jukebox room + queue + stream endpoints (`../voicelink-local/source/routes/local-server.js`)
+- `[x]` Admin operations used by desktop UI (`../voicelink-local/source/routes/local-server.js`)
+- `[x]` Wallet/ecripto integration endpoints (`../voicelink-local/source/routes/local-server.js`)
+- `[ ]` Ensure parity between `server/routes/local-server.js`, `source/routes/local-server.js`, and `source/server/routes/local-server.js` in this repo
+
+### QA and Release Hygiene
+
+- `[ ]` Populate real tests under `tests/unit`, `tests/integration`, and `tests/e2e` (currently scaffold dirs)
+- `[ ]` Remove stale artifact-only native trees from git tracking or replace with source-of-truth code
+- `[ ]` Keep release docs aligned with ZIP-first macOS distribution policy
 
 ## Features
 
@@ -117,7 +164,7 @@ npm start
 
 ### Available Scripts
 
-- `npm start` - Start the Electron application
+- `npm start` - Start the desktop client development runtime
 - `npm run dev` - Start in development mode with hot reload
 - `npm run build` - Build for production
 - `npm run test` - Run test suite
@@ -309,7 +356,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - Web Audio API for audio processing
 - WebRTC for P2P communication
-- Electron for cross-platform desktop support
+- Native desktop clients (macOS/Windows)
 - SimplePeer for WebRTC abstraction
 - Socket.IO for real-time communication
 
