@@ -289,7 +289,7 @@ class ConnectionHealthMonitor: ObservableObject {
 // MARK: - Connection Health View
 struct ConnectionHealthView: View {
     @ObservedObject var monitor = ConnectionHealthMonitor.shared
-    @State private var showHealthInfo = false
+    var showDetectedNodes: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -304,14 +304,6 @@ struct ConnectionHealthView: View {
                     .foregroundColor(.white)
 
                 Spacer()
-
-                // Info button for percentage meanings
-                Button(action: { showHealthInfo.toggle() }) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(.plain)
-                .help("What does this percentage mean?")
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Connection health \(monitor.overallHealth) percent. \(healthMeaning)")
@@ -345,30 +337,8 @@ struct ConnectionHealthView: View {
             }
             .accessibilityLabel(monitor.healthStatus.accessibilityLabel)
 
-            // Health info popup
-            if showHealthInfo {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Connection Strength Guide:")
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-
-                    Group {
-                        Text("0-20%: Offline or local only")
-                        Text("21-50%: Partial connection")
-                        Text("51-70%: Connected, syncing")
-                        Text("71-90%: Fully connected")
-                        Text("91-100%: Optimal performance")
-                    }
-                    .font(.caption2)
-                    .foregroundColor(.gray)
-                }
-                .padding(8)
-                .background(Color.black.opacity(0.6))
-                .cornerRadius(8)
-            }
-
             // Detected Nodes
-            if !monitor.detectedNodes.isEmpty {
+            if showDetectedNodes && !monitor.detectedNodes.isEmpty {
                 Divider()
 
                 Text("Detected Nodes")

@@ -9,6 +9,7 @@ struct RoomActionMenu: View {
     @Binding var isPresented: Bool
 
     @ObservedObject var serverManager = ServerManager.shared
+    @ObservedObject var adminManager = AdminServerManager.shared
     @ObservedObject var whisperManager = WhisperModeManager.shared
     @ObservedObject var audioControl = UserAudioControlManager.shared
     @ObservedObject var roomLockManager = RoomLockManager.shared
@@ -69,6 +70,22 @@ struct RoomActionMenu: View {
             .padding(.vertical, 8)
 
             Divider()
+
+            // Room details
+            VStack(alignment: .leading, spacing: 8) {
+                roomDetailRow(label: "Room Type", value: roomTypeLabel)
+                roomDetailRow(label: "Your Access", value: viewerAccessLabel)
+                roomDetailRow(label: "Total Users", value: "\(room.userCount)/\(room.maxUsers)")
+                roomDetailRow(label: "Uptime", value: roomUptimeLabel)
+                roomDetailRow(label: "Last User", value: room.lastActiveUsername ?? "No activity yet")
+                roomDetailRow(label: "Last Activity", value: roomLastActivityLabel)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.03))
+            .cornerRadius(8)
+            .padding(.horizontal)
+            .padding(.top, 8)
 
             // Actions
             ScrollView {
@@ -144,6 +161,16 @@ struct RoomActionMenu: View {
                         }
                     }
 
+                    ActionMenuItem(
+                        icon: "music.note.house",
+                        label: "Open Jukebox",
+                        shortcut: "Cmd+J",
+                        description: "Manage and play room media"
+                    ) {
+                        NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
+                        isPresented = false
+                    }
+
                     // PTT mode
                     if roomFeatures.pttRequired {
                         ActionMenuItem(
@@ -192,14 +219,34 @@ struct RoomActionMenu: View {
                     ActionMenuItem(
                         icon: "gearshape",
                         label: "Room Settings",
-                        shortcut: "Cmd+,",
+                        shortcut: "Command+Comma",
                         description: "Configure room options"
                     ) {
                         // Show room settings
                     }
 
+                    ActionMenuItem(
+                        icon: "rectangle.portrait.and.arrow.right",
+                        label: "Show Room",
+                        shortcut: "Shift+Cmd+R",
+                        description: "Return to your minimized room"
+                    ) {
+                        NotificationCenter.default.post(name: .roomActionRestore, object: nil)
+                        isPresented = false
+                    }
+
                     // Leave room (if in room)
                     if isInRoom {
+                        ActionMenuItem(
+                            icon: "rectangle.compress.vertical",
+                            label: "Minimize Room",
+                            shortcut: "Cmd+Opt+M",
+                            description: "Keep connected and return to menu"
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionMinimize, object: nil)
+                            isPresented = false
+                        }
+
                         ActionMenuItem(
                             icon: "arrow.left.circle",
                             label: "Leave Room",
@@ -207,7 +254,7 @@ struct RoomActionMenu: View {
                             description: nil,
                             isDestructive: true
                         ) {
-                            serverManager.leaveRoom()
+                            NotificationCenter.default.post(name: .roomActionLeave, object: nil)
                             isPresented = false
                         }
                     }
@@ -242,6 +289,107 @@ struct RoomActionMenu: View {
             PeekManager.shared.peekIntoRoom(room)
         }
         isPeeking.toggle()
+    }
+
+    private var roomTypeLabel: String {
+        let mappedByType: String? = {
+            guard let type = room.roomType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !type.isEmpty else { return nil }
+            if type.contains("default") || type == "system" {
+                return "Default Room"
+            }
+            if type.contains("admin") || type.contains("owner") {
+                return "Admin-Created Room"
+            }
+            if type.contains("member") || type.contains("user") || type.contains("community") {
+                return "Member-Created Room"
+            }
+            return "\(type.capitalized) Room"
+        }()
+
+        if let mappedByType {
+            return mappedByType
+        }
+
+        let role = room.createdByRole?.lowercased() ?? ""
+        if role.contains("admin") || role.contains("owner") {
+            return "Admin-Created Room"
+        }
+        if role.contains("member") || role.contains("user") {
+            return "Member-Created Room"
+        }
+
+        let loweredName = room.name.lowercased()
+        let loweredId = room.id.lowercased()
+        if loweredId.contains("default")
+            || loweredName.contains("lobby")
+            || loweredName.contains("welcome")
+            || loweredName.contains("general") {
+            return "Default Room"
+        }
+        return "Member-Created Room"
+    }
+
+    private var viewerAccessLabel: String {
+        if adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner {
+            return "Admin Access"
+        }
+        if roomFeatures.canLockRoom {
+            return "Room Moderator Access"
+        }
+        if isInRoom {
+            return "Member Access (Joined)"
+        }
+        if room.isPrivate {
+            return "Limited Access (Approval Required)"
+        }
+        return "Standard Access"
+    }
+
+    private var roomUptimeLabel: String {
+        if let uptimeSeconds = room.uptimeSeconds {
+            return formatDuration(seconds: uptimeSeconds)
+        }
+        if let createdAt = room.createdAt {
+            let seconds = max(0, Int(Date().timeIntervalSince(createdAt)))
+            return formatDuration(seconds: seconds)
+        }
+        return "Unknown"
+    }
+
+    private var roomLastActivityLabel: String {
+        guard let lastActivityAt = room.lastActivityAt else {
+            return "Unknown"
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: lastActivityAt, relativeTo: Date())
+    }
+
+    @ViewBuilder
+    private func roomDetailRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(label):")
+                .font(.caption)
+                .foregroundColor(.gray)
+            Text(value)
+                .font(.caption)
+                .foregroundColor(.white)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let secs = seconds % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        if minutes > 0 {
+            return "\(minutes)m \(secs)s"
+        }
+        return "\(secs)s"
     }
 }
 

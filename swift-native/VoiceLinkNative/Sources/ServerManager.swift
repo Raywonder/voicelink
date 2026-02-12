@@ -1,6 +1,7 @@
 import Foundation
 import SocketIO
 import AVFoundation
+import CoreAudio
 
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
@@ -14,6 +15,10 @@ class ServerManager: ObservableObject {
     @Published var currentRoomUsers: [RoomUser] = []
     @Published var errorMessage: String?
     @Published var connectedServer: String = ""
+    @Published var isAudioTransmitting: Bool = false
+    @Published var audioTransmissionStatus: String = "Idle"
+    @Published var inputMuted: Bool = false
+    @Published var outputMuted: Bool = false
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -585,6 +590,70 @@ class ServerManager: ObservableObject {
             }
         }
 
+        // Jellyfin media/webhook push events
+        socket.on("jellyfin-webhook-event") { data, ack in
+            guard let eventData = data.first as? [String: Any] else { return }
+            let title = eventData["title"] as? String ?? "Media"
+            let message = eventData["message"] as? String ?? ""
+            let eventType = eventData["eventType"] as? String ?? "unknown"
+            let loweredType = eventType.lowercased()
+
+            DispatchQueue.main.async {
+                AppSoundManager.shared.playSound(.notification)
+                if loweredType.contains("start") || loweredType.contains("play") {
+                    AccessibilityManager.shared.announceStatus("\(title) started.")
+                } else if loweredType.contains("stop") || loweredType.contains("end") {
+                    AccessibilityManager.shared.announceStatus("\(title) stopped.")
+                } else if message.isEmpty {
+                    AccessibilityManager.shared.announceStatus(title)
+                } else {
+                    AccessibilityManager.shared.announceStatus("\(title). \(message)")
+                }
+                NotificationCenter.default.post(
+                    name: .jellyfinWebhookEvent,
+                    object: nil,
+                    userInfo: [
+                        "title": title,
+                        "message": message,
+                        "eventType": eventType,
+                        "payload": eventData
+                    ]
+                )
+            }
+        }
+
+        socket.on("media-stream-started") { data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            let mediaTitle = (payload["title"] as? String)
+                ?? (payload["itemName"] as? String)
+                ?? (payload["itemId"] as? String)
+                ?? "Media"
+            DispatchQueue.main.async {
+                AccessibilityManager.shared.announceStatus("\(mediaTitle) started.")
+                NotificationCenter.default.post(
+                    name: .jellyfinMediaStreamStarted,
+                    object: nil,
+                    userInfo: payload
+                )
+            }
+        }
+
+        socket.on("media-stream-stopped") { data, ack in
+            let payload = (data.first as? [String: Any]) ?? [:]
+            let mediaTitle = (payload["title"] as? String)
+                ?? (payload["itemName"] as? String)
+                ?? (payload["itemId"] as? String)
+                ?? "Media"
+            DispatchQueue.main.async {
+                AccessibilityManager.shared.announceStatus("\(mediaTitle) stopped.")
+                NotificationCenter.default.post(
+                    name: .jellyfinMediaStreamStopped,
+                    object: nil,
+                    userInfo: payload
+                )
+            }
+        }
+
         // MARK: - Audio Relay Handlers
 
         // Receive relayed audio from server (when P2P fails)
@@ -679,7 +748,8 @@ class ServerManager: ObservableObject {
     func joinRoom(roomId: String, username: String, password: String? = nil) {
         var joinData: [String: Any] = [
             "roomId": roomId,
-            "username": username
+            "username": username,
+            "userName": username
         ]
         if let password = password {
             joinData["password"] = password
@@ -699,6 +769,11 @@ class ServerManager: ObservableObject {
     }
 
     func sendAudioState(isMuted: Bool, isDeafened: Bool) {
+        DispatchQueue.main.async {
+            self.inputMuted = isMuted
+            self.outputMuted = isDeafened
+        }
+
         socket?.emit("audio-state", [
             "muted": isMuted,
             "deafened": isDeafened
@@ -706,8 +781,14 @@ class ServerManager: ObservableObject {
 
         // Start/stop audio transmission based on mute state
         if isMuted {
+            DispatchQueue.main.async {
+                self.audioTransmissionStatus = "Input muted"
+            }
             stopAudioTransmission()
         } else {
+            DispatchQueue.main.async {
+                self.audioTransmissionStatus = isDeafened ? "Transmitting (output muted)" : "Transmitting"
+            }
             startAudioTransmission()
         }
     }
@@ -718,7 +799,22 @@ class ServerManager: ObservableObject {
     private var isTransmitting = false
 
     func startAudioTransmission() {
+        if inputMuted {
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = false
+                self.audioTransmissionStatus = "Input muted"
+            }
+            return
+        }
         guard !isTransmitting else { return }
+
+        // Ensure selected devices are applied before opening capture path.
+        SettingsManager.shared.applySelectedAudioDevices()
+        do {
+            try SpatialAudioEngine.shared.start()
+        } catch {
+            print("[Audio] Spatial audio engine start warning: \(error)")
+        }
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -753,18 +849,31 @@ class ServerManager: ObservableObject {
             try engine.start()
             audioTransmitEngine = engine
             isTransmitting = true
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = true
+                self.audioTransmissionStatus = "Transmitting"
+            }
             print("[Audio] Microphone capture started, transmitting to server")
         } catch {
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = false
+                self.audioTransmissionStatus = "Failed: \(error.localizedDescription)"
+            }
             print("[Audio] Failed to start audio engine: \(error)")
         }
     }
 
     func stopAudioTransmission() {
-        guard isTransmitting else { return }
-        audioTransmitEngine?.inputNode.removeTap(onBus: 0)
-        audioTransmitEngine?.stop()
-        audioTransmitEngine = nil
-        isTransmitting = false
+        if isTransmitting {
+            audioTransmitEngine?.inputNode.removeTap(onBus: 0)
+            audioTransmitEngine?.stop()
+            audioTransmitEngine = nil
+            isTransmitting = false
+        }
+        DispatchQueue.main.async {
+            self.isAudioTransmitting = false
+            self.audioTransmissionStatus = self.inputMuted ? "Input muted" : "Stopped"
+        }
         print("[Audio] Microphone capture stopped")
     }
 
@@ -825,18 +934,85 @@ struct ServerRoom: Identifiable {
     let userCount: Int
     let isPrivate: Bool
     let maxUsers: Int
+    let createdBy: String?
+    let createdByRole: String?
+    let roomType: String?
+    let createdAt: Date?
+    let uptimeSeconds: Int?
+    let lastActiveUsername: String?
+    let lastActivityAt: Date?
 
     init?(from dict: [String: Any]) {
-        guard let id = dict["id"] as? String ?? dict["roomId"] as? String,
-              let name = dict["name"] as? String else {
+        func stringValue(_ value: Any?) -> String? {
+            if let string = value as? String {
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            if let int = value as? Int {
+                return String(int)
+            }
+            if let number = value as? NSNumber {
+                return number.stringValue
+            }
             return nil
+        }
+
+        func intValue(_ value: Any?) -> Int? {
+            if let int = value as? Int {
+                return int
+            }
+            if let number = value as? NSNumber {
+                return number.intValue
+            }
+            if let string = value as? String,
+               let parsed = Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return parsed
+            }
+            return nil
+        }
+
+        guard let id = stringValue(dict["id"]) ?? stringValue(dict["roomId"]),
+              let name = stringValue(dict["name"]) ?? stringValue(dict["roomName"]) ?? stringValue(dict["title"]) else {
+            return nil
+        }
+        func parseDate(_ value: Any?) -> Date? {
+            if let timestamp = value as? TimeInterval {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+            if let timestampInt = value as? Int {
+                return Date(timeIntervalSince1970: TimeInterval(timestampInt))
+            }
+            guard let stringValue = value as? String, !stringValue.isEmpty else {
+                return nil
+            }
+            let isoFormatter = ISO8601DateFormatter()
+            if let parsed = isoFormatter.date(from: stringValue) {
+                return parsed
+            }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return formatter.date(from: stringValue)
         }
         self.id = id
         self.name = name
-        self.description = dict["description"] as? String ?? ""
-        self.userCount = dict["userCount"] as? Int ?? dict["users"] as? Int ?? 0
+        self.description = stringValue(dict["description"]) ?? stringValue(dict["roomDescription"]) ?? ""
+        self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
-        self.maxUsers = dict["maxUsers"] as? Int ?? 50
+        self.maxUsers = intValue(dict["maxUsers"]) ?? 50
+        self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"])
+        self.createdByRole = stringValue(dict["createdByRole"]) ?? stringValue(dict["ownerRole"])
+        self.roomType = stringValue(dict["roomType"])
+            ?? stringValue(dict["type"])
+            ?? stringValue(dict["creationType"])
+        self.createdAt = parseDate(dict["createdAt"] ?? dict["created"])
+        self.uptimeSeconds = intValue(dict["uptimeSeconds"])
+            ?? intValue(dict["uptime"])
+            ?? intValue(dict["roomUptime"])
+        self.lastActiveUsername = stringValue(dict["lastActiveUsername"])
+            ?? stringValue(dict["lastUser"])
+            ?? stringValue(dict["lastSpeaker"])
+        self.lastActivityAt = parseDate(dict["lastActivityAt"] ?? dict["lastActiveAt"] ?? dict["updatedAt"])
     }
 }
 
@@ -866,4 +1042,7 @@ struct RoomUser: Identifiable {
 
 extension Notification.Name {
     static let roomLeft = Notification.Name("roomLeft")
+    static let jellyfinWebhookEvent = Notification.Name("jellyfinWebhookEvent")
+    static let jellyfinMediaStreamStarted = Notification.Name("jellyfinMediaStreamStarted")
+    static let jellyfinMediaStreamStopped = Notification.Name("jellyfinMediaStreamStopped")
 }

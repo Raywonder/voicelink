@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 import Combine
+import UserNotifications
+import Contacts
 
 /// User Status Manager
 /// Manages custom status (online, away, busy, etc.) and status messages
@@ -15,6 +17,13 @@ class StatusManager: ObservableObject {
     @Published var currentStatus: UserStatus = .online
     @Published var statusMessage: String = ""
     @Published var customStatuses: [CustomStatus] = []
+    @Published var syncWithSystemFocus: Bool = false
+    @Published var syncWithContactCard: Bool = false
+
+    private var focusSyncTimer: Timer?
+    private var contactSyncTimer: Timer?
+    private var focusAppliedDND = false
+    private var statusBeforeFocusDND: UserStatus = .online
 
     // MARK: - Types
 
@@ -104,6 +113,8 @@ class StatusManager: ObservableObject {
     init() {
         loadSettings()
         setupNotifications()
+        configureFocusSync()
+        configureContactCardSync()
     }
 
     // MARK: - Status Management
@@ -275,6 +286,198 @@ class StatusManager: ObservableObject {
         )
     }
 
+    private func configureFocusSync() {
+        focusSyncTimer?.invalidate()
+        guard syncWithSystemFocus else {
+            focusAppliedDND = false
+            return
+        }
+
+        evaluateSystemFocusAndApplyStatus()
+        focusSyncTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            self?.evaluateSystemFocusAndApplyStatus()
+        }
+    }
+
+    func setSyncWithSystemFocus(_ enabled: Bool) {
+        syncWithSystemFocus = enabled
+        saveSettings()
+    }
+
+    private func evaluateSystemFocusAndApplyStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            guard let self = self else { return }
+
+            // Best-effort: if alerts are disabled, mirror as DND.
+            let alertsSuppressed = settings.authorizationStatus == .denied || settings.alertSetting == .disabled
+
+            DispatchQueue.main.async {
+                guard self.syncWithSystemFocus else { return }
+
+                if alertsSuppressed {
+                    if !self.focusAppliedDND && self.currentStatus != .doNotDisturb {
+                        self.statusBeforeFocusDND = self.currentStatus
+                        self.focusAppliedDND = true
+                        self.setDoNotDisturb(message: "Synced with macOS Focus")
+                    } else if self.currentStatus != .doNotDisturb {
+                        self.focusAppliedDND = true
+                        self.setDoNotDisturb(message: "Synced with macOS Focus")
+                    }
+                } else if self.focusAppliedDND {
+                    self.focusAppliedDND = false
+                    self.setStatus(self.statusBeforeFocusDND, message: self.statusMessage)
+                }
+            }
+        }
+    }
+
+    private func configureContactCardSync() {
+        contactSyncTimer?.invalidate()
+        guard syncWithContactCard else { return }
+
+        syncFromContactCard()
+        contactSyncTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+            self?.syncFromContactCard()
+        }
+    }
+
+    func setSyncWithContactCard(_ enabled: Bool) {
+        syncWithContactCard = enabled
+        saveSettings()
+    }
+
+    func syncContactCardNow() {
+        syncFromContactCard()
+    }
+
+    private func syncFromContactCard() {
+        let store = CNContactStore()
+        let auth = CNContactStore.authorizationStatus(for: .contacts)
+
+        func normalizedProfileURL(_ raw: String) -> String? {
+            var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return nil }
+            let lower = value.lowercased()
+            if !lower.hasPrefix("http://") &&
+                !lower.hasPrefix("https://") &&
+                !lower.hasPrefix("mailto:") &&
+                !lower.hasPrefix("tel:") {
+                value = "https://\(value)"
+            }
+            guard let components = URLComponents(string: value),
+                  let scheme = components.scheme,
+                  !scheme.isEmpty else { return nil }
+            return components.string
+        }
+
+        func socialProfileURL(_ profile: CNSocialProfile) -> String? {
+            let directURL = profile.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !directURL.isEmpty, let normalized = normalizedProfileURL(directURL) {
+                return normalized
+            }
+
+            let username = profile.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !username.isEmpty else { return nil }
+            let clean = username.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            let service = profile.service.lowercased()
+
+            if service.contains("mastodon") {
+                let parts = clean.split(separator: "@", omittingEmptySubsequences: true).map(String.init)
+                if parts.count >= 2 {
+                    let user = parts[0]
+                    let host = parts[1]
+                    return "https://\(host)/@\(user)"
+                }
+                return "https://mastodon.social/@\(clean)"
+            }
+            if service.contains("github") {
+                return "https://github.com/\(clean)"
+            }
+            if service.contains("twitter") || service == "x" {
+                return "https://x.com/\(clean)"
+            }
+            if service.contains("bluesky") {
+                return "https://bsky.app/profile/\(clean)"
+            }
+            if service.contains("linkedin") {
+                return "https://www.linkedin.com/in/\(clean)"
+            }
+            if service.contains("youtube") {
+                return "https://www.youtube.com/@\(clean)"
+            }
+            if service.contains("instagram") {
+                return "https://www.instagram.com/\(clean)"
+            }
+            return nil
+        }
+
+        func applyMeCardProfile(_ contact: CNContact) {
+            let nickname = contact.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let given = contact.givenName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let family = contact.familyName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let full = "\(given) \(family)".trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolved = !nickname.isEmpty ? nickname : (!full.isEmpty ? full : given)
+
+            var links: [String] = []
+            for item in contact.urlAddresses {
+                let value = String(item.value)
+                if let normalized = normalizedProfileURL(value) {
+                    links.append(normalized)
+                }
+            }
+            for item in contact.socialProfiles {
+                if let normalized = socialProfileURL(item.value) {
+                    links.append(normalized)
+                }
+            }
+
+            var deduped: [String] = []
+            var seen = Set<String>()
+            for link in links {
+                let key = link.lowercased()
+                if !seen.contains(key) {
+                    seen.insert(key)
+                    deduped.append(link)
+                }
+            }
+
+            DispatchQueue.main.async {
+                if !resolved.isEmpty {
+                    SettingsManager.shared.userNickname = resolved
+                }
+                SettingsManager.shared.mergeProfileLinks(deduped)
+                SettingsManager.shared.saveSettings()
+            }
+        }
+
+        let fetchMeCard: () -> Void = {
+            do {
+                let keys: [CNKeyDescriptor] = [
+                    CNContactNicknameKey as NSString,
+                    CNContactGivenNameKey as NSString,
+                    CNContactFamilyNameKey as NSString,
+                    CNContactUrlAddressesKey as NSString,
+                    CNContactSocialProfilesKey as NSString
+                ]
+                let me = try store.unifiedMeContactWithKeys(toFetch: keys)
+                applyMeCardProfile(me)
+            } catch {
+                // Best effort; leave current nickname unchanged.
+            }
+        }
+
+        switch auth {
+        case .authorized:
+            fetchMeCard()
+        case .notDetermined:
+            store.requestAccess(for: .contacts) { granted, _ in
+                if granted { fetchMeCard() }
+            }
+        default:
+            break
+        }
+    }
+
     @objc private func handleIncomingStatusUpdate(_ notification: Notification) {
         guard let data = notification.userInfo?["data"] as? Data,
               let update = try? JSONDecoder().decode(StatusUpdate.self, from: data) else { return }
@@ -313,6 +516,9 @@ class StatusManager: ObservableObject {
                 CustomStatus(name: "Coding", icon: "chevron.left.forwardslash.chevron.right", colorHex: "#3498DB")
             ]
         }
+
+        syncWithSystemFocus = UserDefaults.standard.object(forKey: "syncWithSystemFocus") as? Bool ?? false
+        syncWithContactCard = UserDefaults.standard.object(forKey: "syncWithContactCard") as? Bool ?? false
     }
 
     private func saveSettings() {
@@ -322,6 +528,11 @@ class StatusManager: ObservableObject {
         if let data = try? JSONEncoder().encode(customStatuses) {
             UserDefaults.standard.set(data, forKey: "customStatuses")
         }
+
+        UserDefaults.standard.set(syncWithSystemFocus, forKey: "syncWithSystemFocus")
+        UserDefaults.standard.set(syncWithContactCard, forKey: "syncWithContactCard")
+        configureFocusSync()
+        configureContactCardSync()
     }
 
     // MARK: - Status

@@ -9,6 +9,7 @@ class UserAudioControlManager: ObservableObject {
     // Per-user audio settings
     @Published var userVolumes: [String: Float] = [:]      // userId -> volume (0.0 to 2.0, 1.0 = normal)
     @Published var userMuted: [String: Bool] = [:]         // userId -> isMuted
+    @Published var userSolo: [String: Bool] = [:]          // userId -> isSolo
     @Published var focusedUserId: String?                   // Currently focused user for keyboard control
 
     // Global settings
@@ -98,6 +99,36 @@ class UserAudioControlManager: ObservableObject {
             name: .userMuteChanged,
             object: nil,
             userInfo: ["userId": userId, "muted": muted]
+        )
+
+        saveSettings()
+    }
+
+    /// Check if user is soloed
+    func isSolo(_ userId: String) -> Bool {
+        return userSolo[userId] ?? false
+    }
+
+    /// Toggle solo for a user
+    func toggleSolo(for userId: String) {
+        let currentlySolo = isSolo(userId)
+        setSolo(for: userId, solo: !currentlySolo)
+    }
+
+    /// Set solo state for a user
+    func setSolo(for userId: String, solo: Bool) {
+        userSolo[userId] = solo
+
+        if solo {
+            AppSoundManager.shared.playSound(.toggleOn)
+        } else {
+            AppSoundManager.shared.playSound(.toggleOff)
+        }
+
+        NotificationCenter.default.post(
+            name: .userSoloChanged,
+            object: nil,
+            userInfo: ["userId": userId, "solo": solo]
         )
 
         saveSettings()
@@ -285,6 +316,9 @@ class UserAudioControlManager: ObservableObject {
         if let muteData = UserDefaults.standard.dictionary(forKey: "userMuted") as? [String: Bool] {
             userMuted = muteData
         }
+        if let soloData = UserDefaults.standard.dictionary(forKey: "userSolo") as? [String: Bool] {
+            userSolo = soloData
+        }
         masterVolume = UserDefaults.standard.float(forKey: "masterVolume")
         if masterVolume == 0 { masterVolume = 1.0 }
     }
@@ -292,6 +326,7 @@ class UserAudioControlManager: ObservableObject {
     private func saveSettings() {
         UserDefaults.standard.set(userVolumes, forKey: "userVolumes")
         UserDefaults.standard.set(userMuted, forKey: "userMuted")
+        UserDefaults.standard.set(userSolo, forKey: "userSolo")
         UserDefaults.standard.set(masterVolume, forKey: "masterVolume")
     }
 
@@ -300,6 +335,7 @@ class UserAudioControlManager: ObservableObject {
     func cleanup() {
         userVolumes.removeAll()
         userMuted.removeAll()
+        userSolo.removeAll()
         focusedUserId = nil
     }
 }
@@ -309,6 +345,7 @@ class UserAudioControlManager: ObservableObject {
 extension Notification.Name {
     static let userVolumeChanged = Notification.Name("userVolumeChanged")
     static let userMuteChanged = Notification.Name("userMuteChanged")
+    static let userSoloChanged = Notification.Name("userSoloChanged")
 }
 
 // MARK: - SwiftUI Views

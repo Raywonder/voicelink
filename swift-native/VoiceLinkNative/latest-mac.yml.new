@@ -1,17 +1,18 @@
-version: 1.0.5
-releaseDate: 2026-02-10T01:56:50.000Z
+version: 1.0.0
+releaseDate: 2026-02-12T02:49:14Z
 files:
-  - url: https://voicelink.devinecreations.net/downloads/VoiceLink-macOS.zip
-    sha512: ET/EN+GiYw5MaHgkmRr4mBaOiKUOqSk9GyTi7V9QNzMkhBhB0bq8dRzmZPpo0BNa9/EicwRQZc4ADduNF37gHw==
-    size: 8733366
-path: VoiceLink-macOS.zip
-sha512: ET/EN+GiYw5MaHgkmRr4mBaOiKUOqSk9GyTi7V9QNzMkhBhB0bq8dRzmZPpo0BNa9/EicwRQZc4ADduNF37gHw==
+  - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
+    sha512: iWuFFsqRmP6cPwuUGp3FwrxF7DMMe4qZMtrq6UwoQ135ykmBjo6FCYaEup1aac6eUs10sLL0ZejovCCh+7P8Xg==
+    size: 12851514
+path: VoiceLinkMacOS.zip
+sha512: iWuFFsqRmP6cPwuUGp3FwrxF7DMMe4qZMtrq6UwoQ135ykmBjo6FCYaEup1aac6eUs10sLL0ZejovCCh+7P8Xg==
 required: false
 minimumSupportedVersion: 1.0.0
 requiredReason: "Update required only when API compatibility policy is enforced"
 enforcedAfter: 2026-12-31T23:59:59Z
 releaseNotes: |
-  VoiceLink 1.0.5
-  - Desktop update detection and manifest sync fixes
-  - iOS/iPadOS navigation remains touch-first
-  - Web/Desktop client sync updates
+  VoiceLink 1.0.0
+  - Room actions consolidated under Details context menu
+  - Added room sorting and list/grid/column layouts
+  - Added configurable default room action and VoiceOver hints
+  - Added collapsible server details and removed manual refresh/tap-connect controls

@@ -39,6 +39,7 @@ class AppSoundManager: ObservableObject {
         // Message sounds
         case messageIncoming = "message-incoming-ding"
         case messageReceived = "message-receve"
+        case messageSent = "message-sent"
         case doorbell = "Doorbell-Ding-Dong-Type-Single"
 
         // File transfer
@@ -60,7 +61,7 @@ class AppSoundManager: ObservableObject {
         case toggleOff = "switch_button_push_small_05"
 
         // Test sounds
-        case soundTest = "your-sound-test"
+        case soundTest = "yoursoundtest"
 
         var fileExtension: String {
             switch self {
@@ -91,6 +92,7 @@ class AppSoundManager: ObservableObject {
             case .pttStop: return "Push-to-talk ended"
             case .messageIncoming: return "Incoming message"
             case .messageReceived: return "Message received"
+            case .messageSent: return "Message sent"
             case .doorbell: return "Doorbell"
             case .fileTransferComplete: return "File transfer complete"
             case .menuOpen: return "Menu opened"
@@ -114,6 +116,15 @@ class AppSoundManager: ObservableObject {
     // Audio players cache
     private var audioPlayers: [SoundType: AVAudioPlayer] = [:]
     private var isInitialized = false
+    private let candidateBundles: [Bundle] = {
+        var bundles: [Bundle] = []
+        #if SWIFT_PACKAGE
+        bundles.append(Bundle.module)
+        #endif
+        bundles.append(Bundle.main)
+        bundles.append(Bundle(for: AppSoundManager.self))
+        return bundles
+    }()
 
     init() {
         loadSettings()
@@ -131,34 +142,50 @@ class AppSoundManager: ObservableObject {
     }
 
     private func loadSound(_ soundType: SoundType) {
+        let names: [String] = {
+            if soundType == .soundTest {
+                return [soundType.rawValue, "your-sound-test", "notification", "connected"]
+            }
+            if soundType == .messageSent {
+                return [soundType.rawValue, "message-incoming-ding", "notification", "button-click"]
+            }
+            return [soundType.rawValue]
+        }()
+
         // Try multiple locations for sound files
-        let locations = [
-            ("sounds/ui-sounds", soundType.rawValue, soundType.fileExtension),
-            ("sounds", soundType.rawValue, soundType.fileExtension),
-            (nil, soundType.rawValue, soundType.fileExtension),
-            ("sounds/ui-sounds", soundType.rawValue, "mp3"),
-            ("sounds/ui-sounds", soundType.rawValue, "flac"),
-            ("sounds", soundType.rawValue, "mp3"),
-            ("sounds", soundType.rawValue, "flac")
+        let locations: [(String?, String, String)] = [
+            ("Resources/sounds/ui-sounds", "", ""),
+            ("Resources/sounds", "", ""),
+            ("sounds/ui-sounds", "", ""),
+            ("sounds", "", ""),
+            ("Resources", "", ""),
+            (nil, "", "")
         ]
 
-        for (subdir, name, ext) in locations {
-            var url: URL?
-            if let sub = subdir {
-                url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: sub)
-            } else {
-                url = Bundle.main.url(forResource: name, withExtension: ext)
-            }
+        for name in names {
+            let extensions = Array(Set([soundType.fileExtension, "wav", "mp3", "flac"]))
+            for ext in extensions {
+                for bundle in candidateBundles {
+                    for (subdir, _, _) in locations {
+                        var url: URL?
+                        if let sub = subdir {
+                            url = bundle.url(forResource: name, withExtension: ext, subdirectory: sub)
+                        } else {
+                            url = bundle.url(forResource: name, withExtension: ext)
+                        }
 
-            if let soundURL = url {
-                do {
-                    let player = try AVAudioPlayer(contentsOf: soundURL)
-                    player.prepareToPlay()
-                    player.volume = volume
-                    audioPlayers[soundType] = player
-                    return
-                } catch {
-                    print("AppSoundManager: Failed to load \(soundType.rawValue): \(error)")
+                        if let soundURL = url {
+                            do {
+                                let player = try AVAudioPlayer(contentsOf: soundURL)
+                                player.prepareToPlay()
+                                player.volume = volume
+                                audioPlayers[soundType] = player
+                                return
+                            } catch {
+                                print("AppSoundManager: Failed to load \(soundType.rawValue): \(error)")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -168,21 +195,26 @@ class AppSoundManager: ObservableObject {
 
     // MARK: - Play Sounds
 
-    func playSound(_ soundType: SoundType) {
-        guard soundsEnabled else { return }
+    func playSound(_ soundType: SoundType, force: Bool = false) {
+        guard soundsEnabled || force else { return }
 
         if let player = audioPlayers[soundType] {
             player.volume = volume
             player.currentTime = 0
-            player.play()
-            print("AppSoundManager: Playing \(soundType.description)")
+            if player.play() {
+                print("AppSoundManager: Playing \(soundType.description)")
+            } else {
+                playSystemSound(for: soundType)
+            }
         } else {
             // Try to load on demand
             loadSound(soundType)
             if let player = audioPlayers[soundType] {
                 player.volume = volume
                 player.currentTime = 0
-                player.play()
+                if !player.play() {
+                    playSystemSound(for: soundType)
+                }
             } else {
                 // Fallback to system sound
                 playSystemSound(for: soundType)
@@ -202,6 +234,13 @@ class AppSoundManager: ObservableObject {
         return audioPlayers[soundType]?.isPlaying ?? false
     }
 
+    func soundDuration(_ soundType: SoundType) -> TimeInterval {
+        if audioPlayers[soundType] == nil {
+            loadSound(soundType)
+        }
+        return audioPlayers[soundType]?.duration ?? 1.0
+    }
+
     private func playSystemSound(for soundType: SoundType) {
         // Fallback to NSSound system sounds
         let systemSoundName: String? = {
@@ -212,6 +251,7 @@ class AppSoundManager: ObservableObject {
             case .connected: return "Pop"
             case .disconnected: return "Blow"
             case .buttonClick: return "Tink"
+            case .soundTest: return "Ping"
             default: return nil
             }
         }()
@@ -220,6 +260,8 @@ class AppSoundManager: ObservableObject {
             sound.volume = volume
             sound.play()
             print("AppSoundManager: Playing system sound \(name) as fallback")
+        } else {
+            NSSound.beep()
         }
     }
 
@@ -253,6 +295,7 @@ class AppSoundManager: ObservableObject {
     // Convenience methods - Messages
     func playMessageIncomingSound() { playSound(.messageIncoming) }
     func playMessageReceivedSound() { playSound(.messageReceived) }
+    func playMessageSentSound() { playSound(.messageSent) }
     func playDoorbellSound() { playSound(.doorbell) }
     func playFileTransferCompleteSound() { playSound(.fileTransferComplete) }
 

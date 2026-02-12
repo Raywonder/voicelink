@@ -6,6 +6,7 @@ import Security
 // MARK: - Authentication Manager
 class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = AuthenticationManager()
+    private let authDefaultsKey = "voicelink.authUser"
 
     @Published var currentUser: AuthenticatedUser?
     @Published var authState: AuthState = .unauthenticated
@@ -412,44 +413,74 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         clearStoredAuth()
     }
 
-    // MARK: - Persistence (Keychain)
+    // MARK: - Persistence (UserDefaults first, Keychain best-effort/no-UI)
 
     private func saveAuth(user: AuthenticatedUser) {
-        if let data = try? JSONEncoder().encode(user) {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "VoiceLink",
-                kSecAttrAccount as String: "authUser",
-                kSecValueData as String: data
-            ]
+        guard let data = try? JSONEncoder().encode(user) else { return }
 
-            SecItemDelete(query as CFDictionary)
-            SecItemAdd(query as CFDictionary, nil)
+        // Always keep a local fallback to avoid SecurityAgent prompt loops.
+        UserDefaults.standard.set(data, forKey: authDefaultsKey)
+
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "VoiceLink",
+            kSecAttrAccount as String: "authUser"
+        ]
+        let addQuery: [String: Any] = baseQuery.merging([
+            kSecValueData as String: data,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
+        ]) { _, new in new }
+
+        SecItemDelete(baseQuery as CFDictionary)
+        _ = SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private func decodeStoredUser(_ data: Data) -> AuthenticatedUser? {
+        try? JSONDecoder().decode(AuthenticatedUser.self, from: data)
+    }
+
+    private func loadFromUserDefaults() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: authDefaultsKey),
+              let user = decodeStoredUser(data) else {
+            return false
         }
+        currentUser = user
+        authState = .authenticated
+        return true
     }
 
     private func loadStoredAuth() {
+        // Prefer local fallback first to avoid password/security agent loops.
+        if loadFromUserDefaults() {
+            return
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VoiceLink",
             kSecAttrAccount as String: "authUser",
-            kSecReturnData as String: true
+            kSecReturnData as String: true,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
 
         var result: AnyObject?
         if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
            let data = result as? Data,
-           let user = try? JSONDecoder().decode(AuthenticatedUser.self, from: data) {
+           let user = decodeStoredUser(data) {
             currentUser = user
             authState = .authenticated
+            UserDefaults.standard.set(data, forKey: authDefaultsKey)
         }
     }
 
     private func clearStoredAuth() {
+        UserDefaults.standard.removeObject(forKey: authDefaultsKey)
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VoiceLink",
-            kSecAttrAccount as String: "authUser"
+            kSecAttrAccount as String: "authUser",
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
         SecItemDelete(query as CFDictionary)
     }

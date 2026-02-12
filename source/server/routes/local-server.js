@@ -339,6 +339,84 @@ class VoiceLinkLocalServer {
         }
     }
 
+    getConnectedSocketSet() {
+        if (!this.io?.sockets?.sockets) {
+            return new Set();
+        }
+        return new Set(this.io.sockets.sockets.keys());
+    }
+
+    getLiveRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+
+        const connectedSockets = this.getConnectedSocketSet();
+        const liveUsers = [];
+        const seen = new Set();
+
+        // Authoritative source: active socket/user map.
+        for (const [socketId, user] of this.users.entries()) {
+            if (user?.roomId !== roomId) continue;
+            if (!connectedSockets.has(socketId)) continue;
+            if (seen.has(socketId)) continue;
+            liveUsers.push(user);
+            seen.add(socketId);
+        }
+
+        // Compatibility source: persisted room.users entries.
+        const roomUsers = Array.isArray(room.users) ? room.users : [];
+        for (const roomUser of roomUsers) {
+            if (!roomUser?.id || seen.has(roomUser.id)) continue;
+            if (!connectedSockets.has(roomUser.id)) continue;
+            liveUsers.push(roomUser);
+            seen.add(roomUser.id);
+        }
+
+        return liveUsers;
+    }
+
+    normalizeRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+        room.users = this.getLiveRoomUsers(roomId);
+        return room.users;
+    }
+
+    getConnectedUsersCount() {
+        const connectedSockets = this.getConnectedSocketSet();
+        let count = 0;
+        for (const socketId of this.users.keys()) {
+            if (connectedSockets.has(socketId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    getRoomMonitorSnapshot() {
+        const rooms = [];
+        for (const room of this.rooms.values()) {
+            const users = this.normalizeRoomUsers(room.id);
+            rooms.push({
+                roomId: room.id,
+                name: room.name,
+                userCount: users.length,
+                users: users.map(user => ({
+                    id: user.id,
+                    name: user.name,
+                    joinedAt: user.joinedAt || null,
+                    isAuthenticated: !!user.isAuthenticated
+                })),
+                maxUsers: room.maxUsers || 50,
+                locked: !!room.locked,
+                isDefault: !!room.isDefault,
+                visibility: room.visibility || 'public',
+                accessType: room.accessType || 'hybrid'
+            });
+        }
+        return rooms;
+    }
+
     setupRoutes() {
         // API Routes - now fetches from main server and merges with local
         const authPortalBase = process.env.AUTH_PORTAL_URL || 'https://auth.devinecreations.net';
@@ -383,7 +461,7 @@ class VoiceLinkLocalServer {
                 id: room.id,
                 name: room.name,
                 description: room.description || '',
-                users: room.users.length,
+                users: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -837,6 +915,7 @@ class VoiceLinkLocalServer {
 
         // API status endpoint with relay stats
         this.app.get('/api/status', (req, res) => {
+            const roomSnapshot = this.getRoomMonitorSnapshot();
             res.json({
                 server: 'VoiceLink Local Server',
                 version: '1.0.1',
@@ -854,7 +933,12 @@ class VoiceLinkLocalServer {
                 ],
                 lastUpdated: new Date().toISOString(),
                 activeRooms: this.rooms.size,
-                connectedUsers: this.users.size,
+                connectedUsers: this.getConnectedUsersCount(),
+                roomPresence: roomSnapshot.map(room => ({
+                    roomId: room.roomId,
+                    name: room.name,
+                    userCount: room.userCount
+                })),
                 audioRelay: {
                     enabled: true,
                     activeRelays: this.relayStats.activeRelays,
@@ -872,7 +956,7 @@ class VoiceLinkLocalServer {
                 status: 'healthy',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
-                users: this.users.size
+                users: this.getConnectedUsersCount()
             });
         });
 
@@ -884,7 +968,32 @@ class VoiceLinkLocalServer {
                 version: '1.0.1',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
-                users: this.users.size
+                users: this.getConnectedUsersCount()
+            });
+        });
+
+        // Room/user monitoring endpoint for desktop/web API polling and push sync logic.
+        this.app.get(['/api/monitor', '/api_monitor', '/api/minitor', '/api_minitor'], (req, res) => {
+            const pollIntervalSeconds = Math.max(1, Math.min(60, parseInt(req.query.interval || '5', 10) || 5));
+            const roomSnapshot = this.getRoomMonitorSnapshot();
+            const totalUsersInRooms = roomSnapshot.reduce((sum, room) => sum + room.userCount, 0);
+            const connectedUsers = this.getConnectedUsersCount();
+
+            res.json({
+                service: 'voicelink-local',
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                pollIntervalSeconds,
+                connectedUsers,
+                roomUsers: totalUsersInRooms,
+                rooms: {
+                    total: roomSnapshot.length,
+                    active: roomSnapshot.filter(room => room.userCount > 0).length,
+                    items: roomSnapshot
+                },
+                websocket: {
+                    recommendedEvents: ['room-user-count', 'user-joined', 'user-left', 'joined-room']
+                }
             });
         });
 
@@ -5760,12 +5869,12 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    userCount: Array.isArray(room.users) ? room.users.length : 0,
-                    users: Array.isArray(room.users) ? room.users.map(u => ({
+                    userCount: this.normalizeRoomUsers(room.id).length,
+                    users: this.normalizeRoomUsers(room.id).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false
-                    })) : [],
+                    })),
                     maxUsers: room.maxUsers || 50,
                     hasPassword: !!room.password,
                     visibility: room.visibility || 'public',
@@ -5779,7 +5888,8 @@ class VoiceLinkLocalServer {
 
             // User joins a room
             socket.on('join-room', (data) => {
-                const { roomId, userName, password } = data;
+                const { roomId, userName, username, password } = data;
+                const resolvedUserName = userName || username;
                 const room = this.rooms.get(roomId);
 
                 if (!room) {
@@ -5792,9 +5902,30 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
+                this.normalizeRoomUsers(roomId);
+
                 if (room.users.length >= room.maxUsers) {
                     socket.emit('error', { message: 'Room is full' });
                     return;
+                }
+
+                // If this socket is already in another room, leave that room first.
+                const existingSession = this.users.get(socket.id);
+                if (existingSession?.roomId && existingSession.roomId !== roomId) {
+                    const previousRoom = this.rooms.get(existingSession.roomId);
+                    if (previousRoom) {
+                        previousRoom.users = (previousRoom.users || []).filter(u => u.id !== socket.id);
+                        socket.to(existingSession.roomId).emit('user-left', {
+                            userId: socket.id,
+                            userName: existingSession.name
+                        });
+                        this.io.to(existingSession.roomId).emit('room-user-count', {
+                            roomId: existingSession.roomId,
+                            count: previousRoom.users.length,
+                            users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
+                        });
+                    }
+                    socket.leave(existingSession.roomId);
                 }
 
                 // Check if user is authenticated (Mastodon/email) or guest
@@ -5804,7 +5935,7 @@ class VoiceLinkLocalServer {
                 // Add user to room
                 const user = {
                     id: socket.id,
-                    name: userName || `User ${socket.id.slice(0, 8)}`,
+                    name: resolvedUserName || `User ${socket.id.slice(0, 8)}`,
                     joinedAt: new Date(),
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
@@ -5816,6 +5947,7 @@ class VoiceLinkLocalServer {
                     }
                 };
 
+                room.users = (room.users || []).filter(u => u.id !== socket.id);
                 room.users.push(user);
 
                 // Track recent users (keep last 10)
@@ -5839,13 +5971,13 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: room.users.map(u => ({
+                    users: this.normalizeRoomUsers(roomId).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false,
                         joinedAt: u.joinedAt
                     })),
-                    userCount: room.users.length,
+                    userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false
                 };
@@ -5856,11 +5988,11 @@ class VoiceLinkLocalServer {
                 // Broadcast updated user count to all in room
                 this.io.to(roomId).emit('room-user-count', {
                     roomId,
-                    count: room.users.length,
-                    users: room.users.map(u => ({ id: u.id, name: u.name }))
+                    count: this.normalizeRoomUsers(roomId).length,
+                    users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
                 });
 
-                console.log(`User ${user.name} joined room ${room.name} (${room.users.length} users now)`);
+                console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
 
             // Handle WebRTC signaling
@@ -6156,15 +6288,16 @@ class VoiceLinkLocalServer {
                 const { roomId } = data;
                 const room = this.rooms.get(roomId);
                 if (room) {
+                    const liveUsers = this.normalizeRoomUsers(roomId);
                     socket.emit('room-users', {
                         roomId,
-                        users: room.users.map(u => ({
+                        users: liveUsers.map(u => ({
                             id: u.id,
                             name: u.name,
                             isAuthenticated: u.isAuthenticated || false,
                             joinedAt: u.joinedAt
                         })),
-                        count: room.users.length
+                        count: liveUsers.length
                     });
                 }
             });
@@ -6177,6 +6310,7 @@ class VoiceLinkLocalServer {
                     if (room) {
                         const userName = user.name;
                         room.users = room.users.filter(u => u.id !== socket.id);
+                        const liveUsers = this.normalizeRoomUsers(user.roomId);
 
                         // Notify others user left
                         socket.to(user.roomId).emit('user-left', {
@@ -6187,14 +6321,14 @@ class VoiceLinkLocalServer {
                         // Broadcast updated user count
                         this.io.to(user.roomId).emit('room-user-count', {
                             roomId: user.roomId,
-                            count: room.users.length,
-                            users: room.users.map(u => ({ id: u.id, name: u.name }))
+                            count: liveUsers.length,
+                            users: liveUsers.map(u => ({ id: u.id, name: u.name }))
                         });
 
-                        console.log(`User ${userName} left room ${room.name} (${room.users.length} users remain)`);
+                        console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
 
                         // Clean up empty rooms (but keep default rooms)
-                        if (room.users.length === 0 && !room.isDefault) {
+                        if (liveUsers.length === 0 && !room.isDefault) {
                             this.rooms.delete(user.roomId);
                             console.log(`Room ${room.name} deleted (empty)`);
                         }

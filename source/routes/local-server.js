@@ -73,6 +73,14 @@ class VoiceLinkLocalServer {
             activeRelays: 0
         };
 
+        // API monitor state for room/member visibility snapshots and push updates.
+        this.apiMonitor = {
+            sequence: 0,
+            clients: new Set(),
+            intervalMs: Math.max(1000, Number(process.env.API_MONITOR_INTERVAL_MS || 5000) || 5000),
+            timer: null
+        };
+
         // Initialize federation manager for room sync
         this.federation = new FederationManager(this);
 
@@ -122,6 +130,7 @@ class VoiceLinkLocalServer {
         this.setupMiddleware();
         this.setupRoutes();
         this.setupSocketHandlers();
+        this.startApiMonitorTicker();
         this.loadPersistedRooms();
         this.start();
     }
@@ -337,6 +346,125 @@ class VoiceLinkLocalServer {
             return null;
         }
         return session;
+    }
+
+    getRequesterContext(req) {
+        const body = req.body || {};
+        const query = req.query || {};
+        const headers = req.headers || {};
+
+        const userId = body.userId || body.user?.id || query.userId || headers['x-user-id'] || null;
+        const userName = body.userName
+            || body.username
+            || body.creatorHandle
+            || body.startedBy
+            || body.user?.displayName
+            || query.userName
+            || headers['x-user-name']
+            || null;
+        const role = String(
+            body.role
+            || body.user?.role
+            || query.role
+            || headers['x-user-role']
+            || headers['x-whmcs-role']
+            || ''
+        ).toLowerCase();
+        const permissions = Array.isArray(body.permissions)
+            ? body.permissions
+            : (Array.isArray(body.user?.permissions) ? body.user.permissions : []);
+
+        const isAdmin = body.isAdmin === true
+            || body.user?.isAdmin === true
+            || query.isAdmin === 'true'
+            || headers['x-user-admin'] === 'true'
+            || role === 'admin'
+            || permissions.includes('admin');
+
+        return {
+            userId: userId ? String(userId) : null,
+            userName: userName ? String(userName) : null,
+            role,
+            isAdmin
+        };
+    }
+
+    ensureRoomJellyfinAccess(room) {
+        if (!room) return null;
+        if (!room.jellyfinAccess || typeof room.jellyfinAccess !== 'object') {
+            room.jellyfinAccess = {};
+        }
+        const cfg = room.jellyfinAccess;
+        if (!Array.isArray(cfg.allowedServerIds)) cfg.allowedServerIds = [];
+        if (!cfg.allowedLibraryIdsByServer || typeof cfg.allowedLibraryIdsByServer !== 'object') {
+            cfg.allowedLibraryIdsByServer = {};
+        }
+        if (!cfg.roomUserPermissions || typeof cfg.roomUserPermissions !== 'object') {
+            cfg.roomUserPermissions = {};
+        }
+        if (typeof cfg.enabled !== 'boolean') cfg.enabled = true;
+        if (typeof cfg.adminCanAccessAll !== 'boolean') cfg.adminCanAccessAll = true;
+        if (typeof cfg.allowRoomOwnerUploads !== 'boolean') cfg.allowRoomOwnerUploads = true;
+        if (typeof cfg.allowAuthenticatedUploads !== 'boolean') cfg.allowAuthenticatedUploads = false;
+        return cfg;
+    }
+
+    canManageRoomJellyfin(room, requester) {
+        if (!room || !requester) return false;
+        if (requester.isAdmin) return true;
+        if (!room.creatorHandle) return false;
+        const creator = String(room.creatorHandle).toLowerCase();
+        return (requester.userId && String(requester.userId).toLowerCase() === creator)
+            || (requester.userName && String(requester.userName).toLowerCase() === creator);
+    }
+
+    getRoomJellyfinPermission(room, requester) {
+        const cfg = this.ensureRoomJellyfinAccess(room);
+        const keyFromId = requester?.userId ? `id:${requester.userId}` : null;
+        const keyFromName = requester?.userName ? `name:${String(requester.userName).toLowerCase()}` : null;
+        const explicit = (keyFromId && cfg.roomUserPermissions[keyFromId])
+            || (keyFromName && cfg.roomUserPermissions[keyFromName])
+            || null;
+
+        const owner = this.canManageRoomJellyfin(room, requester) && !requester?.isAdmin;
+        const defaults = {
+            canUseLibraries: true,
+            canUploadMedia: owner ? cfg.allowRoomOwnerUploads : cfg.allowAuthenticatedUploads,
+            canManageRoomLibraries: owner,
+            allowedServerIds: [],
+            allowedLibraryIdsByServer: {}
+        };
+        return {
+            ...defaults,
+            ...(explicit || {}),
+            principal: keyFromId || keyFromName || null
+        };
+    }
+
+    isServerAllowedForRoom(room, serverId, requester) {
+        const cfg = this.ensureRoomJellyfinAccess(room);
+        if (!cfg.enabled) return false;
+        if (requester?.isAdmin && cfg.adminCanAccessAll) return true;
+        const perm = this.getRoomJellyfinPermission(room, requester);
+        const fromUser = Array.isArray(perm.allowedServerIds) ? perm.allowedServerIds : [];
+        const fromRoom = Array.isArray(cfg.allowedServerIds) ? cfg.allowedServerIds : [];
+        const allowed = fromUser.length ? fromUser : fromRoom;
+        if (!allowed.length) return true;
+        return allowed.includes(serverId);
+    }
+
+    isLibraryAllowedForRoom(room, serverId, libraryId, requester) {
+        const cfg = this.ensureRoomJellyfinAccess(room);
+        if (requester?.isAdmin && cfg.adminCanAccessAll) return true;
+        const perm = this.getRoomJellyfinPermission(room, requester);
+
+        const roomMap = cfg.allowedLibraryIdsByServer?.[serverId];
+        const userMap = perm.allowedLibraryIdsByServer?.[serverId];
+        const allowed = Array.isArray(userMap) && userMap.length ? userMap : (Array.isArray(roomMap) ? roomMap : []);
+
+        if (!allowed.length) return true;
+        if (!libraryId) return false;
+        return allowed.includes(String(libraryId));
     }
 
     /**
@@ -1111,7 +1239,16 @@ class VoiceLinkLocalServer {
                 autoLock: autoLock || null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoLockScheduled: null,  // Timeout ID for scheduled auto-lock
                 autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : false,  // Auto-play music when room is empty
-                autoplayPlaylist: autoplayPlaylist || null  // Playlist ID for autoplay
+                autoplayPlaylist: autoplayPlaylist || null,  // Playlist ID for autoplay
+                jellyfinAccess: {
+                    enabled: true,
+                    adminCanAccessAll: true,
+                    allowRoomOwnerUploads: true,
+                    allowAuthenticatedUploads: false,
+                    allowedServerIds: [],
+                    allowedLibraryIdsByServer: {},
+                    roomUserPermissions: {}
+                }
             };
 
             this.rooms.set(roomId, room);
@@ -1461,6 +1598,67 @@ class VoiceLinkLocalServer {
                     packetsRelayed: this.relayStats.packetsRelayed
                 },
                 connectionModes: ['p2p', 'relay', 'auto']
+            });
+        });
+
+        // HubNode-style room/member monitor snapshot endpoint.
+        this.app.get('/api/api_monitor', (req, res) => {
+            const includeMembers = req.query.includeMembers !== 'false';
+            const snapshot = this.buildApiMonitorSnapshot({
+                includeMembers,
+                reason: 'snapshot'
+            });
+
+            res.json({
+                ok: true,
+                intervalMs: this.apiMonitor.intervalMs,
+                snapshot
+            });
+        });
+
+        // Backward-compatible typo alias requested by client tooling.
+        this.app.get('/api/api_minitor', (req, res) => {
+            const includeMembers = req.query.includeMembers !== 'false';
+            const snapshot = this.buildApiMonitorSnapshot({
+                includeMembers,
+                reason: 'snapshot-alias'
+            });
+
+            res.json({
+                ok: true,
+                intervalMs: this.apiMonitor.intervalMs,
+                snapshot
+            });
+        });
+
+        // Optional stream for near-real-time member/room tracking updates.
+        this.app.get('/api/api_monitor/stream', (req, res) => {
+            const includeMembers = req.query.includeMembers !== 'false';
+            const intervalMsRaw = Number(req.query.intervalMs);
+            const intervalMs = Number.isFinite(intervalMsRaw)
+                ? Math.max(1000, Math.min(60000, intervalMsRaw))
+                : this.apiMonitor.intervalMs;
+
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            if (typeof res.flushHeaders === 'function') {
+                res.flushHeaders();
+            }
+
+            const client = { res, includeMembers, intervalMs };
+            this.apiMonitor.clients.add(client);
+
+            const initial = this.buildApiMonitorSnapshot({
+                includeMembers,
+                reason: 'stream-init'
+            });
+            res.write(`event: snapshot\n`);
+            res.write(`data: ${JSON.stringify(initial)}\n\n`);
+
+            req.on('close', () => {
+                this.apiMonitor.clients.delete(client);
             });
         });
 
@@ -2552,6 +2750,117 @@ class VoiceLinkLocalServer {
             res.json({ servers });
         });
 
+        this.app.get('/api/rooms/:roomId/jellyfin/access', (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            const canManage = this.canManageRoomJellyfin(room, requester);
+            const effective = this.getRoomJellyfinPermission(room, requester);
+            const access = this.ensureRoomJellyfinAccess(room);
+            res.json({ success: true, roomId: room.id, canManage, access, effective });
+        });
+
+        this.app.put('/api/rooms/:roomId/jellyfin/access', (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            if (!this.canManageRoomJellyfin(room, requester)) {
+                return res.status(403).json({ error: 'Only admins or room owner can update Jellyfin room access' });
+            }
+            const access = this.ensureRoomJellyfinAccess(room);
+            const payload = req.body || {};
+            if (typeof payload.enabled === 'boolean') access.enabled = payload.enabled;
+            if (typeof payload.adminCanAccessAll === 'boolean') access.adminCanAccessAll = payload.adminCanAccessAll;
+            if (typeof payload.allowRoomOwnerUploads === 'boolean') access.allowRoomOwnerUploads = payload.allowRoomOwnerUploads;
+            if (typeof payload.allowAuthenticatedUploads === 'boolean') access.allowAuthenticatedUploads = payload.allowAuthenticatedUploads;
+            if (Array.isArray(payload.allowedServerIds)) access.allowedServerIds = payload.allowedServerIds.map(String);
+            if (payload.allowedLibraryIdsByServer && typeof payload.allowedLibraryIdsByServer === 'object') {
+                const next = {};
+                Object.entries(payload.allowedLibraryIdsByServer).forEach(([serverId, ids]) => {
+                    next[String(serverId)] = Array.isArray(ids) ? ids.map(String) : [];
+                });
+                access.allowedLibraryIdsByServer = next;
+            }
+            res.json({ success: true, roomId: room.id, access });
+        });
+
+        this.app.put('/api/rooms/:roomId/jellyfin/access/users/:principal', (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            if (!this.canManageRoomJellyfin(room, requester)) {
+                return res.status(403).json({ error: 'Only admins or room owner can manage room user Jellyfin access' });
+            }
+            const principal = String(req.params.principal || '').trim();
+            if (!principal) return res.status(400).json({ error: 'principal is required (id:<id> or name:<name>)' });
+            const access = this.ensureRoomJellyfinAccess(room);
+            const payload = req.body || {};
+            access.roomUserPermissions[principal] = {
+                canUseLibraries: payload.canUseLibraries !== false,
+                canUploadMedia: payload.canUploadMedia === true,
+                canManageRoomLibraries: payload.canManageRoomLibraries === true,
+                allowedServerIds: Array.isArray(payload.allowedServerIds) ? payload.allowedServerIds.map(String) : [],
+                allowedLibraryIdsByServer: payload.allowedLibraryIdsByServer && typeof payload.allowedLibraryIdsByServer === 'object'
+                    ? Object.fromEntries(
+                        Object.entries(payload.allowedLibraryIdsByServer).map(([serverId, ids]) => [String(serverId), Array.isArray(ids) ? ids.map(String) : []])
+                    )
+                    : {}
+            };
+            res.json({ success: true, roomId: room.id, principal, permission: access.roomUserPermissions[principal] });
+        });
+
+        this.app.delete('/api/rooms/:roomId/jellyfin/access/users/:principal', (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            if (!this.canManageRoomJellyfin(room, requester)) {
+                return res.status(403).json({ error: 'Only admins or room owner can manage room user Jellyfin access' });
+            }
+            const principal = String(req.params.principal || '').trim();
+            const access = this.ensureRoomJellyfinAccess(room);
+            delete access.roomUserPermissions[principal];
+            res.json({ success: true, roomId: room.id, principal });
+        });
+
+        this.app.get('/api/rooms/:roomId/jellyfin/libraries', async (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            const permission = this.getRoomJellyfinPermission(room, requester);
+            if (!permission.canUseLibraries) return res.status(403).json({ error: 'Library access disabled for this user' });
+
+            const serverId = String(req.query.serverId || '');
+            const server = this.jellyfinServers.get(serverId);
+            if (!server) return res.status(404).json({ error: 'Jellyfin server not found' });
+            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
+                return res.status(403).json({ error: 'This Jellyfin server is not allowed for this room' });
+            }
+            try {
+                const response = await fetch(`${server.url}/Library/MediaFolders?api_key=${server.apiKey}`);
+                const data = await response.json();
+                const allowed = this.getRoomJellyfinPermission(room, requester).allowedLibraryIdsByServer?.[serverId]
+                    || this.ensureRoomJellyfinAccess(room).allowedLibraryIdsByServer?.[serverId]
+                    || [];
+                const allLibraries = Array.isArray(data.Items) ? data.Items : [];
+                const libraries = (!allowed.length || (requester.isAdmin && this.ensureRoomJellyfinAccess(room).adminCanAccessAll))
+                    ? allLibraries
+                    : allLibraries.filter((item) => allowed.includes(String(item.ItemId || item.Id)));
+                res.json({
+                    success: true,
+                    roomId: room.id,
+                    serverId,
+                    canUpload: !!permission.canUploadMedia,
+                    libraries: libraries.map((item) => ({
+                        id: String(item.ItemId || item.Id),
+                        name: item.Name,
+                        collectionType: item.CollectionType || null
+                    }))
+                });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to fetch room libraries: ' + error.message });
+            }
+        });
+
         // Discover Jellyfin servers on the local network
         this.app.get('/api/jellyfin/discover', async (req, res) => {
             const discoveredServers = [];
@@ -2737,6 +3046,18 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'Jellyfin server not found' });
             }
 
+            const roomId = req.query.roomId ? String(req.query.roomId) : null;
+            if (roomId) {
+                const room = this.rooms.get(roomId);
+                if (!room) return res.status(404).json({ error: 'Room not found' });
+                const requester = this.getRequesterContext(req);
+                const permission = this.getRoomJellyfinPermission(room, requester);
+                if (!permission.canUseLibraries) return res.status(403).json({ error: 'Library access disabled for this user' });
+                if (!this.isServerAllowedForRoom(room, req.params.serverId, requester)) {
+                    return res.status(403).json({ error: 'This Jellyfin server is not allowed for this room' });
+                }
+            }
+
             try {
                 const parentId = req.query.parentId || '';
                 const type = req.query.type || ''; // Audio, Video, MusicAlbum, etc.
@@ -2838,9 +3159,60 @@ class VoiceLinkLocalServer {
             });
         });
 
+        // Jellyfin webhook relay -> push event to connected desktop/web clients
+        this.app.post('/api/jellyfin/webhook', (req, res) => {
+            try {
+                const payload = req.body || {};
+                const webhookSecret = deployConfig.get('jellyfin')?.webhookSecret || process.env.JELLYFIN_WEBHOOK_SECRET;
+                const providedToken =
+                    req.headers['x-jellyfin-token']
+                    || req.headers['x-webhook-token']
+                    || req.query.token
+                    || payload.token
+                    || payload.secret;
+
+                if (webhookSecret && String(providedToken || '') !== String(webhookSecret)) {
+                    return res.status(403).json({ error: 'Invalid webhook token' });
+                }
+
+                const eventType = payload.NotificationType || payload.Event || payload.event || 'unknown';
+                const roomId = payload.roomId || payload.RoomId || null;
+                const event = {
+                    id: uuidv4(),
+                    source: 'jellyfin',
+                    eventType,
+                    title: payload.Name || payload.ItemName || payload.SeriesName || payload.Title || 'Jellyfin Event',
+                    message: payload.message || payload.Description || `${eventType}`,
+                    itemId: payload.ItemId || payload.itemId || null,
+                    userName: payload.UserName || payload.userName || null,
+                    serverName: payload.ServerName || payload.serverName || null,
+                    roomId,
+                    timestamp: new Date().toISOString()
+                };
+
+                if (roomId) {
+                    this.io.to(roomId).emit('jellyfin-webhook-event', event);
+                }
+                this.io.emit('jellyfin-webhook-event', event);
+                this.io.emit('admin-notification', {
+                    type: 'jellyfin-webhook',
+                    module: 'jellyfin',
+                    title: event.title,
+                    message: event.message,
+                    eventType: event.eventType,
+                    timestamp: event.timestamp
+                });
+
+                return res.json({ success: true, delivered: true, eventId: event.id });
+            } catch (error) {
+                console.error('[Jellyfin webhook] Failed to process event:', error.message);
+                return res.status(500).json({ error: 'Webhook processing failed' });
+            }
+        });
+
         // Start streaming media to a room
         this.app.post('/api/jellyfin/stream-to-room', (req, res) => {
-            const { serverId, itemId, roomId, type = 'audio', startedBy = 'Jukebox' } = req.body;
+            const { serverId, itemId, roomId, libraryId = null, type = 'audio', startedBy = 'Jukebox', title = null } = req.body;
 
             const server = this.jellyfinServers.get(serverId);
             if (!server) {
@@ -2852,11 +3224,25 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
+            const requester = this.getRequesterContext(req);
+            const permission = this.getRoomJellyfinPermission(room, requester);
+            if (!permission.canUseLibraries) {
+                return res.status(403).json({ error: 'You are not allowed to stream media in this room' });
+            }
+            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
+                return res.status(403).json({ error: 'Selected Jellyfin server is not allowed in this room' });
+            }
+            if (!this.isLibraryAllowedForRoom(room, serverId, libraryId, requester)) {
+                return res.status(403).json({ error: 'Selected library is not allowed in this room' });
+            }
+
             // Store active stream info
             this.roomMediaStreams.set(roomId, {
                 serverId,
                 itemId,
+                libraryId,
                 type,
+                title,
                 startedAt: new Date(),
                 startedBy,
                 serverUrl: server.url,
@@ -2876,6 +3262,7 @@ class VoiceLinkLocalServer {
                 type,
                 streamUrl,
                 itemId,
+                title,
                 startedBy
             });
 
@@ -2894,10 +3281,16 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'No active stream in room' });
             }
 
+            const existingStream = this.roomMediaStreams.get(roomId);
             this.roomMediaStreams.delete(roomId);
 
             // Notify room users
-            this.io.to(roomId).emit('media-stream-stopped', { roomId });
+            this.io.to(roomId).emit('media-stream-stopped', {
+                roomId,
+                itemId: existingStream?.itemId || null,
+                title: existingStream?.title || null,
+                type: existingStream?.type || 'media'
+            });
 
             res.json({ success: true, message: 'Stream stopped' });
         });
@@ -2927,7 +3320,20 @@ class VoiceLinkLocalServer {
 
         // Add to room queue
         this.app.post('/api/jellyfin/queue', (req, res) => {
-            const { roomId, serverId, itemId, title, type, addedBy = 'Jukebox' } = req.body;
+            const { roomId, serverId, itemId, libraryId = null, title, type, addedBy = 'Jukebox' } = req.body;
+            const room = this.rooms.get(roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            const requester = this.getRequesterContext(req);
+            const permission = this.getRoomJellyfinPermission(room, requester);
+            if (!permission.canUseLibraries) {
+                return res.status(403).json({ error: 'You are not allowed to queue media in this room' });
+            }
+            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
+                return res.status(403).json({ error: 'Selected Jellyfin server is not allowed in this room' });
+            }
+            if (!this.isLibraryAllowedForRoom(room, serverId, libraryId, requester)) {
+                return res.status(403).json({ error: 'Selected library is not allowed in this room' });
+            }
 
             if (!this.mediaQueues.has(roomId)) {
                 this.mediaQueues.set(roomId, []);
@@ -2937,6 +3343,7 @@ class VoiceLinkLocalServer {
             queue.push({
                 serverId,
                 itemId,
+                libraryId,
                 title,
                 type,
                 addedBy,
@@ -3029,6 +3436,170 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.json({ success: false, error: error.message, items: [] });
             }
+        });
+
+        const directUrlMediaDefaultPath = path.join(__dirname, '../../data/media/direct-url');
+        const getDirectUrlMediaConfig = () => {
+            const jellyfinConfig = deployConfig.get('jellyfin') || {};
+            const direct = jellyfinConfig.directUrlMedia || {};
+            return {
+                enabled: direct.enabled !== false,
+                allowSave: direct.allowSave !== false,
+                storagePath: direct.storagePath || directUrlMediaDefaultPath
+            };
+        };
+
+        const sanitizeFileName = (value) => String(value || '')
+            .replace(/[^a-z0-9._-]+/gi, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 120) || `media_${Date.now()}`;
+
+        const resolveRequesterSocketId = (req) => {
+            const candidate = req.body?.socketId
+                || req.headers['x-voicelink-socket-id']
+                || req.query.socketId;
+            if (candidate && this.users.has(String(candidate))) {
+                return String(candidate);
+            }
+            return null;
+        };
+
+        const queueSaveDirectMedia = async ({ mediaUrl, title, storagePath }) => {
+            try {
+                const response = await fetch(mediaUrl);
+                if (!response.ok) {
+                    throw new Error(`Download failed with status ${response.status}`);
+                }
+                const parsedUrl = new URL(mediaUrl);
+                const ext = path.extname(parsedUrl.pathname) || '.bin';
+                const fileName = `${sanitizeFileName(title)}_${Date.now()}${ext.slice(0, 10)}`;
+                fs.mkdirSync(storagePath, { recursive: true });
+                const filePath = path.join(storagePath, fileName);
+                const buffer = Buffer.from(await response.arrayBuffer());
+                fs.writeFileSync(filePath, buffer);
+                return { filePath, fileName, size: buffer.length };
+            } catch (error) {
+                console.error('[Direct URL media] Save failed:', error.message);
+                return null;
+            }
+        };
+
+        // Stream a direct HTTPS URL to self or full room, optionally saving for future use
+        this.app.post('/api/jellyfin/direct-url/stream', async (req, res) => {
+            const { url, target = 'self', roomId, title, startedBy = 'Direct URL', save = false } = req.body || {};
+            const config = getDirectUrlMediaConfig();
+
+            if (!config.enabled) {
+                return res.status(403).json({ success: false, error: 'Direct URL streaming is disabled by admin' });
+            }
+
+            if (!url || typeof url !== 'string') {
+                return res.status(400).json({ success: false, error: 'Missing stream URL' });
+            }
+
+            let parsed;
+            try {
+                parsed = new URL(url);
+            } catch {
+                return res.status(400).json({ success: false, error: 'Invalid stream URL' });
+            }
+
+            if (!['https:'].includes(parsed.protocol)) {
+                return res.status(400).json({ success: false, error: 'Only HTTPS media URLs are allowed' });
+            }
+
+            const mediaTitle = title || decodeURIComponent(path.basename(parsed.pathname)) || 'Direct Media';
+            const payload = {
+                type: 'direct-url',
+                streamUrl: parsed.toString(),
+                title: mediaTitle,
+                itemId: null,
+                startedBy,
+                source: 'direct-url',
+                timestamp: new Date().toISOString()
+            };
+
+            if (target === 'room') {
+                if (!roomId || !this.rooms.has(roomId)) {
+                    return res.status(404).json({ success: false, error: 'Room not found' });
+                }
+                this.roomMediaStreams.set(roomId, {
+                    serverId: 'direct-url',
+                    itemId: null,
+                    type: 'url',
+                    title: mediaTitle,
+                    directUrl: parsed.toString(),
+                    startedAt: new Date(),
+                    startedBy,
+                    serverUrl: parsed.origin,
+                    apiKey: null
+                });
+                this.io.to(roomId).emit('media-stream-started', { ...payload, roomId });
+            } else {
+                const socketId = resolveRequesterSocketId(req);
+                if (socketId) {
+                    this.io.to(socketId).emit('media-stream-started', { ...payload, target: 'self' });
+                } else {
+                    this.io.emit('media-stream-started', { ...payload, target: 'self' });
+                }
+            }
+
+            let saveQueued = false;
+            if (save === true && config.allowSave) {
+                saveQueued = true;
+                queueSaveDirectMedia({
+                    mediaUrl: parsed.toString(),
+                    title: mediaTitle,
+                    storagePath: config.storagePath
+                }).then((saved) => {
+                    if (saved) {
+                        this.io.emit('admin-notification', {
+                            type: 'direct-url-media-saved',
+                            module: 'jellyfin',
+                            title: `Saved media: ${mediaTitle}`,
+                            message: `${saved.fileName} (${saved.size} bytes)`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                });
+            }
+
+            return res.json({
+                success: true,
+                target,
+                roomId: target === 'room' ? roomId : null,
+                streamUrl: parsed.toString(),
+                title: mediaTitle,
+                saveQueued
+            });
+        });
+
+        // Admin config: enable/disable direct URL streaming and save behavior
+        this.app.get('/api/jellyfin/direct-url/config', (req, res) => {
+            res.json({ success: true, config: getDirectUrlMediaConfig() });
+        });
+
+        this.app.put('/api/jellyfin/direct-url/config', async (req, res) => {
+            const expectedAdminKey = deployConfig.get('security')?.adminKey || process.env.VOICELINK_ADMIN_KEY || null;
+            const providedAdminKey = req.body?.adminKey || req.headers['x-admin-key'] || req.query.adminKey;
+            if (expectedAdminKey && String(providedAdminKey || '') !== String(expectedAdminKey)) {
+                return res.status(403).json({ success: false, error: 'Invalid admin key' });
+            }
+
+            const current = deployConfig.get('jellyfin') || {};
+            const direct = current.directUrlMedia || {};
+            const updates = req.body || {};
+            direct.enabled = updates.enabled !== undefined ? !!updates.enabled : (direct.enabled !== false);
+            direct.allowSave = updates.allowSave !== undefined ? !!updates.allowSave : (direct.allowSave !== false);
+            if (typeof updates.storagePath === 'string' && updates.storagePath.trim()) {
+                direct.storagePath = updates.storagePath.trim();
+            } else if (!direct.storagePath) {
+                direct.storagePath = directUrlMediaDefaultPath;
+            }
+            current.directUrlMedia = direct;
+            deployConfig.updateSection('jellyfin', current);
+            await deployConfig.save();
+            return res.json({ success: true, config: getDirectUrlMediaConfig() });
         });
 
         // Wrapper: Get stream URL (POST for JukeboxManager)
@@ -6448,6 +7019,15 @@ class VoiceLinkLocalServer {
         this.io.on('connection', (socket) => {
             console.log(`User connected: ${socket.id}`);
 
+            const emitRoomSessionSync = (originSocketId, userId, payload) => {
+                if (!userId) return;
+                const otherSessions = this.getOtherUserSessions(userId, originSocketId);
+                if (!otherSessions.length) return;
+                otherSessions.forEach((session) => {
+                    this.io.to(session.socketId).emit('room-session-sync', payload);
+                });
+            };
+
             socket.on('register-session', (data = {}) => {
                 try {
                     const {
@@ -6568,9 +7148,9 @@ class VoiceLinkLocalServer {
                 socket.emit('room-list', roomList);
             });
 
-            // User joins a room
-            socket.on('join-room', (data) => {
-                const { roomId, userName, password } = data;
+            // User joins a room (single active room per user/socket)
+            socket.on('join-room', (data = {}) => {
+                const { roomId, userName, username, password } = data;
                 const room = this.rooms.get(roomId);
 
                 if (!room) {
@@ -6583,9 +7163,46 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                if (room.users.length >= room.maxUsers) {
+                // Enforce one-room-per-user/socket and avoid duplicate join in same room
+                const existingUser = this.users.get(socket.id);
+                if (existingUser?.roomId === roomId) {
+                    const existingMember = room.users.find(u => u.id === socket.id);
+                    socket.emit('room-already-joined', {
+                        roomId,
+                        roomName: room.name,
+                        user: existingMember || existingUser
+                    });
+                    return;
+                }
+
+                const existingInTarget = room.users.some(u => u.id === socket.id);
+                if (!existingInTarget && room.users.length >= room.maxUsers) {
                     socket.emit('error', { message: 'Room is full' });
                     return;
+                }
+
+                if (existingUser?.roomId && existingUser.roomId !== roomId) {
+                    const previousRoom = this.rooms.get(existingUser.roomId);
+                    if (previousRoom) {
+                        previousRoom.users = previousRoom.users.filter(u => u.id !== socket.id);
+                        socket.to(existingUser.roomId).emit('user-left', {
+                            userId: socket.id,
+                            userName: existingUser.name,
+                            switchedToRoomId: roomId
+                        });
+                        this.io.to(existingUser.roomId).emit('room-user-count', {
+                            roomId: existingUser.roomId,
+                            count: previousRoom.users.length,
+                            users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
+                        });
+                    }
+                    socket.leave(existingUser.roomId);
+                    socket.emit('room-switching', {
+                        fromRoomId: existingUser.roomId,
+                        toRoomId: roomId,
+                        fromRoomName: previousRoom?.name || null,
+                        toRoomName: room.name
+                    });
                 }
 
                 // Check if user is authenticated (Mastodon/email) or guest
@@ -6595,7 +7212,7 @@ class VoiceLinkLocalServer {
                 // Add user to room
                 const user = {
                     id: socket.id,
-                    name: userName || `User ${socket.id.slice(0, 8)}`,
+                    name: username || userName || `User ${socket.id.slice(0, 8)}`,
                     joinedAt: new Date(),
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
@@ -6626,6 +7243,7 @@ class VoiceLinkLocalServer {
                 if (session) {
                     session.currentRoomId = roomId;
                     session.currentRoomName = room.name;
+                    session.roomMinimized = false;
                     session.lastSeen = new Date();
                 }
 
@@ -6657,7 +7275,148 @@ class VoiceLinkLocalServer {
                     users: room.users.map(u => ({ id: u.id, name: u.name }))
                 });
 
+                const syncedUserId = authUser?.id || this.socketSessions.get(socket.id)?.userId || null;
+                emitRoomSessionSync(socket.id, syncedUserId, {
+                    type: 'joined',
+                    roomId,
+                    roomName: room.name,
+                    isJoined: true,
+                    isMinimized: false,
+                    at: new Date().toISOString()
+                });
+
                 console.log(`User ${user.name} joined room ${room.name} (${room.users.length} users now)`);
+                this.broadcastApiMonitorUpdate('join-room');
+            });
+
+            socket.on('leave-room', () => {
+                const user = this.users.get(socket.id);
+                if (!user?.roomId) {
+                    socket.emit('room-left', { roomId: null, reason: 'not-in-room' });
+                    return;
+                }
+
+                const roomId = user.roomId;
+                const room = this.rooms.get(roomId);
+                if (room) {
+                    room.users = room.users.filter(u => u.id !== socket.id);
+                    socket.to(roomId).emit('user-left', {
+                        userId: socket.id,
+                        userName: user.name
+                    });
+
+                    this.io.to(roomId).emit('room-user-count', {
+                        roomId,
+                        count: room.users.length,
+                        users: room.users.map(u => ({ id: u.id, name: u.name }))
+                    });
+
+                    if (room.users.length === 0 && !room.isDefault) {
+                        this.rooms.delete(roomId);
+                        console.log(`Room ${room.name} deleted (empty)`);
+                    }
+                }
+
+                socket.leave(roomId);
+                this.users.delete(socket.id);
+                this.audioRouting.delete(socket.id);
+
+                const session = this.socketSessions.get(socket.id);
+                const syncedUserId = session?.userId || null;
+                if (session) {
+                    session.currentRoomId = null;
+                    session.currentRoomName = null;
+                    session.roomMinimized = false;
+                    session.lastSeen = new Date();
+                }
+
+                socket.emit('room-left', { roomId, reason: 'left-by-user' });
+                emitRoomSessionSync(socket.id, syncedUserId, {
+                    type: 'left',
+                    roomId: null,
+                    roomName: null,
+                    isJoined: false,
+                    isMinimized: false,
+                    at: new Date().toISOString()
+                });
+                this.broadcastApiMonitorUpdate('leave-room');
+            });
+
+            socket.on('minimize-room', () => {
+                const user = this.users.get(socket.id);
+                const session = this.socketSessions.get(socket.id);
+                const syncedUserId = session?.userId || null;
+
+                if (!user?.roomId) {
+                    socket.emit('room-minimized', { ok: false, reason: 'not-in-room' });
+                    return;
+                }
+
+                if (session) {
+                    session.currentRoomId = user.roomId;
+                    session.currentRoomName = this.rooms.get(user.roomId)?.name || session.currentRoomName || null;
+                    session.roomMinimized = true;
+                    session.lastSeen = new Date();
+                }
+
+                const payload = {
+                    ok: true,
+                    roomId: user.roomId,
+                    roomName: this.rooms.get(user.roomId)?.name || null
+                };
+                socket.emit('room-minimized', payload);
+                emitRoomSessionSync(socket.id, syncedUserId, {
+                    type: 'minimized',
+                    roomId: payload.roomId,
+                    roomName: payload.roomName,
+                    isJoined: true,
+                    isMinimized: true,
+                    at: new Date().toISOString()
+                });
+            });
+
+            socket.on('restore-room', () => {
+                const user = this.users.get(socket.id);
+                const session = this.socketSessions.get(socket.id);
+                const syncedUserId = session?.userId || null;
+                const roomId = user?.roomId || session?.currentRoomId || null;
+                const roomName = this.rooms.get(roomId)?.name || session?.currentRoomName || null;
+
+                if (!roomId) {
+                    socket.emit('room-restored', { ok: false, reason: 'no-room' });
+                    return;
+                }
+
+                if (session) {
+                    session.currentRoomId = roomId;
+                    session.currentRoomName = roomName;
+                    session.roomMinimized = false;
+                    session.lastSeen = new Date();
+                }
+
+                const payload = { ok: true, roomId, roomName };
+                socket.emit('room-restored', payload);
+                emitRoomSessionSync(socket.id, syncedUserId, {
+                    type: 'restored',
+                    roomId,
+                    roomName,
+                    isJoined: !!user?.roomId,
+                    isMinimized: false,
+                    at: new Date().toISOString()
+                });
+            });
+
+            socket.on('get-room-session-state', () => {
+                const user = this.users.get(socket.id);
+                const session = this.socketSessions.get(socket.id);
+                const roomId = user?.roomId || session?.currentRoomId || null;
+                socket.emit('room-session-state', {
+                    roomId,
+                    roomName: this.rooms.get(roomId)?.name || session?.currentRoomName || null,
+                    isJoined: !!user?.roomId,
+                    isMinimized: !!session?.roomMinimized,
+                    canShowRoom: !!roomId
+                });
             });
 
             // Handle WebRTC signaling
@@ -6969,6 +7728,8 @@ class VoiceLinkLocalServer {
             // Disconnect handling
             socket.on('disconnect', () => {
                 const user = this.users.get(socket.id);
+                const session = this.socketSessions.get(socket.id);
+                const syncedUserId = session?.userId || null;
                 if (user) {
                     const room = this.rooms.get(user.roomId);
                     if (room) {
@@ -7001,6 +7762,15 @@ class VoiceLinkLocalServer {
                     this.audioRouting.delete(socket.id);
                 }
 
+                emitRoomSessionSync(socket.id, syncedUserId, {
+                    type: 'disconnect',
+                    roomId: null,
+                    roomName: null,
+                    isJoined: false,
+                    isMinimized: false,
+                    at: new Date().toISOString()
+                });
+
                 // Clean up audio relay state
                 if (this.audioRelayEnabled.get(socket.id)) {
                     this.relayStats.activeRelays = Math.max(0, this.relayStats.activeRelays - 1);
@@ -7010,8 +7780,94 @@ class VoiceLinkLocalServer {
                 this.unregisterSocketSession(socket.id);
 
                 console.log(`User disconnected: ${socket.id}`);
+                this.broadcastApiMonitorUpdate('disconnect');
             });
         });
+    }
+
+    buildApiMonitorSnapshot(options = {}) {
+        const includeMembers = options.includeMembers !== false;
+        const rooms = Array.from(this.rooms.values()).map((room) => {
+            const users = Array.isArray(room.users) ? room.users : [];
+            return {
+                id: room.id,
+                name: room.name,
+                userCount: users.length,
+                maxUsers: room.maxUsers || 0,
+                locked: !!room.locked,
+                visibility: room.visibility || 'public',
+                accessType: room.accessType || 'hybrid',
+                members: includeMembers
+                    ? users.map((u) => ({
+                        id: u.id,
+                        name: u.name || `User ${String(u.id || '').slice(0, 8)}`,
+                        isAuthenticated: !!u.isAuthenticated,
+                        joinedAt: u.joinedAt || null
+                    }))
+                    : undefined
+            };
+        });
+
+        const members = includeMembers
+            ? Array.from(this.users.entries()).map(([socketId, user]) => ({
+                socketId,
+                id: user.id || socketId,
+                name: user.name || `User ${String(socketId).slice(0, 8)}`,
+                roomId: user.roomId || null,
+                roomName: this.rooms.get(user.roomId)?.name || null,
+                isAuthenticated: !!user.isAuthenticated,
+                joinedAt: user.joinedAt || null
+            }))
+            : [];
+
+        this.apiMonitor.sequence += 1;
+        return {
+            service: 'voicelink-local',
+            source: 'hubnodes-api_monitor',
+            reason: options.reason || 'interval',
+            sequence: this.apiMonitor.sequence,
+            timestamp: new Date().toISOString(),
+            intervalMs: this.apiMonitor.intervalMs,
+            totals: {
+                rooms: rooms.length,
+                members: this.users.size
+            },
+            rooms,
+            members
+        };
+    }
+
+    broadcastApiMonitorUpdate(reason = 'interval') {
+        if (!this.apiMonitor.clients.size) return;
+        const deadClients = [];
+
+        for (const client of this.apiMonitor.clients) {
+            try {
+                const snapshot = this.buildApiMonitorSnapshot({
+                    includeMembers: client.includeMembers,
+                    reason
+                });
+                client.res.write(`event: snapshot\n`);
+                client.res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+            } catch (error) {
+                deadClients.push(client);
+            }
+        }
+
+        if (deadClients.length) {
+            deadClients.forEach((client) => this.apiMonitor.clients.delete(client));
+        }
+    }
+
+    startApiMonitorTicker() {
+        if (this.apiMonitor.timer) return;
+        this.apiMonitor.timer = setInterval(() => {
+            this.broadcastApiMonitorUpdate('interval');
+        }, this.apiMonitor.intervalMs);
+
+        if (typeof this.apiMonitor.timer.unref === 'function') {
+            this.apiMonitor.timer.unref();
+        }
     }
 
     // ==================== Message Persistence Methods ====================

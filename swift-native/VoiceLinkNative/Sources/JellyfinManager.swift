@@ -1,5 +1,7 @@
 import SwiftUI
 import AVFoundation
+import AVKit
+import AppKit
 import Combine
 
 // MARK: - Jellyfin Server Configuration
@@ -93,6 +95,11 @@ struct MediaItem: Identifiable, Codable {
 
     var artistString: String {
         return artists?.joined(separator: ", ") ?? albumArtist ?? "Unknown Artist"
+    }
+
+    var isVideo: Bool {
+        let normalized = type.lowercased()
+        return normalized == "movie" || normalized == "episode" || normalized == "video"
     }
 }
 
@@ -215,6 +222,8 @@ class JellyfinManager: ObservableObject {
 
     // Device ID
     private var deviceId: String
+    private var videoWindow: NSWindow?
+    private var videoPlayerView: AVPlayerView?
 
     // API Endpoints
     private let apiEndpoints = APIEndpoints()
@@ -226,6 +235,7 @@ class JellyfinManager: ObservableObject {
         let items = "/Users/{userId}/Items"
         let playbackInfo = "/Items/{itemId}/PlaybackInfo"
         let mediaStream = "/Audio/{itemId}/stream"
+        let videoStream = "/Videos/{itemId}/stream"
         let imageApi = "/Items/{itemId}/Images/Primary"
     }
 
@@ -442,12 +452,34 @@ class JellyfinManager: ObservableObject {
         return components.url
     }
 
+    func getVideoStreamUrl(itemId: String) -> URL? {
+        guard let server = activeConnection,
+              let token = server.accessToken,
+              let userId = server.userId else { return nil }
+
+        var components = URLComponents(string: "\(server.url)\(apiEndpoints.videoStream.replacingOccurrences(of: "{itemId}", with: itemId))")!
+        components.queryItems = [
+            URLQueryItem(name: "userId", value: userId),
+            URLQueryItem(name: "deviceId", value: deviceId),
+            URLQueryItem(name: "api_key", value: token),
+            URLQueryItem(name: "Static", value: "true")
+        ]
+        return components.url
+    }
+
     func playMedia(_ item: MediaItem) async throws {
         guard let server = activeConnection else {
             throw JellyfinError.notConnected
         }
 
-        guard let streamUrl = getStreamUrl(itemId: item.id) else {
+        let resolvedStreamUrl: URL?
+        if item.isVideo {
+            resolvedStreamUrl = getVideoStreamUrl(itemId: item.id) ?? getStreamUrl(itemId: item.id)
+        } else {
+            resolvedStreamUrl = getStreamUrl(itemId: item.id)
+        }
+
+        guard let streamUrl = resolvedStreamUrl else {
             throw JellyfinError.invalidStreamUrl
         }
 
@@ -484,6 +516,63 @@ class JellyfinManager: ObservableObject {
         player.play()
 
         print("Playing: \(item.name)")
+    }
+
+    func isCurrentMediaVideo() -> Bool {
+        currentSession?.mediaItem.isVideo == true
+    }
+
+    @MainActor
+    func showVideoWindow() {
+        guard let session = currentSession,
+              session.mediaItem.isVideo,
+              let player = session.audioPlayer else {
+            return
+        }
+
+        if let existingWindow = videoWindow {
+            if let playerView = videoPlayerView {
+                playerView.player = player
+            }
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let playerView = AVPlayerView(frame: NSRect(x: 0, y: 0, width: 1100, height: 700))
+        playerView.controlsStyle = .floating
+        playerView.player = player
+        playerView.showsFullScreenToggleButton = true
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 120, y: 120, width: 1100, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = session.mediaItem.name
+        window.contentView = playerView
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+
+        videoPlayerView = playerView
+        videoWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    func minimizeVideoWindow() {
+        videoWindow?.miniaturize(nil)
+    }
+
+    @MainActor
+    func toggleVideoFullscreen() {
+        guard let window = videoWindow else {
+            showVideoWindow()
+            videoWindow?.toggleFullScreen(nil)
+            return
+        }
+        window.toggleFullScreen(nil)
     }
 
     func pausePlayback() {
@@ -1107,6 +1196,38 @@ struct NowPlayingMiniView: View {
                     Image(systemName: "forward.fill")
                 }
                 .buttonStyle(.plain)
+
+                if manager.isCurrentMediaVideo() {
+                    Button(action: {
+                        Task { @MainActor in
+                            manager.showVideoWindow()
+                        }
+                    }) {
+                        Image(systemName: "rectangle.on.rectangle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show video window")
+
+                    Button(action: {
+                        Task { @MainActor in
+                            manager.minimizeVideoWindow()
+                        }
+                    }) {
+                        Image(systemName: "minus.rectangle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Minimize video window")
+
+                    Button(action: {
+                        Task { @MainActor in
+                            manager.toggleVideoFullscreen()
+                        }
+                    }) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle full screen")
+                }
             }
         }
         .padding(.horizontal, 8)

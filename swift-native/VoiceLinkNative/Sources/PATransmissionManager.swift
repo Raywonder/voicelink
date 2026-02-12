@@ -95,6 +95,16 @@ class PATransmissionManager: ObservableObject {
     var onTransmitStop: (() -> Void)?
     var onPAReceived: ((String, PATarget) -> Void)? // username, target
 
+    private var candidateBundles: [Bundle] {
+        var bundles: [Bundle] = []
+        #if SWIFT_PACKAGE
+        bundles.append(Bundle.module)
+        #endif
+        bundles.append(Bundle.main)
+        bundles.append(Bundle(for: PATransmissionManager.self))
+        return bundles
+    }
+
     init() {
         loadSettings()
     }
@@ -253,9 +263,14 @@ class PATransmissionManager: ObservableObject {
         let chimeNumber = String(format: "%03d", style)
         let filename = "pa-transmit-start-or-stop_\(chimeNumber)"
 
-        // Try to load from bundle
-        guard let url = Bundle.main.url(forResource: filename, withExtension: "wav", subdirectory: "sounds") ??
-                        Bundle.main.url(forResource: filename, withExtension: "wav") else {
+        // Try to load from multiple bundle locations
+        let url = candidateBundles.lazy.compactMap { bundle in
+            bundle.url(forResource: filename, withExtension: "wav", subdirectory: "sounds")
+            ?? bundle.url(forResource: filename, withExtension: "wav", subdirectory: "Resources/sounds")
+            ?? bundle.url(forResource: filename, withExtension: "wav")
+        }.first
+
+        guard let url else {
             print("PATransmissionManager: Chime file not found: \(filename)")
             completion()
             return

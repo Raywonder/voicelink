@@ -1690,12 +1690,13 @@ class VoiceLinkApp {
                 console.error('Room fetch error:', e.message);
             }
 
+            const isNativeApp = !!window.nativeAPI;
             // Check if user is authenticated
             const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
             const currentUser = window.mastodonAuth?.getUser();
 
             // Filter rooms based on authentication state
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Guests can only see rooms that are:
                 // 1. Marked as public/visible to visitors (or not explicitly private)
                 // 2. Default rooms (always visible)
@@ -1714,7 +1715,7 @@ class VoiceLinkApp {
             const totalServerRooms = rooms.length; // This is already filtered
             let hiddenCount = 0;
 
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Show up to 50 rooms for guests (increased from 5 for better discovery)
                 const guestRoomLimit = 50;
                 if (rooms.length > guestRoomLimit) {

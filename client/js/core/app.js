@@ -13,10 +13,24 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users = new Map();
+        this.multiDeviceState = {
+            activeDevices: [],
+            lastEvent: null
+        };
+        this.navigationSystemInitialized = false;
+        this.lastEscapePressAt = 0;
+        this.escapeDoublePressWindowMs = 1300;
+        this.escapeMenuOpen = false;
 
         // Audio playback management
         this.currentAudio = null;
         this.isAudioPlaying = false;
+        this.clientLogs = [];
+        this.maxClientLogs = 500;
+        this.logCaptureEnabled = false;
+        this.logCaptureInitialized = false;
+        this.logFlushTimer = null;
+        this.lastLogSendAt = 0;
 
         // Room data cache for join screen
         this.roomDataCache = new Map();
@@ -74,6 +88,8 @@ class VoiceLinkApp {
 
     async init() {
         console.log('Initializing VoiceLink Local...');
+        this.setupLogCapture();
+        this.setupGlobalErrorLogHooks();
 
         // IMMEDIATE: Hide platform-specific elements based on environment
         // This must run FIRST to prevent flash of unwanted content
@@ -142,19 +158,8 @@ class VoiceLinkApp {
                 console.log('iOS compatibility layer initialized');
             }
 
-            // IMMEDIATE: Show main menu first to prevent loading screen stuck
-            // Then initialize systems in background
-            const urlParams = new URLSearchParams(window.location.search);
-            const isDemoMode = urlParams.get('demo') === 'true';
-            const testFeature = urlParams.get('test');
-
-            // Show main menu immediately (1 second delay for splash)
-            setTimeout(() => {
-                if (!isDemoMode) {
-                    this.showScreen('main-menu');
-                    console.log('Main menu shown - continuing background initialization');
-                }
-            }, 1000);
+            // Connect to local server first (this doesn't require audio permissions)
+            await this.connectToServer();
 
             // Initialize audio systems (with error handling for Chrome)
             await this.initializeAudioSystems();
@@ -162,23 +167,36 @@ class VoiceLinkApp {
             // Initialize advanced systems
             this.initializeAdvancedSystems();
 
-            // Connect to server in background (don't block UI)
-            this.connectToServer().then(() => {
-                console.log('Server connected - loading rooms');
-                this.loadRooms().catch(err => console.log('Room load failed:', err));
-                this.startServerStatusMonitoring();
-                this.updateNetworkInfo();
-            }).catch(err => {
-                console.log('Server connection failed, running offline:', err.message);
-                this.updateServerStatus('offline');
-            });
+            // Setup UI event listeners
+            this.setupUIEventListeners();
 
-            // Handle demo mode
+            // Setup network event handlers (for Electron)
+            this.setupNetworkEventHandlers();
+
+            // Initial network info update (listener already registered at start of init)
+            this.updateNetworkInfo();
+
+            // Load rooms
+            await this.loadRooms();
+
+            // Check for demo mode (interactive documentation testing)
+            const urlParams = new URLSearchParams(window.location.search);
+            const isDemoMode = urlParams.get('demo') === 'true';
+            const testFeature = urlParams.get('test'); // Specific feature to test (e.g., 'audio', '3d', 'media')
+
             if (isDemoMode) {
                 console.log('Demo mode activated - creating private test room');
+                // Auto-create and join a private test room for documentation testing
                 setTimeout(() => {
                     this.createDemoRoom(testFeature);
                 }, 2500);
+            } else {
+                // Show main menu
+                setTimeout(() => {
+                    this.showScreen('main-menu');
+                    // Start periodic server status monitoring
+                    this.startServerStatusMonitoring();
+                }, 2000);
             }
 
         } catch (error) {
@@ -189,12 +207,6 @@ class VoiceLinkApp {
                 // Don't show error - this is normal browser behavior
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
             }, 2000);
-        } finally {
-            // CRITICAL: Always setup UI event listeners, even if initialization fails
-            // This ensures buttons work regardless of server/audio initialization status
-            this.setupUIEventListeners();
-            this.setupNetworkEventHandlers();
-            console.log('UI event listeners initialized');
         }
     }
 
@@ -412,6 +424,12 @@ class VoiceLinkApp {
             console.log('Jukebox manager initialized');
         }
 
+        // Initialize wallet manager for Ecripto login/minting flows
+        if (typeof WalletManager !== 'undefined') {
+            window.walletManager = new WalletManager(this);
+            console.log('Wallet manager initialized');
+        }
+
         console.log('Advanced systems initialized');
     }
 
@@ -472,14 +490,14 @@ class VoiceLinkApp {
                         }));
                     }
                     this.setupSocketEventListeners();
+                    this.registerSession();
                     resolve();
                 });
 
                 this.socket.on('connect_error', (error) => {
-                    console.log('Server connection unavailable:', error.message);
+                    console.error('Failed to connect to server:', error.message);
                     this.updateServerStatus('offline');
-                    // Resolve instead of reject - app should still work for viewing rooms etc.
-                    resolve();
+                    reject(new Error('Server not available'));
                 });
                 return;
             }
@@ -503,14 +521,13 @@ class VoiceLinkApp {
                 const timeoutId = setTimeout(() => {
                     currentPortIndex++;
                     if (currentPortIndex < portSequence.length) {
-                        console.log(`Port ${port} timed out, trying port ${portSequence[currentPortIndex]}...`);
+                        console.log(`Port ${port} failed, trying port ${portSequence[currentPortIndex]}...`);
                         this.socket.disconnect();
                         tryConnect(portSequence[currentPortIndex]);
                     } else {
-                        console.log('Connection timeout on all ports. Server appears to be offline - app will work in offline mode.');
+                        console.error('Failed to connect to server on all ports');
                         this.updateServerStatus('offline');
-                        // Resolve instead of reject - app should still work without server for UI
-                        resolve();
+                        reject(new Error('Server not available'));
                     }
                 }, 5000);
 
@@ -538,33 +555,24 @@ class VoiceLinkApp {
                     }
 
                     this.setupSocketEventListeners();
+                    this.registerSession();
                     resolve();
                 });
 
                 this.socket.on('connect_error', (error) => {
-                    // Don't immediately reject - let the timeout handle fallback to next port
-                    // This allows all ports in the sequence to be tried
-                    console.log(`Connection error on port ${port}: ${error.message}`);
-
-                    // Only clear timeout and try next port immediately for faster fallback
                     clearTimeout(timeoutId);
-                    this.socket.disconnect();
-                    currentPortIndex++;
-
-                    if (currentPortIndex < portSequence.length) {
-                        console.log(`Trying next port: ${portSequence[currentPortIndex]}...`);
-                        tryConnect(portSequence[currentPortIndex]);
+                    if (port === 3000) {
+                        console.log('Port 3000 failed, trying port 3001...');
+                        this.socket.disconnect();
+                        tryConnect(3001);
                     } else {
-                        // All ports exhausted
-                        console.log('All ports tried. Server appears to be offline - app will work in offline mode.');
-                        this.updateServerStatus('offline');
-                        // Resolve instead of reject - app should still work without server for UI
-                        resolve();
+                        console.error('Failed to connect to server:', error);
+                        reject(error);
                     }
                 });
             };
 
-            // Start with first port in sequence
+            // Start with first port in sequence (4004)
             tryConnect(portSequence[0]);
         });
     }
@@ -574,9 +582,12 @@ class VoiceLinkApp {
         const events = [
             'joined-room', 'user-joined', 'user-left', 'user-audio-routing-changed',
             'user-position-changed', 'user-audio-settings-changed', 'chat-message',
-            'error', 'room-expiring', 'room-expired', 'forced-leave'
+            'error', 'room-expiring', 'room-expired', 'forced-leave', 'background-stream'
         ];
         events.forEach(event => this.socket.off(event));
+        this.socket.off('multi-device-login');
+        this.socket.off('multi-device-active');
+        this.socket.off('multi-device-command');
 
         // Room events
         this.socket.on('joined-room', (data) => {
@@ -626,6 +637,300 @@ class VoiceLinkApp {
         this.socket.on('forced-leave', (data) => {
             this.handleForcedLeave(data);
         });
+
+        // Background stream events
+        this.socket.on('background-stream', (data) => {
+            this.handleBackgroundStream(data);
+        });
+
+        // Multi-device session events
+        this.socket.on('multi-device-login', (data) => {
+            this.handleMultiDeviceLogin(data);
+        });
+
+        this.socket.on('multi-device-active', (data) => {
+            this.handleMultiDeviceActive(data);
+        });
+
+        this.socket.on('multi-device-command', (data) => {
+            this.handleMultiDeviceCommand(data);
+        });
+    }
+
+    // ========================================
+    // MULTI-DEVICE SESSIONS
+    // ========================================
+
+    getClientId() {
+        const key = 'voicelink_client_id';
+        let clientId = localStorage.getItem(key);
+        if (!clientId) {
+            clientId = 'dev_' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem(key, clientId);
+        }
+        return clientId;
+    }
+
+    getMultiDeviceSettings() {
+        return {
+            behavior: localStorage.getItem('voicelink_multi_device_behavior') || 'prompt',
+            autoQuit: localStorage.getItem('voicelink_auto_quit_other') === 'true'
+        };
+    }
+
+    setMultiDeviceSettings(settings = {}) {
+        if (settings.behavior) {
+            localStorage.setItem('voicelink_multi_device_behavior', settings.behavior);
+        }
+        if (typeof settings.autoQuit === 'boolean') {
+            localStorage.setItem('voicelink_auto_quit_other', settings.autoQuit ? 'true' : 'false');
+        }
+    }
+
+    getAudioBehaviorSettings() {
+        return {
+            autoEnableMic: localStorage.getItem('voicelink_audio_auto_enable_mic') !== 'false',
+            alwaysEnableMedia: localStorage.getItem('voicelink_audio_always_enable_media') !== 'false'
+        };
+    }
+
+    setAudioBehaviorSettings(settings = {}) {
+        if (typeof settings.autoEnableMic === 'boolean') {
+            localStorage.setItem('voicelink_audio_auto_enable_mic', settings.autoEnableMic ? 'true' : 'false');
+        }
+        if (typeof settings.alwaysEnableMedia === 'boolean') {
+            localStorage.setItem('voicelink_audio_always_enable_media', settings.alwaysEnableMedia ? 'true' : 'false');
+        }
+    }
+
+    getAuthContext() {
+        const whmcsToken = localStorage.getItem('voicelink_whmcs_token') ||
+            sessionStorage.getItem('voicelink_whmcs_token');
+        const ecriptoToken = localStorage.getItem('voicelink_ecripto_token') ||
+            sessionStorage.getItem('voicelink_ecripto_token');
+        const mastodonToken = localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token');
+        const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+
+        if (whmcsToken) {
+            return { provider: 'whmcs', token: whmcsToken, user };
+        }
+        if (ecriptoToken) {
+            return { provider: 'ecripto', token: ecriptoToken, user };
+        }
+        if (mastodonToken && user) {
+            return { provider: 'mastodon', token: mastodonToken, user };
+        }
+        return null;
+    }
+
+    registerSession() {
+        if (!this.socket || !this.socket.connected) return;
+        const authContext = this.getAuthContext();
+        if (!authContext) return;
+
+        const payload = {
+            token: authContext.token,
+            provider: authContext.provider,
+            deviceId: this.getClientId(),
+            deviceName: navigator.platform || 'Web Client',
+            deviceType: 'web',
+            clientVersion: '1.0.0',
+            appVersion: '1.0.0',
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+            locale: navigator.language || '',
+            locationHint: Intl.DateTimeFormat().resolvedOptions().locale || '',
+            user: authContext.user
+        };
+
+        this.socket.emit('register-session', payload);
+    }
+
+    handleMultiDeviceActive(payload) {
+        if (!payload || !payload.activeDevices) return;
+        this.multiDeviceState.activeDevices = payload.activeDevices || [];
+        this.updateMultiDeviceStatusUI();
+    }
+
+    handleMultiDeviceLogin(payload) {
+        if (!payload) return;
+        const data = Array.isArray(payload) ? payload[0] : payload;
+        const newDevice = data?.newDevice || {};
+        this.multiDeviceState.lastEvent = newDevice;
+        this.multiDeviceState.activeDevices = data?.activeDevices || [];
+
+        const settings = this.getMultiDeviceSettings();
+        this.updateMultiDeviceStatusUI();
+
+        const deviceName = newDevice.deviceName || 'Another device';
+        const locationHint = newDevice.locationHint ? ` • ${newDevice.locationHint}` : '';
+        const roomName = newDevice.currentRoomName ? `Room: ${newDevice.currentRoomName}` : 'No room joined';
+
+        if (settings.autoQuit) {
+            this.showMultiDeviceStatusModal(deviceName, roomName);
+            this.disconnectForMultiDevice();
+            return;
+        }
+
+        switch (settings.behavior) {
+        case 'keep':
+            this.showNotification(`Signed in on ${deviceName}${locationHint}`, 'info');
+            break;
+        case 'join_other_room':
+            if (newDevice.currentRoomId) {
+                this.joinRoomById(newDevice.currentRoomId, newDevice.currentRoomName);
+            }
+            break;
+        case 'leave_other_room':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'leave_room');
+            break;
+        case 'disconnect_other':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'disconnect');
+            break;
+        case 'warn_other':
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'warn_feedback');
+            break;
+        case 'prompt':
+        default:
+            this.showMultiDeviceStatusModal(deviceName, roomName, newDevice);
+            break;
+        }
+    }
+
+    handleMultiDeviceCommand(payload) {
+        const data = Array.isArray(payload) ? payload[0] : payload;
+        if (!data) return;
+        switch (data.action) {
+        case 'leave_room':
+            this.leaveRoom();
+            break;
+        case 'disconnect':
+            this.disconnectForMultiDevice();
+            break;
+        case 'warn_feedback':
+            this.showNotification('Another device is signed in. Consider closing one copy to prevent feedback.', 'warning');
+            break;
+        default:
+            break;
+        }
+    }
+
+    sendMultiDeviceCommand(targetDeviceId, action) {
+        if (!this.socket || !targetDeviceId) return;
+        this.socket.emit('multi-device-command', {
+            targetDeviceId,
+            action
+        });
+    }
+
+    joinRoomById(roomId, roomName = '') {
+        const userNameInput = document.getElementById('user-name');
+        if (userNameInput && !userNameInput.value) {
+            userNameInput.value = this.currentUser?.displayName || 'VoiceLink User';
+        }
+        const joinRoomInput = document.getElementById('join-room-id');
+        if (joinRoomInput) {
+            joinRoomInput.value = roomId;
+        }
+        if (roomName) {
+            const nameEl = document.getElementById('join-room-name');
+            if (nameEl) nameEl.textContent = roomName;
+        }
+        this.showScreen('join-room-screen');
+        this.joinRoom();
+    }
+
+    disconnectForMultiDevice() {
+        if (this.socket) {
+            this.socket.disconnect();
+            this.socket = null;
+        }
+        this.updateServerStatus('offline');
+        this.showScreen('main-menu');
+    }
+
+    showMultiDeviceStatusModal(deviceName, roomName, newDevice = {}) {
+        this.showScreen('settings-screen');
+        this.openSettingsTab('connections');
+        this.updateMultiDeviceStatusUI();
+
+        const existing = document.getElementById('multi-device-modal');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'multi-device-modal';
+        overlay.className = 'modal-overlay';
+
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+
+        content.innerHTML = `
+            <h3>Signed in on another device</h3>
+            <p style="color: rgba(255,255,255,0.7); margin-bottom: 16px;">
+                ${deviceName} • ${roomName}
+            </p>
+            <div class="button-group">
+                <button id="multi-device-join-btn" class="primary-btn">Join That Room</button>
+                <button id="multi-device-leave-btn" class="secondary-btn">Ask Other to Leave</button>
+                <button id="multi-device-keep-btn" class="secondary-btn">Keep Both</button>
+            </div>
+        `;
+
+        overlay.appendChild(content);
+        document.body.appendChild(overlay);
+
+        document.getElementById('multi-device-join-btn')?.addEventListener('click', () => {
+            overlay.remove();
+            if (newDevice.currentRoomId) {
+                this.joinRoomById(newDevice.currentRoomId, newDevice.currentRoomName);
+            }
+        });
+
+        document.getElementById('multi-device-leave-btn')?.addEventListener('click', () => {
+            overlay.remove();
+            this.sendMultiDeviceCommand(newDevice.deviceId, 'leave_room');
+        });
+
+        document.getElementById('multi-device-keep-btn')?.addEventListener('click', () => {
+            overlay.remove();
+        });
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+    }
+
+    updateMultiDeviceStatusUI() {
+        const statusEl = document.getElementById('multi-device-status');
+        if (!statusEl) return;
+        const devices = this.multiDeviceState.activeDevices || [];
+        if (devices.length <= 1) {
+            statusEl.innerHTML = `
+                <div class="status-title">No other active devices detected.</div>
+                <div class="status-details">You are the only active session.</div>
+            `;
+            return;
+        }
+        const otherDevices = devices.filter(d => d.deviceId !== this.getClientId());
+        const deviceLines = otherDevices.map(device => {
+            const room = device.currentRoomName ? ` • ${device.currentRoomName}` : '';
+            const location = device.locationHint ? ` • ${device.locationHint}` : '';
+            return `<div>${device.deviceName || 'Device'}${room}${location}</div>`;
+        }).join('');
+        statusEl.innerHTML = `
+            <div class="status-title">Other active devices detected:</div>
+            <div class="status-details">${deviceLines || 'Another device is active.'}</div>
+        `;
+    }
+
+    openSettingsTab(tabId) {
+        const tabBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        const tabContent = document.getElementById(`${tabId}-tab`);
+        if (!tabBtn || !tabContent) return;
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelectorAll('.settings-tab').forEach(tab => tab.classList.remove('active'));
+        tabBtn.classList.add('active');
+        tabContent.classList.add('active');
     }
 
     /**
@@ -666,10 +971,98 @@ class VoiceLinkApp {
         // Clean up room state
         this.currentRoomId = null;
         this.stopExpirationCountdown();
+        this.stopBackgroundStream();
 
         // Return to main menu
         this.showScreen('main-menu');
         this.showNotification('You have been disconnected: ' + reason, 'info');
+    }
+
+    /**
+     * Handle background stream event - plays ambient/radio stream in room
+     */
+    handleBackgroundStream(data) {
+        console.log('[BackgroundStream] Received stream config:', data);
+
+        const { id, name, url, volume, hidden, autoPlay, fadeInDuration } = data;
+
+        if (!url) {
+            console.warn('[BackgroundStream] No stream URL provided');
+            return;
+        }
+
+        // Create or get background audio element
+        let bgAudio = document.getElementById('background-stream-audio');
+        if (!bgAudio) {
+            bgAudio = document.createElement('audio');
+            bgAudio.id = 'background-stream-audio';
+            bgAudio.className = hidden ? 'hidden-stream' : '';
+            bgAudio.crossOrigin = 'anonymous';
+            bgAudio.preload = 'none';
+            document.body.appendChild(bgAudio);
+        }
+
+        // Store stream info for controls
+        this.backgroundStream = {
+            id,
+            name,
+            url,
+            volume: volume / 100,
+            hidden,
+            element: bgAudio
+        };
+
+        bgAudio.src = url;
+        bgAudio.volume = 0;
+
+        if (autoPlay) {
+            bgAudio.play().then(() => {
+                console.log(`[BackgroundStream] Playing: ${name}`);
+                // Fade in
+                const targetVolume = volume / 100;
+                const fadeSteps = 20;
+                const fadeStepTime = fadeInDuration / fadeSteps;
+                let currentStep = 0;
+
+                const fadeInterval = setInterval(() => {
+                    currentStep++;
+                    bgAudio.volume = (currentStep / fadeSteps) * targetVolume;
+                    if (currentStep >= fadeSteps) {
+                        clearInterval(fadeInterval);
+                        bgAudio.volume = targetVolume;
+                    }
+                }, fadeStepTime);
+            }).catch(err => {
+                console.warn('[BackgroundStream] Autoplay blocked:', err.message);
+                // Try again on user interaction
+                document.addEventListener('click', () => bgAudio.play(), { once: true });
+            });
+        }
+    }
+
+    /**
+     * Stop background stream
+     */
+    stopBackgroundStream() {
+        const bgAudio = document.getElementById('background-stream-audio');
+        if (bgAudio) {
+            bgAudio.pause();
+            bgAudio.src = '';
+        }
+        this.backgroundStream = null;
+    }
+
+    /**
+     * Set background stream volume (0-100)
+     */
+    setBackgroundStreamVolume(volume) {
+        const bgAudio = document.getElementById('background-stream-audio');
+        if (bgAudio) {
+            bgAudio.volume = volume / 100;
+            if (this.backgroundStream) {
+                this.backgroundStream.volume = volume / 100;
+            }
+        }
     }
 
     /**
@@ -876,7 +1269,6 @@ class VoiceLinkApp {
     setupUIEventListeners() {
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
-            this.updateCreateRoomOptionsForAuth();
             this.showScreen('create-room-screen');
             this.setupRoomPrivacyControls();
         });
@@ -995,12 +1387,17 @@ class VoiceLinkApp {
             this.initializeSettingsScreen();
         });
 
-        // Jukebox button - opens Jellyfin music player
+        // Jukebox button - opens room media player
         document.getElementById('room-jukebox-btn')?.addEventListener('click', () => {
+            if (!this.currentUser) {
+                this.showNotification('Login required to use Jukebox', 'info');
+                this.showMastodonLoginModal();
+                return;
+            }
             if (window.jukeboxManager) {
                 window.jukeboxManager.togglePanel();
             } else {
-                this.showToast('Jukebox not available. Configure Jellyfin in settings.');
+                this.showToast('Jukebox not available. Configure media in settings.');
             }
         });
 
@@ -1098,53 +1495,18 @@ class VoiceLinkApp {
         // Voice chat controls
         document.getElementById('mute-btn')?.addEventListener('click', () => {
             const isMuted = this.webrtcManager?.isLocalMuted() || false;
-            const newMutedState = !isMuted;
-            this.webrtcManager?.setMuted(newMutedState);
+            this.webrtcManager?.setMuted(!isMuted);
             this.playUiSound('button-click.wav');
-            this.announce(`Microphone ${newMutedState ? 'muted' : 'unmuted'}`, 'polite');
-
-            // Play appropriate sound
-            if (this.menuSoundManager) {
-                if (newMutedState) {
-                    this.menuSoundManager.playMuteSound();
-                } else {
-                    this.menuSoundManager.playUnmuteSound();
-                }
-            }
+            this.announce(`Microphone ${!isMuted ? 'muted' : 'unmuted'}`, 'polite');
         });
 
         document.getElementById('deafen-btn')?.addEventListener('click', () => {
-            // Toggle deafen state
+            // Toggle deafen state (implement state tracking)
             const isDeafened = this.isDeafened || false;
             this.isDeafened = !isDeafened;
             this.webrtcManager?.setDeafened(this.isDeafened);
             this.playUiSound('button-click.wav');
             this.announce(`Output ${this.isDeafened ? 'muted' : 'unmuted'}`, 'polite');
-
-            // Play appropriate sound
-            if (this.menuSoundManager) {
-                if (this.isDeafened) {
-                    this.menuSoundManager.playDeafenSound();
-                } else {
-                    this.menuSoundManager.playUndeafenSound();
-                }
-            }
-        });
-
-        // Push-to-talk toggle
-        document.getElementById('push-to-talk-btn')?.addEventListener('click', () => {
-            if (this.webrtcManager) {
-                const pttEnabled = this.webrtcManager.togglePTT();
-
-                // Play appropriate sound
-                if (this.menuSoundManager) {
-                    if (pttEnabled) {
-                        this.menuSoundManager.playPTTEnableSound();
-                    } else {
-                        this.menuSoundManager.playPTTDisableSound();
-                    }
-                }
-            }
         });
 
         document.getElementById('leave-room-btn')?.addEventListener('click', () => {
@@ -1188,14 +1550,46 @@ class VoiceLinkApp {
         });
 
         // Auto-play sound test after output device changes
+        const inputDeviceSettings = document.getElementById('input-device-select');
+        inputDeviceSettings?.addEventListener('change', async (e) => {
+            const selected = e?.target?.value || 'default';
+            try {
+                await this.audioEngine.setInputDevice(selected);
+                this.audioEngine.saveDefaultSettings();
+            } catch (error) {
+                console.error('Failed to switch input device:', error);
+                this.showError('Failed to switch microphone. Check permissions and try again.');
+            }
+        });
+
         const outputDeviceSettings = document.getElementById('output-device-settings');
-        outputDeviceSettings?.addEventListener('change', () => {
+        outputDeviceSettings?.addEventListener('change', async (e) => {
+            const selected = e?.target?.value || 'default';
+            this.audioEngine.setOutputDevice(selected);
+            this.audioEngine.saveDefaultSettings();
+
+            const roomOutputSelect = document.getElementById('output-device-select');
+            if (roomOutputSelect) {
+                roomOutputSelect.value = selected;
+            }
+
             const btn = document.getElementById('test-speakers');
             this.audioEngine.testSpeakers().finally(() => {
                 if (btn) {
                     btn.textContent = this.audioEngine?.isTestAudioPlaying ? 'Stop Test' : 'Sound Test';
                 }
             });
+        });
+
+        const outputDeviceRoom = document.getElementById('output-device-select');
+        outputDeviceRoom?.addEventListener('change', (e) => {
+            const selected = e?.target?.value || 'default';
+            this.audioEngine.setOutputDevice(selected);
+            this.audioEngine.saveDefaultSettings();
+
+            if (outputDeviceSettings) {
+                outputDeviceSettings.value = selected;
+            }
         });
 
         document.getElementById('save-audio-settings')?.addEventListener('click', () => {
@@ -1234,6 +1628,172 @@ class VoiceLinkApp {
 
         // Check for OAuth callback
         this.checkOAuthCallback();
+        this.setupNavigationSystem();
+    }
+
+    setupNavigationSystem() {
+        if (this.navigationSystemInitialized) return;
+        this.navigationSystemInitialized = true;
+
+        if (this.isIOSOrIPadOS()) {
+            this.setupIOSNavigationSystem();
+            return;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            this.handleNavigationKeydown(e);
+        });
+    }
+
+    isIOSOrIPadOS() {
+        if (window.iosCompatibility?.isIOS) return true;
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    setupIOSNavigationSystem() {
+        const existing = document.getElementById('ios-nav-menu-btn');
+        if (existing) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'ios-nav-menu-btn';
+        btn.className = 'secondary-btn';
+        btn.textContent = 'Menu';
+        btn.style.position = 'fixed';
+        btn.style.right = '16px';
+        btn.style.bottom = 'calc(16px + var(--safe-area-inset-bottom, 0px))';
+        btn.style.zIndex = '9999';
+        btn.style.minWidth = '76px';
+        btn.style.borderRadius = '999px';
+        btn.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+        btn.addEventListener('click', () => this.openEscapeOptionsMenu('ios'));
+        document.body.appendChild(btn);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (this.escapeMenuOpen) {
+                    this.closeEscapeOptionsMenu();
+                } else {
+                    this.openEscapeOptionsMenu('ios');
+                }
+            }
+        });
+    }
+
+    handleNavigationKeydown(e) {
+        const activeTag = document.activeElement?.tagName;
+        const isTypingContext = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag) || document.activeElement?.isContentEditable;
+
+        // Alt+M opens navigation/options menu directly.
+        if (e.altKey && String(e.key).toLowerCase() === 'm') {
+            e.preventDefault();
+            this.openEscapeOptionsMenu();
+            return;
+        }
+
+        if (e.key !== 'Escape') return;
+        if (isTypingContext) return;
+
+        if (this.escapeMenuOpen) {
+            e.preventDefault();
+            this.closeEscapeOptionsMenu();
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastEscapePressAt <= this.escapeDoublePressWindowMs) {
+            e.preventDefault();
+            this.lastEscapePressAt = 0;
+            this.openEscapeOptionsMenu();
+        } else {
+            this.lastEscapePressAt = now;
+            this.showNotification('Press Escape again to open menu options', 'info');
+        }
+    }
+
+    openEscapeOptionsMenu(source = 'keyboard') {
+        this.closeEscapeOptionsMenu();
+        this.escapeMenuOpen = true;
+        const isIOSMenu = source === 'ios';
+
+        const inRoom = !!this.currentRoom && this.ui.currentScreen === 'voice-chat-screen';
+        const options = inRoom ? [
+            { id: 'return', label: 'Return to Room', action: () => this.closeEscapeOptionsMenu() },
+            { id: 'mute', label: this.webrtcManager?.isLocalMuted() ? 'Unmute Mic' : 'Mute Mic', action: () => {
+                const isMuted = this.webrtcManager?.isLocalMuted() || false;
+                this.webrtcManager?.setMuted(!isMuted);
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'deafen', label: this.isDeafened ? 'Undeafen Audio' : 'Deafen Audio', action: () => {
+                const isDeafened = this.isDeafened || false;
+                this.isDeafened = !isDeafened;
+                this.webrtcManager?.setDeafened(this.isDeafened);
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'settings', label: 'Open Settings', action: () => {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'leave', label: 'Leave Room Now', danger: true, action: () => {
+                this.closeEscapeOptionsMenu();
+                this.leaveRoom();
+            }}
+        ] : [
+            { id: 'main', label: 'Main Menu', action: () => {
+                this.showScreen('main-menu');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'join', label: 'Join Room', action: () => {
+                this.showScreen('join-room-screen');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'create', label: 'Create Room', action: () => {
+                this.showScreen('create-room-screen');
+                this.closeEscapeOptionsMenu();
+            }},
+            { id: 'settings', label: 'Open Settings', action: () => {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+                this.closeEscapeOptionsMenu();
+            }}
+        ];
+
+        const overlay = document.createElement('div');
+        overlay.id = 'escape-options-menu';
+        overlay.className = 'modal';
+        overlay.style.display = 'flex';
+        overlay.innerHTML = `
+            <div class="modal-content" style="${isIOSMenu ? 'max-width: 560px; width: 94%; border-radius: 18px 18px 0 0; margin-top: auto; margin-bottom: 0; padding-bottom: calc(1rem + var(--safe-area-inset-bottom, 0px));' : 'max-width: 420px; width: 90%;'}">
+                <h3 style="margin-top:0;">Navigation Menu</h3>
+                <p style="opacity:.8; margin-top:0;">${isIOSMenu ? 'Tap an option below.' : 'Double Escape opened this menu. Press Escape to close.'}</p>
+                <div class="button-group" id="escape-options-actions"></div>
+            </div>
+        `;
+
+        const actionsContainer = overlay.querySelector('#escape-options-actions');
+        options.forEach((opt) => {
+            const btn = document.createElement('button');
+            btn.className = opt.danger ? 'danger-btn' : 'secondary-btn';
+            btn.textContent = opt.label;
+            btn.addEventListener('click', opt.action);
+            actionsContainer.appendChild(btn);
+        });
+
+        overlay.addEventListener('click', (evt) => {
+            if (evt.target === overlay) {
+                this.closeEscapeOptionsMenu();
+            }
+        });
+
+        document.body.appendChild(overlay);
+    }
+
+    closeEscapeOptionsMenu() {
+        const existing = document.getElementById('escape-options-menu');
+        if (existing) existing.remove();
+        this.escapeMenuOpen = false;
     }
 
     showScreen(screenId) {
@@ -1877,6 +2437,12 @@ class VoiceLinkApp {
             template: room.template || null,
             privacyLevel: room.privacyLevel || 'public',
             encrypted: room.encrypted || false,
+            previewEnabled: room.previewEnabled,
+            allowPreview: room.allowPreview,
+            previewDisabled: room.previewDisabled,
+            previewPolicy: room.previewPolicy || null,
+            ownerId: room.ownerId || room.creatorId || room.createdBy || room.owner?.id || null,
+            ownerName: room.ownerName || room.creatorName || room.owner?.name || room.owner || '',
             isDefault: isDefault,
             isFederated: isDefault || room.isFederated || false
         };
@@ -1903,49 +2469,64 @@ class VoiceLinkApp {
                 ? '1 user'
                 : `${roomData.users} users`;
 
-        // Show peek button only for rooms with active users
-        const showPeekButton = roomData.users > 0;
-        const peekButton = showPeekButton ? `
-            <button class="peek-room-btn"
-                    onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
-                    title="Preview room audio (5-20 seconds)"
-                    aria-label="Peek into ${roomData.name} - hear room audio preview">
-                👁️ Peek In
-            </button>
-        ` : '';
+        const isCurrentRoom = !!this.currentRoom && (this.currentRoom.id === roomData.id || this.currentRoom.roomId === roomData.id);
+        const canManageGlobalMedia = this.isCurrentUserAdmin();
 
-        const shareButton = `
-            <button class="share-room-btn"
-                    onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
-                    title="Share room"
-                    aria-label="Share ${roomData.name}">
-                🔗 Share
-            </button>
+        // Action menu (accessible for keyboard/screen reader users)
+        const previewAvailability = this.getRoomPreviewAvailability(roomData);
+        const actionMenu = `
+            <details class="room-actions-menu" onclick="event.stopPropagation();">
+                <summary class="room-actions-summary" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
+                <div class="room-actions-list" role="menu" onclick="event.stopPropagation();">
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
+                            aria-label="Join ${roomData.name}">
+                        🎧 Join
+                    </button>
+                    <button class="room-action-btn"
+                            ${previewAvailability.enabled
+                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}', '${roomData.name}')"`
+                                : 'disabled'}
+                            title="${previewAvailability.reason || 'Preview room audio'}"
+                            aria-label="Preview room audio for ${roomData.name}">
+                        👁️ Preview Room
+                    </button>
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
+                            aria-label="Share ${roomData.name}">
+                        🔗 Share
+                    </button>
+                    <button class="room-action-btn"
+                            ${isCurrentRoom
+                                ? `onclick="event.stopPropagation(); app.openRoomJukeboxFromMenu('${roomData.id}')"`
+                                : 'disabled'}
+                            title="${isCurrentRoom ? 'Manage room media playback' : 'Join this room first to manage room media playback'}"
+                            aria-label="Manage room media playback for ${roomData.name}">
+                        🎵 Room Jukebox
+                    </button>
+                    ${canManageGlobalMedia ? `
+                    <button class="room-action-btn"
+                            onclick="event.stopPropagation(); app.openGlobalMediaManagement()"
+                            aria-label="Open global media server controls">
+                        🌐 Global Media
+                    </button>` : ''}
+                </div>
+            </details>
         `;
 
-        // Determine if room is locked (private or password protected)
-        const isLocked = roomData.privacyLevel === 'private' || roomData.hasPassword;
-        const lockedClass = isLocked ? 'room-locked' : '';
-        const lockIcon = isLocked ? '<span class="lock-icon" aria-hidden="true">🔒</span>' : '';
-        const accessInfo = isLocked
-            ? (roomData.hasPassword ? 'Password required to join' : 'Private room - login required')
-            : '';
-
         return `
-            <div class="room-item ${isDefault ? 'default-room' : 'user-room'} ${lockedClass}"
+            <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
                  data-room-id="${roomData.id}"
-                 data-locked="${isLocked}"
-                 data-has-password="${roomData.hasPassword}"
-                 data-privacy="${roomData.privacyLevel}"
                  onclick="app.quickJoinRoom('${roomData.id}')"
+                 oncontextmenu="app.openFocusedRoomContextMenu(event, '${roomData.id}')"
+                 onkeydown="app.handleFocusedRoomContextKey(event, '${roomData.id}')"
                  role="button"
                  tabindex="0"
-                 aria-label="${roomData.name}, ${isLocked ? 'Locked room, ' : ''}${descriptionText}, ${userCountText} of ${roomData.maxUsers} max${accessInfo ? ', ' + accessInfo : ''}">
+                 aria-label="${roomData.name}, ${descriptionText}, ${userCountText} of ${roomData.maxUsers} max">
                 <div class="room-header">
                     <div class="room-info">
-                        <h5 class="room-name">${lockIcon}${roomData.name}</h5>
+                        <h5 class="room-name">${roomData.name}</h5>
                         <p class="${descriptionClass}">${descriptionText}</p>
-                        ${accessInfo ? `<p class="room-access-info">${accessInfo}</p>` : ''}
                     </div>
                     <div class="room-status">
                         ${statusLabels}
@@ -1954,40 +2535,240 @@ class VoiceLinkApp {
                 <div class="room-details">
                     <div class="room-stats">
                         <span class="user-count">${userCountText} / ${roomData.maxUsers} max</span>
+                        ${roomData.hasPassword ? '<span class="password-protected">[Password Protected]</span>' : ''}
                         ${this.getRoomDurationDisplay(room)}
                     </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
-                    ${peekButton}
-                    ${shareButton}
+                    ${actionMenu}
                 </div>
             </div>
         `;
     }
 
+    getRoomPreviewAvailability(roomData) {
+        if (!roomData) {
+            return { enabled: false, reason: 'Preview is not available for this room.' };
+        }
+
+        const explicitDisabled = roomData.previewEnabled === false ||
+            roomData.allowPreview === false ||
+            roomData.previewDisabled === true ||
+            roomData.previewPolicy === 'disabled';
+        if (explicitDisabled) {
+            return { enabled: false, reason: 'Preview disabled by room creator/admin.', reasonCode: 'privacy_disabled' };
+        }
+
+        const creatorAdminOnly = roomData.previewPolicy === 'creator_admin_only';
+        if (creatorAdminOnly && !this.canManageRoomPreview(roomData)) {
+            return { enabled: false, reason: 'Preview restricted to room creator/admin.', reasonCode: 'creator_admin_only' };
+        }
+
+        if ((roomData.users || 0) <= 0) {
+            return { enabled: false, reason: 'No active room audio to preview yet.', reasonCode: 'no_audio' };
+        }
+
+        return { enabled: true, reason: '', reasonCode: 'ok' };
+    }
+
+    canManageRoomPreview(roomData) {
+        const currentUser = this.currentUser || {};
+        const role = String(currentUser.role || '').toLowerCase();
+        const isAdmin = currentUser.isAdmin === true ||
+            role === 'admin' ||
+            (Array.isArray(currentUser.permissions) && currentUser.permissions.includes('admin'));
+        if (isAdmin) return true;
+
+        const ownerId = roomData?.ownerId;
+        return !!ownerId && ownerId === currentUser.id;
+    }
+
+    requestRoomPreview(roomId, roomName = 'this room') {
+        const roomData = this.roomDataCache.get(roomId);
+        const availability = this.getRoomPreviewAvailability(roomData);
+        if (!availability.enabled) {
+            const blockedMessage = this.getRandomPreviewBlockedMessage(roomData, availability);
+            this.showNotification(blockedMessage, 'info');
+            return;
+        }
+        this.peekIntoRoom(roomId, roomName);
+    }
+
+    getRandomPreviewBlockedMessage(roomData, availability) {
+        const owner = roomData?.ownerName ? String(roomData.ownerName).trim() : '';
+        const ownerText = owner ? `${owner}` : 'this room owner';
+        const code = availability?.reasonCode || 'privacy_disabled';
+        const intro = [
+            'No peeking.',
+            'Preview blocked.',
+            'Access denied for preview.',
+            'Room preview is locked.',
+            'Hold up.',
+            'Heads up.',
+            'Privacy notice.',
+            'Restricted action.',
+            'Preview unavailable.',
+            'Not allowed.'
+        ];
+        const privacyReason = [
+            'This room is private.',
+            'Preview is disabled for this room.',
+            `${ownerText} requested privacy for this room.`,
+            'Room owner privacy settings are active.',
+            'This room does not allow listener previews.',
+            'Preview is turned off by policy.',
+            'This room is protected from peeking.',
+            'Room privacy mode blocks previews.',
+            'This room is currently marked as no-preview.',
+            'Peeking is disabled for this channel.'
+        ];
+        const creatorAdminReason = [
+            'Only the room creator can preview this room.',
+            'Only admins can preview this room.',
+            'Preview is restricted to room creator/admin.',
+            `${ownerText} restricted preview to trusted roles.`,
+            'Moderator policy requires elevated access for preview.',
+            'Preview rights are limited to owner/admin users.',
+            'Creator-admin preview mode is enabled.',
+            'This room allows preview for management roles only.',
+            'Room control policy blocks general preview access.',
+            'Only room operators can listen before joining.'
+        ];
+        const noAudioReason = [
+            'No active participants are speaking right now.',
+            'No live room audio was detected.',
+            'This room is quiet at the moment.',
+            'There is nothing to preview yet.',
+            'Audio preview source is currently idle.',
+            'No active stream is available right now.',
+            'Room audio is not available for preview yet.',
+            'No participant audio is currently present.',
+            'Preview found no current voice activity.',
+            'Live room audio is temporarily unavailable.'
+        ];
+        const actionHint = [
+            'Join the room to listen live.',
+            'Try again in a moment.',
+            'You can join to hear full room audio.',
+            'Ask the room owner to enable preview.',
+            'Check room settings and try again.',
+            'Use Join Room for direct entry.',
+            'Wait for participants, then retry preview.',
+            'Preview may return when activity starts.',
+            'Use context menu actions to join directly.',
+            'If needed, contact room admin for access.'
+        ];
+        const tone = [
+            'Thanks for respecting privacy.',
+            'Your request was safely blocked.',
+            'Access rules are working as expected.',
+            'Room protections are active.',
+            'Privacy controls are currently enforced.',
+            'Security settings are applied.',
+            'Visibility restrictions are in effect.',
+            'This behavior is intentional.',
+            'Room policy is being enforced.',
+            'Preview protections remain enabled.'
+        ];
+
+        const reasonPool = code === 'creator_admin_only'
+            ? creatorAdminReason
+            : code === 'no_audio'
+                ? noAudioReason
+                : privacyReason;
+
+        const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        return `${pick(intro)} ${pick(reasonPool)} ${pick(actionHint)} ${pick(tone)}`;
+    }
+
+    handleFocusedRoomContextKey(event, roomId) {
+        const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+        if (!isContextKey) return;
+        this.openFocusedRoomContextMenu(event, roomId);
+    }
+
+    openFocusedRoomContextMenu(event, roomId) {
+        event?.preventDefault();
+        event?.stopPropagation();
+
+        const roomItem = document.querySelector(`.room-item[data-room-id="${roomId}"]`);
+        const actionsMenu = roomItem?.querySelector('.room-actions-menu');
+        if (!actionsMenu) return;
+
+        actionsMenu.open = true;
+
+        const previewBtn = actionsMenu.querySelector('.room-action-btn[aria-label^="Preview room audio"]');
+        const joinBtn = actionsMenu.querySelector('.room-action-btn');
+        (previewBtn || joinBtn)?.focus();
+    }
+
+    isCurrentUserAdmin() {
+        const user = this.currentUser || {};
+        const role = String(user.role || '').toLowerCase();
+        return user.isAdmin === true ||
+            role === 'admin' ||
+            (Array.isArray(user.permissions) && user.permissions.includes('admin'));
+    }
+
+    openRoomJukeboxFromMenu(roomId) {
+        const inSelectedRoom = !!this.currentRoom && (this.currentRoom.id === roomId || this.currentRoom.roomId === roomId);
+        if (!inSelectedRoom) {
+            this.showNotification('Join this room first, then open Room Jukebox controls.', 'info');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            window.jukeboxManager.enable();
+            window.jukeboxManager.openPanel();
+            this.showNotification('Opened room Jukebox controls.', 'success');
+            return;
+        }
+
+        if (window.mediaStreamingInterface) {
+            window.mediaStreamingInterface.show();
+            this.showNotification('Opened media controls.', 'success');
+            return;
+        }
+
+        this.showNotification('Media controls are not available in this build.', 'error');
+    }
+
+    openGlobalMediaManagement() {
+        if (!this.isCurrentUserAdmin()) {
+            this.showNotification('Admin role required for global media settings.', 'error');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            window.jukeboxManager.openServerConfig();
+            this.showNotification('Opened global media server settings.', 'success');
+            return;
+        }
+
+        if (window.mediaStreamingInterface) {
+            window.mediaStreamingInterface.show();
+            this.showNotification('Opened global media settings.', 'success');
+            return;
+        }
+
+        this.showNotification('Global media settings are not available in this build.', 'error');
+    }
+
     getRoomStatusLabels(roomData) {
         let labels = [];
 
-        // Check if room is locked (private or password protected)
-        const isLocked = roomData.privacyLevel === 'private' || roomData.hasPassword;
-
-        // Privacy level label with lock icon for private/protected rooms
+        // Privacy level label
         const privacyLabels = {
-            'public': '<span class="status-public">🌐 Public</span>',
-            'unlisted': '<span class="status-unlisted">👁️ Unlisted</span>',
-            'private': '<span class="status-private">🔒 Private</span>',
-            'encrypted': '<span class="status-encrypted">🔐 Encrypted</span>',
-            'secure': '<span class="status-secure">🛡️ Secure</span>'
+            'public': '[Public]',
+            'unlisted': '[Unlisted]',
+            'private': '[Private]',
+            'encrypted': '[Encrypted]',
+            'secure': '[Secure]'
         };
-        labels.push(privacyLabels[roomData.privacyLevel] || privacyLabels['public']);
-
-        // Password protected indicator (separate from privacy level)
-        if (roomData.hasPassword && roomData.privacyLevel !== 'private') {
-            labels.push('<span class="status-password">🔑 Password Required</span>');
-        }
+        labels.push(privacyLabels[roomData.privacyLevel] || '[Public]');
 
         // Encryption status
         if (roomData.encrypted) {
-            labels.push('<span class="status-e2e">🔐 End-to-End Encrypted</span>');
+            labels.push('[End-to-End Encrypted]');
         }
 
         return labels.map(label => `<span class="status-label">${label}</span>`).join(' ');
@@ -2031,81 +2812,8 @@ class VoiceLinkApp {
         return roomId;
     }
 
-    updateCreateRoomOptionsForAuth() {
-        const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
-        const durationSelect = document.getElementById('room-duration');
-
-        if (durationSelect) {
-            // Show/hide options based on auth status
-            const guestOptions = durationSelect.querySelectorAll('.guest-only-option');
-            const authOptions = durationSelect.querySelectorAll('.auth-only-option');
-
-            guestOptions.forEach(opt => opt.style.display = isAuthenticated ? 'none' : 'block');
-            authOptions.forEach(opt => opt.style.display = isAuthenticated ? 'block' : 'none');
-
-            // Set default selection based on auth status
-            if (isAuthenticated) {
-                // Default to 1 hour for authenticated users
-                durationSelect.value = '3600000';
-            } else {
-                // Default to 20 minutes for guests
-                durationSelect.value = '1200000';
-            }
-        }
-
-        // Update visibility and access options visibility
-        const privacyControls = document.getElementById('room-privacy-controls');
-        const accessControls = document.getElementById('room-access-controls');
-        const passwordGroup = document.getElementById('room-password-group');
-
-        if (!isAuthenticated) {
-            // For guests, show a notice about limitations
-            if (privacyControls) {
-                const notice = privacyControls.querySelector('.guest-notice') || document.createElement('div');
-                notice.className = 'guest-notice';
-                notice.style.cssText = 'background: rgba(255,165,0,0.1); padding: 10px; border-radius: 5px; margin-top: 10px; font-size: 0.9em;';
-                notice.innerHTML = '⚠️ Guests can only create public rooms. <a href="#" onclick="document.getElementById(\'mastodon-login-btn\')?.click(); return false;" style="color: #6366f1; text-decoration: underline;">Login</a> for private rooms, passwords, and longer durations.';
-                if (!privacyControls.querySelector('.guest-notice')) {
-                    privacyControls.appendChild(notice);
-                }
-            }
-
-            // Disable private/unlisted options for guests
-            const privateOption = document.querySelector('input[name="room-visibility"][value="private"]');
-            const unlistedOption = document.querySelector('input[name="room-visibility"][value="unlisted"]');
-            if (privateOption) privateOption.disabled = true;
-            if (unlistedOption) unlistedOption.disabled = true;
-
-            // Force public selection
-            const publicOption = document.querySelector('input[name="room-visibility"][value="public"]');
-            if (publicOption) publicOption.checked = true;
-
-            // Disable password for guests
-            if (passwordGroup) {
-                const passwordInput = document.getElementById('room-password');
-                if (passwordInput) {
-                    passwordInput.disabled = true;
-                    passwordInput.placeholder = 'Login required for password protection';
-                }
-            }
-        } else {
-            // Remove guest notice for authenticated users
-            const guestNotice = document.querySelector('.guest-notice');
-            if (guestNotice) guestNotice.remove();
-
-            // Enable all options
-            document.querySelectorAll('input[name="room-visibility"]').forEach(opt => opt.disabled = false);
-            const passwordInput = document.getElementById('room-password');
-            if (passwordInput) {
-                passwordInput.disabled = false;
-                passwordInput.placeholder = 'Leave empty for public room';
-            }
-        }
-    }
-
     async createRoom() {
         const roomName = document.getElementById('room-name').value;
-        const roomDescription = document.getElementById('room-description')?.value || '';
         const password = document.getElementById('room-password').value;
         const maxUsers = parseInt(document.getElementById('max-users').value);
         const duration = document.getElementById('room-duration').value;
@@ -2115,29 +2823,6 @@ class VoiceLinkApp {
         const accessType = document.querySelector('input[name="room-access"]:checked')?.value || 'hybrid';
         // Legacy privacy level support
         const privacyLevel = document.querySelector('input[name="privacy-level"]:checked')?.value || visibility;
-
-        // Check if user is authenticated for room time limits
-        const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
-
-        // Enforce guest restrictions
-        if (!isAuthenticated) {
-            // Guests can only create public rooms
-            if (visibility !== 'public') {
-                this.showError('Guests can only create public rooms. Please login to create private rooms.');
-                return;
-            }
-            // Guests cannot use passwords
-            if (password) {
-                this.showError('Guests cannot create password-protected rooms. Please login for this feature.');
-                return;
-            }
-            // Guests limited to 10-30 minute durations
-            const durationNum = parseInt(duration);
-            if (duration === 'lifetime' || durationNum > 1800000) { // 30 minutes max
-                this.showError('Guests can only create rooms lasting 10-30 minutes. Please login for longer durations.');
-                return;
-            }
-        }
 
         // Determine if room should be visible to guests based on visibility and access type
         const visibleToGuests = visibility === 'public' && accessType !== 'hidden';
@@ -2156,6 +2841,9 @@ class VoiceLinkApp {
 
             const apiBase = this.getApiBaseUrl();
 
+            // Check if user is authenticated for room time limits
+            const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
+
             const response = await fetch(`${apiBase}/api/rooms`, {
                 method: 'POST',
                 headers: {
@@ -2164,7 +2852,6 @@ class VoiceLinkApp {
                 body: JSON.stringify({
                     roomId: roomId,
                     name: roomName,
-                    description: roomDescription,
                     password: password || undefined,
                     maxUsers,
                     duration: duration === 'lifetime' ? null : parseInt(duration),
@@ -2316,6 +3003,7 @@ class VoiceLinkApp {
         const roomId = document.getElementById('join-room-id').value;
         const userName = document.getElementById('user-name').value;
         const password = document.getElementById('join-room-password').value;
+        const audioBehavior = this.getAudioBehaviorSettings();
 
         if (!roomId || !userName) {
             this.showError('Please enter room ID and your name');
@@ -2323,9 +3011,6 @@ class VoiceLinkApp {
         }
 
         try {
-            // Initialize local stream first
-            await this.audioEngine.getUserMedia();
-
             // Initialize WebRTC manager
             this.webrtcManager = new WebRTCManager(
                 this.socket,
@@ -2333,7 +3018,9 @@ class VoiceLinkApp {
                 this.spatialAudio
             );
 
-            await this.webrtcManager.initializeLocalStream();
+            await this.webrtcManager.initializeLocalStream({
+                autoEnableMic: audioBehavior.autoEnableMic
+            });
 
             // Setup push-to-talk
             this.webrtcManager.setupPushToTalk('Space');
@@ -2348,9 +3035,18 @@ class VoiceLinkApp {
                 password
             });
 
+            if (!audioBehavior.autoEnableMic) {
+                this.showNotification('Joined in listen-only mode. Enable microphone in Audio settings to talk.', 'info');
+            }
+
         } catch (error) {
             console.error('Failed to join room:', error);
-            this.showError('Failed to access microphone or join room');
+            const errorName = error?.name || '';
+            if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
+                this.showError('Microphone permission is blocked. You can still join in listen-only mode or allow mic access in Safari/Chrome site settings.');
+            } else {
+                this.showError('Failed to join room');
+            }
         }
     }
 
@@ -2394,12 +3090,11 @@ class VoiceLinkApp {
 
             // Show peek button if room has users
             const peekBtn = document.getElementById('join-peek-btn');
-            if (roomData.users > 0) {
-                peekBtn.style.display = 'inline-block';
-                peekBtn.onclick = () => this.peekIntoRoom(roomId, roomData.name);
-            } else {
-                peekBtn.style.display = 'none';
-            }
+            const previewAvailability = this.getRoomPreviewAvailability(roomData);
+            peekBtn.style.display = 'inline-block';
+            peekBtn.disabled = !previewAvailability.enabled;
+            peekBtn.title = previewAvailability.reason || 'Preview room audio';
+            peekBtn.onclick = () => this.requestRoomPreview(roomId, roomData.name);
         } else {
             // Fallback for manual room ID entry
             document.getElementById('join-room-name').textContent = 'Join Room';
@@ -2407,7 +3102,9 @@ class VoiceLinkApp {
             document.getElementById('join-room-users').textContent = '';
             document.getElementById('join-room-privacy').textContent = '';
             document.getElementById('join-password-group').style.display = 'block'; // Show password just in case
-            document.getElementById('join-peek-btn').style.display = 'none';
+            const peekBtn = document.getElementById('join-peek-btn');
+            peekBtn.style.display = 'none';
+            peekBtn.disabled = true;
         }
 
         // Set default username if not already set
@@ -2839,25 +3536,67 @@ class VoiceLinkApp {
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
         userElement.setAttribute('data-user-name', user.name || 'Unknown');
+        userElement.tabIndex = 0;
+        userElement.setAttribute('role', 'button');
+        userElement.setAttribute('aria-label', `${user.name}. Right click or use keyboard context menu for user actions.`);
 
         userElement.innerHTML = `
-            <div class="user-info">
-                <div class="user-status connected" title="Connected"></div>
-                <span class="user-name">${user.name}</span>
-                <span class="audio-indicator" style="display: none;">[Speaking]</span>
+            <div class="user-header-row">
+                <div class="user-info">
+                    <div class="user-status connected" title="Connected"></div>
+                    <span class="user-name">${user.name}</span>
+                    <span class="audio-indicator" style="display: none;">[Speaking]</span>
+                </div>
+                <button class="user-audio-toggle-btn" onclick="app.toggleUserAudioControls('${user.id}', this)" title="Show or hide user audio controls for ${user.name}" aria-label="Show or hide user audio controls for ${user.name}">Show User Audio Controls</button>
             </div>
-            <div class="user-controls">
+            <div class="user-controls hidden">
                 <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
                 <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Increase volume" aria-label="Increase volume for ${user.name}">Vol +</button>
                 <button onclick="app.toggleUserMute('${user.id}')" title="Mute user" aria-label="Mute ${user.name}">Mute</button>
-                <button onclick="window.userContextMenu?.showMenuForUser('${user.id}', this.closest('.user-item'))" title="User actions" aria-label="Actions for ${user.name}">Actions</button>
             </div>
         `;
+
+        this.bindUserContextMenuHandlers(userElement, user.id);
 
         userList.appendChild(userElement);
 
         // Update audio routing panel
         this.updateAudioRoutingPanel();
+    }
+
+    bindUserContextMenuHandlers(userElement, userId) {
+        if (!userElement) return;
+
+        userElement.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+
+        userElement.addEventListener('keydown', (event) => {
+            const isKeyboardContextMenu =
+                event.key === 'ContextMenu' ||
+                (event.shiftKey && event.key === 'F10');
+            if (!isKeyboardContextMenu) return;
+
+            event.preventDefault();
+            this.showUserContextMenuForElement(userId, userElement);
+        });
+    }
+
+    showUserContextMenuForElement(userId, anchorEl) {
+        window.userContextMenu?.showMenuForUser(userId, anchorEl);
+    }
+
+    toggleUserAudioControls(userId, buttonEl) {
+        const userElement = document.querySelector(`[data-user-id=\"${userId}\"]`);
+        const controls = userElement?.querySelector('.user-controls');
+        if (!controls) return;
+
+        const isHidden = controls.classList.toggle('hidden');
+        if (buttonEl) {
+            buttonEl.textContent = isHidden ? 'Show User Audio Controls' : 'Hide User Audio Controls';
+            buttonEl.setAttribute('aria-expanded', String(!isHidden));
+        }
     }
 
     removeUserFromUI(userId) {
@@ -3073,6 +3812,9 @@ class VoiceLinkApp {
         if (window.jukeboxManager) {
             window.jukeboxManager.disable();
         }
+
+        // Stop background stream when leaving room
+        this.stopBackgroundStream();
 
         // Clean up whisper mode
         if (this.whisperMode) {
@@ -3468,7 +4210,14 @@ class VoiceLinkApp {
             }
         } catch (error) {
             console.error('Audio test failed:', error);
-            alert('Audio test failed. Please check your audio settings and ensure audio permissions are granted.');
+            const name = error?.name || '';
+            if (name === 'NotAllowedError' || name === 'SecurityError') {
+                alert('Microphone access is blocked by browser/site policy. Check Chrome site settings and OS microphone privacy settings.');
+            } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+                alert('Audio test failed because the selected audio device is unavailable. Choose a different input/output device and try again.');
+            } else {
+                alert('Audio test failed. Check your audio devices and browser settings, then try again.');
+            }
         }
     }
 
@@ -3511,6 +4260,40 @@ class VoiceLinkApp {
         // This would load settings from localStorage or native API
         // For now, just set default values
         console.log('Loading current settings...');
+
+        const behaviorSelect = document.getElementById('multi-device-behavior');
+        const autoQuitToggle = document.getElementById('auto-quit-on-other-login');
+        if (behaviorSelect) {
+            behaviorSelect.value = localStorage.getItem('voicelink_multi_device_behavior') || 'prompt';
+        }
+        if (autoQuitToggle) {
+            autoQuitToggle.checked = localStorage.getItem('voicelink_auto_quit_other') === 'true';
+        }
+
+        const audioBehavior = this.getAudioBehaviorSettings();
+        const autoEnableMicToggle = document.getElementById('auto-enable-mic-setting');
+        const alwaysEnableMediaToggle = document.getElementById('always-enable-media-setting');
+        if (autoEnableMicToggle) {
+            autoEnableMicToggle.checked = audioBehavior.autoEnableMic;
+        }
+        if (alwaysEnableMediaToggle) {
+            alwaysEnableMediaToggle.checked = audioBehavior.alwaysEnableMedia;
+        }
+        const sendLogsToggle = document.getElementById('send-support-logs-setting');
+        if (sendLogsToggle) {
+            const enabled = localStorage.getItem('voicelink_send_support_logs') === 'true';
+            sendLogsToggle.checked = enabled;
+            this.logCaptureEnabled = enabled;
+        }
+        const savedDisplayName = localStorage.getItem('voicelink_auth_display_name') || '';
+        const savedMastodonHandle = localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '';
+        const authDisplayNameInput = document.getElementById('auth-display-name');
+        const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
+        if (authDisplayNameInput) authDisplayNameInput.value = savedDisplayName;
+        if (authPreferredHandleInput) authPreferredHandleInput.value = savedMastodonHandle;
+        this.applySavedIdentityPreferences();
+        this.refreshAuthenticationSettingsPanel();
+        this.updateMultiDeviceStatusUI();
     }
 
     setupSettingsEventListeners() {
@@ -3537,6 +4320,50 @@ class VoiceLinkApp {
             }
         });
 
+        document.getElementById('auth-open-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+        });
+
+        document.getElementById('auth-link-mastodon-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+            this.setActiveAuthTab('mastodon-login');
+        });
+
+        document.getElementById('auth-link-wallet-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+            this.setActiveAuthTab('wallet-login');
+        });
+
+        document.getElementById('auth-open-admin-btn')?.addEventListener('click', () => {
+            this.showAdminPanel();
+        });
+
+        document.getElementById('auth-logout-btn')?.addEventListener('click', () => {
+            this.handleMastodonLogout();
+        });
+        document.getElementById('auth-display-name')?.addEventListener('change', () => {
+            this.applySavedIdentityPreferences();
+        });
+        document.getElementById('auth-preferred-mastodon-handle')?.addEventListener('change', () => {
+            this.applySavedIdentityPreferences();
+        });
+
+        document.getElementById('check-updates-btn')?.addEventListener('click', () => {
+            this.checkForAppUpdates();
+        });
+
+        document.getElementById('send-support-logs-setting')?.addEventListener('change', (e) => {
+            this.setSupportLogSendingEnabled(!!e.target.checked);
+        });
+
+        document.getElementById('send-logs-now-btn')?.addEventListener('click', () => {
+            this.sendSupportLogs('manual');
+        });
+
+        document.getElementById('clear-local-logs-btn')?.addEventListener('click', () => {
+            this.clearLocalLogs();
+        });
+
         // Network buttons
         document.getElementById('copy-url-btn')?.addEventListener('click', () => {
             this.copyServerUrl();
@@ -3552,6 +4379,40 @@ class VoiceLinkApp {
             if (window.nativeAPI) {
                 window.nativeAPI.restartServer();
             }
+        });
+
+        // Multi-device settings
+        document.getElementById('multi-device-behavior')?.addEventListener('change', (e) => {
+            this.setMultiDeviceSettings({ behavior: e.target.value });
+        });
+
+        document.getElementById('auto-quit-on-other-login')?.addEventListener('change', (e) => {
+            this.setMultiDeviceSettings({ autoQuit: e.target.checked });
+        });
+
+        document.getElementById('auto-enable-mic-setting')?.addEventListener('change', (e) => {
+            this.setAudioBehaviorSettings({ autoEnableMic: e.target.checked });
+        });
+
+        document.getElementById('always-enable-media-setting')?.addEventListener('change', (e) => {
+            this.setAudioBehaviorSettings({ alwaysEnableMedia: e.target.checked });
+        });
+
+        document.getElementById('multi-device-reconnect')?.addEventListener('click', () => {
+            this.connectToServer().then(() => {
+                this.registerSession();
+                this.showNotification('Reconnected', 'success');
+            }).catch(() => {
+                this.showNotification('Reconnect failed', 'error');
+            });
+        });
+
+        document.getElementById('multi-device-disconnect')?.addEventListener('click', () => {
+            this.disconnectForMultiDevice();
+        });
+
+        document.getElementById('multi-device-keep')?.addEventListener('click', () => {
+            this.showNotification('Keeping both devices active', 'info');
         });
     }
 
@@ -3655,14 +4516,180 @@ class VoiceLinkApp {
 
     saveAllSettings() {
         console.log('Saving all settings...');
-        // Implementation would save to localStorage or native API
+        const autoEnableMic = document.getElementById('auto-enable-mic-setting')?.checked;
+        const alwaysEnableMedia = document.getElementById('always-enable-media-setting')?.checked;
+        const sendSupportLogs = document.getElementById('send-support-logs-setting')?.checked;
+        const authDisplayName = (document.getElementById('auth-display-name')?.value || '').trim();
+        const authPreferredMastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || '').trim();
+        this.setAudioBehaviorSettings({
+            autoEnableMic: typeof autoEnableMic === 'boolean' ? autoEnableMic : true,
+            alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
+        });
+        this.setSupportLogSendingEnabled(!!sendSupportLogs);
+        localStorage.setItem('voicelink_auth_display_name', authDisplayName);
+        localStorage.setItem('voicelink_auth_preferred_mastodon_handle', authPreferredMastodonHandle);
+        this.applySavedIdentityPreferences();
         alert('Settings saved successfully!');
     }
 
     resetAllSettings() {
         console.log('Resetting all settings...');
-        // Implementation would reset to defaults
+        localStorage.removeItem('voicelink_audio_auto_enable_mic');
+        localStorage.removeItem('voicelink_audio_always_enable_media');
+        localStorage.removeItem('voicelink_send_support_logs');
+        localStorage.removeItem('voicelink_auth_display_name');
+        localStorage.removeItem('voicelink_auth_preferred_mastodon_handle');
+        const authDisplayNameInput = document.getElementById('auth-display-name');
+        const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
+        if (authDisplayNameInput) authDisplayNameInput.value = '';
+        if (authPreferredHandleInput) authPreferredHandleInput.value = '';
+        this.applySavedIdentityPreferences();
+        this.logCaptureEnabled = false;
         alert('Settings reset to defaults!');
+    }
+
+    applySavedIdentityPreferences() {
+        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || '').trim();
+        const mastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '').trim();
+        const joinNameInput = document.getElementById('user-name');
+        const whmcsMastodonHandleInput = document.getElementById('whmcs-mastodon-handle');
+
+        if (joinNameInput && displayName) {
+            const currentName = joinNameInput.value?.trim();
+            if (!currentName || currentName === 'Room Creator' || /^User\d{0,4}$/i.test(currentName)) {
+                joinNameInput.value = displayName;
+            }
+        }
+        if (whmcsMastodonHandleInput && mastodonHandle && !whmcsMastodonHandleInput.value?.trim()) {
+            whmcsMastodonHandleInput.value = mastodonHandle;
+        }
+    }
+
+    setupLogCapture() {
+        if (this.logCaptureInitialized) return;
+        this.logCaptureInitialized = true;
+
+        const levels = ['log', 'warn', 'error', 'info'];
+        this.originalConsole = this.originalConsole || {};
+
+        levels.forEach((level) => {
+            if (typeof console[level] !== 'function') return;
+            const original = console[level].bind(console);
+            this.originalConsole[level] = original;
+            console[level] = (...args) => {
+                original(...args);
+                this.captureClientLog(level, args);
+            };
+        });
+    }
+
+    setupGlobalErrorLogHooks() {
+        window.addEventListener('error', (event) => {
+            this.captureClientLog('error', [
+                'window.error',
+                event.message || 'Unknown error',
+                event.filename || '',
+                event.lineno || 0,
+                event.colno || 0
+            ]);
+            this.scheduleSupportLogUpload('window-error');
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            const reason = event.reason?.message || event.reason || 'Unhandled promise rejection';
+            this.captureClientLog('error', ['unhandledrejection', reason]);
+            this.scheduleSupportLogUpload('unhandledrejection');
+        });
+    }
+
+    captureClientLog(level, args = []) {
+        if (!this.logCaptureEnabled) return;
+
+        const entry = {
+            ts: new Date().toISOString(),
+            level,
+            message: args.map((arg) => this.serializeLogArg(arg)).join(' ').slice(0, 2500)
+        };
+
+        this.clientLogs.push(entry);
+        if (this.clientLogs.length > this.maxClientLogs) {
+            this.clientLogs.splice(0, this.clientLogs.length - this.maxClientLogs);
+        }
+    }
+
+    serializeLogArg(arg) {
+        if (arg === null || arg === undefined) return String(arg);
+        if (typeof arg === 'string') return arg;
+        if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+        if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+        try {
+            return JSON.stringify(arg);
+        } catch (e) {
+            return Object.prototype.toString.call(arg);
+        }
+    }
+
+    setSupportLogSendingEnabled(enabled) {
+        this.logCaptureEnabled = !!enabled;
+        localStorage.setItem('voicelink_send_support_logs', this.logCaptureEnabled ? 'true' : 'false');
+        if (this.logCaptureEnabled) {
+            this.captureClientLog('info', ['Support log sending enabled']);
+            this.showNotification('Support log sending enabled', 'info');
+        } else {
+            this.showNotification('Support log sending disabled', 'info');
+        }
+    }
+
+    clearLocalLogs() {
+        this.clientLogs = [];
+        this.showNotification('Local diagnostic logs cleared', 'info');
+    }
+
+    scheduleSupportLogUpload(reason) {
+        if (!this.logCaptureEnabled) return;
+        const now = Date.now();
+        if (now - this.lastLogSendAt < 2 * 60 * 1000) return;
+        clearTimeout(this.logFlushTimer);
+        this.logFlushTimer = setTimeout(() => this.sendSupportLogs(reason, true), 1500);
+    }
+
+    async sendSupportLogs(reason = 'manual', silent = false) {
+        if (!this.logCaptureEnabled) {
+            if (!silent) this.showNotification('Enable "Send diagnostic logs to support" first.', 'error');
+            return;
+        }
+
+        const logs = this.clientLogs.slice(-200);
+        const payload = {
+            reason,
+            clientId: this.getClientId(),
+            appVersion: document.getElementById('app-version')?.textContent || 'unknown',
+            platform: navigator.platform || 'unknown',
+            userAgent: navigator.userAgent || '',
+            room: this.currentRoom ? { id: this.currentRoom.id, name: this.currentRoom.name } : null,
+            user: this.currentUser ? { id: this.currentUser.id || '', username: this.currentUser.username || this.currentUser.displayName || '' } : null,
+            logCount: logs.length,
+            logs
+        };
+
+        try {
+            const response = await fetch(`${this.getApiBaseUrl()}/api/support/logs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`Upload failed (${response.status})`);
+            }
+
+            this.lastLogSendAt = Date.now();
+            if (!silent) this.showNotification('Logs sent to support', 'success');
+        } catch (error) {
+            if (!silent) {
+                this.showNotification(`Failed to send logs: ${error.message}`, 'error');
+            }
+        }
     }
 
     copyServerUrl() {
@@ -3806,53 +4833,14 @@ class VoiceLinkApp {
 
     // Button click audio system
     initializeButtonAudio() {
+        // Intentionally disable global click sounds.
+        // Only explicit, feature-specific sounds should play.
         this.buttonAudio = {
             clickSound: null,
-            init: async () => {
-                try {
-                    // Try different audio file paths
-                    const possiblePaths = [
-                        'sounds/connected.wav',
-                        'client/sounds/connected.wav',
-                        'assets/audio/test-audio/connected.wav'
-                    ];
-
-                    for (const path of possiblePaths) {
-                        try {
-                            this.buttonAudio.clickSound = new Audio(path);
-                            this.buttonAudio.clickSound.volume = 0.3;
-                            await new Promise((resolve, reject) => {
-                                this.buttonAudio.clickSound.addEventListener('canplaythrough', resolve);
-                                this.buttonAudio.clickSound.addEventListener('error', reject);
-                                this.buttonAudio.clickSound.load();
-                            });
-                            console.log(`Button click audio loaded from: ${path}`);
-                            break;
-                        } catch (e) {
-                            console.log(`Failed to load audio from ${path}`);
-                        }
-                    }
-                } catch (error) {
-                    console.log('Button click audio not available, using fallback');
-                }
-            },
-            playClick: () => {
-                if (this.buttonAudio.clickSound) {
-                    this.buttonAudio.clickSound.currentTime = 0;
-                    this.buttonAudio.clickSound.play().catch(e => console.log('Click sound failed'));
-                }
-            }
+            init: async () => {},
+            playClick: () => {}
         };
-
-        // Initialize button audio
-        this.buttonAudio.init();
-
-        // Add click sound to all buttons
-        document.addEventListener('click', (e) => {
-            if (e.target.tagName === 'BUTTON' || e.target.classList.contains('btn')) {
-                this.buttonAudio.playClick();
-            }
-        });
+        console.log('Global button click sounds disabled');
     }
 
     // ========================================
@@ -3888,6 +4876,7 @@ class VoiceLinkApp {
         // WHMCS Login Form Submit
         document.getElementById('whmcs-login-form')?.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
             const email = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
@@ -3896,6 +4885,7 @@ class VoiceLinkApp {
 
             if (email && password) {
                 await this.handleWhmcsLogin(email, password, {
+                    portalSite,
                     twoFactorCode,
                     mastodonHandle,
                     remember
@@ -3904,11 +4894,17 @@ class VoiceLinkApp {
         });
 
         document.getElementById('whmcs-sso-btn')?.addEventListener('click', async () => {
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
             const email = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
-            await this.handleWhmcsSsoLogin({ email, password, twoFactorCode, remember });
+            await this.handleWhmcsSsoLogin({ portalSite, email, password, twoFactorCode, remember });
+        });
+
+        document.getElementById('wp-sso-btn')?.addEventListener('click', async () => {
+            const portalSite = document.getElementById('whmcs-portal-site')?.value;
+            await this.openWordPressAutheliaLogin(portalSite);
         });
 
         // Connect button (Mastodon)
@@ -4054,6 +5050,7 @@ class VoiceLinkApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    portalSite: this.normalizePortalSite(options.portalSite),
                     email,
                     password,
                     twoFactorCode: options.twoFactorCode || null,
@@ -4097,6 +5094,7 @@ class VoiceLinkApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    portalSite: this.normalizePortalSite(options.portalSite),
                     email: options.email,
                     password: options.password,
                     twoFactorCode: options.twoFactorCode || null,
@@ -4121,6 +5119,48 @@ class VoiceLinkApp {
             console.error('WHMCS SSO failed:', error);
             this.showNotification(error.message || 'SSO failed', 'error');
         }
+    }
+
+    normalizePortalSite(site) {
+        const raw = String(site || '').trim().toLowerCase();
+        if (!raw) return 'tappedin.fm';
+        const withoutProtocol = raw.replace(/^https?:\/\//, '');
+        const host = withoutProtocol.split('/')[0];
+        if (!host) return 'tappedin.fm';
+        const normalizedHost = host.replace(/\.+$/, '');
+        const allowedHosts = new Set([
+            'tappedin.fm',
+            'www.tappedin.fm',
+            'ecripto.app',
+            'www.ecripto.app',
+            'ecripto.token',
+            'www.ecripto.token'
+        ]);
+        if (allowedHosts.has(normalizedHost)) return normalizedHost;
+        if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
+        return 'tappedin.fm';
+    }
+
+    async openWordPressAutheliaLogin(site) {
+        const host = this.normalizePortalSite(site);
+        const candidates = [
+            `https://${host}/authelia/login`,
+            `https://${host}/authelia`,
+            `https://${host}/wp-login.php`,
+            `https://${host}/wp-admin`
+        ];
+
+        for (const url of candidates) {
+            try {
+                await this.openExternal(url);
+                this.showNotification(`Opened login for ${host}`, 'info');
+                return;
+            } catch (_) {
+                // try next candidate
+            }
+        }
+
+        this.showNotification(`Unable to open WordPress/Authelia login for ${host}`, 'error');
     }
 
     restoreWhmcsSession() {
@@ -4186,6 +5226,8 @@ class VoiceLinkApp {
         const userRole = document.getElementById('mastodon-user-role');
         const joinNameInput = document.getElementById('user-name');
 
+        this.currentUser = user || null;
+
         if (user) {
             // Show logged-in state
             if (loginPrompt) loginPrompt.style.display = 'none';
@@ -4211,6 +5253,13 @@ class VoiceLinkApp {
 
             // Update role-based UI
             this.updateRoleBasedUI(user);
+            this.registerSession();
+            this.applyEntitlementVisibility(user);
+            if (window.walletManager?.connected) {
+                window.walletManager.linkToAccount().catch((err) => {
+                    console.warn('[WalletManager] Auto-link after auth failed:', err?.message || err);
+                });
+            }
 
             // Default the join name to Mastodon display name if empty or placeholder
             if (joinNameInput) {
@@ -4226,7 +5275,78 @@ class VoiceLinkApp {
 
             // Hide admin controls
             this.hideAdminControls();
+            this.applyEntitlementVisibility(null);
         }
+
+        this.refreshAuthenticationSettingsPanel();
+    }
+
+    refreshAuthenticationSettingsPanel() {
+        const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+        const currentUser = document.getElementById('auth-current-user');
+        const currentProvider = document.getElementById('auth-current-provider');
+        const currentRole = document.getElementById('auth-current-role');
+        const walletStatus = document.getElementById('auth-wallet-status');
+
+        if (currentUser) {
+            currentUser.textContent = user ? (user.displayName || user.username || user.email || 'Authenticated User') : 'Not logged in';
+        }
+        if (currentProvider) {
+            const auth = this.getAuthContext();
+            currentProvider.textContent = auth?.provider ? auth.provider.toUpperCase() : 'Guest';
+        }
+        if (currentRole) {
+            const roleValue = user?.role || (user?.isAdmin ? 'admin' : user?.isModerator ? 'staff' : (user ? 'user' : 'guest'));
+            currentRole.textContent = roleValue.charAt(0).toUpperCase() + roleValue.slice(1);
+        }
+        if (walletStatus) {
+            const hasWallet = !!(localStorage.getItem('voicelink_ecripto_token') || sessionStorage.getItem('voicelink_ecripto_token'));
+            walletStatus.textContent = hasWallet ? 'Connected' : 'Disconnected';
+        }
+    }
+
+    async checkForAppUpdates() {
+        try {
+            this.showNotification('Checking for updates...', 'info');
+
+            if (window.nativeAPI?.checkForUpdates) {
+                const nativeResult = await window.nativeAPI.checkForUpdates();
+                if (nativeResult?.updateAvailable) {
+                    this.showNotification(`Update available: ${nativeResult.version || 'new version'}`, 'success');
+                } else {
+                    this.showNotification('You are up to date.', 'info');
+                }
+                return;
+            }
+
+            const platform = /Mac/i.test(navigator.platform) ? 'macos' : /Win/i.test(navigator.platform) ? 'windows' : 'linux';
+            const response = await fetch(`${this.getApiBaseUrl()}/api/updates/check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ platform, currentVersion: this.appVersion || '0.0.0' })
+            });
+
+            const result = await response.json();
+            if (result?.updateAvailable) {
+                this.showNotification(`Update available: v${result.version}`, 'success');
+            } else {
+                this.showNotification('You are up to date.', 'info');
+            }
+        } catch (error) {
+            console.error('Failed to check updates:', error);
+            this.showNotification('Could not check for updates right now.', 'error');
+        }
+    }
+
+    applyEntitlementVisibility(user) {
+        const connectionsTabBtn = document.querySelector('.tab-btn[data-tab="connections"]');
+        const connectionsTab = document.getElementById('connections-tab');
+        const allowByRole = user?.permissions?.includes('admin') || user?.permissions?.includes('staff') || user?.permissions?.includes('client');
+        const allowByEntitlement = user?.entitlements?.allowMultiDeviceSettings !== false;
+        const allowConnections = !!user && allowByRole && allowByEntitlement;
+
+        if (connectionsTabBtn) connectionsTabBtn.style.display = allowConnections ? '' : 'none';
+        if (connectionsTab) connectionsTab.style.display = allowConnections ? '' : 'none';
     }
 
     updateRoleBasedUI(user) {
@@ -4252,6 +5372,11 @@ class VoiceLinkApp {
             adminPanelBtn.remove();
         }
 
+        const authAdminBtn = document.getElementById('auth-open-admin-btn');
+        if (authAdminBtn) {
+            authAdminBtn.style.display = isAdmin ? '' : 'none';
+        }
+
         // Show share room button for all authenticated users
         this.updateShareButtons(!!user);
 
@@ -4267,6 +5392,11 @@ class VoiceLinkApp {
         const adminPanelBtn = document.getElementById('admin-panel-btn');
         if (adminPanelBtn) {
             adminPanelBtn.remove();
+        }
+
+        const authAdminBtn = document.getElementById('auth-open-admin-btn');
+        if (authAdminBtn) {
+            authAdminBtn.style.display = 'none';
         }
     }
 
@@ -5143,11 +6273,22 @@ class VoiceLinkApp {
 
     async createDefaultRooms() {
         try {
+            const input = window.prompt('How many default rooms should be created? (1-50)', '10');
+            if (input === null) return;
+            const parsed = Number(input);
+            const requestedCount = Number.isFinite(parsed)
+                ? Math.max(1, Math.min(50, Math.floor(parsed)))
+                : 10;
+
             const apiBase = this.getApiBaseUrl();
-            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, { method: 'POST' });
+            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ defaultCount: requestedCount })
+            });
             const result = await response.json();
 
-            this.showNotification('Created ' + (result.count || 0) + ' default rooms', 'success');
+            this.showNotification('Created ' + (result.count || 0) + ` default rooms (requested ${requestedCount})`, 'success');
             this.loadAdminRooms();
             this.loadRooms();
         } catch (error) {
@@ -5506,19 +6647,11 @@ class JukeboxManager {
         this.audioElement = new Audio();
         this.audioElement.crossOrigin = 'anonymous';
         this.audioElement.volume = this.volume / 100;
-        this.audioElement.preload = 'metadata';
-        
-        // Add browser compatibility support
-        this.audioElement.setAttribute('playsinline', 'playsinline');
-        this.audioElement.setAttribute('webkit-playsinline', 'webkit-playsinline');
 
         this.audioElement.addEventListener('timeupdate', () => this.updateProgress());
         this.audioElement.addEventListener('ended', () => this.handleTrackEnded());
         this.audioElement.addEventListener('loadedmetadata', () => this.updateDuration());
         this.audioElement.addEventListener('error', (e) => this.handlePlaybackError(e));
-        this.audioElement.addEventListener('loadstart', () => this.handleLoadStart());
-        this.audioElement.addEventListener('canplay', () => this.handleCanPlay());
-        this.audioElement.addEventListener('stalled', () => this.handleStalled());
     }
 
     async loadServers() {
@@ -5651,12 +6784,6 @@ class JukeboxManager {
     async playItem(item) {
         if (!this.currentServer || !item) return;
 
-        // Check network connectivity
-        if (!navigator.onLine) {
-            this.app.showNotification('Offline. Cannot stream media.', 'error');
-            return;
-        }
-
         try {
             const apiBase = this.app.getApiBaseUrl();
 
@@ -5675,55 +6802,21 @@ class JukeboxManager {
             if (data.success && data.streamUrl) {
                 this.currentTrack = {
                     ...item,
-                    streamUrl: data.streamUrl,
-                    directPlay: data.directPlay,
-                    alternativeStreams: data.alternativeStreams || [],
-                    metadata: data.metadata || {},
-                    triedDirect: false,
-                    triedAlternatives: false
+                    streamUrl: data.streamUrl
                 };
 
-                // Reset audio element state
-                this.audioElement.pause();
-                this.audioElement.currentTime = 0;
-                
-                // Set new source with better error handling
                 this.audioElement.src = data.streamUrl;
-                
-                // Try to play with timeout and detailed error handling
-                const playPromise = this.audioElement.play();
-                
-                if (playPromise !== undefined) {
-                    playPromise
-                        .then(() => {
-                            this.isPlaying = true;
-                            this.updateNowPlaying();
-                            this.updatePlayButton();
-                            console.log('Playback started successfully:', item.Name);
-                            // Broadcast to room
-                            this.broadcastPlay();
-                        })
-                        .catch(error => {
-                            console.error('Play promise rejected:', error);
-                            if (error.name === 'NotAllowedError') {
-                                this.app.showNotification('Autoplay blocked. Click play button to start.', 'warning');
-                            } else if (error.name === 'NotSupportedError') {
-                                this.app.showNotification('Media format not supported. Trying next track...', 'error');
-                                this.next();
-                            } else {
-                                this.app.showNotification(`Playback failed: ${error.message}`, 'error');
-                            }
-                        });
-                }
-            } else {
-                throw new Error(data.error || 'Failed to get stream URL');
+                this.audioElement.play();
+                this.isPlaying = true;
+                this.updateNowPlaying();
+                this.updatePlayButton();
+
+                // Broadcast to room
+                this.broadcastPlay();
             }
         } catch (error) {
             console.error('Failed to play item:', error);
-            this.app.showNotification(`Failed to play "${item.Name}": ${error.message}`, 'error');
-            
-            // Automatically try next track
-            setTimeout(() => this.next(), 1000);
+            this.app.showNotification('Failed to play media', 'error');
         }
     }
 
@@ -5848,18 +6941,9 @@ class JukeboxManager {
     }
 
     next() {
-        if (this.queue.length === 0) {
-            console.log('Queue empty, cannot skip to next track');
-            this.stop();
-            return;
-        }
+        if (this.queue.length === 0) return;
 
-        // If current track failed and was removed, currentIndex should already be adjusted
-        // Otherwise, move to next track
         this.currentIndex = (this.currentIndex + 1) % this.queue.length;
-        
-        console.log(`Playing next track: ${this.queue[this.currentIndex]?.Name || 'Unknown'} (index: ${this.currentIndex})`);
-        
         this.playItem(this.queue[this.currentIndex]);
         this.renderQueue();
         this.broadcastSkip(this.currentIndex);
@@ -5940,127 +7024,14 @@ class JukeboxManager {
         }
     }
 
-    handleLoadStart() {
-        console.log('Loading track:', this.currentTrack?.Name || 'Unknown');
-    }
-
-    handleCanPlay() {
-        console.log('Track ready to play:', this.currentTrack?.Name || 'Unknown');
-    }
-
-    handleStalled() {
-        console.warn('Playback stalled, waiting for data...');
-    }
-
     handlePlaybackError(e) {
-        const error = e.target ? e.target.error : e;
-        let errorMessage = 'Unknown error';
-        
-        if (error) {
-            switch (error.code) {
-                case error.MEDIA_ERR_ABORTED:
-                    errorMessage = 'Playback aborted';
-                    break;
-                case error.MEDIA_ERR_NETWORK:
-                    errorMessage = 'Network error - failed to fetch media';
-                    break;
-                case error.MEDIA_ERR_DECODE:
-                    errorMessage = 'Media format not supported or corrupted';
-                    break;
-                case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                    errorMessage = 'Media source not supported or unavailable';
-                    break;
-                default:
-                    errorMessage = `Error ${error.code}: ${error.message || 'Unknown media error'}`;
-            }
-        }
-        
-        console.error('Playback error:', {
-            track: this.currentTrack?.Name || 'Unknown',
-            url: this.currentTrack?.streamUrl || 'No URL',
-            error: errorMessage,
-            details: e
-        });
-
-        // Try alternative stream formats before skipping
-        if (this.tryAlternativeStream()) {
-            return; // Don't skip if trying alternative
-        }
-
-        this.app.showNotification(`Playback error: ${errorMessage}. Trying next track...`, 'error');
-        
-        // Remove problematic track from queue
-        if (this.currentIndex >= 0 && this.currentIndex < this.queue.length) {
-            const removedTrack = this.queue.splice(this.currentIndex, 1)[0];
-            console.warn('Removed problematic track from queue:', removedTrack.Name);
-            this.currentIndex = Math.max(0, this.currentIndex - 1); // Adjust index
-            this.renderQueue();
-        }
-        
-        if (this.queue.length > 0) {
-            this.currentIndex = this.currentIndex % this.queue.length;
-            this.playItem(this.queue[this.currentIndex]);
+        console.error('Playback error:', e);
+        this.app.showNotification('Playback error. Trying next track...', 'error');
+        if (this.queue.length > 1) {
+            this.next();
         } else {
             this.stop();
-            this.app.showNotification('Queue empty. No more tracks to play.', 'info');
         }
-    }
-
-    tryAlternativeStream() {
-        if (!this.currentTrack) return false;
-        
-        // If we haven't tried direct download yet, try it
-        if (!this.currentTrack.triedDirect && this.currentTrack.directPlay) {
-            console.log('Trying direct download stream instead...');
-            this.currentTrack.triedDirect = true;
-            this.currentTrack.streamUrl = this.currentTrack.directPlay;
-            
-            // Retry playback with direct URL
-            setTimeout(() => {
-                this.audioElement.src = this.currentTrack.streamUrl;
-                this.audioElement.play().catch(e => {
-                    console.error('Direct stream also failed:', e);
-                    this.handlePlaybackError(e);
-                });
-            }, 100);
-            
-            return true;
-        }
-        
-        // Try alternative streams if available
-        if (this.currentTrack.alternativeStreams && !this.currentTrack.triedAlternatives) {
-            this.currentTrack.triedAlternatives = true;
-            const alternatives = this.currentTrack.alternativeStreams;
-            
-            console.log(`Trying ${alternatives.length} alternative stream formats...`);
-            
-            // Try each alternative with fallback
-            alternatives.forEach((altUrl, index) => {
-                setTimeout(() => {
-                    console.log(`Trying alternative ${index + 1}/${alternatives.length}: ${altUrl}`);
-                    this.currentTrack.streamUrl = altUrl;
-                    
-                    this.audioElement.src = altUrl;
-                    this.audioElement.play()
-                        .then(() => {
-                            console.log(`Alternative ${index + 1} succeeded!`);
-                            this.app.showNotification('Found working stream format', 'success');
-                        })
-                        .catch(e => {
-                            console.error(`Alternative ${index + 1} failed:`, e);
-                            
-                            // If this is the last alternative, handle the final error
-                            if (index === alternatives.length - 1) {
-                                this.handlePlaybackError(e);
-                            }
-                        });
-                }, (index + 1) * 500); // Stagger attempts
-            });
-            
-            return true;
-        }
-        
-        return false;
     }
 
     // Socket broadcast methods

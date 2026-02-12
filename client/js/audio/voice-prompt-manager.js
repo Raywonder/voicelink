@@ -27,6 +27,23 @@ class VoicePromptManager {
         this.activePrompts = new Map(); // instanceId -> PromptInstance
         this.promptQueue = [];
         this.isProcessingQueue = false;
+        this.promptRetryTimers = new Map(); // promptId -> timeoutId
+        this.promptRetryState = new Map(); // promptId -> { attempts, nextRetryAt, cooldownUntil }
+        this.retrySweepTimer = null;
+
+        // Silent download/retry behavior for missing prompt packs
+        this.downloadConfig = {
+            maxAttempts: 8,
+            retryIntervalMs: 5 * 60 * 1000, // 5 minutes
+            cooldownAfterMaxMs: 60 * 60 * 1000, // 1 hour
+            requestTimeoutMs: 12000
+        };
+        this.promptBaseUrls = [
+            'assets/audio/voice-prompts/',
+            '/assets/audio/voice-prompts/',
+            '/downloads/voicelink/prompt-packs/default/',
+            'https://voicelink.devinecreations.net/downloads/voicelink/prompt-packs/default/'
+        ];
 
         // Voice prompt categories and files
         this.promptCatalog = {
@@ -112,6 +129,7 @@ class VoicePromptManager {
 
         // Pre-load essential prompts
         await this.preloadEssentialPrompts();
+        this.startSilentRetrySweep();
 
         console.log('Voice Prompt Manager initialized');
     }
@@ -161,33 +179,32 @@ class VoicePromptManager {
         if (this.loadedPrompts.has(promptId) || this.loadingPrompts.has(promptId)) {
             return;
         }
+        if (!this.isRetryAllowed(promptId)) {
+            return;
+        }
 
         this.loadingPrompts.add(promptId);
 
         try {
-            const filePath = this.getPromptFilePath(promptId);
-
-            const response = await fetch(filePath);
-            if (!response.ok) {
-                throw new Error(`Failed to load prompt: ${response.status}`);
-            }
-
-            const arrayBuffer = await response.arrayBuffer();
+            const arrayBuffer = await this.fetchPromptAudioData(promptId);
             const audioBuffer = await this.audioEngine.audioContext.decodeAudioData(arrayBuffer);
 
             this.promptCache.set(promptId, audioBuffer);
             this.loadedPrompts.add(promptId);
+            this.markPromptDownloadSuccess(promptId);
 
             console.log(`Loaded voice prompt: ${promptId}`);
-
         } catch (error) {
-            console.warn(`Failed to load voice prompt ${promptId}:`, error);
+            // Silent retry strategy: don't interrupt users for missing prompt files.
+            this.markPromptDownloadFailure(promptId);
+            this.schedulePromptRetry(promptId);
+            console.debug(`Voice prompt unavailable (will retry silently): ${promptId}`);
         } finally {
             this.loadingPrompts.delete(promptId);
         }
     }
 
-    getPromptFilePath(promptId) {
+    getPromptFilename(promptId) {
         const [category, name] = promptId.split('.');
         const filename = this.promptCatalog[category]?.[name];
 
@@ -195,7 +212,141 @@ class VoicePromptManager {
             throw new Error(`Unknown prompt ID: ${promptId}`);
         }
 
-        return `assets/audio/voice-prompts/${filename}`;
+        return filename;
+    }
+
+    getPromptCandidatePaths(promptId) {
+        const filename = this.getPromptFilename(promptId);
+        return this.promptBaseUrls.map(base => `${base}${filename}`);
+    }
+
+    async fetchWithTimeout(url) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.downloadConfig.requestTimeoutMs);
+
+        try {
+            const response = await fetch(url, {
+                signal: controller.signal,
+                cache: 'no-store'
+            });
+            return response;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    async fetchPromptAudioData(promptId) {
+        const candidates = this.getPromptCandidatePaths(promptId);
+        let lastError = null;
+
+        for (const url of candidates) {
+            try {
+                const response = await this.fetchWithTimeout(url);
+                if (!response.ok) {
+                    lastError = new Error(`HTTP ${response.status} for ${url}`);
+                    continue;
+                }
+                return await response.arrayBuffer();
+            } catch (error) {
+                lastError = error;
+            }
+        }
+
+        throw lastError || new Error(`No prompt source available for ${promptId}`);
+    }
+
+    isRetryAllowed(promptId) {
+        const state = this.promptRetryState.get(promptId);
+        if (!state) return true;
+
+        const now = Date.now();
+        return now >= (state.nextRetryAt || 0);
+    }
+
+    markPromptDownloadSuccess(promptId) {
+        this.promptRetryState.delete(promptId);
+        const existingTimer = this.promptRetryTimers.get(promptId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            this.promptRetryTimers.delete(promptId);
+        }
+    }
+
+    markPromptDownloadFailure(promptId) {
+        const now = Date.now();
+        const state = this.promptRetryState.get(promptId) || {
+            attempts: 0,
+            nextRetryAt: now,
+            cooldownUntil: 0
+        };
+
+        state.attempts += 1;
+
+        if (state.attempts >= this.downloadConfig.maxAttempts) {
+            state.cooldownUntil = now + this.downloadConfig.cooldownAfterMaxMs;
+            state.nextRetryAt = state.cooldownUntil;
+            state.attempts = 0; // allow retries again after cooldown window
+        } else {
+            state.nextRetryAt = now + this.downloadConfig.retryIntervalMs;
+        }
+
+        this.promptRetryState.set(promptId, state);
+    }
+
+    schedulePromptRetry(promptId) {
+        if (this.loadedPrompts.has(promptId)) return;
+        if (this.promptRetryTimers.has(promptId)) return;
+
+        const state = this.promptRetryState.get(promptId);
+        if (!state) return;
+
+        const delay = Math.max(1000, state.nextRetryAt - Date.now());
+        const timerId = setTimeout(async () => {
+            this.promptRetryTimers.delete(promptId);
+            await this.loadPrompt(promptId);
+        }, delay);
+
+        this.promptRetryTimers.set(promptId, timerId);
+    }
+
+    getAllPromptIds() {
+        const ids = [];
+        for (const [category, prompts] of Object.entries(this.promptCatalog)) {
+            for (const name of Object.keys(prompts)) {
+                ids.push(`${category}.${name}`);
+            }
+        }
+        return ids;
+    }
+
+    startSilentRetrySweep() {
+        if (this.retrySweepTimer) return;
+
+        this.retrySweepTimer = setInterval(async () => {
+            const promptIds = this.getAllPromptIds();
+            for (const promptId of promptIds) {
+                if (this.loadedPrompts.has(promptId) || this.loadingPrompts.has(promptId)) {
+                    continue;
+                }
+                if (!this.isRetryAllowed(promptId)) {
+                    continue;
+                }
+                // Fire and continue, no hard failure propagation.
+                this.loadPrompt(promptId);
+            }
+        }, this.downloadConfig.retryIntervalMs);
+    }
+
+    retryAllFailedPrompts(force = false) {
+        for (const [promptId, state] of this.promptRetryState.entries()) {
+            if (force) {
+                state.nextRetryAt = Date.now();
+                state.cooldownUntil = 0;
+                state.attempts = 0;
+                this.promptRetryState.set(promptId, state);
+            }
+            this.schedulePromptRetry(promptId);
+        }
     }
 
     /**
@@ -500,6 +651,15 @@ class VoicePromptManager {
         this.loadedPrompts.clear();
         this.activePrompts.clear();
         this.promptQueue.length = 0;
+        for (const timerId of this.promptRetryTimers.values()) {
+            clearTimeout(timerId);
+        }
+        this.promptRetryTimers.clear();
+        this.promptRetryState.clear();
+        if (this.retrySweepTimer) {
+            clearInterval(this.retrySweepTimer);
+            this.retrySweepTimer = null;
+        }
     }
 }
 

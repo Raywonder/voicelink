@@ -185,10 +185,14 @@ class VoiceLinkApp {
             const testFeature = urlParams.get('test'); // Specific feature to test (e.g., 'audio', '3d', 'media')
 
             if (isDemoMode) {
-                console.log('Demo mode activated - creating private test room');
-                // Auto-create and join a private test room for documentation testing
+                console.log('Demo mode activated');
+                // Keep room list stable; do not auto-create hidden test/demo rooms.
                 setTimeout(() => {
-                    this.createDemoRoom(testFeature);
+                    this.showScreen('main-menu');
+                    this.startServerStatusMonitoring();
+                    if (testFeature) {
+                        this.showNotification(`Demo mode: ${testFeature}`, 'info');
+                    }
                 }, 2500);
             } else {
                 // Show main menu
@@ -1550,14 +1554,46 @@ class VoiceLinkApp {
         });
 
         // Auto-play sound test after output device changes
+        const inputDeviceSettings = document.getElementById('input-device-select');
+        inputDeviceSettings?.addEventListener('change', async (e) => {
+            const selected = e?.target?.value || 'default';
+            try {
+                await this.audioEngine.setInputDevice(selected);
+                this.audioEngine.saveDefaultSettings();
+            } catch (error) {
+                console.error('Failed to switch input device:', error);
+                this.showError('Failed to switch microphone. Check permissions and try again.');
+            }
+        });
+
         const outputDeviceSettings = document.getElementById('output-device-settings');
-        outputDeviceSettings?.addEventListener('change', () => {
+        outputDeviceSettings?.addEventListener('change', async (e) => {
+            const selected = e?.target?.value || 'default';
+            this.audioEngine.setOutputDevice(selected);
+            this.audioEngine.saveDefaultSettings();
+
+            const roomOutputSelect = document.getElementById('output-device-select');
+            if (roomOutputSelect) {
+                roomOutputSelect.value = selected;
+            }
+
             const btn = document.getElementById('test-speakers');
             this.audioEngine.testSpeakers().finally(() => {
                 if (btn) {
                     btn.textContent = this.audioEngine?.isTestAudioPlaying ? 'Stop Test' : 'Sound Test';
                 }
             });
+        });
+
+        const outputDeviceRoom = document.getElementById('output-device-select');
+        outputDeviceRoom?.addEventListener('change', (e) => {
+            const selected = e?.target?.value || 'default';
+            this.audioEngine.setOutputDevice(selected);
+            this.audioEngine.saveDefaultSettings();
+
+            if (outputDeviceSettings) {
+                outputDeviceSettings.value = selected;
+            }
         });
 
         document.getElementById('save-audio-settings')?.addEventListener('click', () => {
@@ -2229,12 +2265,13 @@ class VoiceLinkApp {
                 console.error('Room fetch error:', e.message);
             }
 
+            const isNativeApp = !!window.nativeAPI;
             // Check if user is authenticated
             const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
             const currentUser = window.mastodonAuth?.getUser();
 
             // Filter rooms based on authentication state
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Guests can only see rooms that are:
                 // 1. Marked as public/visible to visitors (or not explicitly private)
                 // 2. Default rooms (always visible)
@@ -2253,7 +2290,7 @@ class VoiceLinkApp {
             const totalServerRooms = rooms.length; // This is already filtered
             let hiddenCount = 0;
 
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Show up to 50 rooms for guests (increased from 5 for better discovery)
                 const guestRoomLimit = 50;
                 if (rooms.length > guestRoomLimit) {
@@ -6241,11 +6278,22 @@ class VoiceLinkApp {
 
     async createDefaultRooms() {
         try {
+            const input = window.prompt('How many default rooms should be created? (1-50)', '10');
+            if (input === null) return;
+            const parsed = Number(input);
+            const requestedCount = Number.isFinite(parsed)
+                ? Math.max(1, Math.min(50, Math.floor(parsed)))
+                : 10;
+
             const apiBase = this.getApiBaseUrl();
-            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, { method: 'POST' });
+            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ defaultCount: requestedCount })
+            });
             const result = await response.json();
 
-            this.showNotification('Created ' + (result.count || 0) + ' default rooms', 'success');
+            this.showNotification('Created ' + (result.count || 0) + ` default rooms (requested ${requestedCount})`, 'success');
             this.loadAdminRooms();
             this.loadRooms();
         } catch (error) {

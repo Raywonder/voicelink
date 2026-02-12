@@ -2,10 +2,12 @@ import Foundation
 
 enum APIEndpointResolver {
     static let canonicalMainBase = "https://voicelink.devinecreations.net"
+    static let communityNode2Base = "https://node2.voicelink.devinecreations.net"
     static let localBase = "http://localhost:4004"
 
     // Ordered fallback list for production API/domain outages.
     private static let mainFallbackBases = [
+        communityNode2Base,
         "https://64.20.46.178",
         "https://64.20.46.179"
     ]

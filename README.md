@@ -58,6 +58,9 @@ Status labels:
 - **VST Plugin Streaming**: Real-time audio effects processing and sharing
 - **Comprehensive Settings**: Tabbed interface for all configuration options
 - **Full Accessibility Support**: Complete screen reader integration with NVDA, system TTS, and ARIA compliance
+- **Jellyfin Webhook Push**: Jellyfin webhook events are pushed in real time to connected desktop clients
+- **Direct HTTPS Media Streaming**: Stream direct HTTPS media URLs to self or to an entire room
+- **Optional Media Save**: Admin-configurable option to save direct URL media for future playback
 
 ### Audio Features
 - 3D spatial audio with customizable room acoustics
@@ -128,19 +131,16 @@ voicelink-local/
 Download the latest release for your platform:
 
 #### 🍎 **macOS**
-- **Apple Silicon (M1/M2)**: [VoiceLink Local-1.0.0-arm64.dmg](releases/VoiceLink%20Local-1.0.0-arm64.dmg)
-- **Intel Mac**: [VoiceLink Local-1.0.0.dmg](releases/VoiceLink%20Local-1.0.0.dmg)
-- **Installation**: Double-click the DMG file and drag VoiceLink Local to Applications
+- **Primary distribution artifact**: `VoiceLinkMacOS.zip`
+- **Public download URL**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
+- **Updater manifest**: `swift-native/VoiceLinkNative/latest-mac.yml`
+- **Installation**: Extract ZIP, place `VoiceLink.app` in `/Applications`, launch.
 
 #### 🪟 **Windows**
-- **64-bit (Recommended)**: [VoiceLink Local-1.0.0-win.zip](releases/VoiceLink%20Local-1.0.0-win.zip)
-- **32-bit**: [VoiceLink Local-1.0.0-ia32-win.zip](releases/VoiceLink%20Local-1.0.0-ia32-win.zip)
-- **Installation**: Extract ZIP and run VoiceLink Local.exe
+- Windows desktop is currently not released for production users in this channel.
 
 #### 🐧 **Linux**
-- **AppImage (Universal)**: [VoiceLink Local-1.0.0.AppImage](releases/VoiceLink%20Local-1.0.0.AppImage)
-- **Debian/Ubuntu**: [voicelink-local_1.0.0_amd64.deb](releases/voicelink-local_1.0.0_amd64.deb)
-- **Generic Linux**: [voicelink-local-1.0.0.tar.gz](releases/voicelink-local-1.0.0.tar.gz)
+- Linux desktop packages are not the active production distribution path in this channel.
 
 ### Development Installation
 

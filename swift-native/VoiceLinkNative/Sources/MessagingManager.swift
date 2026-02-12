@@ -84,9 +84,6 @@ class MessagingManager: ObservableObject {
         // Add to local messages
         addMessage(message)
 
-        // Play sound
-        AppSoundManager.shared.playSound(.buttonClick)
-
         // Send to server
         sendToServer(message, isDirect: false, recipientId: nil)
     }
@@ -317,8 +314,10 @@ class MessagingManager: ObservableObject {
 
         addMessage(message)
 
-        // Play incoming sound
-        AppSoundManager.shared.playSound(.messageIncoming)
+        // Play incoming sound only for other users' messages.
+        if senderId != getCurrentUserId() {
+            AppSoundManager.shared.playSound(.messageIncoming)
+        }
     }
 
     @objc private func handleIncomingDM(_ notification: Notification) {

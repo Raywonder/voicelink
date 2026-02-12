@@ -5,556 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceLink Local - P2P Voice Chat</title>
     <link rel="stylesheet" href="css/style.css">
-    <style>
-        /* EMERGENCY: Force main menu visible after load */
-        #loading-screen { animation: hideLoading 0s 2s forwards !important; }
-        #main-menu { animation: showMenu 0s 2s forwards !important; }
-        @keyframes hideLoading { to { display: none !important; } }
-        @keyframes showMenu { to { display: flex !important; } }
-    </style>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
 <body>
-    <!-- Skip Links for Screen Readers -->
-    <a href="#main-content" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;" onfocus="this.style.cssText='position:fixed;top:0;left:0;background:#6366f1;color:#fff;padding:10px 20px;z-index:10001;font-size:16px;'">Skip to main content</a>
-    <a href="#server-status-display" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;" onfocus="this.style.cssText='position:fixed;top:0;left:100px;background:#6366f1;color:#fff;padding:10px 20px;z-index:10001;font-size:16px;'">Skip to server status</a>
-
-    <div id="app" role="application" aria-label="VoiceLink Local Voice Chat Application">
-        <!-- Loading Screen - DISABLED, showing main menu directly -->
-        <div id="loading-screen" class="screen" style="display:none !important;">
+    <div id="app">
+        <!-- Loading Screen -->
+        <div id="loading-screen" class="screen active">
             <div class="loading-content">
-                <h1>VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Local</h1>
                 <p>Initializing P2P voice chat system...</p>
                 <div class="loading-spinner"></div>
             </div>
         </div>
 
         <!-- Main Menu -->
-        <div id="main-menu" class="screen active" role="main" style="display:flex !important;">
-            <a id="main-content" tabindex="-1"></a>
+        <div id="main-menu" class="screen">
             <div class="menu-header">
-                <h1>VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Local</h1>
                 <p>Advanced P2P Voice Chat with 3D Audio</p>
             </div>
 
-            <!-- Mastodon Login Section -->
-            <div id="mastodon-auth-section" class="auth-section">
-                <!-- Logged Out State -->
-                <div id="mastodon-login-prompt" class="auth-prompt">
-                    <button id="mastodon-login-btn" class="auth-btn mastodon-btn">
-                        <span class="mastodon-icon">🐘</span> Login with Mastodon
+            <div id="authelia-auth-section" class="auth-section">
+                <div id="authelia-login-prompt" class="auth-prompt">
+                    <button id="authelia-login-btn" class="auth-btn sso-btn">
+                        <span class="mastodon-icon">🔐</span> Login with SSO
                     </button>
-                    <!-- Login Benefits (shown to guests on web) -->
-                    <div id="login-benefits" class="login-benefits">
-                        <p class="benefits-title">Login to unlock full features:</p>
-                        <ul class="benefits-list">
-                            <li>Create and manage permanent rooms</li>
-                            <li>Access Jellyfin jukebox with 3D spatial audio</li>
-                            <li>Save audio preferences across sessions</li>
-                            <li>Full admin controls for your rooms</li>
-                            <li>Priority connection to federated servers</li>
-                        </ul>
-                    </div>
-                    <!-- Download Desktop App (hidden in Electron) -->
-                    <div id="download-app-section" class="download-app-section web-only">
-                        <details style="margin: 10px 0; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px;">
-                            <summary style="cursor: pointer; font-weight: bold; padding: 5px; user-select: none;">
-                                📦 Get the Desktop App (Click to expand)
-                            </summary>
-                            <div style="margin-top: 10px;">
-                                <p class="download-subtitle" style="margin-bottom: 10px; opacity: 0.8;">Native apps with full features and auto-updates</p>
-                                <div class="download-buttons">
-                                    <a href="https://voicelink.devinecreations.net/downloads/VoiceLink-macOS.zip" class="download-btn mac-btn" download>
-                                        <span class="platform-icon">🍎</span> macOS v1.0.0
-                                    </a>
-                                    <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe" class="download-btn win-btn" download>
-                                        <span class="platform-icon">🪟</span> Windows v1.0.3
-                                    </a>
-                                    <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe" class="download-btn win-btn" download style="font-size: 0.9em;">
-                                        <span class="platform-icon">💼</span> Windows Portable
-                                    </a>
-                                </div>
-                            </div>
-                        </details>
-                    </div>
                 </div>
-                <!-- Logged In State -->
-                <div id="mastodon-user-info" class="auth-user-info" style="display: none;">
-                    <img id="mastodon-user-avatar" class="user-avatar" src="" alt="Avatar">
+                <div id="authelia-user-info" class="auth-user-info" style="display: none;">
                     <div class="user-details">
-                        <span id="mastodon-user-name" class="user-name"></span>
-                        <span id="mastodon-user-handle" class="user-handle"></span>
-                        <span id="mastodon-user-role" class="user-role"></span>
+                        <span id="authelia-user-name" class="user-name"></span>
+                        <span id="authelia-user-role" class="user-role"></span>
                     </div>
-                    <button id="mastodon-logout-btn" class="auth-btn logout-btn">Logout</button>
-                </div>
-            </div>
-
-            <!-- Unified Login Modal -->
-            <div id="mastodon-login-modal" class="modal" style="display: none;">
-                <div class="modal-content auth-modal">
-                    <h2>Login to VoiceLink</h2>
-
-                    <!-- Auth Method Tabs -->
-                    <div class="auth-tabs">
-                        <button class="auth-tab" data-tab="whmcs-login">Client Portal</button>
-                        <button class="auth-tab active" data-tab="mastodon-login">Mastodon</button>
-                        <button class="auth-tab" data-tab="wallet-login">Wallet</button>
-                    </div>
-
-                    <!-- Email Login Tab -->
-                    <div id="whmcs-login-tab" class="auth-tab-content">
-                        <form id="whmcs-login-form" class="auth-form">
-                            <div class="input-group">
-                                <label for="whmcs-login-email">Email</label>
-                                <input type="email" id="whmcs-login-email" placeholder="you@devinecreations.net" required>
-                            </div>
-                            <div class="input-group">
-                                <label for="whmcs-login-password">Password</label>
-                                <input type="password" id="whmcs-login-password" placeholder="Client portal password" required>
-                            </div>
-                            <div class="input-group">
-                                <label for="whmcs-login-2fa">2FA Code (if enabled)</label>
-                                <input type="text" id="whmcs-login-2fa" placeholder="123 456">
-                            </div>
-                            <div class="input-group">
-                                <label for="whmcs-mastodon-handle">Mastodon Handle (optional)</label>
-                                <input type="text" id="whmcs-mastodon-handle" placeholder="@name@instance.social">
-                            </div>
-                            <div class="auth-options">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="whmcs-remember-me"> Remember me
-                                </label>
-                                <a href="https://devine-creations.com/pwreset.php" target="_blank" class="auth-link">Forgot password?</a>
-                            </div>
-                            <button type="submit" class="primary-btn auth-submit">Login</button>
-                        </form>
-
-                        <div class="auth-divider">
-                            <span>or</span>
-                        </div>
-
-                        <div class="auth-actions-row">
-                            <a href="https://devine-creations.com/register.php" target="_blank" class="secondary-btn">Create Account</a>
-                            <button id="whmcs-sso-btn" class="secondary-btn">Login via Client Portal</button>
-                        </div>
-                    </div>
-
-                    <!-- Mastodon Login Tab -->
-                    <div id="mastodon-login-tab" class="auth-tab-content active">
-                        <p>Login with your Mastodon account for federated authentication:</p>
-
-                        <div class="instance-input-group">
-                            <input type="text" id="mastodon-instance-input"
-                                   placeholder="mastodon.social"
-                                   class="instance-input">
-                            <button id="mastodon-connect-btn" class="primary-btn">Connect</button>
-                        </div>
-
-                        <div class="suggested-instances">
-                            <p>Suggested instances:</p>
-                            <button class="instance-btn" data-instance="md.tappedin.fm">
-                                🎵 md.tappedin.fm (TappedIn)
-                            </button>
-                            <button class="instance-btn" data-instance="mastodon.devinecreations.net">
-                                🎨 mastodon.devinecreations.net (DevineCreations)
-                            </button>
-                        </div>
-
-                        <!-- Manual code entry for Electron -->
-                        <div id="oauth-code-entry" class="oauth-code-entry" style="display: none;">
-                            <p>Enter the authorization code from your browser:</p>
-                            <input type="text" id="oauth-code-input" placeholder="Paste code here" class="code-input">
-                            <button id="oauth-code-submit" class="primary-btn">Submit Code</button>
-                        </div>
-
-                        <div class="mastodon-benefits">
-                            <p class="benefits-note">Benefits of Mastodon login:</p>
-                            <ul>
-                                <li>Admin/Moderator roles from your instance</li>
-                                <li>Share rooms to your feed</li>
-                                <li>Federated identity across servers</li>
-                            </ul>
-                        </div>
-
-                        <div class="join-instance-section">
-                            <p class="join-note">Need a Mastodon account? Join one of our communities:</p>
-                            <div class="join-instance-buttons">
-                                <a href="https://md.tappedin.fm/invite/voicelink" target="_blank" class="join-instance-btn tappedin">
-                                    🎵 Join TappedIn
-                                    <span class="instance-desc">Music & Audio community</span>
-                                </a>
-                                <a href="https://mastodon.devinecreations.net/invite/voicelink" target="_blank" class="join-instance-btn devine">
-                                    🎨 Join DevineCreations
-                                    <span class="instance-desc">Creative professionals</span>
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Wallet Login Tab -->
-                    <div id="wallet-login-tab" class="auth-tab-content">
-                        <div class="wallet-login-content">
-                            <div class="wallet-icon-large">💎</div>
-                            <h3>Connect with Ecripto Wallet</h3>
-                            <p class="wallet-description">Connect your Ecripto wallet to unlock premium features and mint rooms as NFTs.</p>
-
-                            <button id="connect-ecripto-wallet-btn" class="primary-btn wallet-connect-btn">
-                                <span class="wallet-icon">🔗</span> Connect Ecripto Wallet
-                            </button>
-
-                            <div class="wallet-benefits">
-                                <p class="benefits-note">With Ecripto wallet you can:</p>
-                                <ul>
-                                    <li>Mint rooms as tradeable NFTs</li>
-                                    <li>Purchase day/week/monthly access passes</li>
-                                    <li>List rooms in the Ecripto shop</li>
-                                    <li>Receive payments for premium rooms</li>
-                                    <li>Transfer room ownership</li>
-                                </ul>
-                            </div>
-
-                            <div class="wallet-fallback">
-                                <p class="fallback-note">Don't have a wallet?</p>
-                                <p class="fallback-text">You can still use VoiceLink with email or Mastodon login. Wallet features will be limited.</p>
-                            </div>
-
-                            <!-- Wallet Status (shown when connected) -->
-                            <div id="wallet-connected-status" class="wallet-status" style="display: none;">
-                                <div class="wallet-address-display">
-                                    <span class="wallet-label">Connected:</span>
-                                    <span id="wallet-address-short" class="wallet-address">0x...</span>
-                                </div>
-                                <button id="disconnect-wallet-btn" class="secondary-btn small-btn">Disconnect</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Link Account Section (shown after login) -->
-                    <div id="link-account-section" class="link-account-section" style="display: none;">
-                        <p>Link another authentication method to your account:</p>
-                        <button id="link-mastodon-btn" class="secondary-btn">Link Mastodon Account</button>
-                        <button id="link-email-btn" class="secondary-btn">Add Email/Password</button>
-                        <button id="link-wallet-btn" class="secondary-btn">Link Ecripto Wallet</button>
-                    </div>
-
-                    <button id="close-login-modal" class="close-modal-btn">✕</button>
-                </div>
-            </div>
-
-            <!-- Ecripto Wallet Permission Modal -->
-            <div id="wallet-permission-modal" class="modal" style="display: none;">
-                <div class="modal-content wallet-permission-modal">
-                    <div class="permission-header">
-                        <div class="app-icon">🎙️</div>
-                        <h2>VoiceLink wants to connect to your wallet</h2>
-                    </div>
-
-                    <div class="permission-app-info">
-                        <p class="trusted-app-notice">
-                            <span class="trust-icon">✓</span>
-                            <strong>Trusted Application</strong> - VoiceLink by DevineCreations
-                        </p>
-                    </div>
-
-                    <div class="permission-details">
-                        <h3>This app is requesting access to:</h3>
-
-                        <div class="permission-item">
-                            <span class="permission-icon">👁️</span>
-                            <div class="permission-text">
-                                <strong>View wallet address</strong>
-                                <p>See your public wallet address for identification</p>
-                            </div>
-                        </div>
-
-                        <div class="permission-item">
-                            <span class="permission-icon">📝</span>
-                            <div class="permission-text">
-                                <strong>Request transaction signatures</strong>
-                                <p>Ask you to sign transactions for minting rooms or purchasing access passes. You'll always approve each transaction.</p>
-                            </div>
-                        </div>
-
-                        <div class="permission-item">
-                            <span class="permission-icon">🏷️</span>
-                            <div class="permission-text">
-                                <strong>View token balances</strong>
-                                <p>Check your Ecripto token holdings to verify access rights</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="permission-explanation">
-                        <h4>Why does VoiceLink need this?</h4>
-                        <ul>
-                            <li><strong>Room Minting:</strong> Create NFT-backed rooms that you truly own and can sell or transfer</li>
-                            <li><strong>Access Passes:</strong> Purchase time-limited access to premium rooms (day, week, or monthly)</li>
-                            <li><strong>Identity:</strong> Your wallet serves as a decentralized identity across VoiceLink servers</li>
-                            <li><strong>Payments:</strong> Receive payments when others access your minted rooms</li>
-                        </ul>
-                    </div>
-
-                    <div class="permission-security">
-                        <p class="security-note">
-                            <span class="lock-icon">🔒</span>
-                            VoiceLink will <strong>never</strong> access your private keys or make transactions without your explicit approval.
-                        </p>
-                    </div>
-
-                    <!-- See More Details Section -->
-                    <div class="see-more-section">
-                        <button id="see-permission-details" class="text-btn">See more details about this app</button>
-                    </div>
-
-                    <!-- Detailed Permissions (hidden by default) -->
-                    <div id="detailed-permissions" class="detailed-permissions" style="display: none;">
-                        <h4>About VoiceLink</h4>
-                        <div class="app-details">
-                            <div class="detail-row">
-                                <span class="detail-label">Developer:</span>
-                                <span class="detail-value">DevineCreations</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Website:</span>
-                                <span class="detail-value">voicelink.devinecreations.net</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Category:</span>
-                                <span class="detail-value">Social / Voice Communication</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Verified:</span>
-                                <span class="detail-value verified-badge">Yes - Trusted App</span>
-                            </div>
-                        </div>
-
-                        <h4>Data Usage</h4>
-                        <ul class="data-usage-list">
-                            <li><strong>Wallet Address:</strong> Used to identify you across VoiceLink servers and verify ownership of minted rooms.</li>
-                            <li><strong>Transaction Requests:</strong> Only for room minting or purchasing access passes. You approve each transaction individually.</li>
-                            <li><strong>Token Balances:</strong> Checked to verify you hold required tokens for gated rooms. Balance amounts are not stored.</li>
-                        </ul>
-
-                        <h4>Data NOT Collected</h4>
-                        <ul class="data-not-collected">
-                            <li>Private keys or seed phrases</li>
-                            <li>Transaction history</li>
-                            <li>Other wallet balances</li>
-                            <li>Personal information beyond wallet address</li>
-                        </ul>
-
-                        <h4>Your Rights</h4>
-                        <ul class="user-rights">
-                            <li>Disconnect at any time from Settings</li>
-                            <li>Reject any transaction request</li>
-                            <li>Request data deletion</li>
-                            <li>Minted rooms remain yours on blockchain even after disconnecting</li>
-                        </ul>
-                    </div>
-
-                    <div class="permission-actions">
-                        <button id="approve-wallet-connection" class="primary-btn">Allow Connection</button>
-                        <button id="deny-wallet-connection" class="secondary-btn">Reject</button>
-                    </div>
-
-                    <div class="permission-footer">
-                        <p class="revoke-note">You can disconnect your wallet at any time from Settings.</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Wallet Disconnection Warning Modal -->
-            <div id="wallet-disconnect-modal" class="modal" style="display: none;">
-                <div class="modal-content wallet-disconnect-modal">
-                    <div class="warning-header">
-                        <span class="warning-icon">⚠️</span>
-                        <h2>Disconnect Wallet?</h2>
-                    </div>
-
-                    <div class="disconnect-warning">
-                        <p>Disconnecting your wallet will affect the following:</p>
-
-                        <div class="affected-items">
-                            <div class="affected-item" id="affected-minted-rooms">
-                                <span class="item-icon">🏠</span>
-                                <div class="item-details">
-                                    <strong>Minted Rooms</strong>
-                                    <p id="minted-rooms-count">You own 0 minted rooms</p>
-                                    <p class="item-note">Rooms remain yours on the blockchain, but you won't be able to manage them in VoiceLink without reconnecting.</p>
-                                </div>
-                            </div>
-
-                            <div class="affected-item" id="affected-access-passes">
-                                <span class="item-icon">🎫</span>
-                                <div class="item-details">
-                                    <strong>Access Passes</strong>
-                                    <p id="access-passes-count">You have 0 active access passes</p>
-                                    <p class="item-note">Your passes remain valid, but VoiceLink can't verify them without your wallet connected.</p>
-                                </div>
-                            </div>
-
-                            <div class="affected-item">
-                                <span class="item-icon">💰</span>
-                                <div class="item-details">
-                                    <strong>Pending Payments</strong>
-                                    <p id="pending-payments-info">No pending payments</p>
-                                    <p class="item-note">Any pending payments will still be processed to your wallet address.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="disconnect-options">
-                        <h4>What would you like to do?</h4>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="disconnect-action" value="keep-linked" checked>
-                            <div class="option-content">
-                                <strong>Keep account linked</strong>
-                                <p>Your VoiceLink account remembers this wallet. Reconnect anytime to restore full access.</p>
-                            </div>
-                        </label>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="disconnect-action" value="unlink-fully">
-                            <div class="option-content">
-                                <strong>Fully unlink wallet</strong>
-                                <p>Remove all association between this wallet and your VoiceLink account. You'll need to re-link to manage minted rooms.</p>
-                            </div>
-                        </label>
-                    </div>
-
-                    <!-- Minted Rooms Options (shown if user has minted rooms) -->
-                    <div id="minted-rooms-options" class="minted-rooms-options" style="display: none;">
-                        <h4>What should happen to your minted rooms?</h4>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="minted-action" value="keep-active" checked>
-                            <div class="option-content">
-                                <strong>Keep rooms active</strong>
-                                <p>Rooms stay online but you can't modify settings until you reconnect. Others can still join.</p>
-                            </div>
-                        </label>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="minted-action" value="mark-inactive">
-                            <div class="option-content">
-                                <strong>Mark rooms as inactive</strong>
-                                <p>Rooms become hidden and unavailable until you reconnect your wallet.</p>
-                            </div>
-                        </label>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="minted-action" value="transfer-fallback">
-                            <div class="option-content">
-                                <strong>Transfer to linked account</strong>
-                                <p>If you have email or Mastodon linked, manage rooms through that account instead.</p>
-                            </div>
-                        </label>
-
-                        <label class="disconnect-option">
-                            <input type="radio" name="minted-action" value="delegate-admin">
-                            <div class="option-content">
-                                <strong>Delegate to admin</strong>
-                                <p>Let VoiceLink admins manage your rooms while disconnected. Ownership remains yours.</p>
-                            </div>
-                        </label>
-                    </div>
-
-                    <div class="disconnect-actions">
-                        <button id="confirm-disconnect-wallet" class="danger-btn">Disconnect Wallet</button>
-                        <button id="cancel-disconnect-wallet" class="secondary-btn">Keep Connected</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Access Tier Purchase Modal -->
-            <div id="purchase-access-modal" class="modal" style="display: none;">
-                <div class="modal-content purchase-modal">
-                    <h2>Purchase Room Access</h2>
-
-                    <div class="room-purchase-info">
-                        <h3 id="purchase-room-name">Room Name</h3>
-                        <p id="purchase-room-description">Room description</p>
-                    </div>
-
-                    <div class="access-tiers">
-                        <h4>Select Access Duration</h4>
-
-                        <label class="tier-option">
-                            <input type="radio" name="access-tier" value="day">
-                            <div class="tier-content">
-                                <span class="tier-name">Day Pass</span>
-                                <span class="tier-duration">24 hours</span>
-                                <span class="tier-price" id="day-pass-price">--</span>
-                            </div>
-                        </label>
-
-                        <label class="tier-option">
-                            <input type="radio" name="access-tier" value="week" checked>
-                            <div class="tier-content">
-                                <span class="tier-name">Weekly Pass</span>
-                                <span class="tier-duration">7 days</span>
-                                <span class="tier-price" id="week-pass-price">--</span>
-                            </div>
-                        </label>
-
-                        <label class="tier-option">
-                            <input type="radio" name="access-tier" value="month">
-                            <div class="tier-content">
-                                <span class="tier-name">Monthly Pass</span>
-                                <span class="tier-duration">30 days</span>
-                                <span class="tier-price" id="month-pass-price">--</span>
-                            </div>
-                        </label>
-                    </div>
-
-                    <div class="payment-method-section">
-                        <h4>Payment Method</h4>
-
-                        <div class="payment-tabs">
-                            <button class="payment-tab active" data-method="wallet">Ecripto Wallet</button>
-                            <button class="payment-tab" data-method="card">Credit Card</button>
-                        </div>
-
-                        <!-- Wallet Payment -->
-                        <div id="wallet-payment-section" class="payment-section active">
-                            <div id="wallet-payment-ready" style="display: none;">
-                                <p>Pay with connected wallet:</p>
-                                <p class="wallet-display" id="payment-wallet-address">0x...</p>
-                            </div>
-                            <div id="wallet-payment-connect">
-                                <p>Connect your Ecripto wallet to pay</p>
-                                <button id="connect-wallet-for-payment" class="secondary-btn">Connect Wallet</button>
-                            </div>
-                        </div>
-
-                        <!-- Card Payment (Stripe) -->
-                        <div id="card-payment-section" class="payment-section" style="display: none;">
-                            <div id="stripe-card-element">
-                                <!-- Stripe Elements will mount here -->
-                            </div>
-                            <p class="stripe-note">Secure payment powered by Stripe</p>
-                        </div>
-                    </div>
-
-                    <div class="purchase-summary">
-                        <div class="summary-row">
-                            <span>Access Type:</span>
-                            <span id="summary-tier">Weekly Pass</span>
-                        </div>
-                        <div class="summary-row total">
-                            <span>Total:</span>
-                            <span id="summary-total">--</span>
-                        </div>
-                    </div>
-
-                    <div class="purchase-actions">
-                        <button id="confirm-purchase" class="primary-btn">Complete Purchase</button>
-                        <button id="cancel-purchase" class="secondary-btn">Cancel</button>
-                    </div>
+                    <button id="authelia-logout-btn" class="auth-btn logout-btn">Logout</button>
                 </div>
             </div>
 
@@ -562,92 +45,47 @@
                 <!-- Desktop App Controls (only shown when running in Electron) -->
                 <div id="desktop-controls" class="menu-section" style="display: none;">
                     <h3>App Controls</h3>
-                    <button id="minimize-to-tray-btn" class="settings-btn">Minimize to Menu Bar</button>
-                    <button id="preferences-btn" class="settings-btn">Application Settings</button>
+                    <button id="minimize-to-tray-btn" class="settings-btn">📍 Minimize to Menu Bar</button>
+                    <button id="preferences-btn" class="settings-btn">⚙️ Application Settings</button>
                 </div>
 
-                <div class="menu-section" role="group" aria-labelledby="quick-start-heading">
-                    <h3 id="quick-start-heading">Quick Start</h3>
-                    <button id="create-room-btn" class="primary-btn" aria-label="Create a new voice chat room">Create New Room</button>
-                    <button id="join-room-btn" class="secondary-btn" aria-label="Join an existing voice chat room">Join Existing Room</button>
+                <div class="menu-section">
+                    <h3>Quick Start</h3>
+                    <button id="create-room-btn" class="primary-btn">Create New Room</button>
+                    <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
                 </div>
 
-                <div class="menu-section" role="group" aria-labelledby="settings-tools-heading">
-                    <h3 id="settings-tools-heading">Settings & Tools</h3>
-                    <button id="open-settings-btn" class="primary-btn desktop-only" aria-label="Open application settings">Settings</button>
-                    <button id="quick-audio-btn" class="settings-btn" aria-label="Quick audio device selection">Quick Audio</button>
-                    <button id="test-audio-btn" class="settings-btn desktop-only" aria-label="Test microphone and speakers">Test Audio</button>
-                    <a href="/docs/index.html" id="help-link-btn" class="settings-btn help-link" aria-label="View help and documentation" target="_blank">Help & Docs</a>
+                <div class="menu-section">
+                    <h3>Settings & Tools</h3>
+                    <button id="open-settings-btn" class="primary-btn">⚙️ Settings</button>
+                    <button id="quick-audio-btn" class="settings-btn">🎵 Quick Audio</button>
+                    <button id="test-audio-btn" class="settings-btn">🧪 Test Audio</button>
                 </div>
 
                 <div class="menu-section">
                     <h3>Server Status</h3>
-                    <div id="server-status-display" class="server-status" role="region" aria-label="Server Status">
-                        <!-- Web guests see simplified status -->
+                    <div id="server-status-display" class="server-status">
                         <div class="status-item">
-                            <span class="status-label web-label">Main Server:</span>
-                            <span class="status-label desktop-label">Server:</span>
-                            <span class="status-value status-offline" id="server-status-value" role="status" aria-live="polite">Offline</span>
+                            <span class="status-label">Server:</span>
+                            <span class="status-value" id="server-status-value">🔴 Offline</span>
                         </div>
-                        <!-- Desktop app sees full details -->
-                        <div class="status-item desktop-only">
-                            <span class="status-label">Internet:</span>
-                            <span class="status-value status-offline" id="internet-status-value" role="status" aria-live="polite">Offline</span>
-                        </div>
-                        <div class="status-item desktop-only">
-                            <span class="status-label">Local IP:</span>
-                            <span class="status-value" id="local-ip-value">Not detected</span>
-                        </div>
-                        <div class="status-item desktop-only">
-                            <span class="status-label">Public IP:</span>
-                            <span class="status-value" id="public-ip-value">Not available</span>
-                        </div>
-                        <div class="status-item desktop-only">
+                        <div class="status-item">
                             <span class="status-label">Port:</span>
-                            <span class="status-value" id="server-port-value">--</span>
+                            <span class="status-value" id="server-port-value">-</span>
                         </div>
                         <div class="status-item">
-                            <span class="status-label">Users Online:</span>
+                            <span class="status-label">Users:</span>
                             <span class="status-value" id="server-users-value">0</span>
                         </div>
                         <div class="status-item">
-                            <span class="status-label">Active Rooms:</span>
+                            <span class="status-label">Rooms:</span>
                             <span class="status-value" id="server-rooms-value">0</span>
                         </div>
                     </div>
-
-                    <!-- URL Copy Buttons (desktop app only) -->
-                    <div class="url-copy-section desktop-only" role="group" aria-label="Copy Server URL">
-                        <h4>Copy Server URL</h4>
-                        <div class="url-copy-buttons">
-                            <button id="copy-local-url-btn" class="url-btn desktop-only" aria-label="Copy local network URL">
-                                Copy Local URL
-                            </button>
-                            <button id="copy-public-url-btn" class="url-btn desktop-only" aria-label="Copy public URL" disabled>
-                                Copy Public URL
-                            </button>
-                            <button id="copy-localhost-url-btn" class="url-btn desktop-only" aria-label="Copy localhost URL">
-                                Copy Localhost
-                            </button>
-                        </div>
-                        <button id="refresh-network-btn" class="settings-btn desktop-only" aria-label="Refresh network information">
-                            Refresh Network
-                        </button>
-                    </div>
-
-                    <!-- Network Binding Status (desktop app only) -->
-                    <div class="network-interface-section desktop-only" role="group" aria-label="Network Binding Status">
-                        <h4>Listening On</h4>
-                        <div class="network-binding-display">
-                            <span id="network-binding-value" class="info-value">All Networks</span>
-                            <span class="binding-hint desktop-only">(Change in menubar)</span>
-                        </div>
-                    </div>
-
                     <div class="server-control-buttons">
-                        <button id="start-server-btn" class="secondary-btn" style="display: none;" aria-label="Start server">Start Server</button>
-                        <button id="stop-server-btn" class="secondary-btn" style="display: none;" aria-label="Stop server">Stop Server</button>
-                        <button id="restart-server-btn" class="secondary-btn" style="display: none;" aria-label="Restart server">Restart Server</button>
+                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
+                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
+                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
                     </div>
                 </div>
 
@@ -672,11 +110,6 @@
                     </div>
 
                     <div class="input-group">
-                        <label for="room-description">Description (Optional)</label>
-                        <textarea id="room-description" placeholder="Describe your room..." rows="3" maxlength="500"></textarea>
-                    </div>
-
-                    <div class="input-group" id="room-password-group">
                         <label for="room-password">Password (Optional)</label>
                         <input type="password" id="room-password" placeholder="Leave empty for public room">
                     </div>
@@ -699,76 +132,20 @@
                     <div class="input-group">
                         <label for="room-duration">Room Duration</label>
                         <select id="room-duration">
-                            <!-- Guest options (10-30 minutes) -->
-                            <option value="600000" class="guest-only-option">10 Minutes (Guest)</option>
-                            <option value="900000" class="guest-only-option">15 Minutes (Guest)</option>
-                            <option value="1200000" class="guest-only-option" selected>20 Minutes (Guest)</option>
-                            <option value="1800000" class="guest-only-option">30 Minutes (Guest)</option>
-                            <!-- Authenticated user options -->
-                            <option value="3600000" class="auth-only-option">1 Hour</option>
-                            <option value="7200000" class="auth-only-option">2 Hours</option>
-                            <option value="21600000" class="auth-only-option">6 Hours</option>
-                            <option value="86400000" class="auth-only-option">24 Hours</option>
-                            <option value="259200000" class="auth-only-option">3 Days</option>
-                            <option value="604800000" class="auth-only-option">1 Week</option>
-                            <option value="2592000000" class="auth-only-option">30 Days</option>
-                            <option value="5184000000" class="auth-only-option">60 Days</option>
-                            <option value="lifetime" class="auth-only-option">Lifetime (Never Expires)</option>
+                            <option value="lifetime">Lifetime (Never Expires)</option>
+                            <option value="3600000">1 Hour</option>
+                            <option value="7200000">2 Hours</option>
+                            <option value="21600000">6 Hours</option>
+                            <option value="86400000">24 Hours</option>
+                            <option value="259200000">3 Days</option>
+                            <option value="604800000">1 Week</option>
+                            <option value="2592000000">30 Days</option>
+                            <option value="5184000000">60 Days</option>
                         </select>
                     </div>
 
                     <div id="room-privacy-controls" class="input-group">
-                        <label>Room Visibility</label>
-                        <div class="visibility-options">
-                            <label class="visibility-option selected">
-                                <input type="radio" name="room-visibility" value="public" checked>
-                                <span class="option-icon">🌐</span>
-                                <span class="option-label">Public</span>
-                                <span class="option-desc">Anyone can find and join</span>
-                            </label>
-                            <label class="visibility-option">
-                                <input type="radio" name="room-visibility" value="unlisted">
-                                <span class="option-icon">🔗</span>
-                                <span class="option-label">Unlisted</span>
-                                <span class="option-desc">Only with direct link</span>
-                            </label>
-                            <label class="visibility-option">
-                                <input type="radio" name="room-visibility" value="private">
-                                <span class="option-icon">🔒</span>
-                                <span class="option-label">Private</span>
-                                <span class="option-desc">Logged in users only</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div id="room-access-controls" class="input-group">
-                        <label>Access Type</label>
-                        <div class="access-options">
-                            <label class="access-option selected">
-                                <input type="radio" name="room-access" value="hybrid" checked>
-                                <span class="option-icon">🔄</span>
-                                <span class="option-label">Hybrid</span>
-                                <span class="option-desc">App and web embed</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="app-only">
-                                <span class="option-icon">📱</span>
-                                <span class="option-label">App Only</span>
-                                <span class="option-desc">VoiceLink app only</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="web-only">
-                                <span class="option-icon">🌐</span>
-                                <span class="option-label">Web Only</span>
-                                <span class="option-desc">Embed/URL only</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="hidden">
-                                <span class="option-icon">👻</span>
-                                <span class="option-label">Hidden</span>
-                                <span class="option-desc">Direct link only</span>
-                            </label>
-                        </div>
+                        <!-- Privacy controls will be dynamically added here -->
                     </div>
 
                     <div class="button-group">
@@ -781,34 +158,25 @@
 
         <!-- Join Room -->
         <div id="join-room-screen" class="screen">
-            <div class="form-container join-room-container">
-                <!-- Room Preview Info (read-only) -->
-                <div id="join-room-preview" class="room-preview-card">
-                    <h2 id="join-room-name" class="preview-room-name">Room Name</h2>
-                    <p id="join-room-description" class="preview-room-description">Room description</p>
-                    <div id="join-room-stats" class="preview-room-stats">
-                        <span id="join-room-users">0 users</span>
-                        <span id="join-room-privacy">[Public]</span>
-                    </div>
-                </div>
-
+            <div class="form-container">
+                <h2>Join Room</h2>
                 <form id="join-room-form">
-                    <!-- Hidden room ID -->
-                    <input type="hidden" id="join-room-id">
+                    <div class="input-group">
+                        <label for="join-room-id">Room ID</label>
+                        <input type="text" id="join-room-id" placeholder="Enter room ID" required>
+                    </div>
 
                     <div class="input-group">
                         <label for="user-name">Your Name</label>
                         <input type="text" id="user-name" placeholder="Enter your name" required>
                     </div>
 
-                    <!-- Password field - only shown if room requires password -->
-                    <div class="input-group" id="join-password-group" style="display: none;">
-                        <label for="join-room-password">Room Password</label>
-                        <input type="password" id="join-room-password" placeholder="Enter room password">
+                    <div class="input-group">
+                        <label for="join-room-password">Password</label>
+                        <input type="password" id="join-room-password" placeholder="Enter password if required">
                     </div>
 
-                    <div class="button-group join-room-buttons">
-                        <button type="button" id="join-peek-btn" class="secondary-btn peek-btn" style="display: none;">👁️ Peek In</button>
+                    <div class="button-group">
                         <button type="submit" class="primary-btn">Join Room</button>
                         <button type="button" id="back-to-menu-2" class="secondary-btn">Back</button>
                     </div>
@@ -824,11 +192,9 @@
                     <span id="room-id-display">Room ID: </span>
                 </div>
                 <div class="header-controls">
-                    <button id="share-room-btn" class="icon-btn" title="Share Room Link" aria-label="Copy room link to share" style="display: none;">🔗</button>
-                    <button id="room-settings-btn" class="icon-btn desktop-only" title="Room Settings" aria-label="Open room settings">⚙️</button>
-                    <button id="room-jukebox-btn" class="icon-btn" title="Jukebox - Play music for the room" aria-label="Open Jellyfin jukebox">📻</button>
-                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio Settings" aria-label="Quick audio device selection">🎧</button>
-                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room" aria-label="Leave this room">🚪</button>
+                    <button id="room-settings-btn" class="icon-btn" title="Settings">⚙️</button>
+                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio">🎵</button>
+                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room">🚪</button>
                 </div>
             </div>
 
@@ -848,30 +214,9 @@
                     </div>
 
                     <div class="audio-controls">
-                        <div class="control-group">
-                            <button id="mute-btn" class="control-btn" aria-label="Microphone is on. Click to mute." aria-pressed="false" role="switch">
-                                <span class="btn-icon">🎙️</span>
-                                <span class="btn-label">Microphone: On</span>
-                            </button>
-                            <span id="mute-status" class="status-message" aria-live="polite"></span>
-                        </div>
-                        <div class="control-group">
-                            <button id="deafen-btn" class="control-btn" aria-label="Output is on. Click to mute output." aria-pressed="false" role="switch">
-                                <span class="btn-icon">🔊</span>
-                                <span class="btn-label">Output: On</span>
-                            </button>
-                            <span id="deafen-status" class="status-message" aria-live="polite"></span>
-                        </div>
-                        <div class="control-group">
-                            <button id="push-to-talk-btn" class="control-btn" aria-label="Push to talk is off. Click to enable." aria-pressed="false" role="switch">
-                                <span class="btn-icon">🔒</span>
-                                <span class="btn-label">PTT: Off</span>
-                            </button>
-                            <span id="ptt-status" class="status-message" aria-live="polite"></span>
-                        </div>
-                    </div>
-                    <div class="audio-controls-help">
-                        Microphone mutes your voice input. Output mutes what you hear.
+                        <button id="mute-btn" class="control-btn">🎙️ Unmuted</button>
+                        <button id="deafen-btn" class="control-btn">🔊 Output On</button>
+                        <button id="push-to-talk-btn" class="control-btn">🔒 PTT: Off</button>
                     </div>
                 </div>
 
@@ -885,68 +230,6 @@
                     </div>
                 </div>
             </div>
-
-            <!-- Jukebox Media Player Panel -->
-            <div id="jukebox-panel" class="jukebox-panel hidden">
-                <div class="jukebox-header">
-                    <h3>Jukebox</h3>
-                    <div class="jukebox-controls-header">
-                        <button id="jukebox-config-btn" class="icon-btn small" title="Configure Servers">⚙️</button>
-                        <button id="jukebox-minimize-btn" class="icon-btn small" title="Minimize">➖</button>
-                        <button id="jukebox-close-btn" class="icon-btn small" title="Close">✕</button>
-                    </div>
-                </div>
-                <div class="jukebox-content">
-                    <!-- Now Playing -->
-                    <div class="jukebox-now-playing" id="jukebox-now-playing">
-                        <div class="now-playing-art" id="now-playing-art"></div>
-                        <div class="now-playing-info">
-                            <div class="now-playing-title" id="now-playing-title">No media playing</div>
-                            <div class="now-playing-artist" id="now-playing-artist"></div>
-                        </div>
-                    </div>
-
-                    <!-- Playback Controls -->
-                    <div class="jukebox-playback">
-                        <div class="playback-progress">
-                            <input type="range" id="jukebox-progress" min="0" max="100" value="0">
-                            <div class="progress-time">
-                                <span id="jukebox-current-time">0:00</span>
-                                <span id="jukebox-duration">0:00</span>
-                            </div>
-                        </div>
-                        <div class="playback-buttons">
-                            <button id="jukebox-prev-btn" class="playback-btn" title="Previous">⏮️</button>
-                            <button id="jukebox-play-btn" class="playback-btn primary" title="Play/Pause">▶️</button>
-                            <button id="jukebox-next-btn" class="playback-btn" title="Next">⏭️</button>
-                            <button id="jukebox-loop-btn" class="playback-btn" title="Loop">🔁</button>
-                        </div>
-                        <div class="volume-control">
-                            <span>🔊</span>
-                            <input type="range" id="jukebox-volume" min="0" max="100" value="50">
-                        </div>
-                    </div>
-
-                    <!-- Queue -->
-                    <div class="jukebox-queue">
-                        <h4>Queue <span id="queue-count">(0)</span></h4>
-                        <div id="jukebox-queue-list" class="queue-list"></div>
-                    </div>
-
-                    <!-- Library Browser (Admin) -->
-                    <div class="jukebox-library" id="jukebox-library">
-                        <h4>Library</h4>
-                        <div class="library-search">
-                            <input type="text" id="jukebox-search" placeholder="Search media...">
-                            <button id="jukebox-search-btn">🔍</button>
-                        </div>
-                        <div id="jukebox-library-list" class="library-list"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Jukebox Toggle Button (shown when minimized) -->
-            <button id="jukebox-toggle-btn" class="jukebox-toggle hidden" title="Open Jukebox">🎵</button>
 
             <!-- Audio Routing Panel -->
             <div id="audio-routing-panel" class="routing-panel hidden">
@@ -994,18 +277,18 @@
         <div id="settings-screen" class="screen">
             <div class="settings-container">
                 <div class="settings-header">
-                    <h2>VoiceLink Settings</h2>
+                    <h2>⚙️ VoiceLink Settings</h2>
                     <button id="close-settings" class="close-btn">✕</button>
                 </div>
 
                 <!-- Settings Tabs -->
                 <div class="settings-tabs">
-                    <button class="tab-btn active" data-tab="audio">Audio</button>
-                    <button class="tab-btn" data-tab="app">Application</button>
-                    <button class="tab-btn" data-tab="network">Network</button>
-                    <button class="tab-btn" data-tab="streaming">Streaming</button>
-                    <button class="tab-btn" data-tab="privacy">Privacy</button>
-                    <button class="tab-btn" data-tab="advanced">Advanced</button>
+                    <button class="tab-btn active" data-tab="audio">🎵 Audio</button>
+                    <button class="tab-btn" data-tab="app">📱 Application</button>
+                    <button class="tab-btn" data-tab="network">🌐 Network</button>
+                    <button class="tab-btn" data-tab="streaming">📺 Streaming</button>
+                    <button class="tab-btn" data-tab="privacy">🔒 Privacy</button>
+                    <button class="tab-btn" data-tab="advanced">🔧 Advanced</button>
                 </div>
 
                 <!-- Audio Settings Tab -->
@@ -1028,7 +311,7 @@
                             <select id="output-device-settings">
                                 <option value="default">Default Output</option>
                             </select>
-                            <button id="test-speakers" class="test-btn">Sound Test</button>
+                            <button id="test-speakers" class="test-btn">Test</button>
                         </div>
                     </div>
 
@@ -1164,9 +447,9 @@
                             <!-- Server info will be populated here -->
                         </div>
                         <div class="button-group">
-                            <button id="copy-url-btn" class="secondary-btn">Copy URL</button>
-                            <button id="show-qr-btn" class="secondary-btn">QR Code</button>
-                            <button id="restart-server-btn" class="secondary-btn">Restart Server</button>
+                            <button id="copy-url-btn" class="secondary-btn">📋 Copy URL</button>
+                            <button id="show-qr-btn" class="secondary-btn">📱 QR Code</button>
+                            <button id="restart-server-btn" class="secondary-btn">🔄 Restart</button>
                         </div>
                     </div>
                 </div>
@@ -1647,7 +930,7 @@
                         <div class="button-group">
                             <button id="test-audio-advanced" class="test-btn">🧪 Audio Test</button>
                             <button id="open-dev-tools" class="test-btn">🔧 Dev Tools</button>
-                            <button id="reset-settings" class="danger-btn">Reset All Settings</button>
+                            <button id="reset-settings" class="danger-btn">🔄 Reset All</button>
                         </div>
                     </div>
 
@@ -1667,8 +950,8 @@
                 </div>
 
                 <div class="settings-footer">
-                    <button id="save-all-settings" class="primary-btn">Save & Return</button>
-                    <button id="back-from-settings" class="secondary-btn">Back</button>
+                    <button id="save-all-settings" class="primary-btn">Save All Settings</button>
+                    <button id="cancel-settings" class="secondary-btn">Cancel</button>
                 </div>
             </div>
         </div>
@@ -1683,8 +966,7 @@
     <script src="js/core/default-rooms-manager.js"></script>
     <script src="js/core/feature-permissions-manager.js"></script>
     <script src="js/integrations/wordpress-integration.js"></script>
-    <script src="js/accessible-dropdown.js"></script>
-    <script src="js/auth/mastodon-oauth.js"></script>
+    <script src="js/auth/authelia-auth.js"></script>
     <script src="js/core/app.js"></script>
 
     <!-- Audio Processing -->
@@ -1693,7 +975,6 @@
     <script src="js/audio/vst-streaming-engine.js"></script>
     <script src="js/audio/builtin-effects-processor.js"></script>
     <script src="js/audio/audio-ducking-processor.js"></script>
-    <script src="js/audio/whisper-mode-manager.js"></script>
 
     <!-- Network & Communication -->
     <script src="js/network/webrtc-manager.js"></script>
@@ -1722,32 +1003,5 @@
     <script src="js/media/jellyfin-manager.js"></script>
     <script src="js/media/live-streaming-manager.js"></script>
     <script src="js/ui/media-streaming-interface.js"></script>
-
-    <!-- FAILSAFE: Force main menu display -->
-    <script>
-    (function() {
-        function forceMainMenu() {
-            var loading = document.getElementById('loading-screen');
-            var mainMenu = document.getElementById('main-menu');
-            console.log('FAILSAFE: Forcing main menu display');
-            if (loading) {
-                loading.classList.remove('active');
-                loading.style.display = 'none';
-            }
-            if (mainMenu) {
-                mainMenu.classList.add('active');
-                mainMenu.style.display = 'flex';
-            }
-        }
-        // Run after 2 seconds no matter what
-        setTimeout(forceMainMenu, 2000);
-        // Also run on DOMContentLoaded as backup
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                setTimeout(forceMainMenu, 1500);
-            });
-        }
-    })();
-    </script>
 </body>
 </html>

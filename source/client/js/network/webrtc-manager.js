@@ -1,11 +1,6 @@
 /**
  * VoiceLink WebRTC Manager
- * P2P and Server Relay connection management for voice chat
- *
- * Connection Modes:
- * - 'p2p': Direct peer-to-peer (default, lowest latency)
- * - 'relay': Server relay (for NAT/firewall bypass or speed boost)
- * - 'auto': Automatic fallback (try P2P, fall back to relay)
+ * P2P connection management for voice chat
  */
 
 class WebRTCManager {
@@ -18,168 +13,15 @@ class WebRTCManager {
         this.localStream = null;
         this.connectionStates = new Map(); // userId -> connection state
 
-        // Connection mode: 'p2p', 'relay', or 'auto'
-        this.connectionMode = 'auto';
-        this.useServerRelay = false;
-        this.p2pConnectionTimeout = 5000; // 5 seconds to try P2P before fallback
-        this.connectionAttempts = new Map(); // userId -> attempt count
-
-        // Audio relay state
-        this.isRelayMode = false;
-        this.relayAudioContext = null;
-        this.relayProcessor = null;
-
-        // ICE configuration with STUN and TURN servers
         this.iceConfig = {
             iceServers: [
-                // STUN servers (for P2P NAT traversal)
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                // TURN servers (for relay fallback when P2P fails)
-                {
-                    urls: 'turn:turn.devinecreations.net:3478',
-                    username: 'voicelink',
-                    credential: 'voicelink2024'
-                },
-                {
-                    urls: 'turns:turn.devinecreations.net:5349',
-                    username: 'voicelink',
-                    credential: 'voicelink2024'
-                }
-            ],
-            iceCandidatePoolSize: 10
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
         };
 
         this.setupSocketListeners();
-        this.setupRelayListeners();
-    }
-
-    /**
-     * Set connection mode
-     * @param {string} mode - 'p2p', 'relay', or 'auto'
-     */
-    setConnectionMode(mode) {
-        const validModes = ['p2p', 'relay', 'auto'];
-        if (!validModes.includes(mode)) {
-            console.error('Invalid connection mode:', mode);
-            return;
-        }
-
-        this.connectionMode = mode;
-        this.useServerRelay = (mode === 'relay');
-
-        console.log(`Connection mode set to: ${mode}`);
-
-        // If switching to relay mode, enable server relay
-        if (mode === 'relay') {
-            this.enableServerRelay();
-        } else if (mode === 'p2p') {
-            this.disableServerRelay();
-        }
-
-        // Emit event for UI update
-        if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('connectionModeChanged', {
-                detail: { mode, isRelay: this.useServerRelay }
-            }));
-        }
-
-        return { success: true, mode };
-    }
-
-    /**
-     * Get current connection mode
-     */
-    getConnectionMode() {
-        return {
-            mode: this.connectionMode,
-            isRelay: this.useServerRelay,
-            p2pAvailable: this.peers.size > 0
-        };
-    }
-
-    /**
-     * Enable server relay for audio
-     */
-    enableServerRelay() {
-        this.isRelayMode = true;
-        this.socket.emit('enable-audio-relay', {
-            enabled: true,
-            sampleRate: 48000,
-            channels: 2
-        });
-        console.log('Server audio relay enabled');
-    }
-
-    /**
-     * Disable server relay
-     */
-    disableServerRelay() {
-        this.isRelayMode = false;
-        this.socket.emit('enable-audio-relay', { enabled: false });
-        console.log('Server audio relay disabled');
-    }
-
-    /**
-     * Setup listeners for server relay audio
-     */
-    setupRelayListeners() {
-        // Receive relayed audio from server
-        this.socket.on('relayed-audio', (data) => {
-            if (this.isRelayMode || this.connectionMode === 'auto') {
-                this.handleRelayedAudio(data);
-            }
-        });
-
-        // Server relay status updates
-        this.socket.on('relay-status', (status) => {
-            console.log('Server relay status:', status);
-            if (status.active) {
-                this.isRelayMode = true;
-            }
-        });
-
-        // P2P connection failed, auto-switch to relay
-        this.socket.on('p2p-fallback-needed', (data) => {
-            if (this.connectionMode === 'auto') {
-                console.log('P2P connection failed, switching to server relay for user:', data.userId);
-                this.enableServerRelay();
-                this.connectionStates.set(data.userId, 'relay');
-                this.updateUserConnectionStatus(data.userId, 'relay');
-            }
-        });
-    }
-
-    /**
-     * Handle audio received via server relay
-     */
-    handleRelayedAudio(data) {
-        const { userId, audioData, timestamp } = data;
-
-        // Skip if we have a direct P2P connection to this user
-        const peerState = this.connectionStates.get(userId);
-        if (peerState === 'connected' && !this.useServerRelay) {
-            return; // Use P2P instead
-        }
-
-        // Process relayed audio through audio engine
-        if (this.audioEngine && audioData) {
-            this.audioEngine.processRelayedAudio(userId, audioData, timestamp);
-        }
-    }
-
-    /**
-     * Send audio via server relay (when P2P unavailable)
-     */
-    sendAudioViaRelay(audioData) {
-        if (this.isRelayMode && this.socket) {
-            this.socket.emit('audio-data', {
-                audioData: audioData,
-                timestamp: Date.now(),
-                sampleRate: 48000
-            });
-        }
     }
 
     setupSocketListeners() {
@@ -210,73 +52,31 @@ class WebRTCManager {
         });
     }
 
-    async initializeLocalStream(options = {}) {
-        const {
-            autoEnableMic = true
-        } = options;
-
+    async initializeLocalStream() {
         try {
-            if (!autoEnableMic) {
-                this.localStream = new MediaStream();
-                console.log('Local microphone disabled by setting; joining in listen-only mode');
-                return this.localStream;
-            }
-
-            if (this.audioEngine?.localStream) {
-                this.localStream = this.audioEngine.localStream;
-                console.log('Using existing local stream from audio engine');
-                return this.localStream;
-            }
-
             this.localStream = await this.audioEngine.getUserMedia();
             console.log('Local stream initialized');
             return this.localStream;
         } catch (error) {
-            console.warn('Failed to initialize local stream, continuing in listen-only mode:', error);
-            this.localStream = new MediaStream();
-            return this.localStream;
+            console.error('Failed to initialize local stream:', error);
+            throw error;
         }
     }
 
     async createPeerConnection(userId, shouldOffer = false) {
-        // If relay mode is forced, skip P2P entirely
-        if (this.connectionMode === 'relay') {
-            console.log('Relay mode active, skipping P2P for user:', userId);
-            this.connectionStates.set(userId, 'relay');
-            this.updateUserConnectionStatus(userId, 'relay');
-            return null;
-        }
-
         if (this.peers.has(userId)) {
             this.closePeerConnection(userId);
         }
 
-        const peerOptions = {
+        const peer = new SimplePeer({
             initiator: shouldOffer,
             config: this.iceConfig,
+            stream: this.localStream,
             trickle: true
-        };
-
-        if (this.localStream && this.localStream.getTracks().length > 0) {
-            peerOptions.stream = this.localStream;
-        }
-
-        const peer = new SimplePeer(peerOptions);
+        });
 
         this.peers.set(userId, peer);
         this.connectionStates.set(userId, 'connecting');
-
-        // Set up P2P connection timeout for auto mode
-        let connectionTimeout = null;
-        if (this.connectionMode === 'auto') {
-            connectionTimeout = setTimeout(() => {
-                const state = this.connectionStates.get(userId);
-                if (state === 'connecting') {
-                    console.log(`P2P connection timeout for user ${userId}, falling back to relay`);
-                    this.handleP2PFallback(userId, 'timeout');
-                }
-            }, this.p2pConnectionTimeout);
-        }
 
         // Handle peer events
         peer.on('signal', (signal) => {
@@ -301,73 +101,29 @@ class WebRTCManager {
         });
 
         peer.on('connect', () => {
-            console.log('P2P connected to peer:', userId);
-            if (connectionTimeout) clearTimeout(connectionTimeout);
+            console.log('Connected to peer:', userId);
             this.connectionStates.set(userId, 'connected');
             this.updateUserConnectionStatus(userId, 'connected');
-
-            // Disable relay for this user since P2P is working
-            if (this.connectionMode === 'auto' && this.isRelayMode) {
-                console.log('P2P established, using direct connection for:', userId);
-            }
         });
 
         peer.on('stream', (stream) => {
-            console.log('Received P2P stream from peer:', userId);
+            console.log('Received stream from peer:', userId);
             this.handleRemoteStream(userId, stream);
         });
 
         peer.on('close', () => {
             console.log('Peer connection closed:', userId);
-            if (connectionTimeout) clearTimeout(connectionTimeout);
             this.connectionStates.set(userId, 'disconnected');
             this.handlePeerDisconnect(userId);
         });
 
         peer.on('error', (error) => {
             console.error('Peer connection error with', userId, error);
-            if (connectionTimeout) clearTimeout(connectionTimeout);
-
-            // In auto mode, fall back to relay on error
-            if (this.connectionMode === 'auto') {
-                this.handleP2PFallback(userId, error.message || 'connection_error');
-            } else {
-                this.connectionStates.set(userId, 'error');
-                this.updateUserConnectionStatus(userId, 'error');
-            }
+            this.connectionStates.set(userId, 'error');
+            this.updateUserConnectionStatus(userId, 'error');
         });
 
         return peer;
-    }
-
-    /**
-     * Handle P2P connection failure and fall back to relay
-     */
-    handleP2PFallback(userId, reason) {
-        console.log(`P2P fallback for user ${userId}: ${reason}`);
-
-        // Notify server about P2P failure
-        this.socket.emit('p2p-connection-failed', {
-            targetUserId: userId,
-            reason: reason
-        });
-
-        // Update state to relay
-        this.connectionStates.set(userId, 'relay');
-        this.updateUserConnectionStatus(userId, 'relay');
-
-        // Enable server relay if not already enabled
-        if (!this.isRelayMode) {
-            this.enableServerRelay();
-        }
-
-        // Set up audio capture for relay if not already done
-        if (this.audioEngine && !this.audioEngine.relayProcessor) {
-            this.audioEngine.captureAudioForRelay();
-            this.audioEngine.setAudioDataCallback((audioData) => {
-                this.sendAudioViaRelay(audioData);
-            });
-        }
     }
 
     async handleOffer(userId, offer) {
@@ -438,29 +194,14 @@ class WebRTCManager {
 
                 // Update tooltip
                 const statusText = {
-                    'connecting': 'Connecting (P2P)...',
-                    'connected': 'Connected (P2P Direct)',
-                    'relay': 'Connected (Server Relay)',
+                    'connecting': 'Connecting...',
+                    'connected': 'Connected',
                     'disconnected': 'Disconnected',
                     'error': 'Connection Error'
                 };
 
                 statusElement.title = statusText[status] || status;
-
-                // Add visual indicator for relay mode
-                if (status === 'relay') {
-                    statusElement.innerHTML = '🔄'; // Relay indicator
-                } else if (status === 'connected') {
-                    statusElement.innerHTML = '🔗'; // P2P indicator
-                }
             }
-        }
-
-        // Emit event for UI components
-        if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('userConnectionStatusChanged', {
-                detail: { userId, status, isRelay: status === 'relay' }
-            }));
         }
     }
 
@@ -484,10 +225,8 @@ class WebRTCManager {
             // Update UI
             const muteBtn = document.getElementById('mute-btn');
             if (muteBtn) {
-                muteBtn.textContent = muted ? 'Microphone: Off' : 'Microphone: On';
+                muteBtn.textContent = muted ? '🔇 Muted' : '🎙️ Unmuted';
                 muteBtn.classList.toggle('active', muted);
-                muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-                muteBtn.setAttribute('aria-label', muted ? 'Microphone muted' : 'Microphone unmuted');
             }
 
             console.log('Local audio', muted ? 'muted' : 'unmuted');
@@ -503,10 +242,8 @@ class WebRTCManager {
         // Update UI
         const deafenBtn = document.getElementById('deafen-btn');
         if (deafenBtn) {
-            deafenBtn.textContent = deafened ? 'Output: Off' : 'Output: On';
+            deafenBtn.textContent = deafened ? '🔇 Muted Output' : '🔊 Output On';
             deafenBtn.classList.toggle('active', deafened);
-            deafenBtn.setAttribute('aria-pressed', deafened ? 'true' : 'false');
-            deafenBtn.setAttribute('aria-label', deafened ? 'Output muted' : 'Output unmuted');
         }
 
         console.log('Audio output', deafened ? 'deafened' : 'enabled');

@@ -43,6 +43,8 @@ class AutoUpdater: ObservableObject {
 
     private var downloadTask: URLSessionDownloadTask?
     private var downloadedFileURL: URL?
+    private var lastMetadataURL: String?
+    private var saveDownloadForLater: Bool = false
 
     init() {
         loadLastChecked()
@@ -75,54 +77,83 @@ class AutoUpdater: ObservableObject {
 
             var selectedBaseForDownloadPath: String?
             var yamlString: String?
-            var lastError: Error?
+            var selectedMetadataURL: String?
+            var lastFailureReason: String?
 
             for candidate in ymlCandidates {
                 guard let url = URL(string: candidate) else { continue }
                 var request = URLRequest(url: url)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 do {
-                    let (data, _) = try await URLSession.shared.data(for: request)
-                    if let yaml = String(data: data, encoding: .utf8) {
-                        yamlString = yaml
-                        selectedBaseForDownloadPath = candidate.replacingOccurrences(of: "/latest-mac.yml", with: "")
-                        break
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        lastFailureReason = "\(candidate): invalid HTTP response"
+                        continue
                     }
+                    guard (200...299).contains(http.statusCode) else {
+                        lastFailureReason = "\(candidate): HTTP \(http.statusCode)"
+                        continue
+                    }
+
+                    let body = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+                    let firstLine = body.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+                    if firstLine.hasPrefix("<!doctype") || firstLine.hasPrefix("<html") {
+                        lastFailureReason = "\(candidate): returned HTML, not update YAML"
+                        continue
+                    }
+                    guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        lastFailureReason = "\(candidate): empty response"
+                        continue
+                    }
+
+                    yamlString = body
+                    selectedMetadataURL = candidate
+                    selectedBaseForDownloadPath = candidate.replacingOccurrences(of: "/latest-mac.yml", with: "")
+                    break
                 } catch {
-                    lastError = error
+                    lastFailureReason = "\(candidate): \(error.localizedDescription)"
                 }
             }
 
             let finalYamlString = yamlString
-            let finalError = lastError
+            let finalFailureReason = lastFailureReason
             let finalDownloadBase = selectedBaseForDownloadPath ?? self.downloadBaseURL
+            let finalMetadataURL = selectedMetadataURL
 
             await MainActor.run {
                 self.lastChecked = Date()
                 self.saveLastChecked()
+                self.lastMetadataURL = finalMetadataURL
 
                 guard let yaml = finalYamlString else {
                     if !silent {
-                        self.updateState = .error(finalError?.localizedDescription ?? "Failed to check for updates")
+                        self.updateState = .error(finalFailureReason ?? "Failed to check update metadata from /downloads/latest-mac.yml")
                     } else {
                         self.updateState = .idle
                     }
                     return
                 }
 
-                self.parseUpdateYAML(yaml, silent: silent, resolvedDownloadBaseURL: finalDownloadBase)
+                self.parseUpdateYAML(
+                    yaml,
+                    silent: silent,
+                    resolvedDownloadBaseURL: finalDownloadBase,
+                    metadataURL: finalMetadataURL
+                )
             }
         }
     }
 
-    private func parseUpdateYAML(_ yaml: String, silent: Bool, resolvedDownloadBaseURL: String) {
+    private func parseUpdateYAML(_ yaml: String, silent: Bool, resolvedDownloadBaseURL: String, metadataURL: String?) {
         var version: String?
         var path: String?
+        var directFileURL: String?
         var notes: String?
         var inReleaseNotes = false
         var releaseNotesLines: [String] = []
 
-        for line in yaml.components(separatedBy: "\n") {
+        for rawLine in yaml.components(separatedBy: "\n") {
+            let line = rawLine.replacingOccurrences(of: "\u{FEFF}", with: "")
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if inReleaseNotes {
@@ -141,6 +172,10 @@ class AutoUpdater: ObservableObject {
                 version = trimmed.replacingOccurrences(of: "version:", with: "").trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("path:") {
                 path = trimmed.replacingOccurrences(of: "path:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("- url:") {
+                directFileURL = trimmed.replacingOccurrences(of: "- url:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("url:") && directFileURL == nil {
+                directFileURL = trimmed.replacingOccurrences(of: "url:", with: "").trimmingCharacters(in: .whitespaces)
             } else if trimmed.hasPrefix("releaseNotes:") {
                 inReleaseNotes = true
             }
@@ -152,7 +187,9 @@ class AutoUpdater: ObservableObject {
 
         guard let serverVersion = version else {
             if !silent {
-                updateState = .error("Could not parse update information")
+                let firstLine = yaml.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "<empty>"
+                let source = metadataURL ?? "unknown source"
+                updateState = .error("Could not parse update metadata from \(source). First line: \(firstLine)")
             } else {
                 updateState = .idle
             }
@@ -180,8 +217,17 @@ class AutoUpdater: ObservableObject {
             latestVersion = serverVersion
             releaseNotes = notes
 
-            if let downloadPath = path {
-                updateURL = URL(string: "\(resolvedDownloadBaseURL)/\(downloadPath)")
+            if let urlString = directFileURL, !urlString.isEmpty, let absolute = URL(string: urlString) {
+                updateURL = absolute
+            } else if let downloadPath = path, !downloadPath.isEmpty {
+                let normalized = downloadPath.hasPrefix("/") ? String(downloadPath.dropFirst()) : downloadPath
+                updateURL = URL(string: "\(resolvedDownloadBaseURL)/\(normalized)")
+            } else {
+                updateURL = nil
+                if !silent {
+                    updateState = .error("Update metadata is missing download URL/path")
+                    return
+                }
             }
 
             updateAvailable = true
@@ -231,12 +277,13 @@ class AutoUpdater: ObservableObject {
 
     // MARK: - Download Update
 
-    func downloadUpdate() {
+    func downloadUpdate(saveForLater: Bool = false) {
         guard let downloadURL = updateURL else {
             updateState = .error("No download URL available")
             return
         }
 
+        saveDownloadForLater = saveForLater
         isDownloading = true
         downloadProgress = 0
         updateState = .downloading
@@ -262,9 +309,9 @@ class AutoUpdater: ObservableObject {
             return
         }
 
-        // For ZIP files, unzip and open the app
+        // For ZIP files, perform in-place install + relaunch.
         if fileURL.pathExtension == "zip" {
-            unzipAndInstall(fileURL)
+            unzipAndInstallInPlace(fileURL)
         } else {
             // For DMG/PKG, just open it
             NSWorkspace.shared.open(fileURL)
@@ -272,10 +319,10 @@ class AutoUpdater: ObservableObject {
         }
     }
 
-    private func unzipAndInstall(_ zipURL: URL) {
+    private func unzipAndInstallInPlace(_ zipURL: URL) {
         let fileManager = FileManager.default
-        let downloadsDir = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        let extractDir = downloadsDir.appendingPathComponent("VoiceLink-Update")
+        let extractDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("VoiceLink-Update-\(UUID().uuidString)")
 
         // Clean up previous extraction
         try? fileManager.removeItem(at: extractDir)
@@ -290,39 +337,112 @@ class AutoUpdater: ObservableObject {
             process.waitUntilExit()
 
             if process.terminationStatus == 0 {
-                // Find the .app bundle
-                let contents = try fileManager.contentsOfDirectory(at: extractDir, includingPropertiesForKeys: nil)
-                if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
-                    // Open Finder to show the new app
-                    NSWorkspace.shared.selectFile(appBundle.path, inFileViewerRootedAtPath: extractDir.path)
-
-                    // Show instructions
-                    DispatchQueue.main.async {
-                        self.showInstallInstructions(appBundle)
-                    }
+                if let appBundle = findAppBundle(in: extractDir) {
+                    performInPlaceInstall(from: appBundle, originalZipURL: zipURL, extractDirURL: extractDir)
                 } else {
                     updateState = .error("Could not find app in downloaded archive")
                 }
             } else {
-                updateState = .error("Failed to extract update")
+                updateState = .error("Failed to extract update (ditto exit \(process.terminationStatus))")
             }
         } catch {
             updateState = .error("Failed to extract update: \(error.localizedDescription)")
         }
     }
 
-    private func showInstallInstructions(_ appURL: URL) {
-        let alert = NSAlert()
-        alert.messageText = "Update Downloaded"
-        alert.informativeText = "The new version has been downloaded to your Downloads folder.\n\nTo complete the update:\n1. Quit VoiceLink\n2. Move the new VoiceLink.app to your Applications folder\n3. Open the new VoiceLink"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open Downloads Folder")
-        alert.addButton(withTitle: "Later")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.selectFile(appURL.path, inFileViewerRootedAtPath: appURL.deletingLastPathComponent().path)
+    private func findAppBundle(in directory: URL) -> URL? {
+        let fm = FileManager.default
+        if let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            if let direct = items.first(where: { $0.pathExtension == "app" }) {
+                return direct
+            }
         }
+        if let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: nil) {
+            for case let fileURL as URL in enumerator where fileURL.pathExtension == "app" {
+                return fileURL
+            }
+        }
+        return nil
+    }
+
+    private func shellEscape(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func performInPlaceInstall(from extractedAppURL: URL, originalZipURL: URL?, extractDirURL: URL?) {
+        let fm = FileManager.default
+        let currentAppURL = Bundle.main.bundleURL
+        let targetAppURL: URL
+
+        if currentAppURL.pathExtension == "app" {
+            targetAppURL = currentAppURL
+        } else {
+            targetAppURL = URL(fileURLWithPath: "/Applications/VoiceLink.app")
+        }
+
+        let targetDir = targetAppURL.deletingLastPathComponent()
+        let needsPrivileges = !fm.isWritableFile(atPath: targetDir.path)
+
+        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("voicelink-updater-\(UUID().uuidString).sh")
+        let tmpAppURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("VoiceLink.app.tmp-\(UUID().uuidString)")
+
+        let source = shellEscape(extractedAppURL.path)
+        let target = shellEscape(targetAppURL.path)
+        let targetBackup = shellEscape(targetAppURL.path + ".bak")
+        let tmpApp = shellEscape(tmpAppURL.path)
+        let scriptPath = shellEscape(scriptURL.path)
+        let zipToDelete = originalZipURL != nil ? shellEscape(originalZipURL!.path) : "''"
+        let extractToDelete = extractDirURL != nil ? shellEscape(extractDirURL!.path) : "''"
+
+        let script = """
+#!/bin/bash
+set -e
+sleep 1
+rm -rf \(tmpApp)
+cp -R \(source) \(tmpApp)
+xattr -cr \(tmpApp) || true
+codesign --force --deep --sign - \(tmpApp) || true
+if [ -d \(target) ]; then
+  rm -rf \(targetBackup)
+  mv \(target) \(targetBackup)
+fi
+mv \(tmpApp) \(target)
+open \(target)
+rm -rf \(targetBackup)
+rm -f \(zipToDelete) || true
+rm -rf \(extractToDelete) || true
+rm -f "$0" || true
+"""
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            updateState = .error("Failed to prepare updater script: \(error.localizedDescription)")
+            return
+        }
+
+        do {
+            let process = Process()
+            if needsPrivileges {
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = [
+                    "-e",
+                    "do shell script \"bash \(scriptURL.path.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
+                ]
+            } else {
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-lc", "nohup bash \(scriptPath) >/tmp/voicelink-updater.log 2>&1 &"]
+            }
+            try process.run()
+        } catch {
+            updateState = .error("Failed to launch updater: \(error.localizedDescription)")
+            return
+        }
+
+        markUpdateInstalled()
+        NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
     }
 
     // MARK: - Persistence
@@ -349,16 +469,26 @@ class AutoUpdater: ObservableObject {
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
             let fileManager = FileManager.default
             let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("VoiceLink-update-\(UUID().uuidString)")
 
             // Determine file extension from URL
             let originalURL = downloadTask.originalRequest?.url
             let ext = originalURL?.pathExtension ?? "zip"
             let fileName = "VoiceLink-\(updater?.latestVersion ?? "update").\(ext)"
-            let destinationURL = downloadsURL.appendingPathComponent(fileName)
+            let destinationURL: URL
+            if updater?.saveDownloadForLater == true {
+                destinationURL = downloadsURL.appendingPathComponent(fileName)
+            } else {
+                destinationURL = tempURL.appendingPathExtension(ext)
+            }
 
             do {
                 if fileManager.fileExists(atPath: destinationURL.path) {
                     try fileManager.removeItem(at: destinationURL)
+                }
+                if updater?.saveDownloadForLater != true {
+                    try? fileManager.createDirectory(at: tempURL, withIntermediateDirectories: true)
                 }
 
                 try fileManager.moveItem(at: location, to: destinationURL)
@@ -367,7 +497,15 @@ class AutoUpdater: ObservableObject {
                     self.updater?.downloadedFileURL = destinationURL
                     self.updater?.isDownloading = false
                     self.updater?.downloadProgress = 1.0
-                    self.updater?.updateState = .readyToInstall
+                    if self.updater?.saveDownloadForLater == true {
+                        self.updater?.updateState = .idle
+                        self.updater?.saveDownloadForLater = false
+                        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+                    } else {
+                        self.updater?.updateState = .readyToInstall
+                        self.updater?.saveDownloadForLater = false
+                        self.updater?.installUpdate()
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -389,6 +527,7 @@ class AutoUpdater: ObservableObject {
                 DispatchQueue.main.async {
                     self.updater?.updateState = .error("Download failed: \(error.localizedDescription)")
                     self.updater?.isDownloading = false
+                    self.updater?.saveDownloadForLater = false
                 }
             }
         }
@@ -523,14 +662,24 @@ struct UpdateSettingsView: View {
 
             HStack {
                 Button(action: {
-                    updater.downloadUpdate()
+                    updater.downloadUpdate(saveForLater: false)
                 }) {
                     HStack {
-                        Image(systemName: "arrow.down.to.line")
-                        Text("Download Update")
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Update Now")
                     }
                 }
                 .buttonStyle(.borderedProminent)
+
+                Button(action: {
+                    updater.downloadUpdate(saveForLater: true)
+                }) {
+                    HStack {
+                        Image(systemName: "arrow.down.to.line")
+                        Text("Download for Later")
+                    }
+                }
+                .buttonStyle(.bordered)
 
                 Button("Later") {
                     updater.updateState = .idle
@@ -576,7 +725,7 @@ struct UpdateSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Update Downloaded")
                         .fontWeight(.semibold)
-                    Text("Click Install to extract and view the new version.")
+                    Text("Click Install and Relaunch to replace this app automatically.")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
@@ -587,7 +736,7 @@ struct UpdateSettingsView: View {
             }) {
                 HStack {
                     Image(systemName: "arrow.uturn.forward")
-                    Text("Install Update")
+                    Text("Install and Relaunch")
                 }
             }
             .buttonStyle(.borderedProminent)
