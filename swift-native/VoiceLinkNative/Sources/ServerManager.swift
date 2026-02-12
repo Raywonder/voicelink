@@ -331,7 +331,7 @@ class ServerManager: ObservableObject {
         socket.on("room-list") { [weak self] data, ack in
             print("Received room list: \(data)")
             if let roomsData = data[0] as? [[String: Any]] {
-                let rooms = roomsData.compactMap { ServerRoom(from: $0) }
+                let rooms = self?.normalizedRooms(from: roomsData) ?? []
                 DispatchQueue.main.async {
                     self?.rooms = rooms
                 }
@@ -760,6 +760,57 @@ class ServerManager: ObservableObject {
         startAudioTransmission()
     }
 
+    private func normalizedRooms(from rawRooms: [[String: Any]]) -> [ServerRoom] {
+        let parsed = rawRooms.compactMap { ServerRoom(from: $0) }
+        var seen = Set<String>()
+        var normalized: [ServerRoom] = []
+
+        for room in parsed {
+            var candidateId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if candidateId.isEmpty {
+                candidateId = room.name.lowercased().replacingOccurrences(of: " ", with: "-")
+            }
+            if candidateId.isEmpty {
+                candidateId = UUID().uuidString
+            }
+
+            if !seen.contains(candidateId) {
+                seen.insert(candidateId)
+                normalized.append(room)
+                continue
+            }
+
+            // Duplicate IDs break SwiftUI ForEach rendering; synthesize a stable unique ID.
+            var suffix = 2
+            var dedupedId = "\(candidateId)-\(suffix)"
+            while seen.contains(dedupedId) {
+                suffix += 1
+                dedupedId = "\(candidateId)-\(suffix)"
+            }
+            seen.insert(dedupedId)
+
+            normalized.append(
+                ServerRoom(
+                    id: dedupedId,
+                    name: room.name,
+                    description: room.description,
+                    userCount: room.userCount,
+                    isPrivate: room.isPrivate,
+                    maxUsers: room.maxUsers,
+                    createdBy: room.createdBy,
+                    createdByRole: room.createdByRole,
+                    roomType: room.roomType,
+                    createdAt: room.createdAt,
+                    uptimeSeconds: room.uptimeSeconds,
+                    lastActiveUsername: room.lastActiveUsername,
+                    lastActivityAt: room.lastActivityAt
+                )
+            )
+        }
+
+        return normalized
+    }
+
     func leaveRoom() {
         socket?.emit("leave-room")
         stopAudioTransmission()
@@ -942,6 +993,36 @@ struct ServerRoom: Identifiable {
     let lastActiveUsername: String?
     let lastActivityAt: Date?
 
+    init(
+        id: String,
+        name: String,
+        description: String,
+        userCount: Int,
+        isPrivate: Bool,
+        maxUsers: Int,
+        createdBy: String?,
+        createdByRole: String?,
+        roomType: String?,
+        createdAt: Date?,
+        uptimeSeconds: Int?,
+        lastActiveUsername: String?,
+        lastActivityAt: Date?
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.userCount = userCount
+        self.isPrivate = isPrivate
+        self.maxUsers = maxUsers
+        self.createdBy = createdBy
+        self.createdByRole = createdByRole
+        self.roomType = roomType
+        self.createdAt = createdAt
+        self.uptimeSeconds = uptimeSeconds
+        self.lastActiveUsername = lastActiveUsername
+        self.lastActivityAt = lastActivityAt
+    }
+
     init?(from dict: [String: Any]) {
         func stringValue(_ value: Any?) -> String? {
             if let string = value as? String {
@@ -996,7 +1077,16 @@ struct ServerRoom: Identifiable {
         }
         self.id = id
         self.name = name
-        self.description = stringValue(dict["description"]) ?? stringValue(dict["roomDescription"]) ?? ""
+        self.description =
+            stringValue(dict["description"])
+            ?? stringValue(dict["roomDescription"])
+            ?? stringValue(dict["room_description"])
+            ?? stringValue(dict["details"])
+            ?? stringValue(dict["topic"])
+            ?? stringValue(dict["about"])
+            ?? stringValue(dict["summary"])
+            ?? stringValue(dict["subtitle"])
+            ?? ""
         self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
         self.maxUsers = intValue(dict["maxUsers"]) ?? 50
