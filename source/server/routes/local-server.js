@@ -339,6 +339,84 @@ class VoiceLinkLocalServer {
         }
     }
 
+    getConnectedSocketSet() {
+        if (!this.io?.sockets?.sockets) {
+            return new Set();
+        }
+        return new Set(this.io.sockets.sockets.keys());
+    }
+
+    getLiveRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+
+        const connectedSockets = this.getConnectedSocketSet();
+        const liveUsers = [];
+        const seen = new Set();
+
+        // Authoritative source: active socket/user map.
+        for (const [socketId, user] of this.users.entries()) {
+            if (user?.roomId !== roomId) continue;
+            if (!connectedSockets.has(socketId)) continue;
+            if (seen.has(socketId)) continue;
+            liveUsers.push(user);
+            seen.add(socketId);
+        }
+
+        // Compatibility source: persisted room.users entries.
+        const roomUsers = Array.isArray(room.users) ? room.users : [];
+        for (const roomUser of roomUsers) {
+            if (!roomUser?.id || seen.has(roomUser.id)) continue;
+            if (!connectedSockets.has(roomUser.id)) continue;
+            liveUsers.push(roomUser);
+            seen.add(roomUser.id);
+        }
+
+        return liveUsers;
+    }
+
+    normalizeRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+        room.users = this.getLiveRoomUsers(roomId);
+        return room.users;
+    }
+
+    getConnectedUsersCount() {
+        const connectedSockets = this.getConnectedSocketSet();
+        let count = 0;
+        for (const socketId of this.users.keys()) {
+            if (connectedSockets.has(socketId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    getRoomMonitorSnapshot() {
+        const rooms = [];
+        for (const room of this.rooms.values()) {
+            const users = this.normalizeRoomUsers(room.id);
+            rooms.push({
+                roomId: room.id,
+                name: room.name,
+                userCount: users.length,
+                users: users.map(user => ({
+                    id: user.id,
+                    name: user.name,
+                    joinedAt: user.joinedAt || null,
+                    isAuthenticated: !!user.isAuthenticated
+                })),
+                maxUsers: room.maxUsers || 50,
+                locked: !!room.locked,
+                isDefault: !!room.isDefault,
+                visibility: room.visibility || 'public',
+                accessType: room.accessType || 'hybrid'
+            });
+        }
+        return rooms;
+    }
+
     setupRoutes() {
         // API Routes - now fetches from main server and merges with local
         const authPortalBase = process.env.AUTH_PORTAL_URL || 'https://auth.devinecreations.net';
@@ -383,7 +461,7 @@ class VoiceLinkLocalServer {
                 id: room.id,
                 name: room.name,
                 description: room.description || '',
-                users: room.users.length,
+                users: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -837,6 +915,7 @@ class VoiceLinkLocalServer {
 
         // API status endpoint with relay stats
         this.app.get('/api/status', (req, res) => {
+            const roomSnapshot = this.getRoomMonitorSnapshot();
             res.json({
                 server: 'VoiceLink Local Server',
                 version: '1.0.1',
@@ -854,7 +933,12 @@ class VoiceLinkLocalServer {
                 ],
                 lastUpdated: new Date().toISOString(),
                 activeRooms: this.rooms.size,
-                connectedUsers: this.users.size,
+                connectedUsers: this.getConnectedUsersCount(),
+                roomPresence: roomSnapshot.map(room => ({
+                    roomId: room.roomId,
+                    name: room.name,
+                    userCount: room.userCount
+                })),
                 audioRelay: {
                     enabled: true,
                     activeRelays: this.relayStats.activeRelays,
@@ -872,7 +956,7 @@ class VoiceLinkLocalServer {
                 status: 'healthy',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
-                users: this.users.size
+                users: this.getConnectedUsersCount()
             });
         });
 
@@ -884,7 +968,32 @@ class VoiceLinkLocalServer {
                 version: '1.0.1',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
-                users: this.users.size
+                users: this.getConnectedUsersCount()
+            });
+        });
+
+        // Room/user monitoring endpoint for desktop/web API polling and push sync logic.
+        this.app.get(['/api/monitor', '/api_monitor', '/api/minitor', '/api_minitor'], (req, res) => {
+            const pollIntervalSeconds = Math.max(1, Math.min(60, parseInt(req.query.interval || '5', 10) || 5));
+            const roomSnapshot = this.getRoomMonitorSnapshot();
+            const totalUsersInRooms = roomSnapshot.reduce((sum, room) => sum + room.userCount, 0);
+            const connectedUsers = this.getConnectedUsersCount();
+
+            res.json({
+                service: 'voicelink-local',
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                pollIntervalSeconds,
+                connectedUsers,
+                roomUsers: totalUsersInRooms,
+                rooms: {
+                    total: roomSnapshot.length,
+                    active: roomSnapshot.filter(room => room.userCount > 0).length,
+                    items: roomSnapshot
+                },
+                websocket: {
+                    recommendedEvents: ['room-user-count', 'user-joined', 'user-left', 'joined-room']
+                }
             });
         });
 
@@ -932,26 +1041,27 @@ class VoiceLinkLocalServer {
         // Updates check endpoint for native clients
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
+            const macDownloadURL = 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip';
 
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
                     version: '1.0.0',
-                    buildNumber: 1,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                    releaseNotes: 'Initial release with full SwiftUI native support:\n• Spatial audio engine\n• Multi-channel audio\n• Push-to-talk\n• Jellyfin integration\n• Auto-updates\n• TTS announcements\n• Whisper mode'
+                    buildNumber: 2,
+                    downloadURL: macDownloadURL,
+                    releaseNotes: 'v1.0 maintenance build:\n• Device defaults now follow system input/output\n• Reduced repeated microphone permission prompts\n• Room presence accuracy and monitor endpoints improved\n• Audio/UI reliability improvements'
                 },
                 windows: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.'
+                    version: '1.0.0',
+                    buildNumber: 0,
+                    downloadURL: null,
+                    releaseNotes: 'Windows build not currently published.'
                 },
                 linux: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.3-linux.AppImage',
-                    releaseNotes: 'Linux release with AppImage support.'
+                    version: '1.0.0',
+                    buildNumber: 0,
+                    downloadURL: null,
+                    releaseNotes: 'Linux build not currently published.'
                 }
             };
 
@@ -970,7 +1080,13 @@ class VoiceLinkLocalServer {
                 return 0;
             };
 
-            const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
+            const requestedVersion = currentVersion || '0.0.0';
+            const requestedBuild = Number.isFinite(Number(buildNumber)) ? Number(buildNumber) : 0;
+            const newerSemver = compareVersions(platformInfo.version, requestedVersion) > 0;
+            const newerBuildSameVersion =
+                compareVersions(platformInfo.version, requestedVersion) === 0 &&
+                (platformInfo.buildNumber || 0) > requestedBuild;
+            const hasUpdate = newerSemver || newerBuildSameVersion;
 
             res.json({
                 updateAvailable: hasUpdate,
@@ -991,32 +1107,19 @@ class VoiceLinkLocalServer {
                         version: '1.0.0',
                         downloads: [
                             {
-                                name: 'macOS Universal (DMG)',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                                size: '144 MB',
+                                name: 'macOS Native (ZIP)',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip',
+                                size: 'Auto-detected',
                                 type: 'native'
                             }
                         ]
                     },
                     windows: {
-                        version: '1.0.3',
-                        downloads: [
-                            {
-                                name: 'Windows Portable',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                                size: '193 MB',
-                                type: 'native'
-                            },
-                            {
-                                name: 'Windows Setup',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe',
-                                size: '194 MB',
-                                type: 'native'
-                            }
-                        ]
+                        version: '1.0.0',
+                        downloads: []
                     },
                     linux: {
-                        version: '1.0.3',
+                        version: '1.0.0',
                         downloads: []
                     }
                 },
@@ -5760,12 +5863,12 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    userCount: Array.isArray(room.users) ? room.users.length : 0,
-                    users: Array.isArray(room.users) ? room.users.map(u => ({
+                    userCount: this.normalizeRoomUsers(room.id).length,
+                    users: this.normalizeRoomUsers(room.id).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false
-                    })) : [],
+                    })),
                     maxUsers: room.maxUsers || 50,
                     hasPassword: !!room.password,
                     visibility: room.visibility || 'public',
@@ -5792,19 +5895,41 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
+                this.normalizeRoomUsers(roomId);
+
                 if (room.users.length >= room.maxUsers) {
                     socket.emit('error', { message: 'Room is full' });
                     return;
                 }
 
+                // If this socket is already in another room, leave that room first.
+                const existingSession = this.users.get(socket.id);
+                if (existingSession?.roomId && existingSession.roomId !== roomId) {
+                    const previousRoom = this.rooms.get(existingSession.roomId);
+                    if (previousRoom) {
+                        previousRoom.users = (previousRoom.users || []).filter(u => u.id !== socket.id);
+                        socket.to(existingSession.roomId).emit('user-left', {
+                            userId: socket.id,
+                            userName: existingSession.name
+                        });
+                        this.io.to(existingSession.roomId).emit('room-user-count', {
+                            roomId: existingSession.roomId,
+                            count: previousRoom.users.length,
+                            users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
+                        });
+                    }
+                    socket.leave(existingSession.roomId);
+                }
+
                 // Check if user is authenticated (Mastodon/email) or guest
                 const authUser = this.authenticatedUsers.get(socket.id);
                 const isAuthenticated = !!authUser;
+                const resolvedName = this.resolveDisplayName(userName, authUser, socket.id);
 
                 // Add user to room
                 const user = {
                     id: socket.id,
-                    name: userName || `User ${socket.id.slice(0, 8)}`,
+                    name: resolvedName,
                     joinedAt: new Date(),
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
@@ -5816,6 +5941,7 @@ class VoiceLinkLocalServer {
                     }
                 };
 
+                room.users = (room.users || []).filter(u => u.id !== socket.id);
                 room.users.push(user);
 
                 // Track recent users (keep last 10)
@@ -5839,13 +5965,13 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: room.users.map(u => ({
+                    users: this.normalizeRoomUsers(roomId).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false,
                         joinedAt: u.joinedAt
                     })),
-                    userCount: room.users.length,
+                    userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false
                 };
@@ -5856,11 +5982,11 @@ class VoiceLinkLocalServer {
                 // Broadcast updated user count to all in room
                 this.io.to(roomId).emit('room-user-count', {
                     roomId,
-                    count: room.users.length,
-                    users: room.users.map(u => ({ id: u.id, name: u.name }))
+                    count: this.normalizeRoomUsers(roomId).length,
+                    users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
                 });
 
-                console.log(`User ${user.name} joined room ${room.name} (${room.users.length} users now)`);
+                console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
 
             // Handle WebRTC signaling
@@ -6156,15 +6282,16 @@ class VoiceLinkLocalServer {
                 const { roomId } = data;
                 const room = this.rooms.get(roomId);
                 if (room) {
+                    const liveUsers = this.normalizeRoomUsers(roomId);
                     socket.emit('room-users', {
                         roomId,
-                        users: room.users.map(u => ({
+                        users: liveUsers.map(u => ({
                             id: u.id,
                             name: u.name,
                             isAuthenticated: u.isAuthenticated || false,
                             joinedAt: u.joinedAt
                         })),
-                        count: room.users.length
+                        count: liveUsers.length
                     });
                 }
             });
@@ -6177,6 +6304,7 @@ class VoiceLinkLocalServer {
                     if (room) {
                         const userName = user.name;
                         room.users = room.users.filter(u => u.id !== socket.id);
+                        const liveUsers = this.normalizeRoomUsers(user.roomId);
 
                         // Notify others user left
                         socket.to(user.roomId).emit('user-left', {
@@ -6187,14 +6315,14 @@ class VoiceLinkLocalServer {
                         // Broadcast updated user count
                         this.io.to(user.roomId).emit('room-user-count', {
                             roomId: user.roomId,
-                            count: room.users.length,
-                            users: room.users.map(u => ({ id: u.id, name: u.name }))
+                            count: liveUsers.length,
+                            users: liveUsers.map(u => ({ id: u.id, name: u.name }))
                         });
 
-                        console.log(`User ${userName} left room ${room.name} (${room.users.length} users remain)`);
+                        console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
 
                         // Clean up empty rooms (but keep default rooms)
-                        if (room.users.length === 0 && !room.isDefault) {
+                        if (liveUsers.length === 0 && !room.isDefault) {
                             this.rooms.delete(user.roomId);
                             console.log(`Room ${room.name} deleted (empty)`);
                         }
@@ -6214,6 +6342,39 @@ class VoiceLinkLocalServer {
                 console.log(`User disconnected: ${socket.id}`);
             });
         });
+    }
+
+    resolveDisplayName(userName, authUser, socketId) {
+        const fallback = `User ${String(socketId || '').slice(0, 8)}`;
+        const candidates = [
+            userName,
+            authUser?.displayName,
+            authUser?.name,
+            authUser?.username,
+            authUser?.preferred_username,
+            authUser?.authUsername
+        ];
+
+        for (const value of candidates) {
+            if (!value || typeof value !== 'string') continue;
+            const trimmed = value.trim();
+            if (!trimmed) continue;
+
+            // Convert mastodon-style handles like @john@example.com to "john".
+            if (trimmed.startsWith('@') && trimmed.includes('@', 1)) {
+                const core = trimmed.replace(/^@/, '').split('@')[0].trim();
+                if (core) return core;
+            }
+
+            if (!trimmed.startsWith('@') && trimmed.includes('@') && !trimmed.includes(' ')) {
+                const core = trimmed.split('@')[0].trim();
+                if (core) return core;
+            }
+
+            return trimmed;
+        }
+
+        return fallback;
     }
 
     // ==================== Message Persistence Methods ====================

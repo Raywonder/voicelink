@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - P2P Voice Chat</title>
+    <title>VoiceLink Web App - P2P Voice Chat</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -13,7 +13,7 @@
         <!-- Loading Screen -->
         <div id="loading-screen" class="screen active">
             <div class="loading-content">
-                <h1>🎙️ VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Web App</h1>
                 <p>Initializing P2P voice chat system...</p>
                 <div class="loading-spinner"></div>
             </div>
@@ -22,31 +22,10 @@
         <!-- Main Menu -->
         <div id="main-menu" class="screen">
             <div class="menu-header">
-                <h1>🎙️ VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Web App</h1>
                 <p>Advanced P2P Voice Chat with 3D Audio</p>
             </div>
 
-            <!-- Mastodon Login Section -->
-            <div id="mastodon-auth-section" class="auth-section">
-                <!-- Logged Out State -->
-                <div id="mastodon-login-prompt" class="auth-prompt">
-                    <button id="mastodon-login-btn" class="auth-btn mastodon-btn">
-                        <span class="mastodon-icon">🐘</span> Login with Mastodon
-                    </button>
-                </div>
-                <!-- Logged In State -->
-                <div id="mastodon-user-info" class="auth-user-info" style="display: none;">
-                    <img id="mastodon-user-avatar" class="user-avatar" src="" alt="Avatar">
-                    <div class="user-details">
-                        <span id="mastodon-user-name" class="user-name"></span>
-                        <span id="mastodon-user-handle" class="user-handle"></span>
-                        <span id="mastodon-user-role" class="user-role"></span>
-                    </div>
-                    <button id="mastodon-logout-btn" class="auth-btn logout-btn">Logout</button>
-                </div>
-            </div>
-
-            <!-- Authelia SSO Login Section -->
             <div id="authelia-auth-section" class="auth-section">
                 <div id="authelia-login-prompt" class="auth-prompt">
                     <button id="authelia-login-btn" class="auth-btn sso-btn">
@@ -59,40 +38,6 @@
                         <span id="authelia-user-role" class="user-role"></span>
                     </div>
                     <button id="authelia-logout-btn" class="auth-btn logout-btn">Logout</button>
-                </div>
-            </div>
-
-            <!-- Mastodon Login Modal -->
-            <div id="mastodon-login-modal" class="modal" style="display: none;">
-                <div class="modal-content auth-modal">
-                    <h2>🐘 Login with Mastodon</h2>
-                    <p>Enter your Mastodon instance or choose a suggested one:</p>
-
-                    <div class="instance-input-group">
-                        <input type="text" id="mastodon-instance-input"
-                               placeholder="mastodon.social"
-                               class="instance-input">
-                        <button id="mastodon-connect-btn" class="primary-btn">Connect</button>
-                    </div>
-
-                    <div class="suggested-instances">
-                        <p>Suggested instances:</p>
-                        <button class="instance-btn" data-instance="md.tappedin.fm">
-                            🎵 md.tappedin.fm (TappedIn)
-                        </button>
-                        <button class="instance-btn" data-instance="mastodon.devinecreations.net">
-                            🎨 mastodon.devinecreations.net (DevineCreations)
-                        </button>
-                    </div>
-
-                    <!-- Manual code entry for Electron -->
-                    <div id="oauth-code-entry" class="oauth-code-entry" style="display: none;">
-                        <p>Enter the authorization code from your browser:</p>
-                        <input type="text" id="oauth-code-input" placeholder="Paste code here" class="code-input">
-                        <button id="oauth-code-submit" class="primary-btn">Submit Code</button>
-                    </div>
-
-                    <button id="close-login-modal" class="close-modal-btn">✕</button>
                 </div>
             </div>
 
@@ -118,25 +63,34 @@
                 </div>
 
                 <div class="menu-section">
-                    <h3>Server Status</h3>
-                    <div id="server-status-display" class="server-status">
-                        <div class="status-item">
-                            <span class="status-label">Server:</span>
-                            <span class="status-value" id="server-status-value">🔴 Offline</span>
+                    <button id="toggle-server-status" class="collapsible-toggle" aria-expanded="false">
+                        <span>Server Status</span>
+                        <span id="toggle-server-status-icon" class="collapse-icon">▸</span>
+                    </button>
+                    <div id="server-status-content" class="collapsible-content collapsed">
+                        <div id="server-status-display" class="server-status">
+                            <div class="status-item">
+                                <span class="status-label">Server:</span>
+                                <span class="status-value" id="server-status-value">🔴 Offline</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Port:</span>
+                                <span class="status-value" id="server-port-value">-</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Users:</span>
+                                <span class="status-value" id="server-users-value">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Rooms:</span>
+                                <span class="status-value" id="server-rooms-value">0</span>
+                            </div>
                         </div>
-                        <div class="status-item">
-                            <span class="status-label">Users:</span>
-                            <span class="status-value" id="server-users-value">0</span>
+                        <div class="server-control-buttons">
+                            <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
+                            <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
+                            <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
                         </div>
-                        <div class="status-item">
-                            <span class="status-label">Rooms:</span>
-                            <span class="status-value" id="server-rooms-value">0</span>
-                        </div>
-                    </div>
-                    <div class="server-control-buttons">
-                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
-                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
-                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
                     </div>
                 </div>
 
@@ -196,57 +150,7 @@
                     </div>
 
                     <div id="room-privacy-controls" class="input-group">
-                        <label>Room Visibility</label>
-                        <div class="visibility-options">
-                            <label class="visibility-option selected">
-                                <input type="radio" name="room-visibility" value="public" checked>
-                                <span class="option-icon">🌐</span>
-                                <span class="option-label">Public</span>
-                                <span class="option-desc">Anyone can find and join</span>
-                            </label>
-                            <label class="visibility-option">
-                                <input type="radio" name="room-visibility" value="unlisted">
-                                <span class="option-icon">🔗</span>
-                                <span class="option-label">Unlisted</span>
-                                <span class="option-desc">Only with direct link</span>
-                            </label>
-                            <label class="visibility-option">
-                                <input type="radio" name="room-visibility" value="private">
-                                <span class="option-icon">🔒</span>
-                                <span class="option-label">Private</span>
-                                <span class="option-desc">Logged in users only</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div id="room-access-controls" class="input-group">
-                        <label>Access Type</label>
-                        <div class="access-options">
-                            <label class="access-option selected">
-                                <input type="radio" name="room-access" value="hybrid" checked>
-                                <span class="option-icon">🔄</span>
-                                <span class="option-label">Hybrid</span>
-                                <span class="option-desc">App and web embed</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="app-only">
-                                <span class="option-icon">📱</span>
-                                <span class="option-label">App Only</span>
-                                <span class="option-desc">VoiceLink app only</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="web-only">
-                                <span class="option-icon">🌐</span>
-                                <span class="option-label">Web Only</span>
-                                <span class="option-desc">Embed/URL only</span>
-                            </label>
-                            <label class="access-option">
-                                <input type="radio" name="room-access" value="hidden">
-                                <span class="option-icon">👻</span>
-                                <span class="option-label">Hidden</span>
-                                <span class="option-desc">Direct link only</span>
-                            </label>
-                        </div>
+                        <!-- Privacy controls will be dynamically added here -->
                     </div>
 
                     <div class="button-group">
@@ -299,6 +203,29 @@
                 </div>
             </div>
 
+            <div class="room-status-panel">
+                <button id="toggle-room-status" class="collapsible-toggle" aria-expanded="true">
+                    <span>Room Status</span>
+                    <span id="toggle-room-status-icon" class="collapse-icon">▾</span>
+                </button>
+                <div id="room-status-content" class="collapsible-content">
+                    <div class="server-status">
+                        <div class="status-item">
+                            <span class="status-label">Room ID:</span>
+                            <span class="status-value" id="room-status-room-id">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Users:</span>
+                            <span class="status-value" id="room-status-users">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Connection:</span>
+                            <span class="status-value" id="room-status-connection">Disconnected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="chat-main">
                 <!-- User List -->
                 <div class="user-panel">
@@ -316,7 +243,7 @@
 
                     <div class="audio-controls">
                         <button id="mute-btn" class="control-btn">🎙️ Unmuted</button>
-                        <button id="deafen-btn" class="control-btn">🔊 Hearing</button>
+                        <button id="deafen-btn" class="control-btn">🔊 Output On</button>
                         <button id="push-to-talk-btn" class="control-btn">🔒 PTT: Off</button>
                     </div>
                 </div>
@@ -331,67 +258,6 @@
                     </div>
                 </div>
             </div>
-
-            <!-- Jukebox Media Player Panel -->
-            <div id="jukebox-panel" class="jukebox-panel hidden">
-                <div class="jukebox-header">
-                    <h3>🎵 Jukebox</h3>
-                    <div class="jukebox-controls-header">
-                        <button id="jukebox-minimize-btn" class="icon-btn small" title="Minimize">➖</button>
-                        <button id="jukebox-close-btn" class="icon-btn small" title="Close">✕</button>
-                    </div>
-                </div>
-                <div class="jukebox-content">
-                    <!-- Now Playing -->
-                    <div class="jukebox-now-playing" id="jukebox-now-playing">
-                        <div class="now-playing-art" id="now-playing-art"></div>
-                        <div class="now-playing-info">
-                            <div class="now-playing-title" id="now-playing-title">No media playing</div>
-                            <div class="now-playing-artist" id="now-playing-artist"></div>
-                        </div>
-                    </div>
-
-                    <!-- Playback Controls -->
-                    <div class="jukebox-playback">
-                        <div class="playback-progress">
-                            <input type="range" id="jukebox-progress" min="0" max="100" value="0">
-                            <div class="progress-time">
-                                <span id="jukebox-current-time">0:00</span>
-                                <span id="jukebox-duration">0:00</span>
-                            </div>
-                        </div>
-                        <div class="playback-buttons">
-                            <button id="jukebox-prev-btn" class="playback-btn" title="Previous">⏮️</button>
-                            <button id="jukebox-play-btn" class="playback-btn primary" title="Play/Pause">▶️</button>
-                            <button id="jukebox-next-btn" class="playback-btn" title="Next">⏭️</button>
-                            <button id="jukebox-loop-btn" class="playback-btn" title="Loop">🔁</button>
-                        </div>
-                        <div class="volume-control">
-                            <span>🔊</span>
-                            <input type="range" id="jukebox-volume" min="0" max="100" value="50">
-                        </div>
-                    </div>
-
-                    <!-- Queue -->
-                    <div class="jukebox-queue">
-                        <h4>Queue <span id="queue-count">(0)</span></h4>
-                        <div id="jukebox-queue-list" class="queue-list"></div>
-                    </div>
-
-                    <!-- Library Browser (Admin) -->
-                    <div class="jukebox-library" id="jukebox-library">
-                        <h4>Library</h4>
-                        <div class="library-search">
-                            <input type="text" id="jukebox-search" placeholder="Search media...">
-                            <button id="jukebox-search-btn">🔍</button>
-                        </div>
-                        <div id="jukebox-library-list" class="library-list"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Jukebox Toggle Button (shown when minimized) -->
-            <button id="jukebox-toggle-btn" class="jukebox-toggle hidden" title="Open Jukebox">🎵</button>
 
             <!-- Audio Routing Panel -->
             <div id="audio-routing-panel" class="routing-panel hidden">
@@ -449,6 +315,7 @@
                     <button class="tab-btn" data-tab="app">📱 Application</button>
                     <button class="tab-btn" data-tab="network">🌐 Network</button>
                     <button class="tab-btn" data-tab="streaming">📺 Streaming</button>
+                    <button class="tab-btn" data-tab="authentication">🔐 Authentication</button>
                     <button class="tab-btn" data-tab="privacy">🔒 Privacy</button>
                     <button class="tab-btn" data-tab="advanced">🔧 Advanced</button>
                 </div>
@@ -1027,6 +894,40 @@
                     </div>
                 </div>
 
+                <!-- Authentication Settings Tab -->
+                <div id="authentication-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Authentication</h3>
+                        <div class="setting-item">
+                            <label>Current Session:</label>
+                            <span id="auth-settings-status">Not signed in</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Display Name:</label>
+                            <span id="auth-settings-display-name">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Username:</label>
+                            <span id="auth-settings-username">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Provider:</label>
+                            <span id="auth-settings-provider">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Groups:</label>
+                            <span id="auth-settings-groups">-</span>
+                        </div>
+                        <div class="button-group">
+                            <button id="auth-open-login-btn" class="secondary-btn">Sign In</button>
+                            <button id="auth-open-logout-btn" class="secondary-btn">Sign Out</button>
+                        </div>
+                        <div class="setting-item">
+                            <span class="setting-desc">Profile and Mastodon-compatible identity settings are managed here for room presence and federation features.</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Privacy Settings Tab -->
                 <div id="privacy-tab" class="settings-tab">
                     <div class="settings-section">
@@ -1128,8 +1029,6 @@
     <script src="js/core/default-rooms-manager.js"></script>
     <script src="js/core/feature-permissions-manager.js"></script>
     <script src="js/integrations/wordpress-integration.js"></script>
-    <script src="js/accessible-dropdown.js"></script>
-    <script src="js/auth/mastodon-oauth.js"></script>
     <script src="js/auth/authelia-auth.js"></script>
     <script src="js/core/app.js"></script>
 

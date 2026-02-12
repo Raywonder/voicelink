@@ -259,12 +259,6 @@ class VoiceLinkApp {
             );
         }
 
-        // Initialize Jukebox Manager for Jellyfin integration
-        if (typeof JukeboxManager !== 'undefined') {
-            window.jukeboxManager = new JukeboxManager(this);
-            console.log('Jukebox manager initialized');
-        }
-
         console.log('Advanced systems initialized');
     }
 
@@ -293,19 +287,12 @@ class VoiceLinkApp {
 
     async connectToServer() {
         return new Promise((resolve, reject) => {
-            // Determine host - use page host for web access, localhost for Electron
-            const pageHost = window.location.hostname || 'localhost';
-            const pagePort = window.location.port;
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-            const host = isElectron ? 'localhost' : pageHost;
-
-            // If page was loaded from a specific port, try that first
-            // Port sequence: page port (if any), 3010, 4004 (Electron), etc.
-            const portSequence = pagePort ? [parseInt(pagePort), 3010, 4004, 4005, 4006] : [3010, 4004, 4005, 4006, 3000, 3001];
+            // Try port sequence: 4004 (Electron default), 4005, 4006, 3000, 3001
+            const portSequence = [4004, 4005, 4006, 3000, 3001];
             let currentPortIndex = 0;
 
             const tryConnect = (port) => {
-                const url = `http://${host}:${port}`;
+                const url = `http://localhost:${port}`;
                 console.log(`Attempting to connect to server at ${url}`);
                 this.socket = io(url, {
                     timeout: 5000,
@@ -331,7 +318,7 @@ class VoiceLinkApp {
                     console.log(`Connected to VoiceLink local server on port ${port}`);
 
                     // Update server status display
-                    this.updateServerStatus('online');
+                    this.updateServerStatus('online', port);
 
                     // Initialize encryption manager events
                     if (window.serverEncryptionManager) {
@@ -410,6 +397,8 @@ class VoiceLinkApp {
     }
 
     setupUIEventListeners() {
+        this.setupCollapsiblePanels();
+
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
             this.showScreen('create-room-screen');
@@ -417,6 +406,7 @@ class VoiceLinkApp {
         });
 
         document.getElementById('join-room-btn')?.addEventListener('click', () => {
+            this.applyAuthIdentityDefaults();
             this.showScreen('join-room-screen');
         });
 
@@ -589,22 +579,6 @@ class VoiceLinkApp {
             this.createRoom();
         });
 
-        // Visibility option toggle
-        document.querySelectorAll('.visibility-option').forEach(option => {
-            option.addEventListener('click', function() {
-                document.querySelectorAll('.visibility-option').forEach(o => o.classList.remove('selected'));
-                this.classList.add('selected');
-            });
-        });
-
-        // Access type option toggle
-        document.querySelectorAll('.access-option').forEach(option => {
-            option.addEventListener('click', function() {
-                document.querySelectorAll('.access-option').forEach(o => o.classList.remove('selected'));
-                this.classList.add('selected');
-            });
-        });
-
         // Join room
         document.getElementById('join-room-form')?.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -682,12 +656,30 @@ class VoiceLinkApp {
 
         // Initialize button click audio feedback
         this.initializeButtonAudio();
+    }
 
-        // Setup Mastodon authentication
-        this.setupMastodonAuth();
+    setupCollapsiblePanels() {
+        const bindToggle = (buttonId, contentId, iconId, defaultExpanded) => {
+            const button = document.getElementById(buttonId);
+            const content = document.getElementById(contentId);
+            const icon = document.getElementById(iconId);
+            if (!button || !content || !icon) return;
 
-        // Check for OAuth callback
-        this.checkOAuthCallback();
+            const setExpanded = (expanded) => {
+                button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                content.classList.toggle('collapsed', !expanded);
+                icon.textContent = expanded ? '▾' : '▸';
+            };
+
+            setExpanded(defaultExpanded);
+            button.addEventListener('click', () => {
+                const isExpanded = button.getAttribute('aria-expanded') === 'true';
+                setExpanded(!isExpanded);
+            });
+        };
+
+        bindToggle('toggle-server-status', 'server-status-content', 'toggle-server-status-icon', false);
+        bindToggle('toggle-room-status', 'room-status-content', 'toggle-room-status-icon', true);
     }
 
     showScreen(screenId) {
@@ -703,8 +695,9 @@ class VoiceLinkApp {
         console.log('Switched to screen:', screenId);
     }
 
-    updateServerStatus(status) {
+    updateServerStatus(status, port = null) {
         const statusValue = document.getElementById('server-status-value');
+        const portValue = document.getElementById('server-port-value');
 
         if (statusValue) {
             if (status === 'online') {
@@ -714,6 +707,10 @@ class VoiceLinkApp {
                 statusValue.textContent = '🔴 Offline';
                 statusValue.style.color = '#f44336';
             }
+        }
+
+        if (portValue && port) {
+            portValue.textContent = port;
         }
 
         // Also update user and room counts when we have socket events
@@ -742,17 +739,7 @@ class VoiceLinkApp {
         const stopBtn = document.getElementById('stop-server-btn');
         const restartBtn = document.getElementById('restart-server-btn');
 
-        // Only show server control buttons in Electron app, not in browser
-        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-        if (!isElectron) {
-            // Hide all server control buttons for web visitors
-            if (startBtn) startBtn.style.display = 'none';
-            if (stopBtn) stopBtn.style.display = 'none';
-            if (restartBtn) restartBtn.style.display = 'none';
-            return;
-        }
-
-        // Show/hide buttons based on status (Electron only)
+        // Show/hide buttons based on status
         if (startBtn && stopBtn && restartBtn) {
             switch (status) {
                 case 'online':
@@ -811,7 +798,7 @@ class VoiceLinkApp {
         this.statusMonitorInterval = setInterval(() => {
             if (this.socket && this.socket.connected) {
                 // Server is responsive
-                this.updateServerStatus('online');
+                this.updateServerStatus('online', this.getCurrentPort());
             } else {
                 // Server is not responsive, try to reconnect
                 this.updateServerStatus('offline');
@@ -834,7 +821,7 @@ class VoiceLinkApp {
 
             this.socket.on('reconnect', () => {
                 console.log('Server reconnected');
-                this.updateServerStatus('online');
+                this.updateServerStatus('online', this.getCurrentPort());
             });
         }
     }
@@ -852,87 +839,27 @@ class VoiceLinkApp {
 
     async loadRooms() {
         try {
-            // Get host and port from socket connection or page location
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-            const response = await fetch(`http://${host}:${port}/api/rooms`);
+            // Get the correct port from socket connection
+            const port = this.socket?.io?.opts?.port || 3000;
+            const response = await fetch(`http://localhost:${port}/api/rooms`);
             if (!response.ok) {
                 throw new Error('Failed to fetch rooms');
             }
-            let rooms = await response.json();
-
-            // Check if user is authenticated
-            const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
-            const currentUser = window.mastodonAuth?.getUser();
-
-            // Filter rooms based on authentication state
-            if (!isAuthenticated) {
-                // Guests can only see rooms that are:
-                // 1. Marked as public/visible to visitors
-                // 2. Default rooms (always visible)
-                rooms = rooms.filter(room =>
-                    room.visibility === 'public' ||
-                    room.visibleToGuests === true ||
-                    room.isDefault === true
-                );
-            }
-
-            // Calculate how many rooms are hidden from guests
-            const totalServerRooms = rooms.length; // This is already filtered
-            let hiddenCount = 0;
-
-            if (!isAuthenticated) {
-                // Show up to 5 rooms for guests, prompt to login for more
-                const guestRoomLimit = 5;
-                if (rooms.length > guestRoomLimit) {
-                    hiddenCount = rooms.length - guestRoomLimit;
-                    rooms = rooms.slice(0, guestRoomLimit);
-                }
-            }
+            const rooms = await response.json();
 
             const roomList = document.getElementById('room-list');
             if (roomList) {
                 if (rooms.length === 0) {
-                    const message = isAuthenticated
-                        ? `<div class="no-rooms-message">
-                               <p class="text-muted">No rooms available</p>
-                               <p class="text-small">Create a room to get started</p>
-                           </div>`
-                        : `<div class="no-rooms-message">
-                               <p class="text-muted">No public rooms available</p>
-                               <p class="text-small">Login with Mastodon to see all rooms or create your own</p>
-                               <button class="auth-btn mastodon-btn" onclick="document.getElementById('mastodon-login-btn')?.click()">
-                                   Login with Mastodon
-                               </button>
-                           </div>`;
-                    roomList.innerHTML = message;
+                    roomList.innerHTML = `
+                        <div class="no-rooms-message">
+                            <p class="text-muted">No rooms available</p>
+                            <p class="text-small">Default rooms will be generated automatically if enabled</p>
+                        </div>
+                    `;
                 } else {
                     // Group rooms by category for better organization
                     const groupedRooms = this.groupRoomsByCategory(rooms);
-                    let html = this.renderGroupedRooms(groupedRooms);
-
-                    // Add login prompt for guests if there are hidden rooms
-                    if (!isAuthenticated && hiddenCount > 0) {
-                        html += `
-                            <div class="login-to-see-more">
-                                <p>+${hiddenCount} more room${hiddenCount > 1 ? 's' : ''} available</p>
-                                <button class="auth-btn mastodon-btn small" onclick="document.getElementById('mastodon-login-btn')?.click()">
-                                    Login to see all rooms
-                                </button>
-                            </div>
-                        `;
-                    } else if (!isAuthenticated) {
-                        html += `
-                            <div class="login-prompt-small">
-                                <p>Have a direct room link? Join with ID above.</p>
-                                <button class="auth-btn mastodon-btn small" onclick="document.getElementById('mastodon-login-btn')?.click()">
-                                    Login for more features
-                                </button>
-                            </div>
-                        `;
-                    }
-
-                    roomList.innerHTML = html;
+                    roomList.innerHTML = this.renderGroupedRooms(groupedRooms);
                 }
 
                 // Update encryption status indicators for all rooms
@@ -1099,15 +1026,7 @@ class VoiceLinkApp {
         const password = document.getElementById('room-password').value;
         const maxUsers = parseInt(document.getElementById('max-users').value);
         const duration = document.getElementById('room-duration').value;
-        // Get visibility from radio buttons (public, unlisted, private)
-        const visibility = document.querySelector('input[name="room-visibility"]:checked')?.value || 'public';
-        // Get access type (hybrid, app-only, web-only, hidden)
-        const accessType = document.querySelector('input[name="room-access"]:checked')?.value || 'hybrid';
-        // Legacy privacy level support
-        const privacyLevel = document.querySelector('input[name="privacy-level"]:checked')?.value || visibility;
-
-        // Determine if room should be visible to guests based on visibility and access type
-        const visibleToGuests = visibility === 'public' && accessType !== 'hidden';
+        const privacyLevel = document.querySelector('input[name="privacy-level"]:checked')?.value || 'public';
 
         try {
             // Set room privacy settings in the encryption manager
@@ -1121,10 +1040,7 @@ class VoiceLinkApp {
                 }
             }
 
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms', {
+            const response = await fetch('/api/rooms', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1135,12 +1051,8 @@ class VoiceLinkApp {
                     password: password || undefined,
                     maxUsers,
                     duration: duration === 'lifetime' ? null : parseInt(duration),
-                    visibility,
-                    accessType,
-                    visibleToGuests,
                     privacyLevel,
-                    encrypted: window.serverEncryptionManager?.isRoomEncrypted(roomId) || false,
-                    creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null
+                    encrypted: window.serverEncryptionManager?.isRoomEncrypted(roomId) || false
                 })
             });
 
@@ -1164,11 +1076,15 @@ class VoiceLinkApp {
 
     async joinRoom() {
         const roomId = document.getElementById('join-room-id').value;
-        const userName = document.getElementById('user-name').value;
+        const userNameInput = document.getElementById('user-name');
+        const enteredName = userNameInput?.value?.trim();
         const password = document.getElementById('join-room-password').value;
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        const authDisplayName = authUser?.displayName || authUser?.username || '';
+        const userName = enteredName || authDisplayName;
 
         if (!roomId || !userName) {
-            this.showError('Please enter room ID and your name');
+            this.showError('Please enter room ID and your name, or sign in first');
             return;
         }
 
@@ -1206,7 +1122,7 @@ class VoiceLinkApp {
 
     quickJoinRoom(roomId) {
         document.getElementById('join-room-id').value = roomId;
-        document.getElementById('user-name').value = `User_${Date.now().toString().slice(-4)}`;
+        this.applyAuthIdentityDefaults(true);
         this.showScreen('join-room-screen');
     }
 
@@ -1217,6 +1133,14 @@ class VoiceLinkApp {
         // Update UI
         document.getElementById('current-room-name').textContent = room.name;
         document.getElementById('room-id-display').textContent = `Room ID: ${room.id}`;
+        const roomStatusId = document.getElementById('room-status-room-id');
+        if (roomStatusId) {
+            roomStatusId.textContent = room.id;
+        }
+        const connectionStatus = document.getElementById('room-status-connection');
+        if (connectionStatus) {
+            connectionStatus.textContent = this.socket?.connected ? 'Connected' : 'Disconnected';
+        }
 
         // Add existing users
         room.users.forEach(existingUser => {
@@ -1288,9 +1212,14 @@ class VoiceLinkApp {
     }
 
     updateUserCount() {
+        const count = this.users.size + 1; // +1 for current user
         const userCountElement = document.getElementById('user-count');
         if (userCountElement) {
-            userCountElement.textContent = this.users.size + 1; // +1 for current user
+            userCountElement.textContent = count;
+        }
+        const roomStatusUsers = document.getElementById('room-status-users');
+        if (roomStatusUsers) {
+            roomStatusUsers.textContent = String(count);
         }
     }
 
@@ -1422,6 +1351,14 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users.clear();
+        const roomStatusUsers = document.getElementById('room-status-users');
+        if (roomStatusUsers) {
+            roomStatusUsers.textContent = '0';
+        }
+        const roomStatusConnection = document.getElementById('room-status-connection');
+        if (roomStatusConnection) {
+            roomStatusConnection.textContent = 'Disconnected';
+        }
 
         // Reconnect to server
         this.connectToServer().then(() => {
@@ -1447,6 +1384,21 @@ class VoiceLinkApp {
     showSuccess(message) {
         console.log('Success:', message);
         this.showNotification(message, 'success');
+    }
+
+    applyAuthIdentityDefaults(forceGuest = false) {
+        const input = document.getElementById('user-name');
+        if (!input) return;
+
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        if (authUser && !forceGuest) {
+            input.value = authUser.displayName || authUser.username || input.value || '';
+            return;
+        }
+
+        if (!input.value) {
+            input.value = `User_${Date.now().toString().slice(-4)}`;
+        }
     }
 
     // Simple notification system without dialogs
@@ -1804,6 +1756,7 @@ class VoiceLinkApp {
 
         // Load current settings
         this.loadCurrentSettings();
+        this.syncAuthenticationSettings();
 
         // Setup settings event listeners
         this.setupSettingsEventListeners();
@@ -1873,6 +1826,44 @@ class VoiceLinkApp {
                 window.electronAPI.restartServer();
             }
         });
+
+        document.getElementById('auth-open-login-btn')?.addEventListener('click', () => {
+            document.getElementById('authelia-login-btn')?.click();
+        });
+
+        document.getElementById('auth-open-logout-btn')?.addEventListener('click', () => {
+            document.getElementById('authelia-logout-btn')?.click();
+        });
+    }
+
+    syncAuthenticationSettings() {
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        const statusEl = document.getElementById('auth-settings-status');
+        const displayNameEl = document.getElementById('auth-settings-display-name');
+        const usernameEl = document.getElementById('auth-settings-username');
+        const providerEl = document.getElementById('auth-settings-provider');
+        const groupsEl = document.getElementById('auth-settings-groups');
+
+        if (!statusEl || !displayNameEl || !usernameEl || !providerEl || !groupsEl) {
+            return;
+        }
+
+        if (!authUser) {
+            statusEl.textContent = 'Not signed in';
+            displayNameEl.textContent = '-';
+            usernameEl.textContent = '-';
+            providerEl.textContent = '-';
+            groupsEl.textContent = '-';
+            return;
+        }
+
+        statusEl.textContent = 'Signed in';
+        displayNameEl.textContent = authUser.displayName || authUser.username || '-';
+        usernameEl.textContent = authUser.username || '-';
+        providerEl.textContent = authUser.authProvider || 'mastodon';
+        groupsEl.textContent = Array.isArray(authUser.groups) && authUser.groups.length
+            ? authUser.groups.join(', ')
+            : (authUser.isAdmin ? 'admins' : 'users');
     }
 
     loadServerInfo() {
@@ -2175,2064 +2166,12 @@ class VoiceLinkApp {
         });
     }
 
-    // ========================================
-    // MASTODON AUTHENTICATION SYSTEM
-    // ========================================
-
-    setupMastodonAuth() {
-        // Login button
-        document.getElementById('mastodon-login-btn')?.addEventListener('click', () => {
-            this.showMastodonLoginModal();
-        });
-
-        // Close modal button
-        document.getElementById('close-login-modal')?.addEventListener('click', () => {
-            this.hideMastodonLoginModal();
-        });
-
-        // Connect button
-        document.getElementById('mastodon-connect-btn')?.addEventListener('click', () => {
-            const instanceInput = document.getElementById('mastodon-instance-input');
-            if (instanceInput?.value) {
-                this.startMastodonAuth(instanceInput.value);
-            }
-        });
-
-        // Instance input - allow Enter key
-        document.getElementById('mastodon-instance-input')?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                document.getElementById('mastodon-connect-btn')?.click();
-            }
-        });
-
-        // Suggested instance buttons
-        document.querySelectorAll('.instance-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const instance = btn.dataset.instance;
-                if (instance) {
-                    this.startMastodonAuth(instance);
-                }
-            });
-        });
-
-        // Manual OAuth code submit (for Electron)
-        document.getElementById('oauth-code-submit')?.addEventListener('click', () => {
-            const codeInput = document.getElementById('oauth-code-input');
-            if (codeInput?.value) {
-                this.handleManualOAuthCode(codeInput.value);
-            }
-        });
-
-        // Logout button
-        document.getElementById('mastodon-logout-btn')?.addEventListener('click', () => {
-            this.handleMastodonLogout();
-        });
-
-        // Listen for Mastodon auth events
-        window.addEventListener('mastodon-login', (e) => {
-            this.updateUIForAuthState(e.detail.user);
-        });
-
-        window.addEventListener('mastodon-logout', () => {
-            this.updateUIForAuthState(null);
-        });
-
-        // Check existing session
-        if (window.mastodonAuth?.isAuthenticated()) {
-            this.updateUIForAuthState(window.mastodonAuth.getUser());
-        }
-    }
-
-    showMastodonLoginModal() {
-        const modal = document.getElementById('mastodon-login-modal');
-        if (modal) {
-            modal.style.display = 'flex';
-        }
-    }
-
-    hideMastodonLoginModal() {
-        const modal = document.getElementById('mastodon-login-modal');
-        if (modal) {
-            modal.style.display = 'none';
-        }
-        // Hide code entry section
-        const codeEntry = document.getElementById('oauth-code-entry');
-        if (codeEntry) {
-            codeEntry.style.display = 'none';
-        }
-    }
-
-    async startMastodonAuth(instanceUrl) {
-        try {
-            if (!window.mastodonAuth) {
-                throw new Error('Mastodon OAuth manager not initialized');
-            }
-
-            this.showNotification('Connecting to ' + instanceUrl + '...', 'info');
-
-            const authUrl = await window.mastodonAuth.startAuth(instanceUrl);
-
-            // Check if we're in Electron (need manual code entry)
-            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
-
-            if (isElectron) {
-                // Open external browser and show code entry field
-                if (window.electronAPI?.openExternal) {
-                    window.electronAPI.openExternal(authUrl);
-                } else {
-                    window.open(authUrl, '_blank');
-                }
-
-                // Show code entry section
-                const codeEntry = document.getElementById('oauth-code-entry');
-                if (codeEntry) {
-                    codeEntry.style.display = 'block';
-                }
-            } else {
-                // Web flow - redirect to auth page
-                window.location.href = authUrl;
-            }
-        } catch (error) {
-            console.error('Failed to start Mastodon auth:', error);
-            this.showNotification('Failed to connect: ' + error.message, 'error');
-        }
-    }
-
-    async handleManualOAuthCode(code) {
-        try {
-            this.showNotification('Verifying authorization code...', 'info');
-
-            const user = await window.mastodonAuth.handleManualCode(code);
-
-            this.hideMastodonLoginModal();
-            this.showNotification('Welcome, ' + user.displayName + '!', 'success');
-        } catch (error) {
-            console.error('Failed to verify OAuth code:', error);
-            this.showNotification('Failed to verify code: ' + error.message, 'error');
-        }
-    }
-
-    checkOAuthCallback() {
-        // Check URL for OAuth callback params
-        const urlParams = new URLSearchParams(window.location.search);
-        const code = urlParams.get('oauth_code') || urlParams.get('code');
-        const state = urlParams.get('oauth_state') || urlParams.get('state');
-
-        if (code) {
-            // Remove params from URL
-            const cleanUrl = window.location.pathname;
-            window.history.replaceState({}, document.title, cleanUrl);
-
-            // Handle the callback
-            this.handleOAuthCallback(code, state);
-        }
-    }
-
-    async handleOAuthCallback(code, state) {
-        try {
-            this.showNotification('Completing login...', 'info');
-
-            const user = await window.mastodonAuth.handleCallback(code, state);
-
-            this.showNotification('Welcome, ' + user.displayName + '!', 'success');
-        } catch (error) {
-            console.error('OAuth callback failed:', error);
-            this.showNotification('Login failed: ' + error.message, 'error');
-        }
-    }
-
-    async handleMastodonLogout() {
-        try {
-            await window.mastodonAuth?.logout();
-            this.showNotification('Logged out successfully', 'info');
-        } catch (error) {
-            console.error('Logout failed:', error);
-        }
-    }
-
-    updateUIForAuthState(user) {
-        const loginPrompt = document.getElementById('mastodon-login-prompt');
-        const userInfo = document.getElementById('mastodon-user-info');
-        const avatar = document.getElementById('mastodon-user-avatar');
-        const userName = document.getElementById('mastodon-user-name');
-        const userHandle = document.getElementById('mastodon-user-handle');
-        const userRole = document.getElementById('mastodon-user-role');
-
-        if (user) {
-            // Show logged-in state
-            if (loginPrompt) loginPrompt.style.display = 'none';
-            if (userInfo) userInfo.style.display = 'flex';
-
-            if (avatar) avatar.src = user.avatar || user.avatarStatic || '';
-            if (userName) userName.textContent = user.displayName;
-            if (userHandle) userHandle.textContent = user.fullHandle;
-
-            // Show role badge
-            if (userRole) {
-                if (user.isAdmin) {
-                    userRole.textContent = 'Admin';
-                    userRole.className = 'user-role admin';
-                } else if (user.isModerator) {
-                    userRole.textContent = 'Moderator';
-                    userRole.className = 'user-role moderator';
-                } else {
-                    userRole.textContent = 'User';
-                    userRole.className = 'user-role user';
-                }
-            }
-
-            // Update role-based UI
-            this.updateRoleBasedUI(user);
-        } else {
-            // Show logged-out state
-            if (loginPrompt) loginPrompt.style.display = 'block';
-            if (userInfo) userInfo.style.display = 'none';
-
-            // Hide admin controls
-            this.hideAdminControls();
-        }
-    }
-
-    updateRoleBasedUI(user) {
-        const isAdmin = user?.isAdmin === true;
-        const isModerator = user?.isModerator === true || isAdmin;
-
-        // Server control buttons - only for admins
-        const serverControls = document.querySelector('.server-control-buttons');
-        if (serverControls) {
-            if (isAdmin) {
-                serverControls.style.display = 'flex';
-            } else {
-                serverControls.style.display = 'none';
-            }
-        }
-
-        // Show admin panel button
-        let adminPanelBtn = document.getElementById('admin-panel-btn');
-        if (isAdmin && !adminPanelBtn) {
-            this.createAdminPanelButton();
-        } else if (!isAdmin && adminPanelBtn) {
-            adminPanelBtn.remove();
-        }
-
-        // Show share room button for all authenticated users
-        this.updateShareButtons(!!user);
-
-        console.log('UI updated for ' + user?.displayName + ' - Admin: ' + isAdmin + ', Moderator: ' + isModerator);
-    }
-
-    hideAdminControls() {
-        const serverControls = document.querySelector('.server-control-buttons');
-        if (serverControls) {
-            serverControls.style.display = 'none';
-        }
-
-        const adminPanelBtn = document.getElementById('admin-panel-btn');
-        if (adminPanelBtn) {
-            adminPanelBtn.remove();
-        }
-    }
-
-    updateShareButtons(isAuthenticated) {
-        // Add share buttons to rooms if user is authenticated
-        if (isAuthenticated) {
-            document.querySelectorAll('.room-item').forEach(roomItem => {
-                if (!roomItem.querySelector('.share-room-btn')) {
-                    const shareBtn = document.createElement('button');
-                    shareBtn.className = 'share-room-btn';
-                    shareBtn.textContent = 'Share';
-                    shareBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        const roomId = roomItem.dataset.roomId;
-                        this.shareRoom(roomId);
-                    };
-                    roomItem.querySelector('.room-details')?.appendChild(shareBtn);
-                }
-            });
-        }
-    }
-
-    async shareRoom(roomId) {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/share/' + roomId);
-            const data = await response.json();
-
-            if (data.shareUrls?.mastodon) {
-                window.open(data.shareUrls.mastodon, '_blank');
-            } else {
-                // Fallback - copy link
-                const joinUrl = data.joinUrl || (window.location.origin + '/?room=' + roomId);
-                await navigator.clipboard.writeText(joinUrl);
-                this.showNotification('Room link copied to clipboard!', 'success');
-            }
-        } catch (error) {
-            console.error('Failed to share room:', error);
-            this.showNotification('Failed to share room', 'error');
-        }
-    }
-
-    // ========================================
-    // EMBED CODE GENERATOR
-    // ========================================
-
-    async showEmbedCodeModal(roomId, roomName) {
-        // Remove existing modal
-        document.querySelector('.embed-code-modal')?.remove();
-
-        const modal = document.createElement('div');
-        modal.className = 'embed-code-modal modal';
-        modal.style.display = 'flex';
-
-        const content = document.createElement('div');
-        content.className = 'modal-content embed-modal';
-
-        // Title
-        const title = document.createElement('h2');
-        title.textContent = 'Embed Room';
-        content.appendChild(title);
-
-        // Room name
-        const roomLabel = document.createElement('p');
-        roomLabel.textContent = `Room: ${roomName}`;
-        roomLabel.style.color = '#888';
-        content.appendChild(roomLabel);
-
-        // Generate token button
-        const generateBtn = document.createElement('button');
-        generateBtn.className = 'primary-btn';
-        generateBtn.textContent = 'Generate Embed Code';
-        generateBtn.style.marginTop = '15px';
-        content.appendChild(generateBtn);
-
-        // Embed code container (hidden initially)
-        const embedContainer = document.createElement('div');
-        embedContainer.className = 'embed-code-container';
-        embedContainer.style.display = 'none';
-
-        const embedCode = document.createElement('pre');
-        embedCode.className = 'embed-code';
-        embedContainer.appendChild(embedCode);
-
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'copy-embed-btn';
-        copyBtn.textContent = 'Copy';
-        embedContainer.appendChild(copyBtn);
-
-        content.appendChild(embedContainer);
-
-        // Size options
-        const sizeOptions = document.createElement('div');
-        sizeOptions.className = 'embed-options';
-        sizeOptions.style.display = 'none';
-
-        const widthOption = document.createElement('div');
-        widthOption.className = 'embed-option';
-        const widthLabel = document.createElement('label');
-        widthLabel.textContent = 'Size';
-        const sizeInputs = document.createElement('div');
-        sizeInputs.className = 'embed-size-inputs';
-
-        const widthInput = document.createElement('input');
-        widthInput.type = 'number';
-        widthInput.value = '400';
-        widthInput.id = 'embed-width';
-
-        const sizeX = document.createElement('span');
-        sizeX.textContent = 'x';
-
-        const heightInput = document.createElement('input');
-        heightInput.type = 'number';
-        heightInput.value = '300';
-        heightInput.id = 'embed-height';
-
-        sizeInputs.appendChild(widthInput);
-        sizeInputs.appendChild(sizeX);
-        sizeInputs.appendChild(heightInput);
-        widthOption.appendChild(widthLabel);
-        widthOption.appendChild(sizeInputs);
-        sizeOptions.appendChild(widthOption);
-
-        content.appendChild(sizeOptions);
-
-        // Close button
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'close-modal-btn';
-        closeBtn.textContent = '\u2715';
-        closeBtn.addEventListener('click', () => modal.remove());
-        content.appendChild(closeBtn);
-
-        modal.appendChild(content);
-        document.body.appendChild(modal);
-
-        // Generate token handler
-        generateBtn.addEventListener('click', async () => {
-            generateBtn.disabled = true;
-            generateBtn.textContent = 'Generating...';
-
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                const response = await fetch(`http://${host}:${port}/api/embed/token`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        roomId,
-                        creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null,
-                        expiresIn: 86400000 * 30 // 30 days
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    embedCode.textContent = data.embedCode;
-                    embedContainer.style.display = 'block';
-                    sizeOptions.style.display = 'flex';
-                    generateBtn.style.display = 'none';
-
-                    // Update embed code when size changes
-                    const updateEmbed = () => {
-                        const w = widthInput.value || 400;
-                        const h = heightInput.value || 300;
-                        embedCode.textContent = data.embedCode.replace('width="400"', `width="${w}"`).replace('height="300"', `height="${h}"`);
-                    };
-
-                    widthInput.addEventListener('input', updateEmbed);
-                    heightInput.addEventListener('input', updateEmbed);
-
-                    // Copy handler
-                    copyBtn.addEventListener('click', () => {
-                        navigator.clipboard.writeText(embedCode.textContent);
-                        copyBtn.textContent = 'Copied!';
-                        setTimeout(() => copyBtn.textContent = 'Copy', 2000);
-                    });
-                } else {
-                    alert('Failed to generate embed code: ' + (data.error || 'Unknown error'));
-                    generateBtn.disabled = false;
-                    generateBtn.textContent = 'Generate Embed Code';
-                }
-            } catch (error) {
-                console.error('Embed generation error:', error);
-                alert('Error generating embed code');
-                generateBtn.disabled = false;
-                generateBtn.textContent = 'Generate Embed Code';
-            }
-        });
-    }
-
-    // ========================================
-    // ADMIN PANEL & CONTROLS
-    // ========================================
-
-    createAdminPanelButton() {
-        const menuSection = document.querySelector('.menu-section');
-        if (!menuSection) return;
-
-        const adminSection = document.createElement('div');
-        adminSection.className = 'menu-section admin-section';
-
-        const header = document.createElement('h3');
-        header.textContent = 'Admin Controls';
-
-        const adminBtn = document.createElement('button');
-        adminBtn.id = 'admin-panel-btn';
-        adminBtn.className = 'primary-btn admin-btn';
-        adminBtn.textContent = 'Open Admin Panel';
-
-        adminSection.appendChild(header);
-        adminSection.appendChild(adminBtn);
-
-        menuSection.parentNode.insertBefore(adminSection, menuSection);
-
-        adminBtn.addEventListener('click', () => {
-            this.showAdminPanel();
-        });
-    }
-
-    showAdminPanel() {
-        // Remove existing panel
-        document.querySelector('.admin-panel-modal')?.remove();
-
-        const modal = document.createElement('div');
-        modal.className = 'admin-panel-modal modal';
-        modal.style.display = 'flex';
-
-        // Build admin panel content using DOM methods
-        const content = document.createElement('div');
-        content.className = 'modal-content admin-panel';
-
-        // Header
-        const header = document.createElement('div');
-        header.className = 'admin-header';
-        const title = document.createElement('h2');
-        title.textContent = 'VoiceLink Admin Panel';
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'close-admin-panel';
-        closeBtn.textContent = 'X';
-        header.appendChild(title);
-        header.appendChild(closeBtn);
-        content.appendChild(header);
-
-        // Tabs
-        const tabs = document.createElement('div');
-        tabs.className = 'admin-tabs';
-        const tabData = [
-            { id: 'server', label: 'Server' },
-            { id: 'rooms', label: 'Rooms' },
-            { id: 'users', label: 'Users' },
-            { id: 'mastodon', label: 'Mastodon' },
-            { id: 'federation', label: 'Federation' }
-        ];
-        tabData.forEach((tab, index) => {
-            const tabBtn = document.createElement('button');
-            tabBtn.className = 'admin-tab' + (index === 0 ? ' active' : '');
-            tabBtn.dataset.tab = tab.id;
-            tabBtn.textContent = tab.label;
-            tabs.appendChild(tabBtn);
-        });
-        content.appendChild(tabs);
-
-        // Content area
-        const contentArea = document.createElement('div');
-        contentArea.className = 'admin-content';
-
-        // Server Tab
-        const serverTab = this.createServerTab();
-        contentArea.appendChild(serverTab);
-
-        // Rooms Tab
-        const roomsTab = this.createRoomsTab();
-        contentArea.appendChild(roomsTab);
-
-        // Users Tab
-        const usersTab = this.createUsersTab();
-        contentArea.appendChild(usersTab);
-
-        // Mastodon Tab
-        const mastodonTab = this.createMastodonTab();
-        contentArea.appendChild(mastodonTab);
-
-        // Federation Tab
-        const federationTab = this.createFederationTab();
-        contentArea.appendChild(federationTab);
-
-        content.appendChild(contentArea);
-        modal.appendChild(content);
-        document.body.appendChild(modal);
-
-        // Setup tab switching
-        modal.querySelectorAll('.admin-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                modal.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
-                modal.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
-
-                tab.classList.add('active');
-                const tabId = 'admin-' + tab.dataset.tab + '-tab';
-                document.getElementById(tabId)?.classList.add('active');
-            });
-        });
-
-        // Close button
-        closeBtn.addEventListener('click', () => modal.remove());
-
-        // Click outside to close
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.remove();
-        });
-
-        // Load initial data
-        this.loadAdminData();
-    }
-
-    createServerTab() {
-        const tab = document.createElement('div');
-        tab.className = 'admin-tab-content active';
-        tab.id = 'admin-server-tab';
-
-        const title = document.createElement('h3');
-        title.textContent = 'Server Management';
-        tab.appendChild(title);
-
-        const grid = document.createElement('div');
-        grid.className = 'admin-grid';
-
-        // Status card
-        const statusCard = document.createElement('div');
-        statusCard.className = 'admin-card';
-
-        const statusTitle = document.createElement('h4');
-        statusTitle.textContent = 'Server Status';
-        statusCard.appendChild(statusTitle);
-
-        const stats = document.createElement('div');
-        stats.className = 'server-stats';
-
-        const statusItem = this.createStatItem('Status:', 'admin-server-status', 'Online');
-        const uptimeItem = this.createStatItem('Uptime:', 'admin-server-uptime', 'Loading...');
-        const connItem = this.createStatItem('Connections:', 'admin-connections', '0');
-
-        stats.appendChild(statusItem);
-        stats.appendChild(uptimeItem);
-        stats.appendChild(connItem);
-        statusCard.appendChild(stats);
-
-        const actions = document.createElement('div');
-        actions.className = 'admin-actions';
-
-        const restartBtn = document.createElement('button');
-        restartBtn.className = 'admin-action-btn';
-        restartBtn.textContent = 'Restart';
-        restartBtn.onclick = () => this.adminRestartServer();
-
-        const stopBtn = document.createElement('button');
-        stopBtn.className = 'admin-action-btn danger';
-        stopBtn.textContent = 'Stop';
-        stopBtn.onclick = () => this.adminStopServer();
-
-        actions.appendChild(restartBtn);
-        actions.appendChild(stopBtn);
-        statusCard.appendChild(actions);
-
-        grid.appendChild(statusCard);
-
-        // Settings card
-        const settingsCard = document.createElement('div');
-        settingsCard.className = 'admin-card';
-
-        const settingsTitle = document.createElement('h4');
-        settingsTitle.textContent = 'Server Settings';
-        settingsCard.appendChild(settingsTitle);
-
-        const maxRoomsRow = this.createSettingRow('Max Concurrent Rooms:', 'admin-max-rooms', 'number', '100');
-        settingsCard.appendChild(maxRoomsRow);
-
-        const requireAuthRow = this.createCheckboxRow('Require Authentication', 'admin-require-auth');
-        settingsCard.appendChild(requireAuthRow);
-
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'primary-btn';
-        saveBtn.textContent = 'Save Settings';
-        saveBtn.onclick = () => this.saveServerSettings();
-        settingsCard.appendChild(saveBtn);
-
-        grid.appendChild(settingsCard);
-        tab.appendChild(grid);
-
-        return tab;
-    }
-
-    createRoomsTab() {
-        const tab = document.createElement('div');
-        tab.className = 'admin-tab-content';
-        tab.id = 'admin-rooms-tab';
-
-        const title = document.createElement('h3');
-        title.textContent = 'Room Management';
-        tab.appendChild(title);
-
-        const toolbar = document.createElement('div');
-        toolbar.className = 'admin-toolbar';
-
-        const defaultRoomsBtn = document.createElement('button');
-        defaultRoomsBtn.className = 'admin-action-btn';
-        defaultRoomsBtn.textContent = 'Generate Default Rooms';
-        defaultRoomsBtn.onclick = () => this.createDefaultRooms();
-
-        const cleanupBtn = document.createElement('button');
-        cleanupBtn.className = 'admin-action-btn';
-        cleanupBtn.textContent = 'Cleanup Expired';
-        cleanupBtn.onclick = () => this.cleanupExpiredRooms();
-
-        toolbar.appendChild(defaultRoomsBtn);
-        toolbar.appendChild(cleanupBtn);
-        tab.appendChild(toolbar);
-
-        const roomsList = document.createElement('div');
-        roomsList.id = 'admin-rooms-list';
-        roomsList.className = 'admin-list';
-        roomsList.textContent = 'Loading rooms...';
-        tab.appendChild(roomsList);
-
-        return tab;
-    }
-
-    createUsersTab() {
-        const tab = document.createElement('div');
-        tab.className = 'admin-tab-content';
-        tab.id = 'admin-users-tab';
-
-        const title = document.createElement('h3');
-        title.textContent = 'Connected Users';
-        tab.appendChild(title);
-
-        const toolbar = document.createElement('div');
-        toolbar.className = 'admin-toolbar';
-
-        const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'admin-action-btn';
-        refreshBtn.textContent = 'Refresh';
-        refreshBtn.onclick = () => this.refreshUserList();
-
-        const broadcastBtn = document.createElement('button');
-        broadcastBtn.className = 'admin-action-btn';
-        broadcastBtn.textContent = 'Broadcast Message';
-        broadcastBtn.onclick = () => this.broadcastMessage();
-
-        toolbar.appendChild(refreshBtn);
-        toolbar.appendChild(broadcastBtn);
-        tab.appendChild(toolbar);
-
-        const usersList = document.createElement('div');
-        usersList.id = 'admin-users-list';
-        usersList.className = 'admin-list';
-        usersList.textContent = 'Loading users...';
-        tab.appendChild(usersList);
-
-        return tab;
-    }
-
-    createMastodonTab() {
-        const tab = document.createElement('div');
-        tab.className = 'admin-tab-content';
-        tab.id = 'admin-mastodon-tab';
-
-        const title = document.createElement('h3');
-        title.textContent = 'Mastodon Integration';
-        tab.appendChild(title);
-
-        const grid = document.createElement('div');
-        grid.className = 'admin-grid';
-
-        // Bot Accounts card
-        const botCard = document.createElement('div');
-        botCard.className = 'admin-card';
-
-        const botTitle = document.createElement('h4');
-        botTitle.textContent = 'Bot Accounts';
-        botCard.appendChild(botTitle);
-
-        const botList = document.createElement('div');
-        botList.id = 'admin-bot-list';
-        botList.textContent = 'Loading bots...';
-        botCard.appendChild(botList);
-
-        // Add bot form
-        const addBotForm = document.createElement('div');
-        addBotForm.className = 'add-bot-form';
-
-        const instanceInput = document.createElement('input');
-        instanceInput.type = 'text';
-        instanceInput.id = 'new-bot-instance';
-        instanceInput.placeholder = 'Instance URL';
-
-        const tokenInput = document.createElement('input');
-        tokenInput.type = 'text';
-        tokenInput.id = 'new-bot-token';
-        tokenInput.placeholder = 'Access Token';
-
-        const addBotBtn = document.createElement('button');
-        addBotBtn.className = 'primary-btn';
-        addBotBtn.textContent = 'Add Bot';
-        addBotBtn.onclick = () => this.registerBot();
-
-        addBotForm.appendChild(instanceInput);
-        addBotForm.appendChild(tokenInput);
-        addBotForm.appendChild(addBotBtn);
-        botCard.appendChild(addBotForm);
-
-        grid.appendChild(botCard);
-
-        // Quick Actions card
-        const actionsCard = document.createElement('div');
-        actionsCard.className = 'admin-card';
-
-        const actionsTitle = document.createElement('h4');
-        actionsTitle.textContent = 'Quick Actions';
-        actionsCard.appendChild(actionsTitle);
-
-        const announceBtn = document.createElement('button');
-        announceBtn.className = 'admin-action-btn';
-        announceBtn.textContent = 'Announce Online';
-        announceBtn.onclick = () => this.announceServerOnline();
-
-        const customBtn = document.createElement('button');
-        customBtn.className = 'admin-action-btn';
-        customBtn.textContent = 'Custom Announcement';
-        customBtn.onclick = () => this.showAnnouncementForm();
-
-        actionsCard.appendChild(announceBtn);
-        actionsCard.appendChild(customBtn);
-
-        // Announcement form
-        const announcementForm = document.createElement('div');
-        announcementForm.id = 'announcement-form';
-        announcementForm.style.display = 'none';
-        announcementForm.style.marginTop = '10px';
-
-        const textarea = document.createElement('textarea');
-        textarea.id = 'announcement-text';
-        textarea.placeholder = 'Enter announcement...';
-        textarea.rows = 3;
-        textarea.style.width = '100%';
-
-        const postBtn = document.createElement('button');
-        postBtn.className = 'primary-btn';
-        postBtn.textContent = 'Post';
-        postBtn.onclick = () => this.postAnnouncement();
-
-        announcementForm.appendChild(textarea);
-        announcementForm.appendChild(postBtn);
-        actionsCard.appendChild(announcementForm);
-
-        grid.appendChild(actionsCard);
-        tab.appendChild(grid);
-
-        return tab;
-    }
-
-    createFederationTab() {
-        const tab = document.createElement('div');
-        tab.className = 'admin-tab-content';
-        tab.id = 'admin-federation-tab';
-
-        const title = document.createElement('h3');
-        title.textContent = 'Server Federation';
-        tab.appendChild(title);
-
-        const card = document.createElement('div');
-        card.className = 'admin-card';
-
-        const cardTitle = document.createElement('h4');
-        cardTitle.textContent = 'Connected Servers';
-        card.appendChild(cardTitle);
-
-        const serverList = document.createElement('div');
-        serverList.id = 'admin-federation-list';
-        serverList.textContent = 'Loading federated servers...';
-        card.appendChild(serverList);
-
-        // Add server form
-        const addServerForm = document.createElement('div');
-        addServerForm.className = 'add-server-form';
-
-        const serverInput = document.createElement('input');
-        serverInput.type = 'text';
-        serverInput.id = 'new-federated-server';
-        serverInput.placeholder = 'Server URL';
-
-        const addServerBtn = document.createElement('button');
-        addServerBtn.className = 'primary-btn';
-        addServerBtn.textContent = 'Connect Server';
-        addServerBtn.onclick = () => this.addFederatedServer();
-
-        addServerForm.appendChild(serverInput);
-        addServerForm.appendChild(addServerBtn);
-        card.appendChild(addServerForm);
-
-        tab.appendChild(card);
-
-        return tab;
-    }
-
-    createStatItem(label, id, defaultValue) {
-        const item = document.createElement('div');
-        item.className = 'stat-item';
-
-        const labelSpan = document.createElement('span');
-        labelSpan.className = 'stat-label';
-        labelSpan.textContent = label;
-
-        const valueSpan = document.createElement('span');
-        valueSpan.className = 'stat-value';
-        valueSpan.id = id;
-        valueSpan.textContent = defaultValue;
-
-        item.appendChild(labelSpan);
-        item.appendChild(valueSpan);
-        return item;
-    }
-
-    createSettingRow(label, id, type, defaultValue) {
-        const row = document.createElement('div');
-        row.className = 'setting-row';
-
-        const labelEl = document.createElement('label');
-        labelEl.textContent = label;
-
-        const input = document.createElement('input');
-        input.type = type;
-        input.id = id;
-        input.value = defaultValue;
-
-        row.appendChild(labelEl);
-        row.appendChild(input);
-        return row;
-    }
-
-    createCheckboxRow(label, id) {
-        const row = document.createElement('div');
-        row.className = 'setting-row';
-
-        const labelEl = document.createElement('label');
-
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.id = id;
-
-        labelEl.appendChild(checkbox);
-        labelEl.appendChild(document.createTextNode(' ' + label));
-
-        row.appendChild(labelEl);
-        return row;
-    }
-
-    async loadAdminData() {
-        await Promise.all([
-            this.loadAdminServerStats(),
-            this.loadAdminRooms(),
-            this.loadAdminUsers(),
-            this.loadAdminBots(),
-            this.loadFederatedServers()
-        ]);
-    }
-
-    async loadAdminServerStats() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/stats');
-            const stats = await response.json();
-
-            const statusEl = document.getElementById('admin-server-status');
-            const uptimeEl = document.getElementById('admin-server-uptime');
-            const connEl = document.getElementById('admin-connections');
-
-            if (statusEl) statusEl.textContent = 'Online';
-            if (uptimeEl) uptimeEl.textContent = this.formatUptime(stats.uptime);
-            if (connEl) connEl.textContent = stats.connections || 0;
-        } catch (error) {
-            console.error('Failed to load server stats:', error);
-        }
-    }
-
-    formatUptime(ms) {
-        if (!ms) return 'Unknown';
-        const hours = Math.floor(ms / 3600000);
-        const minutes = Math.floor((ms % 3600000) / 60000);
-        return hours + 'h ' + minutes + 'm';
-    }
-
-    async loadAdminRooms() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms');
-            const rooms = await response.json();
-
-            const roomsList = document.getElementById('admin-rooms-list');
-            if (roomsList) {
-                roomsList.textContent = '';
-
-                if (rooms.length === 0) {
-                    roomsList.textContent = 'No active rooms';
-                } else {
-                    rooms.forEach(room => {
-                        const item = this.createAdminListItem(
-                            room.name,
-                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
-                            [
-                                { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
-                                { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }
-                            ]
-                        );
-                        item.dataset.roomId = room.id || room.roomId;
-                        roomsList.appendChild(item);
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load admin rooms:', error);
-        }
-    }
-
-    async loadAdminUsers() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/users');
-            const users = await response.json();
-
-            const usersList = document.getElementById('admin-users-list');
-            if (usersList) {
-                usersList.textContent = '';
-
-                if (!users || users.length === 0) {
-                    usersList.textContent = 'No connected users';
-                } else {
-                    users.forEach(user => {
-                        const item = this.createAdminListItem(
-                            user.name || user.username || 'Anonymous',
-                            'Room: ' + (user.room || 'Lobby') + ' - ' + (user.mastodonHandle || 'No Mastodon'),
-                            [
-                                { label: 'Kick', action: () => this.kickUser(user.id) },
-                                { label: 'Ban', action: () => this.banUser(user.id), danger: true }
-                            ]
-                        );
-                        item.dataset.userId = user.id;
-                        usersList.appendChild(item);
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load admin users:', error);
-        }
-    }
-
-    async loadAdminBots() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/bots');
-            const bots = await response.json();
-
-            const botList = document.getElementById('admin-bot-list');
-            if (botList) {
-                botList.textContent = '';
-
-                if (!bots || bots.length === 0) {
-                    botList.textContent = 'No bots configured';
-                } else {
-                    bots.forEach(bot => {
-                        const item = this.createAdminListItem(
-                            '@' + bot.username,
-                            bot.instance + ' - ' + (bot.enabled ? 'Active' : 'Disabled'),
-                            [
-                                { label: bot.enabled ? 'Disable' : 'Enable', action: () => this.toggleBot(encodeURIComponent(bot.instance)) },
-                                { label: 'Remove', action: () => this.removeBot(encodeURIComponent(bot.instance)), danger: true }
-                            ]
-                        );
-                        item.dataset.botInstance = bot.instance;
-                        botList.appendChild(item);
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load admin bots:', error);
-        }
-    }
-
-    async loadFederatedServers() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/federation/servers');
-            const servers = await response.json();
-
-            const serverList = document.getElementById('admin-federation-list');
-            if (serverList) {
-                serverList.textContent = '';
-
-                if (!servers || servers.length === 0) {
-                    serverList.textContent = 'No federated servers';
-                } else {
-                    servers.forEach(server => {
-                        const item = this.createAdminListItem(
-                            server.name || server.url,
-                            (server.status === 'connected' ? 'Connected' : 'Disconnected') + ' - ' + (server.rooms || 0) + ' rooms',
-                            [
-                                { label: 'Ping', action: () => this.pingServer(encodeURIComponent(server.url)) },
-                                { label: 'Disconnect', action: () => this.disconnectServer(encodeURIComponent(server.url)), danger: true }
-                            ]
-                        );
-                        item.dataset.serverUrl = server.url;
-                        serverList.appendChild(item);
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load federated servers:', error);
-        }
-    }
-
-    createAdminListItem(name, meta, actions) {
-        const item = document.createElement('div');
-        item.className = 'admin-list-item';
-
-        const info = document.createElement('div');
-        info.className = 'item-info';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'item-name';
-        nameSpan.textContent = name;
-
-        const metaSpan = document.createElement('span');
-        metaSpan.className = 'item-meta';
-        metaSpan.textContent = meta;
-
-        info.appendChild(nameSpan);
-        info.appendChild(metaSpan);
-        item.appendChild(info);
-
-        const actionsDiv = document.createElement('div');
-        actionsDiv.className = 'item-actions';
-
-        actions.forEach(action => {
-            const btn = document.createElement('button');
-            btn.className = 'small-btn' + (action.danger ? ' danger' : '');
-            btn.textContent = action.label;
-            btn.onclick = action.action;
-            actionsDiv.appendChild(btn);
-        });
-
-        item.appendChild(actionsDiv);
-        return item;
-    }
-
-    // Admin actions
-    async adminRestartServer() {
-        if (confirm('Are you sure you want to restart the server?')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/restart', { method: 'POST' });
-                this.showNotification('Server restarting...', 'info');
-            } catch (error) {
-                this.showNotification('Failed to restart server', 'error');
-            }
-        }
-    }
-
-    async adminStopServer() {
-        if (confirm('Are you sure you want to stop the server? All users will be disconnected.')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/stop', { method: 'POST' });
-                this.showNotification('Server stopping...', 'info');
-            } catch (error) {
-                this.showNotification('Failed to stop server', 'error');
-            }
-        }
-    }
-
-    async createDefaultRooms() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms/generate-defaults', { method: 'POST' });
-            const result = await response.json();
-
-            this.showNotification('Created ' + (result.count || 0) + ' default rooms', 'success');
-            this.loadAdminRooms();
-            this.loadRooms();
-        } catch (error) {
-            this.showNotification('Failed to create default rooms', 'error');
-        }
-    }
-
-    async cleanupExpiredRooms() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/rooms/cleanup', { method: 'POST' });
-            const result = await response.json();
-
-            this.showNotification('Cleaned up ' + (result.removed || 0) + ' expired rooms', 'success');
-            this.loadAdminRooms();
-            this.loadRooms();
-        } catch (error) {
-            this.showNotification('Failed to cleanup rooms', 'error');
-        }
-    }
-
-    async deleteRoom(roomId) {
-        if (confirm('Delete this room? All users will be disconnected.')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/rooms/' + roomId, { method: 'DELETE' });
-                this.showNotification('Room deleted', 'success');
-                this.loadAdminRooms();
-                this.loadRooms();
-            } catch (error) {
-                this.showNotification('Failed to delete room', 'error');
-            }
-        }
-    }
-
-    async registerBot() {
-        const instanceInput = document.getElementById('new-bot-instance');
-        const tokenInput = document.getElementById('new-bot-token');
-
-        if (!instanceInput?.value || !tokenInput?.value) {
-            this.showNotification('Please enter instance URL and access token', 'error');
-            return;
-        }
-
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/bots', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    instanceUrl: instanceInput.value,
-                    accessToken: tokenInput.value
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                this.showNotification('Bot @' + result.bot.username + ' registered!', 'success');
-                instanceInput.value = '';
-                tokenInput.value = '';
-                this.loadAdminBots();
-            } else {
-                this.showNotification(result.error || 'Failed to register bot', 'error');
-            }
-        } catch (error) {
-            this.showNotification('Failed to register bot', 'error');
-        }
-    }
-
-    async removeBot(instance) {
-        if (confirm('Remove this bot?')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/mastodon/bots/' + instance, { method: 'DELETE' });
-                this.showNotification('Bot removed', 'success');
-                this.loadAdminBots();
-            } catch (error) {
-                this.showNotification('Failed to remove bot', 'error');
-            }
-        }
-    }
-
-    showAnnouncementForm() {
-        const form = document.getElementById('announcement-form');
-        if (form) {
-            form.style.display = form.style.display === 'none' ? 'block' : 'none';
-        }
-    }
-
-    async postAnnouncement() {
-        const textArea = document.getElementById('announcement-text');
-
-        if (!textArea?.value.trim()) {
-            this.showNotification('Please enter an announcement', 'error');
-            return;
-        }
-
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/announce', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: textArea.value,
-                    visibility: 'public'
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                this.showNotification('Announcement posted!', 'success');
-                textArea.value = '';
-                document.getElementById('announcement-form').style.display = 'none';
-            } else {
-                this.showNotification('Failed to post announcement', 'error');
-            }
-        } catch (error) {
-            this.showNotification('Failed to post announcement', 'error');
-        }
-    }
-
-    async announceServerOnline() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-            const serverUrl = 'http://' + host + ':' + port;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/mastodon/announce', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: 'VoiceLink Server is now online!\n\n' + serverUrl + '\n\n#VoiceLink #VoiceChat #P2P',
-                    visibility: 'public'
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                this.showNotification('Server online announcement posted!', 'success');
-            } else {
-                this.showNotification('Failed to post announcement', 'error');
-            }
-        } catch (error) {
-            this.showNotification('Failed to post announcement', 'error');
-        }
-    }
-
-    async broadcastMessage() {
-        const message = prompt('Enter message to broadcast to all users:');
-        if (!message) return;
-
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            await fetch('http://' + host + ':' + port + '/api/admin/broadcast', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
-            });
-
-            this.showNotification('Broadcast sent', 'success');
-        } catch (error) {
-            this.showNotification('Failed to send broadcast', 'error');
-        }
-    }
-
-    async kickUser(userId) {
-        if (confirm('Kick this user?')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/users/' + userId + '/kick', { method: 'POST' });
-                this.showNotification('User kicked', 'success');
-                this.loadAdminUsers();
-            } catch (error) {
-                this.showNotification('Failed to kick user', 'error');
-            }
-        }
-    }
-
-    async banUser(userId) {
-        if (confirm('Ban this user? They will not be able to reconnect.')) {
-            try {
-                const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-                const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-                await fetch('http://' + host + ':' + port + '/api/admin/users/' + userId + '/ban', { method: 'POST' });
-                this.showNotification('User banned', 'success');
-                this.loadAdminUsers();
-            } catch (error) {
-                this.showNotification('Failed to ban user', 'error');
-            }
-        }
-    }
-
-    async addFederatedServer() {
-        const serverInput = document.getElementById('new-federated-server');
-        if (!serverInput?.value) {
-            this.showNotification('Please enter a server URL', 'error');
-            return;
-        }
-
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch('http://' + host + ':' + port + '/api/federation/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ serverUrl: serverInput.value })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                this.showNotification('Server connected!', 'success');
-                serverInput.value = '';
-                this.loadFederatedServers();
-            } else {
-                this.showNotification(result.error || 'Failed to connect', 'error');
-            }
-        } catch (error) {
-            this.showNotification('Failed to connect to server', 'error');
-        }
-    }
-
-    async saveServerSettings() {
-        try {
-            const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const settings = {
-                maxRooms: document.getElementById('admin-max-rooms')?.value,
-                requireAuth: document.getElementById('admin-require-auth')?.checked
-            };
-
-            await fetch('http://' + host + ':' + port + '/api/admin/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(settings)
-            });
-
-            this.showNotification('Settings saved!', 'success');
-        } catch (error) {
-            this.showNotification('Failed to save settings', 'error');
-        }
-    }
-
-    refreshUserList() {
-        this.loadAdminUsers();
-        this.showNotification('User list refreshed', 'info');
-    }
-
-    editRoom(roomId) {
-        this.showNotification('Room editor coming soon', 'info');
-    }
-
-    toggleBot(instance) {
-        this.showNotification('Bot toggle coming soon', 'info');
-    }
-
-    pingServer(serverUrl) {
-        this.showNotification('Pinging server...', 'info');
-    }
-
-    disconnectServer(serverUrl) {
-        this.showNotification('Server disconnect coming soon', 'info');
-    }
-
-}
-
-/**
- * JukeboxManager - Manages Jellyfin media streaming integration
- * Provides UI controls for browsing, queuing, and playing media in rooms
- */
-class JukeboxManager {
-    constructor(app) {
-        this.app = app;
-        this.isEnabled = false;
-        this.isMinimized = false;
-        this.servers = [];
-        this.currentServer = null;
-        this.queue = [];
-        this.currentTrack = null;
-        this.currentIndex = -1;
-        this.isPlaying = false;
-        this.isLooping = false;
-        this.volume = 50;
-        this.audioElement = null;
-        this.progressInterval = null;
-
-        this.elements = {
-            panel: document.getElementById('jukebox-panel'),
-            toggleBtn: document.getElementById('jukebox-toggle-btn'),
-            minimizeBtn: document.getElementById('jukebox-minimize-btn'),
-            closeBtn: document.getElementById('jukebox-close-btn'),
-            nowPlaying: document.getElementById('jukebox-now-playing'),
-            progress: document.getElementById('jukebox-progress'),
-            currentTime: document.getElementById('jukebox-current-time'),
-            duration: document.getElementById('jukebox-duration'),
-            prevBtn: document.getElementById('jukebox-prev-btn'),
-            playBtn: document.getElementById('jukebox-play-btn'),
-            nextBtn: document.getElementById('jukebox-next-btn'),
-            loopBtn: document.getElementById('jukebox-loop-btn'),
-            volumeSlider: document.getElementById('jukebox-volume'),
-            queueList: document.getElementById('jukebox-queue-list'),
-            libraryList: document.getElementById('jukebox-library-list'),
-            searchInput: document.getElementById('jukebox-search'),
-            searchBtn: document.getElementById('jukebox-search-btn')
-        };
-
-        this.init();
-    }
-
-    init() {
-        this.setupEventListeners();
-        this.createAudioElement();
-        this.loadServers();
-        console.log('JukeboxManager initialized');
-    }
-
-    setupEventListeners() {
-        // Toggle button
-        this.elements.toggleBtn?.addEventListener('click', () => this.togglePanel());
-
-        // Header controls
-        this.elements.minimizeBtn?.addEventListener('click', () => this.minimize());
-        this.elements.closeBtn?.addEventListener('click', () => this.closePanel());
-
-        // Playback controls
-        this.elements.prevBtn?.addEventListener('click', () => this.previous());
-        this.elements.playBtn?.addEventListener('click', () => this.togglePlayPause());
-        this.elements.nextBtn?.addEventListener('click', () => this.next());
-        this.elements.loopBtn?.addEventListener('click', () => this.toggleLoop());
-
-        // Progress and volume
-        this.elements.progress?.addEventListener('input', (e) => this.seek(e.target.value));
-        this.elements.volumeSlider?.addEventListener('input', (e) => this.setVolume(e.target.value));
-
-        // Search
-        this.elements.searchBtn?.addEventListener('click', () => this.searchLibrary());
-        this.elements.searchInput?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.searchLibrary();
-        });
-
-        // Socket events for synced playback
-        if (this.app.socket) {
-            this.app.socket.on('jukebox-play', (data) => this.handleRemotePlay(data));
-            this.app.socket.on('jukebox-pause', () => this.handleRemotePause());
-            this.app.socket.on('jukebox-skip', (data) => this.handleRemoteSkip(data));
-            this.app.socket.on('jukebox-queue-update', (data) => this.handleRemoteQueueUpdate(data));
-        }
-    }
-
-    createAudioElement() {
-        this.audioElement = new Audio();
-        this.audioElement.crossOrigin = 'anonymous';
-        this.audioElement.volume = this.volume / 100;
-
-        this.audioElement.addEventListener('timeupdate', () => this.updateProgress());
-        this.audioElement.addEventListener('ended', () => this.handleTrackEnded());
-        this.audioElement.addEventListener('loadedmetadata', () => this.updateDuration());
-        this.audioElement.addEventListener('error', (e) => this.handlePlaybackError(e));
-    }
-
-    async loadServers() {
-        try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/servers`);
-            const data = await response.json();
-
-            if (data.success && data.servers) {
-                this.servers = data.servers;
-                if (this.servers.length > 0) {
-                    this.currentServer = this.servers[0];
-                    this.loadLibrary();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load Jellyfin servers:', error);
-        }
-    }
-
-    async loadLibrary(parentId = null) {
-        if (!this.currentServer) return;
-
-        try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const params = new URLSearchParams({
-                serverId: this.currentServer.id
-            });
-            if (parentId) params.append('parentId', parentId);
-
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/library?${params}`);
-            const data = await response.json();
-
-            if (data.success && data.items) {
-                this.renderLibrary(data.items, parentId);
-            }
-        } catch (error) {
-            console.error('Failed to load library:', error);
-        }
-    }
-
-    renderLibrary(items, parentId = null) {
-        if (!this.elements.libraryList) return;
-
-        this.elements.libraryList.innerHTML = '';
-
-        // Add back button if in subfolder
-        if (parentId) {
-            const backItem = document.createElement('div');
-            backItem.className = 'library-item back-item';
-            backItem.innerHTML = '⬅️ Back';
-            backItem.addEventListener('click', () => this.loadLibrary());
-            this.elements.libraryList.appendChild(backItem);
-        }
-
-        items.forEach(item => {
-            const itemEl = document.createElement('div');
-            itemEl.className = 'library-item';
-            itemEl.dataset.id = item.Id;
-            itemEl.dataset.type = item.Type;
-
-            const icon = this.getItemIcon(item.Type);
-            const name = item.Name || 'Unknown';
-            const artist = item.AlbumArtist || item.Artists?.[0] || '';
-
-            itemEl.innerHTML = `
-                <span class="item-icon">${icon}</span>
-                <div class="item-info">
-                    <span class="item-name">${name}</span>
-                    ${artist ? `<span class="item-artist">${artist}</span>` : ''}
-                </div>
-                ${item.Type === 'Audio' ? '<button class="add-queue-btn" title="Add to queue">+</button>' : ''}
-            `;
-
-            // Click handler
-            if (item.Type === 'Audio') {
-                itemEl.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('add-queue-btn')) {
-                        this.addToQueue(item);
-                    } else {
-                        this.playItem(item);
-                    }
-                });
-            } else if (['Folder', 'MusicAlbum', 'MusicArtist', 'CollectionFolder'].includes(item.Type)) {
-                itemEl.addEventListener('click', () => this.loadLibrary(item.Id));
-            }
-
-            this.elements.libraryList.appendChild(itemEl);
-        });
-    }
-
-    getItemIcon(type) {
-        const icons = {
-            'Audio': '🎵',
-            'MusicAlbum': '💿',
-            'MusicArtist': '👤',
-            'Folder': '📁',
-            'CollectionFolder': '📚',
-            'Video': '🎬',
-            'Movie': '🎥',
-            'Episode': '📺'
-        };
-        return icons[type] || '📄';
-    }
-
-    async searchLibrary() {
-        const query = this.elements.searchInput?.value?.trim();
-        if (!query || !this.currentServer) return;
-
-        try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const params = new URLSearchParams({
-                serverId: this.currentServer.id,
-                query: query
-            });
-
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/search?${params}`);
-            const data = await response.json();
-
-            if (data.success && data.items) {
-                this.renderLibrary(data.items);
-            }
-        } catch (error) {
-            console.error('Failed to search library:', error);
-        }
-    }
-
-    async playItem(item) {
-        if (!this.currentServer || !item) return;
-
-        try {
-            const host = this.app.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
-            const port = this.app.socket?.io?.opts?.port || window.location.port || 3010;
-
-            const response = await fetch(`http://${host}:${port}/api/jellyfin/stream-url`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    serverId: this.currentServer.id,
-                    itemId: item.Id,
-                    type: item.Type === 'Audio' ? 'audio' : 'video'
-                })
-            });
-
-            const data = await response.json();
-
-            if (data.success && data.streamUrl) {
-                this.currentTrack = {
-                    ...item,
-                    streamUrl: data.streamUrl
-                };
-
-                this.audioElement.src = data.streamUrl;
-                this.audioElement.play();
-                this.isPlaying = true;
-                this.updateNowPlaying();
-                this.updatePlayButton();
-
-                // Broadcast to room
-                this.broadcastPlay();
-            }
-        } catch (error) {
-            console.error('Failed to play item:', error);
-            this.app.showNotification('Failed to play media', 'error');
-        }
-    }
-
-    addToQueue(item) {
-        this.queue.push(item);
-        this.renderQueue();
-        this.app.showNotification(`Added "${item.Name}" to queue`, 'success');
-
-        // If nothing playing, start playback
-        if (!this.currentTrack) {
-            this.currentIndex = 0;
-            this.playItem(this.queue[0]);
-        }
-
-        this.broadcastQueueUpdate();
-    }
-
-    renderQueue() {
-        if (!this.elements.queueList) return;
-
-        this.elements.queueList.innerHTML = '';
-
-        if (this.queue.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'queue-empty';
-            empty.textContent = 'Queue is empty';
-            this.elements.queueList.appendChild(empty);
-            return;
-        }
-
-        this.queue.forEach((item, index) => {
-            const queueItem = document.createElement('div');
-            queueItem.className = 'queue-item' + (index === this.currentIndex ? ' active' : '');
-            queueItem.innerHTML = `
-                <span class="queue-number">${index + 1}</span>
-                <div class="queue-info">
-                    <span class="queue-name">${item.Name}</span>
-                    <span class="queue-artist">${item.AlbumArtist || item.Artists?.[0] || ''}</span>
-                </div>
-                <button class="remove-queue-btn" data-index="${index}" title="Remove">✕</button>
-            `;
-
-            queueItem.querySelector('.remove-queue-btn')?.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.removeFromQueue(index);
-            });
-
-            queueItem.addEventListener('click', () => {
-                this.currentIndex = index;
-                this.playItem(this.queue[index]);
-            });
-
-            this.elements.queueList.appendChild(queueItem);
-        });
-    }
-
-    removeFromQueue(index) {
-        this.queue.splice(index, 1);
-        if (index < this.currentIndex) {
-            this.currentIndex--;
-        } else if (index === this.currentIndex) {
-            if (this.queue.length > 0) {
-                this.currentIndex = Math.min(this.currentIndex, this.queue.length - 1);
-                this.playItem(this.queue[this.currentIndex]);
-            } else {
-                this.stop();
-            }
-        }
-        this.renderQueue();
-        this.broadcastQueueUpdate();
-    }
-
-    togglePlayPause() {
-        if (this.isPlaying) {
-            this.pause();
-        } else {
-            this.play();
-        }
-    }
-
-    play() {
-        if (this.audioElement.src) {
-            this.audioElement.play();
-            this.isPlaying = true;
-            this.updatePlayButton();
-            this.broadcastPlay();
-        } else if (this.queue.length > 0) {
-            this.currentIndex = 0;
-            this.playItem(this.queue[0]);
-        }
-    }
-
-    pause() {
-        this.audioElement.pause();
-        this.isPlaying = false;
-        this.updatePlayButton();
-        this.broadcastPause();
-    }
-
-    stop() {
-        this.audioElement.pause();
-        this.audioElement.currentTime = 0;
-        this.audioElement.src = '';
-        this.isPlaying = false;
-        this.currentTrack = null;
-        this.currentIndex = -1;
-        this.updatePlayButton();
-        this.updateNowPlaying();
-    }
-
-    previous() {
-        if (this.queue.length === 0) return;
-
-        // If more than 3 seconds in, restart; otherwise go to previous
-        if (this.audioElement.currentTime > 3) {
-            this.audioElement.currentTime = 0;
-        } else {
-            this.currentIndex = (this.currentIndex - 1 + this.queue.length) % this.queue.length;
-            this.playItem(this.queue[this.currentIndex]);
-        }
-        this.renderQueue();
-    }
-
-    next() {
-        if (this.queue.length === 0) return;
-
-        this.currentIndex = (this.currentIndex + 1) % this.queue.length;
-        this.playItem(this.queue[this.currentIndex]);
-        this.renderQueue();
-        this.broadcastSkip(this.currentIndex);
-    }
-
-    toggleLoop() {
-        this.isLooping = !this.isLooping;
-        this.audioElement.loop = this.isLooping && this.queue.length <= 1;
-
-        if (this.elements.loopBtn) {
-            this.elements.loopBtn.classList.toggle('active', this.isLooping);
-        }
-    }
-
-    seek(value) {
-        if (this.audioElement.duration) {
-            this.audioElement.currentTime = (value / 100) * this.audioElement.duration;
-        }
-    }
-
-    setVolume(value) {
-        this.volume = parseInt(value);
-        this.audioElement.volume = this.volume / 100;
-    }
-
-    updateProgress() {
-        if (!this.audioElement.duration) return;
-
-        const progress = (this.audioElement.currentTime / this.audioElement.duration) * 100;
-        if (this.elements.progress) {
-            this.elements.progress.value = progress;
-        }
-        if (this.elements.currentTime) {
-            this.elements.currentTime.textContent = this.formatTime(this.audioElement.currentTime);
-        }
-    }
-
-    updateDuration() {
-        if (this.elements.duration) {
-            this.elements.duration.textContent = this.formatTime(this.audioElement.duration);
-        }
-    }
-
-    formatTime(seconds) {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
-    }
-
-    updateNowPlaying() {
-        if (!this.elements.nowPlaying) return;
-
-        if (this.currentTrack) {
-            const titleEl = this.elements.nowPlaying.querySelector('.now-playing-title');
-            const artistEl = this.elements.nowPlaying.querySelector('.now-playing-artist');
-
-            if (titleEl) titleEl.textContent = this.currentTrack.Name || 'Unknown';
-            if (artistEl) artistEl.textContent = this.currentTrack.AlbumArtist || this.currentTrack.Artists?.[0] || '';
-        }
-    }
-
-    updatePlayButton() {
-        if (this.elements.playBtn) {
-            this.elements.playBtn.textContent = this.isPlaying ? '⏸️' : '▶️';
-        }
-    }
-
-    handleTrackEnded() {
-        if (this.queue.length > 0) {
-            if (this.isLooping && this.queue.length === 1) {
-                this.audioElement.currentTime = 0;
-                this.audioElement.play();
-            } else {
-                this.next();
-            }
-        } else {
-            this.stop();
-        }
-    }
-
-    handlePlaybackError(e) {
-        console.error('Playback error:', e);
-        this.app.showNotification('Playback error. Trying next track...', 'error');
-        if (this.queue.length > 1) {
-            this.next();
-        } else {
-            this.stop();
-        }
-    }
-
-    // Socket broadcast methods
-    broadcastPlay() {
-        if (this.app.socket && this.app.currentRoom) {
-            this.app.socket.emit('jukebox-play', {
-                roomId: this.app.currentRoom.id,
-                track: this.currentTrack,
-                position: this.audioElement.currentTime
-            });
-        }
-    }
-
-    broadcastPause() {
-        if (this.app.socket && this.app.currentRoom) {
-            this.app.socket.emit('jukebox-pause', {
-                roomId: this.app.currentRoom.id
-            });
-        }
-    }
-
-    broadcastSkip(index) {
-        if (this.app.socket && this.app.currentRoom) {
-            this.app.socket.emit('jukebox-skip', {
-                roomId: this.app.currentRoom.id,
-                index: index
-            });
-        }
-    }
-
-    broadcastQueueUpdate() {
-        if (this.app.socket && this.app.currentRoom) {
-            this.app.socket.emit('jukebox-queue-update', {
-                roomId: this.app.currentRoom.id,
-                queue: this.queue
-            });
-        }
-    }
-
-    // Remote event handlers
-    handleRemotePlay(data) {
-        if (data.track && data.track.streamUrl) {
-            this.currentTrack = data.track;
-            this.audioElement.src = data.track.streamUrl;
-            if (data.position) {
-                this.audioElement.currentTime = data.position;
-            }
-            this.audioElement.play();
-            this.isPlaying = true;
-            this.updateNowPlaying();
-            this.updatePlayButton();
-        }
-    }
-
-    handleRemotePause() {
-        this.audioElement.pause();
-        this.isPlaying = false;
-        this.updatePlayButton();
-    }
-
-    handleRemoteSkip(data) {
-        if (this.queue[data.index]) {
-            this.currentIndex = data.index;
-            this.playItem(this.queue[data.index]);
-        }
-    }
-
-    handleRemoteQueueUpdate(data) {
-        if (data.queue) {
-            this.queue = data.queue;
-            this.renderQueue();
-        }
-    }
-
-    // Panel visibility
-    togglePanel() {
-        if (this.elements.panel?.classList.contains('hidden')) {
-            this.openPanel();
-        } else {
-            this.closePanel();
-        }
-    }
-
-    openPanel() {
-        this.elements.panel?.classList.remove('hidden', 'minimized');
-        this.elements.toggleBtn?.classList.add('hidden');
-        this.isMinimized = false;
-    }
-
-    closePanel() {
-        this.elements.panel?.classList.add('hidden');
-        this.elements.toggleBtn?.classList.remove('hidden');
-    }
-
-    minimize() {
-        this.elements.panel?.classList.toggle('minimized');
-        this.isMinimized = !this.isMinimized;
-    }
-
-    // Enable/disable for room
-    enable() {
-        this.isEnabled = true;
-        this.elements.toggleBtn?.classList.remove('hidden');
-    }
-
-    disable() {
-        this.isEnabled = false;
-        this.closePanel();
-        this.elements.toggleBtn?.classList.add('hidden');
-        this.stop();
-    }
-
-    // Get current state for admin controls
-    getState() {
-        return {
-            isEnabled: this.isEnabled,
-            isPlaying: this.isPlaying,
-            currentTrack: this.currentTrack,
-            queue: this.queue,
-            volume: this.volume
-        };
-    }
 }
 
 // Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new VoiceLinkApp();
     window.voiceLinkApp = window.app; // For compatibility
-
-    // Initialize accessible dropdowns for VoiceOver support
-    if (typeof initAccessibleDropdowns === 'function') {
-        initAccessibleDropdowns('select');
-        console.log('Accessible dropdowns initialized for VoiceOver compatibility');
-    }
 });
 
 // Export for testing

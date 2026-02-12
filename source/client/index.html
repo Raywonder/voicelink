@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - P2P Voice Chat</title>
+    <title>VoiceLink Web App - P2P Voice Chat</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -13,7 +13,7 @@
         <!-- Loading Screen -->
         <div id="loading-screen" class="screen active">
             <div class="loading-content">
-                <h1>🎙️ VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Web App</h1>
                 <p>Initializing P2P voice chat system...</p>
                 <div class="loading-spinner"></div>
             </div>
@@ -22,7 +22,7 @@
         <!-- Main Menu -->
         <div id="main-menu" class="screen">
             <div class="menu-header">
-                <h1>🎙️ VoiceLink Local</h1>
+                <h1>🎙️ VoiceLink Web App</h1>
                 <p>Advanced P2P Voice Chat with 3D Audio</p>
             </div>
 
@@ -63,29 +63,34 @@
                 </div>
 
                 <div class="menu-section">
-                    <h3>Server Status</h3>
-                    <div id="server-status-display" class="server-status">
-                        <div class="status-item">
-                            <span class="status-label">Server:</span>
-                            <span class="status-value" id="server-status-value">🔴 Offline</span>
+                    <button id="toggle-server-status" class="collapsible-toggle" aria-expanded="false">
+                        <span>Server Status</span>
+                        <span id="toggle-server-status-icon" class="collapse-icon">▸</span>
+                    </button>
+                    <div id="server-status-content" class="collapsible-content collapsed">
+                        <div id="server-status-display" class="server-status">
+                            <div class="status-item">
+                                <span class="status-label">Server:</span>
+                                <span class="status-value" id="server-status-value">🔴 Offline</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Port:</span>
+                                <span class="status-value" id="server-port-value">-</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Users:</span>
+                                <span class="status-value" id="server-users-value">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Rooms:</span>
+                                <span class="status-value" id="server-rooms-value">0</span>
+                            </div>
                         </div>
-                        <div class="status-item">
-                            <span class="status-label">Port:</span>
-                            <span class="status-value" id="server-port-value">-</span>
+                        <div class="server-control-buttons">
+                            <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
+                            <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
+                            <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
                         </div>
-                        <div class="status-item">
-                            <span class="status-label">Users:</span>
-                            <span class="status-value" id="server-users-value">0</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Rooms:</span>
-                            <span class="status-value" id="server-rooms-value">0</span>
-                        </div>
-                    </div>
-                    <div class="server-control-buttons">
-                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
-                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
-                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
                     </div>
                 </div>
 
@@ -198,6 +203,29 @@
                 </div>
             </div>
 
+            <div class="room-status-panel">
+                <button id="toggle-room-status" class="collapsible-toggle" aria-expanded="true">
+                    <span>Room Status</span>
+                    <span id="toggle-room-status-icon" class="collapse-icon">▾</span>
+                </button>
+                <div id="room-status-content" class="collapsible-content">
+                    <div class="server-status">
+                        <div class="status-item">
+                            <span class="status-label">Room ID:</span>
+                            <span class="status-value" id="room-status-room-id">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Users:</span>
+                            <span class="status-value" id="room-status-users">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Connection:</span>
+                            <span class="status-value" id="room-status-connection">Disconnected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="chat-main">
                 <!-- User List -->
                 <div class="user-panel">
@@ -215,7 +243,7 @@
 
                     <div class="audio-controls">
                         <button id="mute-btn" class="control-btn">🎙️ Unmuted</button>
-                        <button id="deafen-btn" class="control-btn">🔊 Hearing</button>
+                        <button id="deafen-btn" class="control-btn">🔊 Output On</button>
                         <button id="push-to-talk-btn" class="control-btn">🔒 PTT: Off</button>
                     </div>
                 </div>
@@ -287,6 +315,7 @@
                     <button class="tab-btn" data-tab="app">📱 Application</button>
                     <button class="tab-btn" data-tab="network">🌐 Network</button>
                     <button class="tab-btn" data-tab="streaming">📺 Streaming</button>
+                    <button class="tab-btn" data-tab="authentication">🔐 Authentication</button>
                     <button class="tab-btn" data-tab="privacy">🔒 Privacy</button>
                     <button class="tab-btn" data-tab="advanced">🔧 Advanced</button>
                 </div>
@@ -861,6 +890,40 @@
                             </select>
                             <button id="load-preset" class="secondary-btn">Load</button>
                             <button id="delete-preset" class="danger-btn">Delete</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Authentication Settings Tab -->
+                <div id="authentication-tab" class="settings-tab">
+                    <div class="settings-section">
+                        <h3>Authentication</h3>
+                        <div class="setting-item">
+                            <label>Current Session:</label>
+                            <span id="auth-settings-status">Not signed in</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Display Name:</label>
+                            <span id="auth-settings-display-name">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Username:</label>
+                            <span id="auth-settings-username">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Provider:</label>
+                            <span id="auth-settings-provider">-</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Groups:</label>
+                            <span id="auth-settings-groups">-</span>
+                        </div>
+                        <div class="button-group">
+                            <button id="auth-open-login-btn" class="secondary-btn">Sign In</button>
+                            <button id="auth-open-logout-btn" class="secondary-btn">Sign Out</button>
+                        </div>
+                        <div class="setting-item">
+                            <span class="setting-desc">Profile and Mastodon-compatible identity settings are managed here for room presence and federation features.</span>
                         </div>
                     </div>
                 </div>

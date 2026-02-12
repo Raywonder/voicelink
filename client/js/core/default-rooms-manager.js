@@ -9,6 +9,26 @@ class DefaultRoomsManager {
         this.defaultRoomsEnabled = true;
         this.generatedRooms = new Map();
         this.roomTemplates = new Map();
+        this.ambientLoaded = new Set();
+        this.ambientLoading = new Set();
+        this.ambientRetryTimers = new Map(); // filename -> timeoutId
+        this.ambientRetryState = new Map(); // filename -> retry metadata
+        this.ambientRetrySweepTimer = null;
+
+        this.ambientDownloadConfig = {
+            maxAttempts: 8,
+            retryIntervalMs: 5 * 60 * 1000, // 5 minutes
+            cooldownAfterMaxMs: 60 * 60 * 1000, // 1 hour
+            requestTimeoutMs: 12000
+        };
+        this.ambientBaseUrls = [
+            'sounds/',
+            'client/sounds/',
+            'assets/audio/room-ambience/',
+            '/assets/audio/room-ambience/',
+            '/downloads/voicelink/sounds/room-ambience/',
+            'https://voicelink.devinecreations.net/downloads/voicelink/sounds/room-ambience/'
+        ];
 
         this.init();
     }
@@ -17,6 +37,8 @@ class DefaultRoomsManager {
         this.loadRoomTemplates();
         this.loadServerConfig();
         this.setupEventListeners();
+        this.preloadAmbientAssets();
+        this.startAmbientRetrySweep();
     }
 
     setupEventListeners() {
@@ -558,6 +580,10 @@ class DefaultRoomsManager {
             createdAt: Date.now()
         });
 
+        if (template.ambientSound) {
+            this.loadAmbientAsset(template.ambientSound);
+        }
+
         return true;
     }
 
@@ -610,6 +636,157 @@ class DefaultRoomsManager {
 
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    getAmbientFilenames() {
+        const files = new Set();
+        for (const category of this.roomTemplates.values()) {
+            for (const template of category.templates) {
+                if (template?.ambientSound) {
+                    files.add(template.ambientSound);
+                }
+            }
+        }
+        return Array.from(files);
+    }
+
+    getAmbientCandidatePaths(filename) {
+        return this.ambientBaseUrls.map(base => `${base}${filename}`);
+    }
+
+    async fetchWithTimeout(url) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.ambientDownloadConfig.requestTimeoutMs);
+
+        try {
+            const response = await fetch(url, {
+                signal: controller.signal,
+                cache: 'no-store'
+            });
+            return response;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    isAmbientRetryAllowed(filename) {
+        const state = this.ambientRetryState.get(filename);
+        if (!state) return true;
+        return Date.now() >= (state.nextRetryAt || 0);
+    }
+
+    markAmbientDownloadSuccess(filename) {
+        this.ambientRetryState.delete(filename);
+        const existingTimer = this.ambientRetryTimers.get(filename);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            this.ambientRetryTimers.delete(filename);
+        }
+    }
+
+    markAmbientDownloadFailure(filename) {
+        const now = Date.now();
+        const state = this.ambientRetryState.get(filename) || {
+            attempts: 0,
+            nextRetryAt: now,
+            cooldownUntil: 0
+        };
+
+        state.attempts += 1;
+        if (state.attempts >= this.ambientDownloadConfig.maxAttempts) {
+            state.cooldownUntil = now + this.ambientDownloadConfig.cooldownAfterMaxMs;
+            state.nextRetryAt = state.cooldownUntil;
+            state.attempts = 0;
+        } else {
+            state.nextRetryAt = now + this.ambientDownloadConfig.retryIntervalMs;
+        }
+
+        this.ambientRetryState.set(filename, state);
+    }
+
+    scheduleAmbientRetry(filename) {
+        if (this.ambientLoaded.has(filename)) return;
+        if (this.ambientRetryTimers.has(filename)) return;
+
+        const state = this.ambientRetryState.get(filename);
+        if (!state) return;
+
+        const delay = Math.max(1000, state.nextRetryAt - Date.now());
+        const timerId = setTimeout(async () => {
+            this.ambientRetryTimers.delete(filename);
+            await this.loadAmbientAsset(filename);
+        }, delay);
+
+        this.ambientRetryTimers.set(filename, timerId);
+    }
+
+    async loadAmbientAsset(filename) {
+        if (!filename || this.ambientLoaded.has(filename) || this.ambientLoading.has(filename)) {
+            return;
+        }
+        if (!this.isAmbientRetryAllowed(filename)) {
+            return;
+        }
+
+        this.ambientLoading.add(filename);
+        try {
+            const candidates = this.getAmbientCandidatePaths(filename);
+            let loaded = false;
+            let lastError = null;
+
+            for (const url of candidates) {
+                try {
+                    const response = await this.fetchWithTimeout(url);
+                    if (!response.ok) {
+                        lastError = new Error(`HTTP ${response.status} for ${url}`);
+                        continue;
+                    }
+                    await response.arrayBuffer();
+                    loaded = true;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+
+            if (!loaded) {
+                throw lastError || new Error(`Ambient asset unavailable: ${filename}`);
+            }
+
+            this.ambientLoaded.add(filename);
+            this.markAmbientDownloadSuccess(filename);
+        } catch (error) {
+            // Keep retries silent so room creation/join never fails from missing ambience.
+            this.markAmbientDownloadFailure(filename);
+            this.scheduleAmbientRetry(filename);
+            console.debug(`Ambient asset unavailable (will retry silently): ${filename}`);
+        } finally {
+            this.ambientLoading.delete(filename);
+        }
+    }
+
+    preloadAmbientAssets() {
+        const ambience = this.getAmbientFilenames();
+        ambience.forEach(filename => {
+            this.loadAmbientAsset(filename);
+        });
+    }
+
+    startAmbientRetrySweep() {
+        if (this.ambientRetrySweepTimer) return;
+
+        this.ambientRetrySweepTimer = setInterval(() => {
+            const ambience = this.getAmbientFilenames();
+            for (const filename of ambience) {
+                if (this.ambientLoaded.has(filename) || this.ambientLoading.has(filename)) {
+                    continue;
+                }
+                if (!this.isAmbientRetryAllowed(filename)) {
+                    continue;
+                }
+                this.loadAmbientAsset(filename);
+            }
+        }, this.ambientDownloadConfig.retryIntervalMs);
     }
 
     handleServerConfigUpdate(config) {

@@ -397,6 +397,8 @@ class VoiceLinkApp {
     }
 
     setupUIEventListeners() {
+        this.setupCollapsiblePanels();
+
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
             this.showScreen('create-room-screen');
@@ -404,6 +406,7 @@ class VoiceLinkApp {
         });
 
         document.getElementById('join-room-btn')?.addEventListener('click', () => {
+            this.applyAuthIdentityDefaults();
             this.showScreen('join-room-screen');
         });
 
@@ -653,6 +656,30 @@ class VoiceLinkApp {
 
         // Initialize button click audio feedback
         this.initializeButtonAudio();
+    }
+
+    setupCollapsiblePanels() {
+        const bindToggle = (buttonId, contentId, iconId, defaultExpanded) => {
+            const button = document.getElementById(buttonId);
+            const content = document.getElementById(contentId);
+            const icon = document.getElementById(iconId);
+            if (!button || !content || !icon) return;
+
+            const setExpanded = (expanded) => {
+                button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                content.classList.toggle('collapsed', !expanded);
+                icon.textContent = expanded ? '▾' : '▸';
+            };
+
+            setExpanded(defaultExpanded);
+            button.addEventListener('click', () => {
+                const isExpanded = button.getAttribute('aria-expanded') === 'true';
+                setExpanded(!isExpanded);
+            });
+        };
+
+        bindToggle('toggle-server-status', 'server-status-content', 'toggle-server-status-icon', false);
+        bindToggle('toggle-room-status', 'room-status-content', 'toggle-room-status-icon', true);
     }
 
     showScreen(screenId) {
@@ -1049,11 +1076,15 @@ class VoiceLinkApp {
 
     async joinRoom() {
         const roomId = document.getElementById('join-room-id').value;
-        const userName = document.getElementById('user-name').value;
+        const userNameInput = document.getElementById('user-name');
+        const enteredName = userNameInput?.value?.trim();
         const password = document.getElementById('join-room-password').value;
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        const authDisplayName = authUser?.displayName || authUser?.username || '';
+        const userName = enteredName || authDisplayName;
 
         if (!roomId || !userName) {
-            this.showError('Please enter room ID and your name');
+            this.showError('Please enter room ID and your name, or sign in first');
             return;
         }
 
@@ -1091,7 +1122,7 @@ class VoiceLinkApp {
 
     quickJoinRoom(roomId) {
         document.getElementById('join-room-id').value = roomId;
-        document.getElementById('user-name').value = `User_${Date.now().toString().slice(-4)}`;
+        this.applyAuthIdentityDefaults(true);
         this.showScreen('join-room-screen');
     }
 
@@ -1102,6 +1133,14 @@ class VoiceLinkApp {
         // Update UI
         document.getElementById('current-room-name').textContent = room.name;
         document.getElementById('room-id-display').textContent = `Room ID: ${room.id}`;
+        const roomStatusId = document.getElementById('room-status-room-id');
+        if (roomStatusId) {
+            roomStatusId.textContent = room.id;
+        }
+        const connectionStatus = document.getElementById('room-status-connection');
+        if (connectionStatus) {
+            connectionStatus.textContent = this.socket?.connected ? 'Connected' : 'Disconnected';
+        }
 
         // Add existing users
         room.users.forEach(existingUser => {
@@ -1173,9 +1212,14 @@ class VoiceLinkApp {
     }
 
     updateUserCount() {
+        const count = this.users.size + 1; // +1 for current user
         const userCountElement = document.getElementById('user-count');
         if (userCountElement) {
-            userCountElement.textContent = this.users.size + 1; // +1 for current user
+            userCountElement.textContent = count;
+        }
+        const roomStatusUsers = document.getElementById('room-status-users');
+        if (roomStatusUsers) {
+            roomStatusUsers.textContent = String(count);
         }
     }
 
@@ -1307,6 +1351,14 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users.clear();
+        const roomStatusUsers = document.getElementById('room-status-users');
+        if (roomStatusUsers) {
+            roomStatusUsers.textContent = '0';
+        }
+        const roomStatusConnection = document.getElementById('room-status-connection');
+        if (roomStatusConnection) {
+            roomStatusConnection.textContent = 'Disconnected';
+        }
 
         // Reconnect to server
         this.connectToServer().then(() => {
@@ -1332,6 +1384,21 @@ class VoiceLinkApp {
     showSuccess(message) {
         console.log('Success:', message);
         this.showNotification(message, 'success');
+    }
+
+    applyAuthIdentityDefaults(forceGuest = false) {
+        const input = document.getElementById('user-name');
+        if (!input) return;
+
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        if (authUser && !forceGuest) {
+            input.value = authUser.displayName || authUser.username || input.value || '';
+            return;
+        }
+
+        if (!input.value) {
+            input.value = `User_${Date.now().toString().slice(-4)}`;
+        }
     }
 
     // Simple notification system without dialogs
@@ -1689,6 +1756,7 @@ class VoiceLinkApp {
 
         // Load current settings
         this.loadCurrentSettings();
+        this.syncAuthenticationSettings();
 
         // Setup settings event listeners
         this.setupSettingsEventListeners();
@@ -1758,6 +1826,44 @@ class VoiceLinkApp {
                 window.electronAPI.restartServer();
             }
         });
+
+        document.getElementById('auth-open-login-btn')?.addEventListener('click', () => {
+            document.getElementById('authelia-login-btn')?.click();
+        });
+
+        document.getElementById('auth-open-logout-btn')?.addEventListener('click', () => {
+            document.getElementById('authelia-logout-btn')?.click();
+        });
+    }
+
+    syncAuthenticationSettings() {
+        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
+        const statusEl = document.getElementById('auth-settings-status');
+        const displayNameEl = document.getElementById('auth-settings-display-name');
+        const usernameEl = document.getElementById('auth-settings-username');
+        const providerEl = document.getElementById('auth-settings-provider');
+        const groupsEl = document.getElementById('auth-settings-groups');
+
+        if (!statusEl || !displayNameEl || !usernameEl || !providerEl || !groupsEl) {
+            return;
+        }
+
+        if (!authUser) {
+            statusEl.textContent = 'Not signed in';
+            displayNameEl.textContent = '-';
+            usernameEl.textContent = '-';
+            providerEl.textContent = '-';
+            groupsEl.textContent = '-';
+            return;
+        }
+
+        statusEl.textContent = 'Signed in';
+        displayNameEl.textContent = authUser.displayName || authUser.username || '-';
+        usernameEl.textContent = authUser.username || '-';
+        providerEl.textContent = authUser.authProvider || 'mastodon';
+        groupsEl.textContent = Array.isArray(authUser.groups) && authUser.groups.length
+            ? authUser.groups.join(', ')
+            : (authUser.isAdmin ? 'admins' : 'users');
     }
 
     loadServerInfo() {

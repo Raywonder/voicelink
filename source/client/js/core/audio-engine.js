@@ -73,35 +73,17 @@ class AudioEngine {
 
     async enumerateDevices() {
         try {
-            // First check if we have microphone permission for full device labels
-            let hasPermission = false;
-            try {
-                const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
-                hasPermission = permissionStatus.state === 'granted';
-            } catch (e) {
-                // Permission API might not be available, try anyway
-            }
-
-            // If no permission, request temporary stream to unlock device labels
-            let tempStream = null;
-            if (!hasPermission) {
-                try {
-                    tempStream = await navigator.mediaDevices.getUserMedia({
-                        audio: true,
-                        video: false
-                    });
-                } catch (e) {
-                    console.warn('Could not get microphone permission for full device enumeration');
-                }
-            }
-
+            // Enumerate only; do not request microphone permission here.
+            // Permission prompts should occur only on explicit audio actions.
             const devices = await navigator.mediaDevices.enumerateDevices();
+            let inputIndex = 1;
+            let outputIndex = 1;
 
             this.audioDevices.inputs = devices
                 .filter(device => device.kind === 'audioinput')
                 .map(device => ({
                     id: device.deviceId,
-                    name: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
+                    name: device.label || `Microphone ${inputIndex++}`,
                     type: this.getDeviceType(device.label)
                 }));
 
@@ -109,9 +91,25 @@ class AudioEngine {
                 .filter(device => device.kind === 'audiooutput')
                 .map(device => ({
                     id: device.deviceId,
-                    name: device.label || `Speaker ${device.deviceId.slice(0, 8)}`,
+                    name: device.label || `Speaker ${outputIndex++}`,
                     type: this.getDeviceType(device.label)
                 }));
+
+            // Always expose system defaults so UI never shows as disconnected.
+            if (!this.audioDevices.inputs.some(device => device.id === 'default')) {
+                this.audioDevices.inputs.unshift({
+                    id: 'default',
+                    name: 'System Default Input',
+                    type: 'builtin'
+                });
+            }
+            if (!this.audioDevices.outputs.some(device => device.id === 'default')) {
+                this.audioDevices.outputs.unshift({
+                    id: 'default',
+                    name: 'System Default Output',
+                    type: 'builtin'
+                });
+            }
 
             // Add virtual multi-channel outputs for professional audio interfaces
             this.audioDevices.outputs.push(
@@ -120,15 +118,30 @@ class AudioEngine {
                 { id: 'output-7-8', name: 'Audio Interface 7-8', type: 'interface' }
             );
 
-            // Clean up temporary stream
-            if (tempStream) {
-                tempStream.getTracks().forEach(track => track.stop());
-            }
+            this.normalizeSelectedDevices();
 
             console.log(`Enumerated ${this.audioDevices.inputs.length} input devices and ${this.audioDevices.outputs.length} output devices`);
             this.updateDeviceSelects();
         } catch (error) {
             console.error('Failed to enumerate devices:', error);
+        }
+    }
+
+    normalizeSelectedDevices() {
+        const validInputIds = new Set(this.audioDevices.inputs.map(device => device.id));
+        const validOutputIds = new Set(this.audioDevices.outputs.map(device => device.id));
+
+        if (!this.selectedInputDevice || !validInputIds.has(this.selectedInputDevice)) {
+            this.selectedInputDevice = 'default';
+        }
+        if (!this.selectedOutputDevice || !validOutputIds.has(this.selectedOutputDevice)) {
+            this.selectedOutputDevice = 'default';
+        }
+
+        for (const [inputType, deviceId] of this.selectedInputDevices.entries()) {
+            if (!deviceId || !validInputIds.has(deviceId)) {
+                this.selectedInputDevices.set(inputType, 'default');
+            }
         }
     }
 
@@ -206,7 +219,9 @@ class AudioEngine {
     async getUserMedia(constraints = null) {
         const defaultConstraints = {
             audio: {
-                deviceId: this.selectedInputDevice ? { exact: this.selectedInputDevice } : undefined,
+                deviceId: (this.selectedInputDevice && this.selectedInputDevice !== 'default')
+                    ? { exact: this.selectedInputDevice }
+                    : undefined,
                 echoCancellation: this.settings.echoCancellation,
                 noiseSuppression: this.settings.noiseSuppression,
                 autoGainControl: this.settings.autoGainControl,
@@ -365,7 +380,7 @@ class AudioEngine {
     }
 
     async setInputDevice(deviceId) {
-        this.selectedInputDevice = deviceId;
+        this.selectedInputDevice = deviceId || 'default';
 
         // Restart user media with new device
         if (this.localStream) {
@@ -374,7 +389,7 @@ class AudioEngine {
     }
 
     setOutputDevice(deviceId) {
-        this.selectedOutputDevice = deviceId;
+        this.selectedOutputDevice = deviceId || 'default';
 
         // In a real implementation, this would switch the actual output device
         // For now, we just update the routing for new users
@@ -386,12 +401,20 @@ class AudioEngine {
         const inputSelect = document.getElementById('input-device-select');
         if (inputSelect) {
             inputSelect.innerHTML = '';
-            this.audioDevices.inputs.forEach(device => {
+            const defaultOption = document.createElement('option');
+            defaultOption.value = 'default';
+            defaultOption.textContent = 'System Default Input';
+            inputSelect.appendChild(defaultOption);
+
+            this.audioDevices.inputs
+                .filter(device => device.id !== 'default')
+                .forEach(device => {
                 const option = document.createElement('option');
                 option.value = device.id;
                 option.textContent = device.name;
                 inputSelect.appendChild(option);
             });
+            inputSelect.value = this.selectedInputDevice || 'default';
         }
 
         // Update output device selects
@@ -404,12 +427,20 @@ class AudioEngine {
             const select = document.getElementById(selectId);
             if (select) {
                 select.innerHTML = '';
-                this.audioDevices.outputs.forEach(device => {
+                const defaultOption = document.createElement('option');
+                defaultOption.value = 'default';
+                defaultOption.textContent = 'System Default Output';
+                select.appendChild(defaultOption);
+
+                this.audioDevices.outputs
+                    .filter(device => device.id !== 'default')
+                    .forEach(device => {
                     const option = document.createElement('option');
                     option.value = device.id;
                     option.textContent = device.name;
                     select.appendChild(option);
                 });
+                select.value = this.selectedOutputDevice || 'default';
             }
         });
     }
@@ -516,7 +547,9 @@ class AudioEngine {
                 try {
                     testStream = await navigator.mediaDevices.getUserMedia({
                         audio: {
-                            deviceId: this.selectedInputDevice ? { exact: this.selectedInputDevice } : undefined,
+                            deviceId: (this.selectedInputDevice && this.selectedInputDevice !== 'default')
+                                ? { exact: this.selectedInputDevice }
+                                : undefined,
                             echoCancellation: false, // Disable for live monitoring to avoid feedback issues
                             noiseSuppression: false,
                             autoGainControl: false,
@@ -818,8 +851,13 @@ class AudioEngine {
         }
 
         const outputSelect = document.getElementById('output-device-settings');
-        if (outputSelect && this.selectedOutputDevice) {
-            outputSelect.value = this.selectedOutputDevice;
+        if (outputSelect) {
+            outputSelect.value = this.selectedOutputDevice || 'default';
+        }
+
+        const outputSelectMain = document.getElementById('output-device-select');
+        if (outputSelectMain) {
+            outputSelectMain.value = this.selectedOutputDevice || 'default';
         }
 
         // Update volume sliders
@@ -870,7 +908,7 @@ class AudioEngine {
             if (inputType === this.inputTypes.MICROPHONE) {
                 constraints = {
                     audio: {
-                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        deviceId: (deviceId && deviceId !== 'default') ? { exact: deviceId } : undefined,
                         echoCancellation: this.inputSettings.get(inputType).processing.echoCancellation,
                         noiseSuppression: this.inputSettings.get(inputType).processing.noiseSuppression,
                         autoGainControl: this.inputSettings.get(inputType).processing.autoGainControl,
@@ -882,7 +920,7 @@ class AudioEngine {
             } else if (inputType === this.inputTypes.MEDIA_STREAMING) {
                 constraints = {
                     audio: {
-                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        deviceId: (deviceId && deviceId !== 'default') ? { exact: deviceId } : undefined,
                         echoCancellation: false, // Raw audio for streaming
                         noiseSuppression: false,
                         autoGainControl: false,
@@ -895,7 +933,7 @@ class AudioEngine {
                 // For virtual inputs, we might need different constraints
                 constraints = customConstraints || {
                     audio: {
-                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        deviceId: (deviceId && deviceId !== 'default') ? { exact: deviceId } : undefined,
                         echoCancellation: false,
                         noiseSuppression: false,
                         autoGainControl: false,
@@ -908,7 +946,7 @@ class AudioEngine {
                 // System audio or other types
                 constraints = customConstraints || {
                     audio: {
-                        deviceId: deviceId ? { exact: deviceId } : undefined,
+                        deviceId: (deviceId && deviceId !== 'default') ? { exact: deviceId } : undefined,
                         sampleRate: 48000,
                         channelCount: 2
                     },
@@ -919,7 +957,7 @@ class AudioEngine {
             // Get the media stream
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.inputStreams.set(inputType, stream);
-            this.selectedInputDevices.set(inputType, deviceId);
+            this.selectedInputDevices.set(inputType, deviceId || 'default');
 
             // Create audio processing chain for this input
             await this.createInputProcessingChain(inputType, stream);
@@ -1138,9 +1176,9 @@ class AudioEngine {
      * Get device name by ID
      */
     getDeviceName(deviceId) {
-        if (!deviceId) return 'Default';
+        if (!deviceId || deviceId === 'default') return 'System Default';
         const device = this.audioDevices.inputs.find(d => d.id === deviceId);
-        return device ? device.label : 'Unknown Device';
+        return device ? device.name : 'Unknown Device';
     }
 
     /**

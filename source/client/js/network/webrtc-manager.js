@@ -242,7 +242,7 @@ class WebRTCManager {
         // Update UI
         const deafenBtn = document.getElementById('deafen-btn');
         if (deafenBtn) {
-            deafenBtn.textContent = deafened ? '🔇 Deafened' : '🔊 Hearing';
+            deafenBtn.textContent = deafened ? '🔇 Muted Output' : '🔊 Output On';
             deafenBtn.classList.toggle('active', deafened);
         }
 
