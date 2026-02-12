@@ -198,6 +198,22 @@ struct VoiceLinkApp: App {
                             Label(status.displayName, systemImage: statusManager.currentStatus == status ? "checkmark.circle.fill" : status.icon)
                         }
                     }
+
+                    Divider()
+
+                    Toggle("Sync with macOS Focus modes", isOn: Binding(
+                        get: { statusManager.syncWithSystemFocus },
+                        set: { newValue in
+                            statusManager.setSyncWithSystemFocus(newValue)
+                        }
+                    ))
+
+                    Toggle("Sync profile from Contact Card", isOn: Binding(
+                        get: { statusManager.syncWithContactCard },
+                        set: { newValue in
+                            statusManager.setSyncWithContactCard(newValue)
+                        }
+                    ))
                 }
 
                 Button("Set Nickname...") {
@@ -335,6 +351,7 @@ extension Notification.Name {
     static let roomActionRestore = Notification.Name("roomActionRestore")
     static let roomActionLeave = Notification.Name("roomActionLeave")
     static let mainWindowCloseRequested = Notification.Name("mainWindowCloseRequested")
+    static let openRoomJukebox = Notification.Name("openRoomJukebox")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -869,6 +886,32 @@ class AppState: ObservableObject {
 
     func refreshRooms() {
         serverManager.getRooms()
+        Task { @MainActor in
+            await fetchRoomsViaHTTPFallback()
+        }
+    }
+
+    @MainActor
+    private func fetchRoomsViaHTTPFallback() async {
+        guard let base = serverManager.baseURL, !base.isEmpty else { return }
+        guard let url = APIEndpointResolver.url(base: base, path: "/api/rooms") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
+            guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+
+            let parsed = array.compactMap { ServerRoom(from: $0) }.map(Room.init(from:))
+            if !parsed.isEmpty {
+                rooms = parsed
+            }
+        } catch {
+            // Keep socket path as primary; fallback is best-effort.
+        }
     }
 
     func canManageRoom(_ room: Room) -> Bool {
@@ -1146,6 +1189,7 @@ struct Room: Identifiable {
 // MARK: - Content View
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @State private var showJukeboxSheet = false
 
     var body: some View {
         ZStack {
@@ -1181,6 +1225,21 @@ struct ContentView: View {
             case .login:
                 LoginView()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openRoomJukebox)) { _ in
+            showJukeboxSheet = true
+        }
+        .sheet(isPresented: $showJukeboxSheet) {
+            NavigationView {
+                JellyfinView()
+                    .navigationTitle("Jukebox")
+                    .toolbar {
+                        ToolbarItem(placement: .automatic) {
+                            Button("Done") { showJukeboxSheet = false }
+                        }
+                    }
+            }
+            .frame(minWidth: 920, minHeight: 620)
         }
     }
 }
@@ -1288,38 +1347,6 @@ struct MainMenuView: View {
                                     .foregroundColor(.white.opacity(0.6))
                                     .font(.caption)
                             }
-
-                            HStack {
-                                Text("Sync Mode")
-                                    .foregroundColor(.white.opacity(0.7))
-                                    .font(.caption)
-                                Spacer()
-                                Menu {
-                                    ForEach(SyncMode.allCases) { mode in
-                                        Button(action: { SettingsManager.shared.syncMode = mode }) {
-                                            HStack {
-                                                if SettingsManager.shared.syncMode == mode {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                                Image(systemName: mode.icon)
-                                                Text(mode.displayName)
-                                            }
-                                        }
-                                    }
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: SettingsManager.shared.syncMode.icon)
-                                        Text(SettingsManager.shared.syncMode.displayName)
-                                            .font(.caption)
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.white.opacity(0.1))
-                                    .cornerRadius(6)
-                                    .foregroundColor(.white.opacity(0.8))
-                                }
-                                .menuStyle(.borderlessButton)
-                            }
                         }
                         .padding(.top, 8)
                     },
@@ -1342,6 +1369,39 @@ struct MainMenuView: View {
                 .padding(.horizontal, 40)
                 .accessibilityLabel("Server details")
                 .accessibilityHint("Expand for connection details and sync mode options. Collapse to save space.")
+
+                HStack {
+                    Text("Sync Mode")
+                        .foregroundColor(.white.opacity(0.7))
+                        .font(.caption)
+                    Spacer()
+                    Menu {
+                        ForEach(SyncMode.allCases) { mode in
+                            Button(action: { SettingsManager.shared.syncMode = mode }) {
+                                HStack {
+                                    if SettingsManager.shared.syncMode == mode {
+                                        Image(systemName: "checkmark")
+                                    }
+                                    Image(systemName: mode.icon)
+                                    Text(mode.displayName)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: SettingsManager.shared.syncMode.icon)
+                            Text(SettingsManager.shared.syncMode.displayName)
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                        .foregroundColor(.white.opacity(0.8))
+                    }
+                    .menuStyle(.borderlessButton)
+                }
+                .padding(.horizontal, 40)
 
             // Error message
             if let error = appState.errorMessage {
@@ -1600,32 +1660,6 @@ struct MainMenuView: View {
 
             // Right Sidebar - Connection Health & Servers
             VStack(spacing: 16) {
-                // Connection Health Panel
-                ConnectionHealthView()
-                    .frame(maxWidth: 280)
-
-                // Servers Button - navigate to servers screen instead of sheet
-                Button(action: { appState.currentScreen = .servers }) {
-                    HStack {
-                        Image(systemName: "server.rack")
-                        Text("My Servers")
-                        Spacer()
-                        Text("\(PairingManager.shared.linkedServers.count)")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.3))
-                            .cornerRadius(10)
-                    }
-                    .padding()
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(10)
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.white)
-                .accessibilityLabel("My Servers. \(PairingManager.shared.linkedServers.count) servers linked.")
-                .accessibilityHint("Opens server management for linked and owned servers")
-
                 Spacer()
 
                 // Settings tip at bottom of sidebar
@@ -1756,11 +1790,14 @@ struct RoomActionSplitButton: View {
     let isAdmin: Bool
 
     var body: some View {
-        Menu {
-            Button("Room Details") { onOpenDetails() }
-            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
-            Button("Preview Room Audio") { onPreview() }.disabled(!roomHasUsers)
-            Button("Share Room Link") { onShare() }
+            Menu {
+                Button("Room Details") { onOpenDetails() }
+                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                Button("Open Jukebox") {
+                    NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
+                }
+                Button("Preview Room Audio") { onPreview() }.disabled(!roomHasUsers)
+                Button("Share Room Link") { onShare() }
             Button("Copy Room ID") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(roomId, forType: .string)
@@ -2694,6 +2731,7 @@ class SettingsManager: ObservableObject {
 
     // Profile Settings
     @Published var userNickname: String = ""
+    @Published var userProfileLinks: [String] = []
 
     // Available devices
     @Published var availableInputDevices: [String] = ["Default"]
@@ -2755,6 +2793,7 @@ class SettingsManager: ObservableObject {
 
         // Profile settings
         userNickname = UserDefaults.standard.string(forKey: "userNickname") ?? ""
+        userProfileLinks = UserDefaults.standard.stringArray(forKey: "userProfileLinks") ?? []
 
         // File sharing settings
         if let mode = UserDefaults.standard.string(forKey: "fileReceiveMode"),
@@ -2830,6 +2869,7 @@ class SettingsManager: ObservableObject {
 
         // Profile settings
         UserDefaults.standard.set(userNickname, forKey: "userNickname")
+        UserDefaults.standard.set(userProfileLinks, forKey: "userProfileLinks")
 
         // File sharing settings
         UserDefaults.standard.set(fileReceiveMode.rawValue, forKey: "fileReceiveMode")
@@ -2845,6 +2885,44 @@ class SettingsManager: ObservableObject {
 
         // Apply selected devices so audio routing follows settings in active sessions.
         applySelectedAudioDevices()
+    }
+
+    func mergeProfileLinks(_ incoming: [String], replaceExisting: Bool = false) {
+        let seed = replaceExisting ? [] : userProfileLinks
+        var merged: [String] = []
+        var seen = Set<String>()
+
+        for value in seed + incoming {
+            guard let normalized = normalizeProfileLink(value) else { continue }
+            let key = normalized.lowercased()
+            if !seen.contains(key) {
+                seen.insert(key)
+                merged.append(normalized)
+            }
+        }
+
+        userProfileLinks = merged
+    }
+
+    func removeProfileLink(_ link: String) {
+        let key = link.lowercased()
+        userProfileLinks.removeAll { $0.lowercased() == key }
+    }
+
+    private func normalizeProfileLink(_ raw: String) -> String? {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let lower = value.lowercased()
+        if !lower.hasPrefix("http://") &&
+            !lower.hasPrefix("https://") &&
+            !lower.hasPrefix("mailto:") &&
+            !lower.hasPrefix("tel:") {
+            value = "https://\(value)"
+        }
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme,
+              !scheme.isEmpty else { return nil }
+        return components.string
     }
 
     func detectAudioDevices() {
@@ -3220,6 +3298,59 @@ struct SettingsView: View {
                 Text("This nickname will be displayed to other users in voice rooms")
                     .font(.caption)
                     .foregroundColor(.gray)
+            }
+        }
+
+        SettingsSection(title: "Profile Links") {
+            let statusManager = StatusManager.shared
+
+            Toggle("Auto-sync links from Contact Card", isOn: Binding(
+                get: { statusManager.syncWithContactCard },
+                set: { newValue in
+                    statusManager.setSyncWithContactCard(newValue)
+                }
+            ))
+
+            HStack {
+                Button("Sync Now") {
+                    statusManager.syncContactCardNow()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+            }
+
+            if settings.userProfileLinks.isEmpty {
+                Text("No profile links found yet. Add links to your macOS Me card, then choose Sync Now.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(settings.userProfileLinks, id: \.self) { link in
+                        HStack {
+                            if let url = URL(string: link) {
+                                Link(link, destination: url)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            } else {
+                                Text(link)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Button(role: .destructive) {
+                                settings.removeProfileLink(link)
+                                settings.saveSettings()
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove link")
+                        }
+                    }
+                }
             }
         }
     }
