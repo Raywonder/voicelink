@@ -119,97 +119,6 @@ class VoiceLinkLocalServer {
         this.start();
     }
 
-    getRequesterContext(req) {
-        const body = req.body || {};
-        const query = req.query || {};
-        const headers = req.headers || {};
-        const userId = body.userId || body.user?.id || query.userId || headers['x-user-id'] || null;
-        const userName = body.userName || body.username || body.creatorHandle || body.startedBy || query.userName || headers['x-user-name'] || null;
-        const role = String(body.role || body.user?.role || query.role || headers['x-user-role'] || '').toLowerCase();
-        const permissions = Array.isArray(body.permissions)
-            ? body.permissions
-            : (Array.isArray(body.user?.permissions) ? body.user.permissions : []);
-        const isAdmin = body.isAdmin === true
-            || body.user?.isAdmin === true
-            || query.isAdmin === 'true'
-            || headers['x-user-admin'] === 'true'
-            || role === 'admin'
-            || permissions.includes('admin');
-        return {
-            userId: userId ? String(userId) : null,
-            userName: userName ? String(userName) : null,
-            role,
-            isAdmin
-        };
-    }
-
-    ensureRoomJellyfinAccess(room) {
-        if (!room) return null;
-        if (!room.jellyfinAccess || typeof room.jellyfinAccess !== 'object') {
-            room.jellyfinAccess = {};
-        }
-        const cfg = room.jellyfinAccess;
-        if (!Array.isArray(cfg.allowedServerIds)) cfg.allowedServerIds = [];
-        if (!cfg.allowedLibraryIdsByServer || typeof cfg.allowedLibraryIdsByServer !== 'object') cfg.allowedLibraryIdsByServer = {};
-        if (!cfg.roomUserPermissions || typeof cfg.roomUserPermissions !== 'object') cfg.roomUserPermissions = {};
-        if (typeof cfg.enabled !== 'boolean') cfg.enabled = true;
-        if (typeof cfg.adminCanAccessAll !== 'boolean') cfg.adminCanAccessAll = true;
-        if (typeof cfg.allowRoomOwnerUploads !== 'boolean') cfg.allowRoomOwnerUploads = true;
-        if (typeof cfg.allowAuthenticatedUploads !== 'boolean') cfg.allowAuthenticatedUploads = false;
-        return cfg;
-    }
-
-    canManageRoomJellyfin(room, requester) {
-        if (!room || !requester) return false;
-        if (requester.isAdmin) return true;
-        if (!room.creatorHandle) return false;
-        const creator = String(room.creatorHandle).toLowerCase();
-        return (requester.userId && String(requester.userId).toLowerCase() === creator)
-            || (requester.userName && String(requester.userName).toLowerCase() === creator);
-    }
-
-    getRoomJellyfinPermission(room, requester) {
-        const cfg = this.ensureRoomJellyfinAccess(room);
-        const keyFromId = requester?.userId ? `id:${requester.userId}` : null;
-        const keyFromName = requester?.userName ? `name:${String(requester.userName).toLowerCase()}` : null;
-        const explicit = (keyFromId && cfg.roomUserPermissions[keyFromId])
-            || (keyFromName && cfg.roomUserPermissions[keyFromName])
-            || null;
-        const owner = this.canManageRoomJellyfin(room, requester) && !requester?.isAdmin;
-        const defaults = {
-            canUseLibraries: true,
-            canUploadMedia: owner ? cfg.allowRoomOwnerUploads : cfg.allowAuthenticatedUploads,
-            canManageRoomLibraries: owner,
-            allowedServerIds: [],
-            allowedLibraryIdsByServer: {}
-        };
-        return { ...defaults, ...(explicit || {}) };
-    }
-
-    isServerAllowedForRoom(room, serverId, requester) {
-        const cfg = this.ensureRoomJellyfinAccess(room);
-        if (!cfg.enabled) return false;
-        if (requester?.isAdmin && cfg.adminCanAccessAll) return true;
-        const perm = this.getRoomJellyfinPermission(room, requester);
-        const fromUser = Array.isArray(perm.allowedServerIds) ? perm.allowedServerIds : [];
-        const fromRoom = Array.isArray(cfg.allowedServerIds) ? cfg.allowedServerIds : [];
-        const allowed = fromUser.length ? fromUser : fromRoom;
-        if (!allowed.length) return true;
-        return allowed.includes(serverId);
-    }
-
-    isLibraryAllowedForRoom(room, serverId, libraryId, requester) {
-        const cfg = this.ensureRoomJellyfinAccess(room);
-        if (requester?.isAdmin && cfg.adminCanAccessAll) return true;
-        const perm = this.getRoomJellyfinPermission(room, requester);
-        const roomMap = cfg.allowedLibraryIdsByServer?.[serverId];
-        const userMap = perm.allowedLibraryIdsByServer?.[serverId];
-        const allowed = Array.isArray(userMap) && userMap.length ? userMap : (Array.isArray(roomMap) ? roomMap : []);
-        if (!allowed.length) return true;
-        if (!libraryId) return false;
-        return allowed.includes(String(libraryId));
-    }
-
     /**
      * Initialize installed modules
      */
@@ -681,16 +590,7 @@ class VoiceLinkLocalServer {
                 autoLock: autoLock || null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoLockScheduled: null,  // Timeout ID for scheduled auto-lock
                 autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : false,  // Auto-play music when room is empty
-                autoplayPlaylist: autoplayPlaylist || null,  // Playlist ID for autoplay
-                jellyfinAccess: {
-                    enabled: true,
-                    adminCanAccessAll: true,
-                    allowRoomOwnerUploads: true,
-                    allowAuthenticatedUploads: false,
-                    allowedServerIds: [],
-                    allowedLibraryIdsByServer: {},
-                    roomUserPermissions: {}
-                }
+                autoplayPlaylist: autoplayPlaylist || null  // Playlist ID for autoplay
             };
 
             this.rooms.set(roomId, room);
@@ -2166,116 +2066,6 @@ class VoiceLinkLocalServer {
             res.json({ servers });
         });
 
-        this.app.get('/api/rooms/:roomId/jellyfin/access', (req, res) => {
-            const room = this.rooms.get(req.params.roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            const canManage = this.canManageRoomJellyfin(room, requester);
-            const effective = this.getRoomJellyfinPermission(room, requester);
-            const access = this.ensureRoomJellyfinAccess(room);
-            res.json({ success: true, roomId: room.id, canManage, access, effective });
-        });
-
-        this.app.put('/api/rooms/:roomId/jellyfin/access', (req, res) => {
-            const room = this.rooms.get(req.params.roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            if (!this.canManageRoomJellyfin(room, requester)) {
-                return res.status(403).json({ error: 'Only admins or room owner can update Jellyfin room access' });
-            }
-            const access = this.ensureRoomJellyfinAccess(room);
-            const payload = req.body || {};
-            if (typeof payload.enabled === 'boolean') access.enabled = payload.enabled;
-            if (typeof payload.adminCanAccessAll === 'boolean') access.adminCanAccessAll = payload.adminCanAccessAll;
-            if (typeof payload.allowRoomOwnerUploads === 'boolean') access.allowRoomOwnerUploads = payload.allowRoomOwnerUploads;
-            if (typeof payload.allowAuthenticatedUploads === 'boolean') access.allowAuthenticatedUploads = payload.allowAuthenticatedUploads;
-            if (Array.isArray(payload.allowedServerIds)) access.allowedServerIds = payload.allowedServerIds.map(String);
-            if (payload.allowedLibraryIdsByServer && typeof payload.allowedLibraryIdsByServer === 'object') {
-                const next = {};
-                Object.entries(payload.allowedLibraryIdsByServer).forEach(([serverId, ids]) => {
-                    next[String(serverId)] = Array.isArray(ids) ? ids.map(String) : [];
-                });
-                access.allowedLibraryIdsByServer = next;
-            }
-            res.json({ success: true, roomId: room.id, access });
-        });
-
-        this.app.put('/api/rooms/:roomId/jellyfin/access/users/:principal', (req, res) => {
-            const room = this.rooms.get(req.params.roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            if (!this.canManageRoomJellyfin(room, requester)) {
-                return res.status(403).json({ error: 'Only admins or room owner can manage room user Jellyfin access' });
-            }
-            const principal = String(req.params.principal || '').trim();
-            if (!principal) return res.status(400).json({ error: 'principal is required (id:<id> or name:<name>)' });
-            const access = this.ensureRoomJellyfinAccess(room);
-            const payload = req.body || {};
-            access.roomUserPermissions[principal] = {
-                canUseLibraries: payload.canUseLibraries !== false,
-                canUploadMedia: payload.canUploadMedia === true,
-                canManageRoomLibraries: payload.canManageRoomLibraries === true,
-                allowedServerIds: Array.isArray(payload.allowedServerIds) ? payload.allowedServerIds.map(String) : [],
-                allowedLibraryIdsByServer: payload.allowedLibraryIdsByServer && typeof payload.allowedLibraryIdsByServer === 'object'
-                    ? Object.fromEntries(
-                        Object.entries(payload.allowedLibraryIdsByServer).map(([serverId, ids]) => [String(serverId), Array.isArray(ids) ? ids.map(String) : []])
-                    )
-                    : {}
-            };
-            res.json({ success: true, roomId: room.id, principal, permission: access.roomUserPermissions[principal] });
-        });
-
-        this.app.delete('/api/rooms/:roomId/jellyfin/access/users/:principal', (req, res) => {
-            const room = this.rooms.get(req.params.roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            if (!this.canManageRoomJellyfin(room, requester)) {
-                return res.status(403).json({ error: 'Only admins or room owner can manage room user Jellyfin access' });
-            }
-            const principal = String(req.params.principal || '').trim();
-            const access = this.ensureRoomJellyfinAccess(room);
-            delete access.roomUserPermissions[principal];
-            res.json({ success: true, roomId: room.id, principal });
-        });
-
-        this.app.get('/api/rooms/:roomId/jellyfin/libraries', async (req, res) => {
-            const room = this.rooms.get(req.params.roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            const permission = this.getRoomJellyfinPermission(room, requester);
-            if (!permission.canUseLibraries) return res.status(403).json({ error: 'Library access disabled for this user' });
-            const serverId = String(req.query.serverId || '');
-            const server = this.jellyfinServers.get(serverId);
-            if (!server) return res.status(404).json({ error: 'Jellyfin server not found' });
-            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
-                return res.status(403).json({ error: 'This Jellyfin server is not allowed for this room' });
-            }
-            try {
-                const response = await fetch(`${server.url}/Library/MediaFolders?api_key=${server.apiKey}`);
-                const data = await response.json();
-                const allowed = this.getRoomJellyfinPermission(room, requester).allowedLibraryIdsByServer?.[serverId]
-                    || this.ensureRoomJellyfinAccess(room).allowedLibraryIdsByServer?.[serverId]
-                    || [];
-                const allLibraries = Array.isArray(data.Items) ? data.Items : [];
-                const libraries = (!allowed.length || (requester.isAdmin && this.ensureRoomJellyfinAccess(room).adminCanAccessAll))
-                    ? allLibraries
-                    : allLibraries.filter((item) => allowed.includes(String(item.ItemId || item.Id)));
-                res.json({
-                    success: true,
-                    roomId: room.id,
-                    serverId,
-                    canUpload: !!permission.canUploadMedia,
-                    libraries: libraries.map((item) => ({
-                        id: String(item.ItemId || item.Id),
-                        name: item.Name,
-                        collectionType: item.CollectionType || null
-                    }))
-                });
-            } catch (error) {
-                res.status(500).json({ error: 'Failed to fetch room libraries: ' + error.message });
-            }
-        });
-
         // Discover Jellyfin servers on the local network
         this.app.get('/api/jellyfin/discover', async (req, res) => {
             const discoveredServers = [];
@@ -2461,18 +2251,6 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'Jellyfin server not found' });
             }
 
-            const roomId = req.query.roomId ? String(req.query.roomId) : null;
-            if (roomId) {
-                const room = this.rooms.get(roomId);
-                if (!room) return res.status(404).json({ error: 'Room not found' });
-                const requester = this.getRequesterContext(req);
-                const permission = this.getRoomJellyfinPermission(room, requester);
-                if (!permission.canUseLibraries) return res.status(403).json({ error: 'Library access disabled for this user' });
-                if (!this.isServerAllowedForRoom(room, req.params.serverId, requester)) {
-                    return res.status(403).json({ error: 'This Jellyfin server is not allowed for this room' });
-                }
-            }
-
             try {
                 const parentId = req.query.parentId || '';
                 const type = req.query.type || ''; // Audio, Video, MusicAlbum, etc.
@@ -2576,7 +2354,7 @@ class VoiceLinkLocalServer {
 
         // Start streaming media to a room
         this.app.post('/api/jellyfin/stream-to-room', (req, res) => {
-            const { serverId, itemId, roomId, libraryId = null, type = 'audio', startedBy = 'Jukebox' } = req.body;
+            const { serverId, itemId, roomId, type = 'audio', startedBy = 'Jukebox' } = req.body;
 
             const server = this.jellyfinServers.get(serverId);
             if (!server) {
@@ -2588,23 +2366,10 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
-            const requester = this.getRequesterContext(req);
-            const permission = this.getRoomJellyfinPermission(room, requester);
-            if (!permission.canUseLibraries) {
-                return res.status(403).json({ error: 'You are not allowed to stream media in this room' });
-            }
-            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
-                return res.status(403).json({ error: 'Selected Jellyfin server is not allowed in this room' });
-            }
-            if (!this.isLibraryAllowedForRoom(room, serverId, libraryId, requester)) {
-                return res.status(403).json({ error: 'Selected library is not allowed in this room' });
-            }
-
             // Store active stream info
             this.roomMediaStreams.set(roomId, {
                 serverId,
                 itemId,
-                libraryId,
                 type,
                 startedAt: new Date(),
                 startedBy,
@@ -2676,20 +2441,7 @@ class VoiceLinkLocalServer {
 
         // Add to room queue
         this.app.post('/api/jellyfin/queue', (req, res) => {
-            const { roomId, serverId, itemId, libraryId = null, title, type, addedBy = 'Jukebox' } = req.body;
-            const room = this.rooms.get(roomId);
-            if (!room) return res.status(404).json({ error: 'Room not found' });
-            const requester = this.getRequesterContext(req);
-            const permission = this.getRoomJellyfinPermission(room, requester);
-            if (!permission.canUseLibraries) {
-                return res.status(403).json({ error: 'You are not allowed to queue media in this room' });
-            }
-            if (!this.isServerAllowedForRoom(room, serverId, requester)) {
-                return res.status(403).json({ error: 'Selected Jellyfin server is not allowed in this room' });
-            }
-            if (!this.isLibraryAllowedForRoom(room, serverId, libraryId, requester)) {
-                return res.status(403).json({ error: 'Selected library is not allowed in this room' });
-            }
+            const { roomId, serverId, itemId, title, type, addedBy = 'Jukebox' } = req.body;
 
             if (!this.mediaQueues.has(roomId)) {
                 this.mediaQueues.set(roomId, []);
@@ -2699,7 +2451,6 @@ class VoiceLinkLocalServer {
             queue.push({
                 serverId,
                 itemId,
-                libraryId,
                 title,
                 type,
                 addedBy,

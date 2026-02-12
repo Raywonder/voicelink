@@ -943,36 +943,8 @@ struct ServerRoom: Identifiable {
     let lastActivityAt: Date?
 
     init?(from dict: [String: Any]) {
-        func stringValue(_ value: Any?) -> String? {
-            if let string = value as? String {
-                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
-            if let int = value as? Int {
-                return String(int)
-            }
-            if let number = value as? NSNumber {
-                return number.stringValue
-            }
-            return nil
-        }
-
-        func intValue(_ value: Any?) -> Int? {
-            if let int = value as? Int {
-                return int
-            }
-            if let number = value as? NSNumber {
-                return number.intValue
-            }
-            if let string = value as? String,
-               let parsed = Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                return parsed
-            }
-            return nil
-        }
-
-        guard let id = stringValue(dict["id"]) ?? stringValue(dict["roomId"]),
-              let name = stringValue(dict["name"]) ?? stringValue(dict["roomName"]) ?? stringValue(dict["title"]) else {
+        guard let id = dict["id"] as? String ?? dict["roomId"] as? String,
+              let name = dict["name"] as? String else {
             return nil
         }
         func parseDate(_ value: Any?) -> Date? {
@@ -996,22 +968,22 @@ struct ServerRoom: Identifiable {
         }
         self.id = id
         self.name = name
-        self.description = stringValue(dict["description"]) ?? stringValue(dict["roomDescription"]) ?? ""
-        self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
+        self.description = dict["description"] as? String ?? ""
+        self.userCount = dict["userCount"] as? Int ?? dict["users"] as? Int ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
-        self.maxUsers = intValue(dict["maxUsers"]) ?? 50
-        self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"])
-        self.createdByRole = stringValue(dict["createdByRole"]) ?? stringValue(dict["ownerRole"])
-        self.roomType = stringValue(dict["roomType"])
-            ?? stringValue(dict["type"])
-            ?? stringValue(dict["creationType"])
+        self.maxUsers = dict["maxUsers"] as? Int ?? 50
+        self.createdBy = dict["createdBy"] as? String ?? dict["ownerUsername"] as? String
+        self.createdByRole = dict["createdByRole"] as? String ?? dict["ownerRole"] as? String
+        self.roomType = dict["roomType"] as? String
+            ?? dict["type"] as? String
+            ?? dict["creationType"] as? String
         self.createdAt = parseDate(dict["createdAt"] ?? dict["created"])
-        self.uptimeSeconds = intValue(dict["uptimeSeconds"])
-            ?? intValue(dict["uptime"])
-            ?? intValue(dict["roomUptime"])
-        self.lastActiveUsername = stringValue(dict["lastActiveUsername"])
-            ?? stringValue(dict["lastUser"])
-            ?? stringValue(dict["lastSpeaker"])
+        self.uptimeSeconds = dict["uptimeSeconds"] as? Int
+            ?? dict["uptime"] as? Int
+            ?? dict["roomUptime"] as? Int
+        self.lastActiveUsername = dict["lastActiveUsername"] as? String
+            ?? dict["lastUser"] as? String
+            ?? dict["lastSpeaker"] as? String
         self.lastActivityAt = parseDate(dict["lastActivityAt"] ?? dict["lastActiveAt"] ?? dict["updatedAt"])
     }
 }

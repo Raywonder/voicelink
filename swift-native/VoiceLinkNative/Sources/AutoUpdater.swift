@@ -44,7 +44,6 @@ class AutoUpdater: ObservableObject {
     private var downloadTask: URLSessionDownloadTask?
     private var downloadedFileURL: URL?
     private var lastMetadataURL: String?
-    private var saveDownloadForLater: Bool = false
 
     init() {
         loadLastChecked()
@@ -277,13 +276,12 @@ class AutoUpdater: ObservableObject {
 
     // MARK: - Download Update
 
-    func downloadUpdate(saveForLater: Bool = false) {
+    func downloadUpdate() {
         guard let downloadURL = updateURL else {
             updateState = .error("No download URL available")
             return
         }
 
-        saveDownloadForLater = saveForLater
         isDownloading = true
         downloadProgress = 0
         updateState = .downloading
@@ -338,7 +336,7 @@ class AutoUpdater: ObservableObject {
 
             if process.terminationStatus == 0 {
                 if let appBundle = findAppBundle(in: extractDir) {
-                    performInPlaceInstall(from: appBundle, originalZipURL: zipURL, extractDirURL: extractDir)
+                    performInPlaceInstall(from: appBundle)
                 } else {
                     updateState = .error("Could not find app in downloaded archive")
                 }
@@ -369,7 +367,7 @@ class AutoUpdater: ObservableObject {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func performInPlaceInstall(from extractedAppURL: URL, originalZipURL: URL?, extractDirURL: URL?) {
+    private func performInPlaceInstall(from extractedAppURL: URL) {
         let fm = FileManager.default
         let currentAppURL = Bundle.main.bundleURL
         let targetAppURL: URL
@@ -393,8 +391,6 @@ class AutoUpdater: ObservableObject {
         let targetBackup = shellEscape(targetAppURL.path + ".bak")
         let tmpApp = shellEscape(tmpAppURL.path)
         let scriptPath = shellEscape(scriptURL.path)
-        let zipToDelete = originalZipURL != nil ? shellEscape(originalZipURL!.path) : "''"
-        let extractToDelete = extractDirURL != nil ? shellEscape(extractDirURL!.path) : "''"
 
         let script = """
 #!/bin/bash
@@ -411,9 +407,6 @@ fi
 mv \(tmpApp) \(target)
 open \(target)
 rm -rf \(targetBackup)
-rm -f \(zipToDelete) || true
-rm -rf \(extractToDelete) || true
-rm -f "$0" || true
 """
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
@@ -469,26 +462,16 @@ rm -f "$0" || true
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
             let fileManager = FileManager.default
             let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VoiceLink-update-\(UUID().uuidString)")
 
             // Determine file extension from URL
             let originalURL = downloadTask.originalRequest?.url
             let ext = originalURL?.pathExtension ?? "zip"
             let fileName = "VoiceLink-\(updater?.latestVersion ?? "update").\(ext)"
-            let destinationURL: URL
-            if updater?.saveDownloadForLater == true {
-                destinationURL = downloadsURL.appendingPathComponent(fileName)
-            } else {
-                destinationURL = tempURL.appendingPathExtension(ext)
-            }
+            let destinationURL = downloadsURL.appendingPathComponent(fileName)
 
             do {
                 if fileManager.fileExists(atPath: destinationURL.path) {
                     try fileManager.removeItem(at: destinationURL)
-                }
-                if updater?.saveDownloadForLater != true {
-                    try? fileManager.createDirectory(at: tempURL, withIntermediateDirectories: true)
                 }
 
                 try fileManager.moveItem(at: location, to: destinationURL)
@@ -497,15 +480,7 @@ rm -f "$0" || true
                     self.updater?.downloadedFileURL = destinationURL
                     self.updater?.isDownloading = false
                     self.updater?.downloadProgress = 1.0
-                    if self.updater?.saveDownloadForLater == true {
-                        self.updater?.updateState = .idle
-                        self.updater?.saveDownloadForLater = false
-                        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
-                    } else {
-                        self.updater?.updateState = .readyToInstall
-                        self.updater?.saveDownloadForLater = false
-                        self.updater?.installUpdate()
-                    }
+                    self.updater?.updateState = .readyToInstall
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -527,7 +502,6 @@ rm -f "$0" || true
                 DispatchQueue.main.async {
                     self.updater?.updateState = .error("Download failed: \(error.localizedDescription)")
                     self.updater?.isDownloading = false
-                    self.updater?.saveDownloadForLater = false
                 }
             }
         }
@@ -662,24 +636,14 @@ struct UpdateSettingsView: View {
 
             HStack {
                 Button(action: {
-                    updater.downloadUpdate(saveForLater: false)
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("Update Now")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button(action: {
-                    updater.downloadUpdate(saveForLater: true)
+                    updater.downloadUpdate()
                 }) {
                     HStack {
                         Image(systemName: "arrow.down.to.line")
-                        Text("Download for Later")
+                        Text("Download Update")
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
 
                 Button("Later") {
                     updater.updateState = .idle
