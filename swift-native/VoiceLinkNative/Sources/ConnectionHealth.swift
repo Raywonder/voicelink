@@ -289,6 +289,7 @@ class ConnectionHealthMonitor: ObservableObject {
 // MARK: - Connection Health View
 struct ConnectionHealthView: View {
     @ObservedObject var monitor = ConnectionHealthMonitor.shared
+    var showDetectedNodes: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -337,7 +338,7 @@ struct ConnectionHealthView: View {
             .accessibilityLabel(monitor.healthStatus.accessibilityLabel)
 
             // Detected Nodes
-            if !monitor.detectedNodes.isEmpty {
+            if showDetectedNodes && !monitor.detectedNodes.isEmpty {
                 Divider()
 
                 Text("Detected Nodes")

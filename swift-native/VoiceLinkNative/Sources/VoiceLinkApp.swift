@@ -149,7 +149,7 @@ struct VoiceLinkApp: App {
                 }
 
                 Button("Test Sound") {
-                    AppSoundManager.shared.playSound(.soundTest)
+                    AppSoundManager.shared.playSound(.soundTest, force: true)
                 }
 
                 Divider()
@@ -828,6 +828,16 @@ class AppState: ObservableObject {
             let settings = SettingsManager.shared
 
             if self.currentScreen != .mainMenu {
+                if self.currentRoom != nil {
+                    self.currentScreen = .voiceChat
+                    self.errorMessage = nil
+                    return
+                }
+                if self.minimizedRoom != nil {
+                    self.restoreMinimizedRoom()
+                    self.errorMessage = nil
+                    return
+                }
                 let fallback: Screen = (self.previousScreen != self.currentScreen) ? self.previousScreen : .mainMenu
                 self.currentScreen = fallback
                 self.errorMessage = nil
@@ -2073,10 +2083,14 @@ struct VoiceChatView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var messagingManager = MessagingManager.shared
     @ObservedObject var adminManager = AdminServerManager.shared
+    @ObservedObject var roomLockManager = RoomLockManager.shared
     @State private var isMuted = false
     @State private var isDeafened = false
     @State private var messageText = ""
     @State private var showChat = true
+    @State private var showRoomActionsSheet = false
+    @State private var pendingEscapeTimestamp: Date?
+    @State private var escapeKeyMonitor: Any?
 
     private var meDisplayName: String {
         appState.preferredDisplayName()
@@ -2119,6 +2133,17 @@ struct VoiceChatView: View {
                     Spacer()
 
                     Menu {
+                        Button("Room Actions...") {
+                            showRoomActionsSheet = true
+                        }
+                        Button("Open Jukebox") {
+                            NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
+                        }
+                        if roomLockManager.canCurrentUserLock {
+                            Button(roomLockManager.isRoomLocked ? "Unlock Room" : "Lock Room") {
+                                roomLockManager.toggleLock()
+                            }
+                        }
                         if let room = appState.currentRoom, appState.canManageRoom(room) {
                             Button("Room Administration") {
                                 appState.currentScreen = .admin
@@ -2154,6 +2179,7 @@ struct VoiceChatView: View {
                         LazyVStack(spacing: 8) {
                             // Show yourself
                             UserRow(
+                                userId: "self",
                                 username: "\(meDisplayName) (Me)",
                                 isMuted: isMuted,
                                 isDeafened: isDeafened,
@@ -2164,6 +2190,7 @@ struct VoiceChatView: View {
                             // Show other users from server
                             ForEach(visibleRoomUsers) { user in
                                 UserRow(
+                                    userId: user.odId,
                                     username: user.username,
                                     isMuted: user.isMuted,
                                     isDeafened: user.isDeafened,
@@ -2298,6 +2325,10 @@ struct VoiceChatView: View {
         .onAppear {
             // Ensure room audio path is active when chat view is visible.
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            setupEscapeMonitor()
+        }
+        .onDisappear {
+            tearDownEscapeMonitor()
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleMute)) { _ in
             isMuted.toggle()
@@ -2314,6 +2345,12 @@ struct VoiceChatView: View {
             AppSoundManager.shared.playSound(.buttonClick)
             // Announce state change
             AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
+        }
+        .sheet(isPresented: $showRoomActionsSheet) {
+            if let room = appState.currentRoom {
+                RoomActionMenu(room: room, isInRoom: true, isPresented: $showRoomActionsSheet)
+                    .presentationDetents([.medium, .large])
+            }
         }
     }
 
@@ -2334,7 +2371,44 @@ struct VoiceChatView: View {
 
         print("Sending message: \(messageText)")
         messagingManager.sendRoomMessage(messageText)
+        AppSoundManager.shared.playSound(.messageSent)
         messageText = ""
+    }
+
+    private func setupEscapeMonitor() {
+        guard escapeKeyMonitor == nil else { return }
+        escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Escape key
+            guard event.keyCode == 53 else { return event }
+
+            // Let text fields keep normal Escape behavior.
+            if let responder = NSApp.keyWindow?.firstResponder,
+               responder is NSTextView || responder is NSTextField {
+                return event
+            }
+
+            let now = Date()
+            if let previous = pendingEscapeTimestamp,
+               now.timeIntervalSince(previous) <= 1.0 {
+                pendingEscapeTimestamp = nil
+                showRoomActionsSheet = true
+                AppSoundManager.shared.playSound(.menuOpen)
+                AccessibilityManager.shared.announce("Room actions menu opened")
+                return nil
+            }
+
+            pendingEscapeTimestamp = now
+            AccessibilityManager.shared.announce("Press Escape again to open room actions")
+            return nil
+        }
+    }
+
+    private func tearDownEscapeMonitor() {
+        if let monitor = escapeKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeKeyMonitor = nil
+        }
+        pendingEscapeTimestamp = nil
     }
 }
 
@@ -2394,6 +2468,7 @@ struct ChatMessageRow: View {
 }
 
 struct UserRow: View {
+    let userId: String
     let username: String
     let isMuted: Bool
     let isDeafened: Bool
@@ -2402,9 +2477,26 @@ struct UserRow: View {
 
     @State private var showControls = false
     @State private var userVolume: Double = 1.0
-    @State private var isUserMuted = false
-    @State private var isSoloed = false
     @ObservedObject private var settings = SettingsManager.shared
+    @ObservedObject private var audioControl = UserAudioControlManager.shared
+    @ObservedObject private var monitor = LocalMonitorManager.shared
+
+    private var resolvedVolume: Double {
+        if isCurrentUser {
+            return settings.inputVolume
+        }
+        return Double(audioControl.getVolume(for: userId))
+    }
+
+    private var isUserMuted: Bool {
+        if isCurrentUser { return false }
+        return audioControl.isMuted(userId)
+    }
+
+    private var isSoloed: Bool {
+        if isCurrentUser { return monitor.isMonitoring }
+        return audioControl.isSolo(userId)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2488,20 +2580,20 @@ struct UserRow: View {
                             .foregroundColor(.white.opacity(0.7))
                         Slider(
                             value: Binding(
-                                get: { isCurrentUser ? settings.inputVolume : userVolume },
+                                get: { resolvedVolume },
                                 set: { newValue in
                                     if isCurrentUser {
                                         settings.inputVolume = newValue
                                         settings.saveSettings()
                                     } else {
-                                        userVolume = newValue
+                                        audioControl.setVolume(for: userId, volume: Float(newValue))
                                     }
                                 }
                             ),
                             in: 0...1
                         )
                             .frame(maxWidth: .infinity)
-                        Text("\(Int((isCurrentUser ? settings.inputVolume : userVolume) * 100))%")
+                        Text("\(Int(resolvedVolume * 100))%")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .frame(width: 35)
@@ -2515,7 +2607,11 @@ struct UserRow: View {
 
                     // Mute and Solo buttons
                     HStack(spacing: 12) {
-                        Button(action: { if !isCurrentUser { isUserMuted.toggle() } }) {
+                        Button(action: {
+                            if !isCurrentUser {
+                                audioControl.toggleMute(for: userId)
+                            }
+                        }) {
                             HStack {
                                 Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
                                 Text(isUserMuted ? "Unmute" : "Mute")
@@ -2529,7 +2625,13 @@ struct UserRow: View {
                         .buttonStyle(.plain)
                         .disabled(isCurrentUser)
 
-                        Button(action: { isSoloed.toggle() }) {
+                        Button(action: {
+                            if isCurrentUser {
+                                monitor.toggleMonitoring()
+                            } else {
+                                audioControl.toggleSolo(for: userId)
+                            }
+                        }) {
                             HStack {
                                 Image(systemName: isSoloed ? "ear.fill" : "ear")
                                 Text(isCurrentUser ? (isSoloed ? "Stop Monitor" : "Monitor") : (isSoloed ? "Unsolo" : "Solo"))
@@ -3121,7 +3223,6 @@ struct SettingsView: View {
         case fileSharing = "File Sharing"
         case notifications = "Notifications"
         case privacy = "Privacy"
-        case mastodon = "Mastodon"
         case advanced = "Advanced"
     }
 
@@ -3204,8 +3305,6 @@ struct SettingsView: View {
                             notificationSettings
                         case .privacy:
                             privacySettings
-                        case .mastodon:
-                            mastodonSettings
                         case .advanced:
                             advancedSettings
                         }
@@ -3232,7 +3331,6 @@ struct SettingsView: View {
         case .fileSharing: return "folder.badge.person.crop"
         case .notifications: return "bell"
         case .privacy: return "lock.shield"
-        case .mastodon: return "bubble.left.and.bubble.right"
         case .advanced: return "gear"
         }
     }
@@ -3353,6 +3451,8 @@ struct SettingsView: View {
                 }
             }
         }
+
+        mastodonSettings
     }
 
     // MARK: - Audio Settings
@@ -3380,8 +3480,8 @@ struct SettingsView: View {
         SettingsSection(title: "Current Device Status") {
             VStack(alignment: .leading, spacing: 10) {
                 statusRow(
-                    label: "Built-In Input Device",
-                    value: detectedBuiltinInputName
+                    label: "System Input Device",
+                    value: detectedDefaultInputName
                 )
                 statusRow(
                     label: "Selected Input Name",
@@ -3391,12 +3491,16 @@ struct SettingsView: View {
                     label: "Input Status",
                     value: settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Unavailable"
                 )
+                statusRow(
+                    label: "Input Channels",
+                    value: detectedInputChannelSummary
+                )
 
                 Divider().background(Color.white.opacity(0.15))
 
                 statusRow(
-                    label: "Built-In Output Device",
-                    value: detectedBuiltinOutputName
+                    label: "System Output Device",
+                    value: detectedDefaultOutputName
                 )
                 statusRow(
                     label: "Selected Output Name",
@@ -3406,11 +3510,12 @@ struct SettingsView: View {
                     label: "Output Status",
                     value: settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Unavailable"
                 )
+                statusRow(
+                    label: "Output Channels",
+                    value: detectedOutputChannelSummary
+                )
             }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(
-                "Current audio devices. Built in input \(detectedBuiltinInputName). Selected input \(settings.inputDevice). Input status \(settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Unavailable"). Built in output \(detectedBuiltinOutputName). Selected output \(settings.outputDevice). Output status \(settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Unavailable")."
-            )
         }
 
         SettingsSection(title: "Output Device") {
@@ -3432,17 +3537,17 @@ struct SettingsView: View {
             }
 
             Button(action: {
-                if isSoundTestPlaying {
-                    AppSoundManager.shared.stopSound(.soundTest)
+                isSoundTestPlaying = true
+                AppSoundManager.shared.playSound(.soundTest, force: true)
+                let resetAfter = max(0.6, AppSoundManager.shared.soundDuration(.soundTest) + 0.1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + resetAfter) {
                     isSoundTestPlaying = false
-                } else {
-                    AppSoundManager.shared.playSound(.soundTest)
-                    isSoundTestPlaying = true
                 }
             }) {
-                Text(isSoundTestPlaying ? "Stop Test" : "Test My Sound")
+                Text(isSoundTestPlaying ? "Testing..." : "Test My Sound")
             }
             .buttonStyle(.bordered)
+            .disabled(isSoundTestPlaying)
         }
 
         SettingsSection(title: "Audio Processing") {
@@ -3483,20 +3588,150 @@ struct SettingsView: View {
         }
     }
 
-    private var detectedBuiltinInputName: String {
-        detectBuiltinDevice(in: settings.availableInputDevices)
+    private var detectedDefaultInputName: String {
+        defaultDeviceName(isInput: true)
     }
 
-    private var detectedBuiltinOutputName: String {
-        detectBuiltinDevice(in: settings.availableOutputDevices)
+    private var detectedDefaultOutputName: String {
+        defaultDeviceName(isInput: false)
     }
 
-    private func detectBuiltinDevice(in devices: [String]) -> String {
-        let preferred = devices.first {
-            let d = $0.lowercased()
-            return d.contains("built-in") || d.contains("internal")
+    private var detectedInputChannelSummary: String {
+        channelSummary(for: detectedDefaultInputName, isInput: true)
+    }
+
+    private var detectedOutputChannelSummary: String {
+        channelSummary(for: detectedDefaultOutputName, isInput: false)
+    }
+
+    private func defaultDeviceName(isInput: Bool) -> String {
+        let selector = isInput ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID
+        ) == noErr, deviceID != 0 else {
+            return "Not detected"
         }
-        return preferred ?? "Not detected"
+
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var nameSize = UInt32(MemoryLayout<CFString?>.size)
+        var cfName: CFString?
+        guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &cfName) == noErr,
+              let name = cfName as String?,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Not detected"
+        }
+        return name
+    }
+
+    private func channelSummary(for deviceName: String, isInput: Bool) -> String {
+        guard deviceName != "Not detected",
+              let deviceID = getDeviceID(named: deviceName, isInput: isInput) else {
+            return "Unavailable"
+        }
+        let channels = getChannelCount(deviceID: deviceID, isInput: isInput)
+        if channels <= 0 { return "Unavailable" }
+        if channels == 1 { return "Mono (1 channel)" }
+        if channels == 2 { return "Stereo (2 channels)" }
+        return "Multi-channel (\(channels) channels)"
+    }
+
+    private func getDeviceID(named targetName: String, isInput: Bool) -> AudioDeviceID? {
+        var propertySize: UInt32 = 0
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize
+        ) == noErr else {
+            return nil
+        }
+
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &deviceIDs
+        ) == noErr else {
+            return nil
+        }
+
+        let streamScope: AudioObjectPropertyScope = isInput ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+        for deviceID in deviceIDs {
+            var streamSize: UInt32 = 0
+            var streamAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope: streamScope,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            guard AudioObjectGetPropertyDataSize(deviceID, &streamAddress, 0, nil, &streamSize) == noErr else {
+                continue
+            }
+            if streamSize == 0 { continue }
+
+            var nameSize = UInt32(MemoryLayout<CFString?>.size)
+            var nameAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var cfName: CFString?
+            guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &cfName) == noErr else {
+                continue
+            }
+            if (cfName as String?) == targetName {
+                return deviceID
+            }
+        }
+        return nil
+    }
+
+    private func getChannelCount(deviceID: AudioDeviceID, isInput: Bool) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: isInput ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr else {
+            return 0
+        }
+
+        let bufferList = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: Int(size))
+        defer { bufferList.deallocate() }
+
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, bufferList) == noErr else {
+            return 0
+        }
+
+        let list = UnsafeMutableAudioBufferListPointer(bufferList)
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) }
     }
 
     @ViewBuilder
