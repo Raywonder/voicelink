@@ -70,8 +70,10 @@ class AutoUpdater: ObservableObject {
     private let dismissedBuildHashKey = "dismissedUpdateBuildHash"
     private let dismissedBuildNumberKey = "dismissedUpdateBuildNumber"
     private let dismissedVersionKey = "dismissedUpdateVersion"
+    private let deferredCleanupPathsKey = "updaterDeferredCleanupPaths"
 
     init() {
+        cleanupDeferredUpdateArtifacts()
         loadLastChecked()
         // Check for updates on launch (after a short delay)
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
@@ -443,9 +445,11 @@ class AutoUpdater: ObservableObject {
         let extracted = extractZip(zipURL, to: extractDir)
         if extracted {
             if let appBundle = findAppBundle(in: extractDir) {
-                NSWorkspace.shared.selectFile(appBundle.path, inFileViewerRootedAtPath: extractDir.path)
-                DispatchQueue.main.async {
-                    self.showInstallInstructions(appBundle)
+                if !attemptAutomatedInstall(extractedAppURL: appBundle, extractRoot: extractDir) {
+                    NSWorkspace.shared.selectFile(appBundle.path, inFileViewerRootedAtPath: extractDir.path)
+                    DispatchQueue.main.async {
+                        self.showInstallInstructions(appBundle)
+                    }
                 }
             } else {
                 tryRedownloadAfterExtractionFailure("Could not find VoiceLink.app in downloaded archive")
@@ -453,6 +457,80 @@ class AutoUpdater: ObservableObject {
         } else {
             tryRedownloadAfterExtractionFailure("Failed to extract update")
         }
+    }
+
+    private func attemptAutomatedInstall(extractedAppURL: URL, extractRoot: URL) -> Bool {
+        let fileManager = FileManager.default
+        let currentAppURL = Bundle.main.bundleURL.standardizedFileURL
+        let targetDir = currentAppURL.deletingLastPathComponent()
+        guard fileManager.isWritableFile(atPath: targetDir.path) else {
+            return false
+        }
+
+        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("voicelink-auto-install-\(UUID().uuidString).sh")
+
+        let script = """
+        #!/bin/bash
+        set -euo pipefail
+        NEW_APP="$1"
+        TARGET_APP="$2"
+        EXTRACT_ROOT="$3"
+        ZIP_FILE="${4:-}"
+        LOG_FILE="$HOME/Library/Logs/VoiceLink-Updater.log"
+        mkdir -p "$(dirname "$LOG_FILE")" || true
+        exec >> "$LOG_FILE" 2>&1
+        echo "[\\$(date)] Starting automated install"
+        /bin/sleep 2
+        for _ in {1..90}; do
+          if /usr/bin/pgrep -f "$TARGET_APP/Contents/MacOS/" >/dev/null 2>&1; then
+            /bin/sleep 1
+          else
+            break
+          fi
+        done
+        if [ -d "$TARGET_APP" ]; then
+          /bin/rm -rf "$TARGET_APP"
+        fi
+        /usr/bin/ditto "$NEW_APP" "$TARGET_APP"
+        /usr/bin/xattr -cr "$TARGET_APP" >/dev/null 2>&1 || true
+        /usr/bin/open -a "$TARGET_APP"
+        /bin/rm -rf "$EXTRACT_ROOT" || true
+        if [ -n "$ZIP_FILE" ]; then
+          /bin/rm -f "$ZIP_FILE" || true
+        fi
+        /bin/rm -f "$0" || true
+        echo "[\\$(date)] Automated install completed"
+        """
+
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [scriptURL.path, extractedAppURL.path, currentAppURL.path, extractRoot.path, downloadedFileURL?.path ?? ""]
+            try process.run()
+        } catch {
+            updateState = .error("Could not start automated installer: \(error.localizedDescription)")
+            return false
+        }
+
+        rememberDeferredCleanupPath(extractRoot.path)
+        if let zipPath = downloadedFileURL?.path, !zipPath.isEmpty {
+            rememberDeferredCleanupPath(zipPath)
+        }
+
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "Installing Update"
+            alert.informativeText = "VoiceLink will quit, replace the app, and relaunch automatically."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Continue")
+            _ = alert.runModal()
+            NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
+        }
+        return true
     }
 
     private func extractZip(_ zipURL: URL, to extractDir: URL) -> Bool {
@@ -666,6 +744,38 @@ class AutoUpdater: ObservableObject {
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             NSWorkspace.shared.selectFile(appURL.path, inFileViewerRootedAtPath: appURL.deletingLastPathComponent().path)
+        }
+    }
+
+    private func rememberDeferredCleanupPath(_ path: String) {
+        let cleaned = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        var values = UserDefaults.standard.stringArray(forKey: deferredCleanupPathsKey) ?? []
+        if !values.contains(cleaned) {
+            values.append(cleaned)
+            UserDefaults.standard.set(values, forKey: deferredCleanupPathsKey)
+        }
+    }
+
+    private func cleanupDeferredUpdateArtifacts() {
+        let fileManager = FileManager.default
+        let values = UserDefaults.standard.stringArray(forKey: deferredCleanupPathsKey) ?? []
+        guard !values.isEmpty else { return }
+        var remaining: [String] = []
+        for item in values {
+            let cleaned = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { continue }
+            if !fileManager.fileExists(atPath: cleaned) { continue }
+            do {
+                try fileManager.removeItem(atPath: cleaned)
+            } catch {
+                remaining.append(cleaned)
+            }
+        }
+        if remaining.isEmpty {
+            UserDefaults.standard.removeObject(forKey: deferredCleanupPathsKey)
+        } else {
+            UserDefaults.standard.set(remaining, forKey: deferredCleanupPathsKey)
         }
     }
 
