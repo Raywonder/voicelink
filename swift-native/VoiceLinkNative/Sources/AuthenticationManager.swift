@@ -4,8 +4,12 @@ import AuthenticationServices
 import Security
 
 // MARK: - Authentication Manager
-class AuthenticationManager: ObservableObject {
+class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = AuthenticationManager()
+    private let mastodonScopes = "read:accounts"
+    private let mastodonAppName = "VoiceLink"
+    private let mastodonWebsite = "https://voicelink.devinecreations.net"
+    private var resolvedMastodonScope = "read:accounts"
 
     @Published var currentUser: AuthenticatedUser?
     @Published var authState: AuthState = .unauthenticated
@@ -13,8 +17,10 @@ class AuthenticationManager: ObservableObject {
 
     // Mastodon OAuth state
     @Published var mastodonInstance: String = ""
+    @Published var mastodonRequestElevatedScope: Bool = UserDefaults.standard.bool(forKey: "mastodonRequestElevatedScope")
     private var mastodonClientId: String?
     private var mastodonClientSecret: String?
+    private var authSession: ASWebAuthenticationSession?
 
     // Email verification state
     @Published var pendingEmailVerification: String?
@@ -27,15 +33,47 @@ class AuthenticationManager: ObservableObject {
         case error
     }
 
-    init() {
+    override init() {
+        super.init()
         loadStoredAuth()
+        setupOAuthCallbackListener()
+    }
+
+    private func setupOAuthCallbackListener() {
+        // Listen for OAuth callbacks from URL handler (fallback for external browser auth)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOAuthCallbackNotification(_:)),
+            name: .oauthCallback,
+            object: nil
+        )
+    }
+
+    @objc private func handleOAuthCallbackNotification(_ notification: Notification) {
+        guard let userInfo = notification.object as? [String: Any],
+              let code = userInfo["code"] as? String else {
+            return
+        }
+        handleMastodonCallback(code: code)
+    }
+
+    // ASWebAuthenticationPresentationContextProviding
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return NSApp.windows.first ?? ASPresentationAnchor()
     }
 
     // MARK: - Mastodon OAuth
 
     func authenticateWithMastodon(instance: String, completion: @escaping (Bool, String?) -> Void) {
         authState = .authenticating
-        mastodonInstance = instance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        mastodonInstance = normalizeMastodonInstance(instance)
+        guard !mastodonInstance.isEmpty else {
+            authState = .error
+            authError = "Invalid Mastodon instance"
+            completion(false, "Invalid Mastodon instance")
+            return
+        }
+        UserDefaults.standard.set(mastodonRequestElevatedScope, forKey: "mastodonRequestElevatedScope")
 
         // Step 1: Register OAuth app with the instance
         registerMastodonApp { [weak self] success, error in
@@ -52,43 +90,91 @@ class AuthenticationManager: ObservableObject {
     }
 
     private func registerMastodonApp(completion: @escaping (Bool, String?) -> Void) {
-        guard let url = URL(string: "https://\(mastodonInstance)/api/v1/apps") else {
-            completion(false, "Invalid Mastodon instance URL")
+        resolveMastodonScope { [weak self] scope in
+            guard let self else {
+                completion(false, "Authentication manager unavailable")
+                return
+            }
+            self.resolvedMastodonScope = scope
+
+            guard let url = URL(string: "https://\(self.mastodonInstance)/api/v1/apps") else {
+                completion(false, "Invalid Mastodon instance URL")
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let body: [String: String] = [
+                "client_name": self.mastodonAppName,
+                "redirect_uris": "voicelink://oauth/callback",
+                "scopes": scope,
+                "website": self.mastodonWebsite
+            ]
+
+            request.httpBody = self.formEncodedBody(body)
+
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        completion(false, error.localizedDescription)
+                        return
+                    }
+
+                    if let httpResponse = response as? HTTPURLResponse,
+                       !(200...299).contains(httpResponse.statusCode) {
+                        let details = Self.parseMastodonError(from: data)
+                        completion(false, details ?? "Failed to register with Mastodon instance (HTTP \(httpResponse.statusCode))")
+                        return
+                    }
+
+                    guard let data = data,
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let clientId = json["client_id"] as? String,
+                          let clientSecret = json["client_secret"] as? String else {
+                        let details = Self.parseMastodonError(from: data)
+                        completion(false, details ?? "Failed to register with Mastodon instance")
+                        return
+                    }
+
+                    self?.mastodonClientId = clientId
+                    self?.mastodonClientSecret = clientSecret
+                    completion(true, nil)
+                }
+            }.resume()
+        }
+    }
+
+    private func resolveMastodonScope(completion: @escaping (String) -> Void) {
+        let fallback = mastodonScopes
+        guard let serverBase = ServerManager.shared.baseURL,
+              var components = URLComponents(string: "\(serverBase)/api/auth/mastodon/scope-policy") else {
+            completion(fallback)
             return
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "client_name": "VoiceLink",
-            "redirect_uris": "voicelink://oauth/callback",
-            "scopes": "read write",
-            "website": "https://voicelink.devinecreations.net"
+        components.queryItems = [
+            URLQueryItem(name: "instance", value: mastodonInstance),
+            URLQueryItem(name: "username", value: currentUser?.username),
+            URLQueryItem(name: "requestElevated", value: mastodonRequestElevatedScope ? "true" : "false")
         ]
 
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let url = components.url else {
+            completion(fallback)
+            return
+        }
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    completion(false, error.localizedDescription)
-                    return
-                }
-
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let clientId = json["client_id"] as? String,
-                      let clientSecret = json["client_secret"] as? String else {
-                    completion(false, "Failed to register with Mastodon instance")
-                    return
-                }
-
-                self?.mastodonClientId = clientId
-                self?.mastodonClientSecret = clientSecret
-                completion(true, nil)
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let scope = json["effectiveScope"] as? String,
+                  !scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                DispatchQueue.main.async { completion(fallback) }
+                return
             }
+            DispatchQueue.main.async { completion(scope) }
         }.resume()
     }
 
@@ -98,22 +184,66 @@ class AuthenticationManager: ObservableObject {
             return
         }
 
-        let authURL = "https://\(mastodonInstance)/oauth/authorize?" +
-            "client_id=\(clientId)&" +
-            "redirect_uri=voicelink://oauth/callback&" +
-            "response_type=code&" +
-            "scope=read%20write"
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = mastodonInstance
+        components.path = "/oauth/authorize"
+        components.queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: "voicelink://oauth/callback"),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: resolvedMastodonScope)
+        ]
 
-        guard let url = URL(string: authURL) else {
+        guard let url = components.url else {
             completion(false, "Invalid auth URL")
             return
         }
 
-        // Open in default browser - app will handle callback via URL scheme
-        NSWorkspace.shared.open(url)
-
         // Store completion for callback handling
         pendingMastodonCompletion = completion
+
+        // Use ASWebAuthenticationSession for in-app authentication
+        // This shows the auth page in a secure sheet within the app
+        authSession = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "voicelink"
+        ) { [weak self] callbackURL, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    // Check if user cancelled
+                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        self?.authState = .unauthenticated
+                        self?.pendingMastodonCompletion?(false, "Authentication cancelled")
+                        self?.pendingMastodonCompletion = nil
+                    } else {
+                        self?.authState = .error
+                        self?.authError = error.localizedDescription
+                        self?.pendingMastodonCompletion?(false, error.localizedDescription)
+                        self?.pendingMastodonCompletion = nil
+                    }
+                    return
+                }
+
+                guard let callbackURL = callbackURL,
+                      let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+                      let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+                    self?.authState = .error
+                    self?.authError = "No authorization code received"
+                    self?.pendingMastodonCompletion?(false, "No authorization code received")
+                    self?.pendingMastodonCompletion = nil
+                    return
+                }
+
+                // Handle the OAuth callback with the code
+                self?.handleMastodonCallback(code: code)
+            }
+        }
+
+        // Set the presentation context and start the session
+        authSession?.presentationContextProvider = self
+        authSession?.prefersEphemeralWebBrowserSession = false // Allow persisting cookies for "remember me"
+        authSession?.start()
     }
 
     private var pendingMastodonCompletion: ((Bool, String?) -> Void)?
@@ -133,18 +263,19 @@ class AuthenticationManager: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let body: [String: Any] = [
+        let body: [String: String] = [
             "client_id": clientId,
             "client_secret": clientSecret,
             "redirect_uri": "voicelink://oauth/callback",
             "grant_type": "authorization_code",
             "code": code,
-            "scope": "read write"
+            "scope": resolvedMastodonScope
         ]
 
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.httpBody = formEncodedBody(body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -154,11 +285,20 @@ class AuthenticationManager: ObservableObject {
                     return
                 }
 
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    self?.authState = .error
+                    let details = Self.parseMastodonError(from: data)
+                    self?.pendingMastodonCompletion?(false, details ?? "Failed to get access token (HTTP \(httpResponse.statusCode))")
+                    return
+                }
+
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let accessToken = json["access_token"] as? String else {
                     self?.authState = .error
-                    self?.pendingMastodonCompletion?(false, "Failed to get access token")
+                    let details = Self.parseMastodonError(from: data)
+                    self?.pendingMastodonCompletion?(false, details ?? "Failed to get access token")
                     return
                 }
 
@@ -396,6 +536,43 @@ class AuthenticationManager: ObservableObject {
         let newId = UUID().uuidString
         UserDefaults.standard.set(newId, forKey: "clientId")
         return newId
+    }
+
+    private func normalizeMastodonInstance(_ input: String) -> String {
+        var value = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if value.hasPrefix("https://") {
+            value.removeFirst("https://".count)
+        } else if value.hasPrefix("http://") {
+            value.removeFirst("http://".count)
+        }
+        if let slashIndex = value.firstIndex(of: "/") {
+            value = String(value[..<slashIndex])
+        }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func formEncodedBody(_ params: [String: String]) -> Data? {
+        var components = URLComponents()
+        components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return components.percentEncodedQuery?.data(using: .utf8)
+    }
+
+    private static func parseMastodonError(from data: Data?) -> String? {
+        guard let data else { return nil }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let description = json["error_description"] as? String, !description.isEmpty {
+                return description
+            }
+            if let error = json["error"] as? String, !error.isEmpty {
+                return error
+            }
+        }
+        if let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+        return nil
     }
 }
 
@@ -802,9 +979,29 @@ struct MastodonAuthView: View {
             Text("This will open your browser to authorize VoiceLink")
                 .font(.caption)
                 .foregroundColor(.gray)
+
+            Toggle("Request full Mastodon access (read write)", isOn: $authManager.mastodonRequestElevatedScope)
+                .toggleStyle(.checkbox)
+                .frame(width: 320)
+
+            if let appsURL = applicationsSettingsURL {
+                Link("Manage VoiceLink in Mastodon Apps", destination: appsURL)
+                    .font(.caption)
+            }
         }
         .padding(30)
-        .frame(width: 400, height: 350)
+        .frame(width: 420, height: 390)
+    }
+
+    private var applicationsSettingsURL: URL? {
+        let cleaned = instanceInput
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !cleaned.isEmpty else { return nil }
+        return URL(string: "https://\(cleaned)/settings/applications")
     }
 
     private func authenticate() {
