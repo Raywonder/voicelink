@@ -3,6 +3,7 @@ import AVFoundation
 import AppKit
 import SocketIO
 import CoreAudio
+import Combine
 
 @main
 struct VoiceLinkApp: App {
@@ -39,6 +40,15 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("n", modifiers: .command)
             }
             CommandMenu("Room") {
+                if let room = appState.currentRoom {
+                    Text("Current Room: \(room.name)")
+                    Text("Members: \(appState.serverManager.currentRoomUsers.count + 1)")
+                    Divider()
+                } else {
+                    Text("Current Room: None")
+                    Divider()
+                }
+
                 Button("Create Room") {
                     appState.currentScreen = .createRoom
                 }
@@ -48,6 +58,14 @@ struct VoiceLinkApp: App {
                     appState.currentScreen = .joinRoom
                 }
                 .keyboardShortcut("j", modifiers: .command)
+
+                Divider()
+
+                Button("Export Room Snapshot...") {
+                    appState.exportRoomSnapshot()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(appState.currentRoom == nil)
 
                 Divider()
 
@@ -75,9 +93,10 @@ struct VoiceLinkApp: App {
 
                 if authManager.authState == .authenticated {
                     if let user = authManager.currentUser {
-                        Text("Logged in as: \(user.displayName)")
                         if let instance = user.mastodonInstance {
-                            Text("Instance: \(instance)")
+                            Text("You are logged in as \(user.username)@\(instance)")
+                        } else {
+                            Text("Logged in as: \(user.displayName)")
                         }
                     }
 
@@ -93,6 +112,14 @@ struct VoiceLinkApp: App {
                     }
                     .keyboardShortcut("l", modifiers: .command)
                 }
+
+                Divider()
+
+                Button("Set Nickname...") {
+                    appState.currentScreen = .settings
+                    NotificationCenter.default.post(name: .openProfileSettings, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: .command)
             }
 
             CommandMenu("License") {
@@ -120,75 +147,43 @@ struct VoiceLinkApp: App {
                 }
             }
 
-            CommandMenu("Connect") {
-                // Connection targets
-                Button("Federation (Main Node)") {
-                    appState.connectToMainServer()
-                }
-                .help("Connect to the main VoiceLink public server")
-                .keyboardShortcut("1", modifiers: [.command, .option])
+            CommandMenu("Server") {
+                let serverManager = ServerManager.shared
 
-                Button("Local Server") {
-                    if let url = localDiscovery.localServerURL {
-                        localDiscovery.autoPairWithLocalServer { _ in }
-                    } else {
-                        appState.connectToLocalServer()
-                    }
-                }
-                .help("Connect to a local VoiceLink server")
-                .keyboardShortcut("2", modifiers: [.command, .option])
-
-                Button("Auto-Connect (Remote First)") {
-                    appState.connectToServer()
-                }
-                .help("Try remote server first, fallback to local")
-                .keyboardShortcut("0", modifiers: [.command, .option])
-
-                Divider()
-
-                if localDiscovery.localServerFound {
-                    Text("Local server found: \(localDiscovery.localServerName ?? "localhost")")
+                // Connection status
+                if serverManager.isConnected {
+                    Label("Connected to \(serverManager.connectedServer)", systemImage: "checkmark.circle.fill")
                 } else {
-                    Text("No local server detected")
-                        .foregroundColor(.secondary)
+                    Label("Disconnected", systemImage: "xmark.circle")
                 }
-
-                Button("Scan for Local Servers") {
-                    localDiscovery.scanForLocalServer()
-                }
-                .disabled(localDiscovery.isScanning)
 
                 Divider()
 
-                // Remote Server Controls
-                if ServerManager.shared.isConnected {
-                    Button("Disconnect") {
-                        ServerManager.shared.disconnect()
-                    }
-                    .help("Disconnect from current server")
+                // Quick connect options
+                Button("Connect to Federation") {
+                    serverManager.connectToMainServer()
+                    UserDefaults.standard.set("main", forKey: "lastConnectedServer")
                 }
+                .disabled(serverManager.isConnected && serverManager.connectedServer == "Federation")
 
-                if AdminServerManager.shared.isAdmin {
-                    Divider()
-
-                    Text("Remote Server Control")
-                        .font(.caption)
-
-                    Button("Start Remote Server") {
-                        RemoteServerControl.shared.startRemoteServer()
-                    }
-                    .help("Start the remote server via OpenLink, webserver, or direct connection")
-
-                    Button("Stop Remote Server") {
-                        RemoteServerControl.shared.stopRemoteServer()
-                    }
-                    .help("Stop the remote server gracefully")
-
-                    Button("Restart Remote Server") {
-                        RemoteServerControl.shared.restartRemoteServer()
-                    }
-                    .help("Restart the remote server")
+                Button("Connect to Local Server") {
+                    serverManager.connectToLocalServer()
+                    UserDefaults.standard.set("local", forKey: "lastConnectedServer")
                 }
+                .disabled(serverManager.isConnected && serverManager.connectedServer == "Local Server")
+
+                Divider()
+
+                Button("Disconnect") {
+                    serverManager.disconnect()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!serverManager.isConnected)
+
+                Button("Reconnect") {
+                    serverManager.tryMainThenLocal()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
 
             CommandMenu("Servers") {
@@ -198,13 +193,24 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .help("View and manage servers you've linked to this device")
 
-                Divider()
+                // Local server discovery - requires license
+                if LicensingManager.shared.licenseStatus == .licensed {
+                    Divider()
 
-                Button("Discover Local Servers") {
-                    localDiscovery.scanForLocalServer()
+                    Button("Discover Local Servers") {
+                        localDiscovery.scanForLocalServer()
+                    }
+                    .help("Scan local network for VoiceLink servers")
+                    .disabled(localDiscovery.isScanning)
+
+                    if localDiscovery.localServerFound {
+                        Button("Connect to \(localDiscovery.localServerName ?? "Local Server")") {
+                            if let _ = localDiscovery.localServerURL {
+                                localDiscovery.autoPairWithLocalServer { _ in }
+                            }
+                        }
+                    }
                 }
-                .help("Scan local network for VoiceLink servers")
-                .disabled(localDiscovery.isScanning)
 
                 if AdminServerManager.shared.isAdmin {
                     Divider()
@@ -243,13 +249,6 @@ struct VoiceLinkApp: App {
 
                 Divider()
 
-                Button("Check for Updates...") {
-                    AutoUpdater.shared.checkForUpdates()
-                }
-                .help("Check for available updates")
-
-                Divider()
-
                 Button("VoiceLink Help") {
                     if let url = URL(string: "https://voicelink.devinecreations.net/help") {
                         NSWorkspace.shared.open(url)
@@ -268,6 +267,7 @@ extension Notification.Name {
     static let pairingSuccess = Notification.Name("pairingSuccess")
     static let discoverServers = Notification.Name("discoverServers")
     static let goToMainMenu = Notification.Name("goToMainMenu")
+    static let openProfileSettings = Notification.Name("openProfileSettings")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -288,12 +288,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             andEventID: AEEventID(kAEGetURL)
         )
 
+        // Auto-connect to server on launch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.autoConnectOnLaunch()
+        }
+
         // Show window on launch (user can close it to stay in menubar)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             NSApp.activate(ignoringOtherApps: true)
             if let window = NSApp.windows.first {
                 window.makeKeyAndOrderFront(nil)
                 window.center()
+            }
+        }
+
+        // Play randomized intro welcome sound from root sounds folder.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            AppSoundManager.shared.playRandomStartupIntro()
+        }
+
+        // Ensure updater-triggered quit fully terminates the app.
+        NotificationCenter.default.addObserver(
+            forName: .shouldQuitForUpdate,
+            object: nil,
+            queue: .main
+        ) { _ in
+            NSApp.terminate(nil)
+        }
+    }
+
+    func autoConnectOnLaunch() {
+        let serverManager = ServerManager.shared
+
+        // Check if already connected
+        if serverManager.isConnected {
+            print("[AppDelegate] Already connected to server")
+            return
+        }
+
+        // Check saved server preference
+        let savedServer = UserDefaults.standard.string(forKey: "lastConnectedServer") ?? "main"
+
+        print("[AppDelegate] Auto-connecting to server: \(savedServer)")
+
+        if savedServer == "local" {
+            serverManager.connectToLocalServer()
+        } else if savedServer.hasPrefix("http") {
+            serverManager.connectToURL(savedServer)
+        } else {
+            // Default: try main server first, fallback to local
+            serverManager.tryMainThenLocal()
+        }
+
+        // Set up auto-reconnect observer
+        setupAutoReconnect()
+    }
+
+    func setupAutoReconnect() {
+        NotificationCenter.default.addObserver(
+            forName: .serverConnectionChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            let serverManager = ServerManager.shared
+            let settings = SettingsManager.shared
+
+            // Auto-reconnect if enabled and disconnected
+            if !serverManager.isConnected && settings.reconnectOnDisconnect {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if !serverManager.isConnected {
+                        print("[AppDelegate] Auto-reconnecting...")
+                        serverManager.tryMainThenLocal()
+                    }
+                }
             }
         }
     }
@@ -315,7 +382,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Never quit when window closes - stay in menubar
+        // Keep tray behavior when user closes the window.
         return false
     }
 
@@ -347,7 +414,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 class AppState: ObservableObject {
     @Published var currentScreen: Screen = .mainMenu
     @Published var isConnected: Bool = false
-    @Published var currentRoom: Room?
+    @Published var currentRoom: Room? {
+        didSet {
+            if let room = currentRoom {
+                UserDefaults.standard.set(room.roomId, forKey: "lastJoinedRoomId")
+                UserDefaults.standard.set(room.name, forKey: "lastJoinedRoomName")
+            }
+            NotificationCenter.default.post(
+                name: .activeRoomChanged,
+                object: nil,
+                userInfo: ["roomId": currentRoom?.roomId as Any]
+            )
+        }
+    }
     @Published var rooms: [Room] = []
     @Published var localIP: String = "Detecting..."
     @Published var serverStatus: ServerStatus = .offline
@@ -358,6 +437,12 @@ class AppState: ObservableObject {
 
     let serverManager = ServerManager.shared
     let licensing = LicensingManager.shared
+    private var cancellables = Set<AnyCancellable>()
+    private var roomRefreshCancellable: AnyCancellable?
+    private var hasTriedAutoJoinLastRoom = false
+    private var lastNotifiedUpdateVersion: String?
+    private let lastJoinedRoomIdKey = "lastJoinedRoomId"
+    private let lastJoinedRoomNameKey = "lastJoinedRoomName"
 
     enum Screen {
         case mainMenu
@@ -379,6 +464,7 @@ class AppState: ObservableObject {
         detectLocalIP()
         connectToServer()
         setupServerObservers()
+        startAutomaticRoomRefresh()
         initializeLicensing()
         setupURLObservers()
     }
@@ -506,7 +592,15 @@ class AppState: ObservableObject {
         // Observe server connection status
         serverManager.$isConnected
             .receive(on: DispatchQueue.main)
-            .assign(to: &$isConnected)
+            .sink { [weak self] connected in
+                guard let self = self else { return }
+                self.isConnected = connected
+                if connected {
+                    self.serverManager.getRooms()
+                    self.tryAutoJoinLastRoom()
+                }
+            }
+            .store(in: &cancellables)
 
         // Observe server status
         serverManager.$serverStatus
@@ -526,7 +620,12 @@ class AppState: ObservableObject {
             .map { serverRooms in
                 serverRooms.map { Room(from: $0) }
             }
-            .assign(to: &$rooms)
+            .sink { [weak self] updatedRooms in
+                guard let self = self else { return }
+                self.rooms = self.deduplicateRooms(updatedRooms)
+                self.tryAutoJoinLastRoom()
+            }
+            .store(in: &cancellables)
 
         // Observe errors
         serverManager.$errorMessage
@@ -538,9 +637,23 @@ class AppState: ObservableObject {
             if let roomData = notification.object as? [String: Any],
                let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String {
                 // Find the room and set it as current
-                if let room = self?.rooms.first(where: { $0.id == roomId }) {
+                if let room = self?.rooms.first(where: { $0.roomId == roomId }) {
                     self?.currentRoom = room
                     self?.currentScreen = .voiceChat
+                    UserDefaults.standard.set(room.roomId, forKey: self?.lastJoinedRoomIdKey ?? "lastJoinedRoomId")
+                    UserDefaults.standard.set(room.name, forKey: self?.lastJoinedRoomNameKey ?? "lastJoinedRoomName")
+                    self?.pushActionNotification(
+                        title: "Joined Room",
+                        message: "You joined \(room.name)"
+                    )
+                } else if let self = self {
+                    UserDefaults.standard.set(roomId, forKey: self.lastJoinedRoomIdKey)
+                    let fallbackName = roomData["name"] as? String ?? "your room"
+                    UserDefaults.standard.set(fallbackName, forKey: self.lastJoinedRoomNameKey)
+                    self.pushActionNotification(
+                        title: "Joined Room",
+                        message: "You joined \(fallbackName)"
+                    )
                 }
             }
         }
@@ -549,10 +662,180 @@ class AppState: ObservableObject {
         NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
             self?.currentScreen = .mainMenu
         }
+
+        // Keep visible/join username aligned to Mastodon account when available.
+        AuthenticationManager.shared.$currentUser
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] user in
+                guard let self = self else { return }
+                guard SettingsManager.shared.userNickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                if let user {
+                    let preferred = user.username.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !preferred.isEmpty {
+                        self.username = preferred
+                    } else {
+                        let display = user.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !display.isEmpty {
+                            self.username = display
+                        }
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        // Listen for update availability and optionally push a desktop notification.
+        NotificationCenter.default.addObserver(forName: .updateAvailable, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self else { return }
+            guard SettingsManager.shared.desktopNotifications else { return }
+            guard SettingsManager.shared.notifyOnUpdateAvailable else { return }
+
+            let version = (notification.object as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !version.isEmpty else { return }
+            guard self.lastNotifiedUpdateVersion != version else { return }
+            self.lastNotifiedUpdateVersion = version
+
+            self.pushActionNotification(
+                title: "There's a download available!",
+                message: "Version \(version) is ready. Check for updates to download and make sure you're up to date."
+            )
+        }
+    }
+
+    private func tryAutoJoinLastRoom() {
+        guard !hasTriedAutoJoinLastRoom else { return }
+        guard isConnected else { return }
+        guard SettingsManager.shared.autoJoinLastRoomOnLaunch else { return }
+        guard currentRoom == nil else { return }
+
+        let roomId = UserDefaults.standard.string(forKey: lastJoinedRoomIdKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !roomId.isEmpty else {
+            hasTriedAutoJoinLastRoom = true
+            return
+        }
+
+        hasTriedAutoJoinLastRoom = true
+
+        if let room = rooms.first(where: { $0.roomId == roomId || $0.id == roomId }) {
+            let joinName = SettingsManager.shared.userNickname.isEmpty ? username : SettingsManager.shared.userNickname
+            serverManager.joinRoom(roomId: room.roomId, username: joinName)
+            currentScreen = .voiceChat
+            pushActionNotification(title: "Rejoining Room", message: "Rejoining \(room.name)")
+            return
+        }
+
+        // Local fallback if the room list has not populated yet or room is currently hidden.
+        let joinName = SettingsManager.shared.userNickname.isEmpty ? username : SettingsManager.shared.userNickname
+        serverManager.joinRoom(roomId: roomId, username: joinName)
+        currentScreen = .voiceChat
+        let lastRoomName = UserDefaults.standard.string(forKey: lastJoinedRoomNameKey) ?? "last room"
+        pushActionNotification(title: "Rejoining Room", message: "Rejoining \(lastRoomName)")
+    }
+
+    private func pushActionNotification(title: String, message: String) {
+        guard SettingsManager.shared.desktopNotifications else { return }
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = message
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    private func deduplicateRooms(_ rooms: [Room]) -> [Room] {
+        func normalized(_ value: String) -> String {
+            value
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        }
+
+        var byKey: [String: Room] = [:]
+        var orderedKeys: [String] = []
+
+        for room in rooms {
+            let primaryId = normalized(room.roomId)
+            let fallbackId = normalized(room.id)
+            let name = normalized(room.name)
+            let desc = normalized(room.description)
+            let server = normalized(room.serverURL.isEmpty ? room.serverName : room.serverURL)
+
+            // Signature fallback handles duplicate logical rooms with mismatched IDs.
+            let signature = "\(name)|\(desc)|\(server)|\(room.maxUsers)|\(room.isPrivate)"
+            let key = !signature.hasPrefix("||") ? signature : (!primaryId.isEmpty ? primaryId : fallbackId)
+
+            guard !key.isEmpty else { continue }
+            if let existing = byKey[key] {
+                // Keep the richer row when duplicates arrive.
+                if room.userCount > existing.userCount || (existing.description.isEmpty && !room.description.isEmpty) {
+                    byKey[key] = room
+                }
+            } else {
+                byKey[key] = room
+                orderedKeys.append(key)
+            }
+        }
+
+        return orderedKeys.compactMap { byKey[$0] }
     }
 
     func refreshRooms() {
         serverManager.getRooms()
+    }
+
+    private func startAutomaticRoomRefresh() {
+        roomRefreshCancellable = Timer.publish(every: 12, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                guard self.isConnected else { return }
+                self.serverManager.getRooms()
+            }
+    }
+
+    func exportRoomSnapshot() {
+        guard let room = currentRoom else {
+            pushActionNotification(title: "Room Snapshot", message: "Join a room first to export a snapshot.")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "VoiceLink-Room-\(room.name.replacingOccurrences(of: " ", with: "_"))-Snapshot.json"
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        let payload: [String: Any] = [
+            "generatedAt": ISO8601DateFormatter().string(from: Date()),
+            "room": [
+                "id": room.roomId,
+                "name": room.name,
+                "description": room.description,
+                "isPrivate": room.isPrivate,
+                "userCount": room.userCount,
+                "maxUsers": room.maxUsers,
+                "serverURL": room.serverURL,
+                "serverName": room.serverName
+            ],
+            "activeUsers": serverManager.currentRoomUsers.map { user in
+                [
+                    "id": user.id,
+                    "username": user.username,
+                    "isMuted": user.isMuted,
+                    "isDeafened": user.isDeafened,
+                    "isSpeaking": user.isSpeaking
+                ]
+            },
+            "localUser": username
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: destination)
+            pushActionNotification(title: "Room Snapshot Exported", message: "Saved \(destination.lastPathComponent)")
+            NSWorkspace.shared.activateFileViewerSelecting([destination])
+        } catch {
+            errorMessage = "Failed to export room snapshot: \(error.localizedDescription)"
+        }
     }
 
     func detectLocalIP() {
@@ -590,28 +873,37 @@ class AppState: ObservableObject {
 // MARK: - Models
 struct Room: Identifiable {
     let id: String
+    let roomId: String
     let name: String
     let description: String
     var userCount: Int
     let isPrivate: Bool
     let maxUsers: Int
+    let serverURL: String
+    let serverName: String
 
-    init(id: String, name: String, description: String, userCount: Int, isPrivate: Bool, maxUsers: Int = 50) {
+    init(id: String, roomId: String, name: String, description: String, userCount: Int, isPrivate: Bool, maxUsers: Int = 50, serverURL: String = "", serverName: String = "") {
         self.id = id
+        self.roomId = roomId
         self.name = name
         self.description = description
         self.userCount = userCount
         self.isPrivate = isPrivate
         self.maxUsers = maxUsers
+        self.serverURL = serverURL
+        self.serverName = serverName
     }
 
     init(from serverRoom: ServerRoom) {
         self.id = serverRoom.id
+        self.roomId = serverRoom.id
         self.name = serverRoom.name
         self.description = serverRoom.description
         self.userCount = serverRoom.userCount
         self.isPrivate = serverRoom.isPrivate
         self.maxUsers = serverRoom.maxUsers
+        self.serverURL = ""
+        self.serverName = ""
     }
 }
 
@@ -662,6 +954,61 @@ struct MainMenuView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
+    @State private var roomViewMode: RoomViewMode = .list
+    @State private var roomSortMode: RoomSortMode = .mostUsers
+
+    enum RoomViewMode: String, CaseIterable, Identifiable {
+        case list = "List"
+        case grid = "Grid"
+        case column = "Column"
+        case table = "Table"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .list: return "list.bullet"
+            case .grid: return "square.grid.2x2"
+            case .column: return "rectangle.split.3x1"
+            case .table: return "tablecells"
+            }
+        }
+    }
+
+    enum RoomSortMode: String, CaseIterable, Identifiable {
+        case mostUsers = "Most Users"
+        case leastUsers = "Least Users"
+        case nameAZ = "Name A-Z"
+        case nameZA = "Name Z-A"
+
+        var id: String { rawValue }
+    }
+
+    var displayedRooms: [Room] {
+        // AppState already deduplicates mixed server responses.
+        let uniqueRooms = appState.rooms
+
+        switch roomSortMode {
+        case .mostUsers:
+            return uniqueRooms.sorted { lhs, rhs in
+                if lhs.userCount == rhs.userCount {
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+                return lhs.userCount > rhs.userCount
+            }
+        case .leastUsers:
+            return uniqueRooms.sorted { lhs, rhs in
+                if lhs.userCount == rhs.userCount {
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+                return lhs.userCount < rhs.userCount
+            }
+        case .nameAZ:
+            return uniqueRooms.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .nameZA:
+            return uniqueRooms.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedDescending }
+        }
+    }
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -723,19 +1070,6 @@ struct MainMenuView: View {
                             }
                         }
 
-                        Divider()
-
-                        Menu("Connection") {
-                            Button("Main Server") {
-                                appState.connectToMainServer()
-                            }
-                            Button("Local Server") {
-                                appState.connectToLocalServer()
-                            }
-                            Button("Auto (Local then Main)") {
-                                appState.connectToServer()
-                            }
-                        }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: SettingsManager.shared.syncMode.icon)
@@ -751,13 +1085,6 @@ struct MainMenuView: View {
                     .menuStyle(.borderlessButton)
 
                     Spacer()
-
-                    Button(action: { appState.refreshRooms() }) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!appState.isConnected)
 
                     Text("Local IP: \(appState.localIP)")
                         .foregroundColor(.white.opacity(0.6))
@@ -775,34 +1102,131 @@ struct MainMenuView: View {
 
             // Room List
             VStack(alignment: .leading, spacing: 15) {
-                Text("Available Rooms")
-                    .font(.headline)
-                    .foregroundColor(.white)
+                HStack {
+                    Text("Available Rooms")
+                        .font(.headline)
+                        .foregroundColor(.white)
+
+                    Spacer()
+
+                    Picker("View", selection: $roomViewMode) {
+                        ForEach(RoomViewMode.allCases) { mode in
+                            Label(mode.rawValue, systemImage: mode.icon).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 150)
+
+                    Picker("Sort", selection: $roomSortMode) {
+                        ForEach(RoomSortMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 160)
+                }
 
                 ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(appState.rooms) { room in
-                            RoomCard(room: room) {
-                                // Join room via server
-                                appState.serverManager.joinRoom(
-                                    roomId: room.id,
-                                    username: appState.username
-                                )
-                                appState.currentRoom = room
-                                appState.currentScreen = .voiceChat
+                    if roomViewMode == .list {
+                        LazyVStack(spacing: 12) {
+                            ForEach(displayedRooms) { room in
+                                RoomCard(room: room) {
+                                    // Join room via server
+                                    appState.serverManager.joinRoom(
+                                        roomId: room.roomId,
+                                        username: appState.username
+                                    )
+                                    appState.currentRoom = room
+                                    appState.currentScreen = .voiceChat
+                                }
                             }
                         }
+                    } else if roomViewMode == .grid {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            ForEach(displayedRooms) { room in
+                                RoomCard(room: room) {
+                                    appState.serverManager.joinRoom(
+                                        roomId: room.roomId,
+                                        username: appState.username
+                                    )
+                                    appState.currentRoom = room
+                                    appState.currentScreen = .voiceChat
+                                }
+                            }
+                        }
+                    } else if roomViewMode == .table {
+                        Table(displayedRooms) {
+                            TableColumn("Room") { room in
+                                Text(room.name)
+                                    .foregroundColor(.white)
+                            }
+                            TableColumn("Users") { room in
+                                Text("\(room.userCount)")
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            TableColumn("Type") { room in
+                                Text(room.isPrivate ? "Private" : "Public")
+                                    .foregroundColor(room.isPrivate ? .yellow : .green)
+                            }
+                            TableColumn("Server") { room in
+                                Text(room.serverName.isEmpty ? "Main" : room.serverName)
+                                    .foregroundColor(.blue.opacity(0.9))
+                            }
+                            TableColumn("Join") { room in
+                                Button("Join") {
+                                    appState.serverManager.joinRoom(
+                                        roomId: room.roomId,
+                                        username: appState.username
+                                    )
+                                    appState.currentRoom = room
+                                    appState.currentScreen = .voiceChat
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+                        .frame(minHeight: 220)
+                    } else {
+                        let leftColumn = Array(displayedRooms.enumerated().filter { $0.offset % 2 == 0 }.map { $0.element })
+                        let rightColumn = Array(displayedRooms.enumerated().filter { $0.offset % 2 != 0 }.map { $0.element })
 
-                        if appState.rooms.isEmpty && appState.isConnected {
+                        HStack(alignment: .top, spacing: 12) {
+                            LazyVStack(spacing: 12) {
+                                ForEach(leftColumn) { room in
+                                    RoomCard(room: room) {
+                                        appState.serverManager.joinRoom(
+                                            roomId: room.roomId,
+                                            username: appState.username
+                                        )
+                                        appState.currentRoom = room
+                                        appState.currentScreen = .voiceChat
+                                    }
+                                }
+                            }
+                            LazyVStack(spacing: 12) {
+                                ForEach(rightColumn) { room in
+                                    RoomCard(room: room) {
+                                        appState.serverManager.joinRoom(
+                                            roomId: room.roomId,
+                                            username: appState.username
+                                        )
+                                        appState.currentRoom = room
+                                        appState.currentScreen = .voiceChat
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                        if displayedRooms.isEmpty && appState.isConnected {
                             Text("No rooms available. Create one!")
                                 .foregroundColor(.gray)
                                 .padding()
-                        } else if appState.rooms.isEmpty && !appState.isConnected {
+                        } else if displayedRooms.isEmpty && !appState.isConnected {
                             Text("Connect to server to see rooms")
                                 .foregroundColor(.gray)
                                 .padding()
                         }
-                    }
                 }
                 .frame(maxHeight: 300)
             }
@@ -867,36 +1291,29 @@ struct MainMenuView: View {
                 ConnectionHealthView()
                     .frame(maxWidth: 280)
 
-                // Local Server Discovery Status
+                // Connection Status (auto-connects to available server)
                 HStack {
                     Circle()
-                        .fill(localDiscovery.localServerFound ? Color.green : Color.gray)
+                        .fill(ServerManager.shared.isConnected ? Color.green : Color.gray)
                         .frame(width: 8, height: 8)
-                    Text("Local Server")
+                    Text("Server")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.8))
                     Spacer()
-                    if localDiscovery.isScanning {
-                        ProgressView()
-                            .scaleEffect(0.5)
-                    } else {
-                        Text(localDiscovery.localServerFound ? (localDiscovery.localServerName ?? "Found") : "Not Found")
-                            .font(.caption2)
-                            .foregroundColor(localDiscovery.localServerFound ? .green : .gray)
-                    }
+                    Text(ServerManager.shared.isConnected ? "Connected" : "Disconnected")
+                        .font(.caption2)
+                        .foregroundColor(ServerManager.shared.isConnected ? .green : .gray)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.05))
                 .cornerRadius(8)
                 .onTapGesture {
-                    if localDiscovery.localServerFound, let url = localDiscovery.localServerURL {
-                        localDiscovery.autoPairWithLocalServer { _ in }
-                    } else {
-                        localDiscovery.scanForLocalServer()
+                    if !ServerManager.shared.isConnected {
+                        appState.connectToServer()
                     }
                 }
-                .accessibilityLabel("Local server \(localDiscovery.localServerFound ? "found" : "not found"). Tap to \(localDiscovery.localServerFound ? "connect" : "scan").")
+                .accessibilityLabel("Server \(ServerManager.shared.isConnected ? "connected" : "disconnected"). Tap to connect.")
 
                 // Servers Button - navigate to servers screen instead of sheet
                 Button(action: { appState.currentScreen = .servers }) {
@@ -958,6 +1375,12 @@ struct RoomCard: View {
                 Text(room.description)
                     .font(.caption)
                     .foregroundColor(.gray)
+
+                if !room.serverName.isEmpty {
+                    Text(room.serverName)
+                        .font(.caption2)
+                        .foregroundColor(.blue.opacity(0.9))
+                }
             }
 
             Spacer()
@@ -1104,91 +1527,281 @@ struct JoinRoomView: View {
 
 struct VoiceChatView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject var messagingManager = MessagingManager.shared
     @State private var isMuted = false
     @State private var isDeafened = false
+    @State private var messageText = ""
+    @State private var showChat = true
 
     var body: some View {
-        VStack {
-            // Room Header
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(appState.currentRoom?.name ?? "Room")
-                        .font(.title)
-                        .foregroundColor(.white)
-                    Text(appState.currentRoom?.description ?? "")
-                        .foregroundColor(.gray)
+        HSplitView {
+            // Left side - Users and Voice Controls
+            VStack {
+                // Room Header
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(appState.currentRoom?.name ?? "Room")
+                            .font(.title)
+                            .foregroundColor(.white)
+                        Text(appState.currentRoom?.description ?? "")
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+
+                    Button("Leave") {
+                        let roomName = appState.currentRoom?.name ?? "room"
+                        appState.serverManager.leaveRoom()
+                        appState.currentRoom = nil
+                        appState.currentScreen = .mainMenu
+                        if SettingsManager.shared.desktopNotifications {
+                            let notification = NSUserNotification()
+                            notification.title = "Left Room"
+                            notification.informativeText = "You left \(roomName)"
+                            NSUserNotificationCenter.default.deliver(notification)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
-                Spacer()
+                .padding()
 
-                // Keyboard shortcut hints
-                HStack(spacing: 15) {
-                    Text("Cmd+M Mute")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text("Cmd+D Deafen")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
+                // Users in room
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Users in Room")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Text("\(appState.serverManager.currentRoomUsers.count + 1)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
 
-                Button("Leave") {
-                    appState.serverManager.leaveRoom()
-                    appState.currentRoom = nil
-                    appState.currentScreen = .mainMenu
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-            }
-            .padding()
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            // Show yourself
+                            UserRow(username: appState.username + " (You)", isMuted: isMuted, isDeafened: isDeafened, isSpeaking: false)
 
-            // Users in room
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Users in Room")
-                    .font(.headline)
-                    .foregroundColor(.white)
-
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        // Show yourself
-                        UserRow(username: appState.username + " (You)", isMuted: isMuted, isDeafened: isDeafened, isSpeaking: false)
-
-                        // Show other users from server
-                        ForEach(appState.serverManager.currentRoomUsers) { user in
-                            UserRow(username: user.username, isMuted: user.isMuted, isDeafened: user.isDeafened, isSpeaking: user.isSpeaking)
+                            // Show other users from server
+                            ForEach(appState.serverManager.currentRoomUsers) { user in
+                                UserRow(username: user.username, isMuted: user.isMuted, isDeafened: user.isDeafened, isSpeaking: user.isSpeaking)
+                            }
                         }
                     }
                 }
-                .frame(maxHeight: 300)
-            }
-            .padding(.horizontal)
+                .padding(.horizontal)
 
-            Spacer()
+                Spacer()
 
-            // Voice Controls
-            HStack(spacing: 30) {
-                VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                                  label: isMuted ? "Unmute (Cmd+M)" : "Mute (Cmd+M)",
-                                  isActive: !isMuted) {
-                    isMuted.toggle()
-                    appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                // Voice Controls
+                HStack(spacing: 30) {
+                    VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
+                                      label: isMuted ? "Unmute Microphone" : "Mute Microphone",
+                                      isActive: !isMuted) {
+                        isMuted.toggle()
+                        appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                        // Play button click sound
+                        AppSoundManager.shared.playSound(.buttonClick)
+                        // Announce state change
+                        AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
+                    }
+                    .accessibilityLabel(isMuted ? "Unmute Microphone" : "Mute Microphone")
+                    .accessibilityHint("Toggle microphone input. Currently \(isMuted ? "muted" : "unmuted")")
+
+                    VoiceControlButton(icon: isDeafened ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                                      label: isDeafened ? "Undeafen Output" : "Deafen Output",
+                                      isActive: !isDeafened) {
+                        isDeafened.toggle()
+                        appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                        // Play button click sound
+                        AppSoundManager.shared.playSound(.buttonClick)
+                        // Announce state change
+                        AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
+                    }
+                    .accessibilityLabel(isDeafened ? "Undeafen Output" : "Deafen Output")
+                    .accessibilityHint("Toggle audio output. Currently \(isDeafened ? "deafened - you cannot hear others" : "undeafened - you can hear others")")
+
+                    VoiceControlButton(icon: showChat ? "bubble.left.fill" : "bubble.left",
+                                      label: showChat ? "Hide Chat" : "Show Chat",
+                                      isActive: showChat) {
+                        showChat.toggle()
+                    }
                 }
+                .padding(.bottom, 20)
 
-                VoiceControlButton(icon: isDeafened ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                                  label: isDeafened ? "Undeafen (Cmd+D)" : "Deafen (Cmd+D)",
-                                  isActive: !isDeafened) {
-                    isDeafened.toggle()
-                    appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                // Keyboard shortcuts hint
+                HStack(spacing: 15) {
+                    Text("⌘M Mute Microphone")
+                    Text("⌘D Deafen Output")
+                    Text("⌘Enter Send")
                 }
+                .font(.caption)
+                .foregroundColor(.gray)
+                .padding(.bottom, 10)
             }
-            .padding(.bottom, 40)
+            .frame(minWidth: 300)
+
+            // Right side - Chat Panel
+            if showChat {
+                VStack(spacing: 0) {
+                    // Chat header
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                        Text("Room Chat")
+                            .font(.headline)
+                        Spacer()
+                        if messagingManager.totalUnreadCount > 0 {
+                            Text("\(messagingManager.totalUnreadCount)")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color.red)
+                                .cornerRadius(10)
+                        }
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.3))
+
+                    // Messages list
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(messagingManager.messages) { message in
+                                    ChatMessageRow(message: message)
+                                        .id(message.id)
+                                }
+                            }
+                            .padding()
+                        }
+                        .onChange(of: messagingManager.messages.count) { _ in
+                            if let lastMessage = messagingManager.messages.last {
+                                withAnimation {
+                                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                                }
+                            }
+                        }
+                    }
+
+                    // Message input
+                    HStack(spacing: 8) {
+                        TextField(appState.serverStatus == .online ? "Type a message..." : "Connect to send messages", text: $messageText)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(appState.serverStatus != .online || appState.currentRoom == nil)
+                            .onSubmit {
+                                sendMessage()
+                            }
+
+                        Button(action: sendMessage) {
+                            HStack(spacing: 4) {
+                                Text("Send")
+                                    .fontWeight(.medium)
+                                Image(systemName: "paperplane.fill")
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                        }
+                        .disabled(messageText.isEmpty || appState.serverStatus != .online || appState.currentRoom == nil)
+                        .buttonStyle(.borderedProminent)
+                        .tint((messageText.isEmpty || appState.serverStatus != .online) ? .gray : .blue)
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.3))
+                }
+                .frame(minWidth: 250, idealWidth: 300)
+                .background(Color.black.opacity(0.2))
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleMute)) { _ in
             isMuted.toggle()
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            // Play button click sound
+            AppSoundManager.shared.playSound(.buttonClick)
+            // Announce state change
+            AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleDeafen)) { _ in
             isDeafened.toggle()
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            // Play button click sound
+            AppSoundManager.shared.playSound(.buttonClick)
+            // Announce state change
+            AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
         }
+    }
+
+    private func sendMessage() {
+        guard !messageText.isEmpty else { return }
+
+        // Check if we're connected
+        guard appState.serverStatus == .online else {
+            print("Cannot send message: Not connected to server")
+            return
+        }
+
+        // Check if we're in a room
+        guard appState.currentRoom != nil else {
+            print("Cannot send message: Not in a room")
+            return
+        }
+
+        print("Sending message: \(messageText)")
+        messagingManager.sendRoomMessage(messageText)
+        messageText = ""
+    }
+}
+
+// Chat message row view
+struct ChatMessageRow: View {
+    let message: MessagingManager.ChatMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            // Avatar placeholder
+            Circle()
+                .fill(avatarColor)
+                .frame(width: 32, height: 32)
+                .overlay(
+                    Text(String(message.senderName.prefix(1)).uppercased())
+                        .font(.caption)
+                        .foregroundColor(.white)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(message.senderName)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(message.type == .system ? .gray : .white)
+
+                    Text(formatTime(message.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+
+                Text(message.content)
+                    .font(.body)
+                    .foregroundColor(message.type == .system ? .gray : .white)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var avatarColor: Color {
+        if message.type == .system {
+            return .gray
+        }
+        // Generate consistent color from sender ID
+        let hash = message.senderId.hashValue
+        let colors: [Color] = [.blue, .green, .orange, .purple, .pink, .cyan]
+        return colors[abs(hash) % colors.count]
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 
@@ -1198,30 +1811,126 @@ struct UserRow: View {
     let isDeafened: Bool
     let isSpeaking: Bool
 
+    @State private var showControls = false
+    @State private var userVolume: Double = 1.0
+    @State private var isUserMuted = false
+    @State private var isSoloed = false
+
     var body: some View {
-        HStack {
-            // Speaking indicator
-            Circle()
-                .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
-                .frame(width: 10, height: 10)
+        VStack(spacing: 0) {
+            // Main row
+            HStack {
+                // Speaking indicator
+                Circle()
+                    .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
+                    .frame(width: 10, height: 10)
 
-            Text(username)
-                .foregroundColor(.white)
+                Text(username)
+                    .foregroundColor(.white)
 
-            Spacer()
+                Spacer()
 
-            if isMuted {
-                Image(systemName: "mic.slash.fill")
-                    .foregroundColor(.red)
+                if isMuted {
+                    Image(systemName: "mic.slash.fill")
+                        .foregroundColor(.red)
+                }
+                if isDeafened {
+                    Image(systemName: "speaker.slash.fill")
+                        .foregroundColor(.red)
+                }
+
+                // Expand/collapse button
+                Button(action: { showControls.toggle() }) {
+                    Image(systemName: showControls ? "chevron.up" : "chevron.down")
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
             }
-            if isDeafened {
-                Image(systemName: "speaker.slash.fill")
-                    .foregroundColor(.red)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.05))
+            .contextMenu {
+                Button(action: {
+                    // TODO: Implement whisper mode
+                    print("Whisper to \(username)")
+                }) {
+                    Label("Whisper", systemImage: "mic.badge.plus")
+                }
+
+                Button(action: {
+                    // TODO: Implement direct message
+                    print("Send DM to \(username)")
+                }) {
+                    Label("Send Direct Message", systemImage: "message")
+                }
+
+                Button(action: {
+                    // TODO: Implement file send
+                    print("Send file to \(username)")
+                }) {
+                    Label("Send File", systemImage: "doc")
+                }
+
+                Divider()
+
+                Button(action: {
+                    // TODO: Implement view profile
+                    print("View profile of \(username)")
+                }) {
+                    Label("View Profile", systemImage: "person.circle")
+                }
+            }
+
+            // Expandable audio controls
+            if showControls {
+                VStack(spacing: 8) {
+                    // Volume slider
+                    HStack {
+                        Image(systemName: "speaker.wave.2")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                        Slider(value: $userVolume, in: 0...1)
+                            .frame(maxWidth: .infinity)
+                        Text("\(Int(userVolume * 100))%")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .frame(width: 35)
+                    }
+
+                    // Mute and Solo buttons
+                    HStack(spacing: 12) {
+                        Button(action: { isUserMuted.toggle() }) {
+                            HStack {
+                                Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
+                                Text(isUserMuted ? "Unmute" : "Mute")
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: { isSoloed.toggle() }) {
+                            HStack {
+                                Image(systemName: isSoloed ? "star.fill" : "star")
+                                Text(isSoloed ? "Unsolo" : "Solo")
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isSoloed ? Color.yellow.opacity(0.3) : Color.gray.opacity(0.2))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 15)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.02))
             }
         }
-        .padding(.horizontal, 15)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.05))
         .cornerRadius(8)
     }
 }
@@ -1290,6 +1999,32 @@ enum SyncMode: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - File Receive Mode
+enum FileReceiveMode: String, CaseIterable {
+    case autoReceive = "auto"
+    case askAlways = "ask"
+    case askOnce = "askOnce" // Ask once per sender
+    case blockAll = "block"
+
+    var displayName: String {
+        switch self {
+        case .autoReceive: return "Auto-receive files"
+        case .askAlways: return "Ask every time"
+        case .askOnce: return "Ask once per sender"
+        case .blockAll: return "Block all transfers"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .autoReceive: return "arrow.down.circle.fill"
+        case .askAlways: return "questionmark.circle"
+        case .askOnce: return "person.badge.clock"
+        case .blockAll: return "xmark.shield"
+        }
+    }
+}
+
 // MARK: - Settings Manager
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
@@ -1315,6 +2050,7 @@ class SettingsManager: ObservableObject {
     @Published var autoConnect: Bool = true
     @Published var preferLocalServer: Bool = true
     @Published var reconnectOnDisconnect: Bool = true
+    @Published var autoJoinLastRoomOnLaunch: Bool = false
     @Published var connectionTimeout: Double = 30
 
     // PTT Settings
@@ -1326,14 +2062,33 @@ class SettingsManager: ObservableObject {
     @Published var desktopNotifications: Bool = true
     @Published var notifyOnJoin: Bool = true
     @Published var notifyOnLeave: Bool = true
+    @Published var notifyOnUpdateAvailable: Bool = true
 
     // Privacy
     @Published var showOnlineStatus: Bool = true
     @Published var allowDirectMessages: Bool = true
 
+    // File Sharing Settings
+    @Published var fileReceiveMode: FileReceiveMode = .askAlways
+    @Published var autoReceiveTimeLimit: Int = 30 // minutes, 0 = always
+    @Published var maxAutoReceiveSize: Int = 100 // MB
+    @Published var saveReceivedFilesTo: String = "~/Downloads/VoiceLink"
+
+    // Mastodon Integration Settings
+    @Published var useMastodonForDM: Bool = false
+    @Published var autoCreateThreads: Bool = true // Auto-create threads for messages > 500 chars
+    @Published var storeMastodonDMsLocally: Bool = true // Keep copy in VoiceLink
+    @Published var useMastodonForFileStorage: Bool = false // Use instance for media (future)
+
     // 3D Audio
     @Published var spatialAudioEnabled: Bool = true
     @Published var headTrackingEnabled: Bool = false
+
+    // UI Settings
+    @Published var showAudioControlsOnStartup: Bool = true
+
+    // Profile Settings
+    @Published var userNickname: String = ""
 
     // Available devices
     @Published var availableInputDevices: [String] = ["Default"]
@@ -1342,6 +2097,13 @@ class SettingsManager: ObservableObject {
     init() {
         loadSettings()
         detectAudioDevices()
+    }
+
+    private func boolSetting(_ key: String, default defaultValue: Bool) -> Bool {
+        if let value = UserDefaults.standard.object(forKey: key) as? Bool {
+            return value
+        }
+        return defaultValue
     }
 
     func loadSettings() {
@@ -1356,13 +2118,46 @@ class SettingsManager: ObservableObject {
         outputVolume = UserDefaults.standard.double(forKey: "outputVolume")
         if outputVolume == 0 { outputVolume = 0.8 }
 
-        noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
-        echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
-        autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
-        autoConnect = UserDefaults.standard.bool(forKey: "autoConnect")
-        preferLocalServer = UserDefaults.standard.bool(forKey: "preferLocalServer")
-        pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
-        spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
+        noiseSuppression = boolSetting("noiseSuppression", default: true)
+        echoCancellation = boolSetting("echoCancellation", default: true)
+        autoGainControl = boolSetting("autoGainControl", default: true)
+        autoConnect = boolSetting("autoConnect", default: true)
+        preferLocalServer = boolSetting("preferLocalServer", default: true)
+        reconnectOnDisconnect = boolSetting("reconnectOnDisconnect", default: true)
+        autoJoinLastRoomOnLaunch = boolSetting("autoJoinLastRoomOnLaunch", default: false)
+        pttEnabled = boolSetting("pttEnabled", default: false)
+        spatialAudioEnabled = boolSetting("spatialAudioEnabled", default: true)
+        soundNotifications = boolSetting("soundNotifications", default: true)
+        desktopNotifications = boolSetting("desktopNotifications", default: true)
+        notifyOnJoin = boolSetting("notifyOnJoin", default: true)
+        notifyOnLeave = boolSetting("notifyOnLeave", default: true)
+        notifyOnUpdateAvailable = boolSetting("notifyOnUpdateAvailable", default: true)
+        allowDirectMessages = boolSetting("allowDirectMessages", default: true)
+
+        // UI settings
+        showAudioControlsOnStartup = UserDefaults.standard.object(forKey: "showAudioControlsOnStartup") as? Bool ?? true
+
+        // Profile settings
+        userNickname = UserDefaults.standard.string(forKey: "userNickname") ?? ""
+
+        // File sharing settings
+        if let mode = UserDefaults.standard.string(forKey: "fileReceiveMode"),
+           let receiveMode = FileReceiveMode(rawValue: mode) {
+            self.fileReceiveMode = receiveMode
+        }
+        autoReceiveTimeLimit = UserDefaults.standard.integer(forKey: "autoReceiveTimeLimit")
+        if autoReceiveTimeLimit == 0 { autoReceiveTimeLimit = 30 }
+        maxAutoReceiveSize = UserDefaults.standard.integer(forKey: "maxAutoReceiveSize")
+        if maxAutoReceiveSize == 0 { maxAutoReceiveSize = 100 }
+        if let savePath = UserDefaults.standard.string(forKey: "saveReceivedFilesTo") {
+            saveReceivedFilesTo = savePath
+        }
+
+        // Mastodon settings
+        useMastodonForDM = UserDefaults.standard.bool(forKey: "useMastodonForDM")
+        autoCreateThreads = UserDefaults.standard.bool(forKey: "autoCreateThreads")
+        storeMastodonDMsLocally = UserDefaults.standard.bool(forKey: "storeMastodonDMsLocally")
+        useMastodonForFileStorage = UserDefaults.standard.bool(forKey: "useMastodonForFileStorage")
 
         // Defaults that should be true
         if !UserDefaults.standard.bool(forKey: "settingsInitialized") {
@@ -1375,10 +2170,13 @@ class SettingsManager: ObservableObject {
             desktopNotifications = true
             notifyOnJoin = true
             notifyOnLeave = true
+            notifyOnUpdateAvailable = true
             showOnlineStatus = true
             allowDirectMessages = true
             spatialAudioEnabled = true
             reconnectOnDisconnect = true
+            showAudioControlsOnStartup = true
+            autoJoinLastRoomOnLaunch = false
             UserDefaults.standard.set(true, forKey: "settingsInitialized")
         }
     }
@@ -1392,8 +2190,34 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
         UserDefaults.standard.set(autoConnect, forKey: "autoConnect")
         UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer")
+        UserDefaults.standard.set(reconnectOnDisconnect, forKey: "reconnectOnDisconnect")
+        UserDefaults.standard.set(autoJoinLastRoomOnLaunch, forKey: "autoJoinLastRoomOnLaunch")
         UserDefaults.standard.set(pttEnabled, forKey: "pttEnabled")
         UserDefaults.standard.set(spatialAudioEnabled, forKey: "spatialAudioEnabled")
+        UserDefaults.standard.set(soundNotifications, forKey: "soundNotifications")
+        UserDefaults.standard.set(desktopNotifications, forKey: "desktopNotifications")
+        UserDefaults.standard.set(notifyOnJoin, forKey: "notifyOnJoin")
+        UserDefaults.standard.set(notifyOnLeave, forKey: "notifyOnLeave")
+        UserDefaults.standard.set(notifyOnUpdateAvailable, forKey: "notifyOnUpdateAvailable")
+        UserDefaults.standard.set(allowDirectMessages, forKey: "allowDirectMessages")
+
+        // UI settings
+        UserDefaults.standard.set(showAudioControlsOnStartup, forKey: "showAudioControlsOnStartup")
+
+        // Profile settings
+        UserDefaults.standard.set(userNickname, forKey: "userNickname")
+
+        // File sharing settings
+        UserDefaults.standard.set(fileReceiveMode.rawValue, forKey: "fileReceiveMode")
+        UserDefaults.standard.set(autoReceiveTimeLimit, forKey: "autoReceiveTimeLimit")
+        UserDefaults.standard.set(maxAutoReceiveSize, forKey: "maxAutoReceiveSize")
+        UserDefaults.standard.set(saveReceivedFilesTo, forKey: "saveReceivedFilesTo")
+
+        // Mastodon settings
+        UserDefaults.standard.set(useMastodonForDM, forKey: "useMastodonForDM")
+        UserDefaults.standard.set(autoCreateThreads, forKey: "autoCreateThreads")
+        UserDefaults.standard.set(storeMastodonDMsLocally, forKey: "storeMastodonDMsLocally")
+        UserDefaults.standard.set(useMastodonForFileStorage, forKey: "useMastodonForFileStorage")
     }
 
     func detectAudioDevices() {
@@ -1467,14 +2291,23 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var settings = SettingsManager.shared
     @State private var selectedTab: SettingsTab = .audio
+    @State private var isSoundTestPlaying = false
+    @State private var isExportingData = false
+    @State private var dataExportStatus: String?
 
     enum SettingsTab: String, CaseIterable {
+        case profile = "Profile"
         case audio = "Audio"
-        case connection = "Connection"
         case sync = "Sync & Filters"
+        case fileSharing = "File Sharing"
         case notifications = "Notifications"
         case privacy = "Privacy"
+        case mastodon = "Mastodon"
         case advanced = "Advanced"
+    }
+
+    private var exportButtonLabel: String {
+        isExportingData ? "Exporting..." : "Export My Data"
     }
 
     var body: some View {
@@ -1492,6 +2325,9 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.white.opacity(0.8))
+                .accessibilityLabel("Back to main menu")
+                .accessibilityHint("Saves settings and returns to the main screen")
+                .help("Saves settings and returns to the main screen")
 
                 Spacer()
 
@@ -1530,6 +2366,9 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundColor(selectedTab == tab ? .white : .white.opacity(0.7))
+                        .accessibilityLabel("\(tab.rawValue) settings")
+                        .accessibilityHint("Opens the \(tab.rawValue) settings panel")
+                        .help("Opens the \(tab.rawValue) settings panel")
                     }
                     Spacer()
                 }
@@ -1542,16 +2381,20 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         switch selectedTab {
+                        case .profile:
+                            profileSettings
                         case .audio:
                             audioSettings
-                        case .connection:
-                            connectionSettings
                         case .sync:
                             syncSettings
+                        case .fileSharing:
+                            fileSharingSettings
                         case .notifications:
                             notificationSettings
                         case .privacy:
                             privacySettings
+                        case .mastodon:
+                            mastodonSettings
                         case .advanced:
                             advancedSettings
                         }
@@ -1561,16 +2404,44 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openProfileSettings)) { _ in
+            selectedTab = .profile
+        }
     }
 
     func iconForTab(_ tab: SettingsTab) -> String {
         switch tab {
+        case .profile: return "person.circle"
         case .audio: return "speaker.wave.2"
-        case .connection: return "wifi"
         case .sync: return "arrow.triangle.2.circlepath"
+        case .fileSharing: return "folder.badge.person.crop"
         case .notifications: return "bell"
         case .privacy: return "lock.shield"
+        case .mastodon: return "bubble.left.and.bubble.right"
         case .advanced: return "gear"
+        }
+    }
+
+    // MARK: - Profile Settings
+    @ViewBuilder
+    var profileSettings: some View {
+        SettingsSection(title: "User Information") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Nickname")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                TextField("Enter your nickname", text: $settings.userNickname)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: settings.userNickname) { _ in
+                        settings.saveSettings()
+                    }
+                    .accessibilityLabel("Nickname")
+                    .accessibilityHint("Sets the display name other users hear and see in rooms")
+                    .help("Sets the display name other users hear and see in rooms")
+                Text("This nickname will be displayed to other users in voice rooms")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
         }
     }
 
@@ -1584,10 +2455,15 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.menu)
+            .accessibilityHint("Choose the microphone used for voice chat input")
+            .help("Choose the microphone used for voice chat input")
 
             HStack {
                 Text("Input Volume")
                 Slider(value: $settings.inputVolume, in: 0...1)
+                    .accessibilityLabel("Input volume")
+                    .accessibilityHint("Adjusts microphone level before sending audio")
+                    .help("Adjusts microphone level before sending audio")
                 Text("\(Int(settings.inputVolume * 100))%")
                     .frame(width: 40)
             }
@@ -1600,13 +2476,34 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.menu)
+            .accessibilityHint("Choose the playback device for room audio")
+            .help("Choose the playback device for room audio")
 
             HStack {
                 Text("Output Volume")
                 Slider(value: $settings.outputVolume, in: 0...1)
+                    .accessibilityLabel("Output volume")
+                    .accessibilityHint("Adjusts speaker or headphone playback level")
+                    .help("Adjusts speaker or headphone playback level")
                 Text("\(Int(settings.outputVolume * 100))%")
                     .frame(width: 40)
             }
+
+            Button(action: {
+                if isSoundTestPlaying {
+                    AppSoundManager.shared.stopSound(.soundTest)
+                    isSoundTestPlaying = false
+                } else {
+                    AppSoundManager.shared.playSound(.soundTest)
+                    isSoundTestPlaying = true
+                }
+            }) {
+                Text(isSoundTestPlaying ? "Stop Test" : "Test My Sound")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel(isSoundTestPlaying ? "Stop sound test" : "Test my sound")
+            .accessibilityHint("Plays or stops the your-sound-test audio file")
+            .help("Plays or stops the your-sound-test audio file")
         }
 
         SettingsSection(title: "Audio Processing") {
@@ -1621,8 +2518,28 @@ struct SettingsView: View {
                 .disabled(!settings.spatialAudioEnabled)
         }
 
+        SettingsSection(title: "Interface") {
+            Toggle("Show Audio Controls on Startup", isOn: $settings.showAudioControlsOnStartup)
+                .onChange(of: settings.showAudioControlsOnStartup) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("When enabled, audio control panel opens by default")
+                .help("When enabled, audio control panel opens by default")
+        }
+
+        SettingsSection(title: "Startup & Rejoin") {
+            Toggle("Auto-Join Last Room on Launch", isOn: $settings.autoJoinLastRoomOnLaunch)
+                .onChange(of: settings.autoJoinLastRoomOnLaunch) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("On app launch, rejoins your most recent room using server data with local fallback")
+                .help("On app launch, rejoins your most recent room using server data with local fallback")
+        }
+
         SettingsSection(title: "Push-to-Talk") {
             Toggle("Enable PTT Mode", isOn: $settings.pttEnabled)
+                .accessibilityHint("When enabled, hold your push-to-talk key to transmit")
+                .help("When enabled, hold your push-to-talk key to transmit")
             if settings.pttEnabled {
                 HStack {
                     Text("PTT Key:")
@@ -1635,54 +2552,9 @@ struct SettingsView: View {
                         // PTT key binding - would need key capture UI
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityHint("Changes your push-to-talk key binding")
+                    .help("Changes your push-to-talk key binding")
                 }
-            }
-        }
-    }
-
-    // MARK: - Connection Settings
-    @ViewBuilder
-    var connectionSettings: some View {
-        SettingsSection(title: "Auto-Connect") {
-            Toggle("Connect automatically on launch", isOn: $settings.autoConnect)
-            Toggle("Prefer local server when available", isOn: $settings.preferLocalServer)
-            Toggle("Reconnect on disconnect", isOn: $settings.reconnectOnDisconnect)
-        }
-
-        SettingsSection(title: "Connection Timeout") {
-            HStack {
-                Text("Timeout:")
-                Slider(value: $settings.connectionTimeout, in: 5...60, step: 5)
-                Text("\(Int(settings.connectionTimeout))s")
-                    .frame(width: 40)
-            }
-        }
-
-        SettingsSection(title: "Server Status") {
-            HStack {
-                Circle()
-                    .fill(appState.isConnected ? Color.green : Color.red)
-                    .frame(width: 10, height: 10)
-                Text(appState.isConnected ? "Connected" : "Disconnected")
-                    .foregroundColor(appState.isConnected ? .green : .red)
-                Spacer()
-                if appState.isConnected {
-                    Text(appState.serverManager.connectedServer)
-                        .foregroundColor(.gray)
-                }
-            }
-
-            HStack {
-                Button("Reconnect") {
-                    appState.connectToServer()
-                }
-                .buttonStyle(.bordered)
-
-                Button("Disconnect") {
-                    appState.serverManager.disconnect()
-                }
-                .buttonStyle(.bordered)
-                .disabled(!appState.isConnected)
             }
         }
     }
@@ -1734,12 +2606,39 @@ struct SettingsView: View {
     var notificationSettings: some View {
         SettingsSection(title: "Sound Notifications") {
             Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
+                .onChange(of: settings.soundNotifications) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("Plays UI sounds for room and chat events")
+                .help("Plays UI sounds for room and chat events")
             Toggle("Play sound when user joins", isOn: $settings.notifyOnJoin)
+                .onChange(of: settings.notifyOnJoin) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("Plays a sound when someone enters your room")
+                .help("Plays a sound when someone enters your room")
             Toggle("Play sound when user leaves", isOn: $settings.notifyOnLeave)
+                .onChange(of: settings.notifyOnLeave) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("Plays a sound when someone leaves your room")
+                .help("Plays a sound when someone leaves your room")
         }
 
         SettingsSection(title: "Desktop Notifications") {
             Toggle("Enable desktop notifications", isOn: $settings.desktopNotifications)
+                .onChange(of: settings.desktopNotifications) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("Shows macOS notifications for important actions")
+                .help("Shows macOS notifications for important actions")
+
+            Toggle("Notify when updates are available", isOn: $settings.notifyOnUpdateAvailable)
+                .onChange(of: settings.notifyOnUpdateAvailable) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("Shows a desktop notification when a new VoiceLink update is detected")
+                .help("Shows a desktop notification when a new VoiceLink update is detected")
 
             Button("Test Notification") {
                 let notification = NSUserNotification()
@@ -1748,6 +2647,65 @@ struct SettingsView: View {
                 NSUserNotificationCenter.default.deliver(notification)
             }
             .buttonStyle(.bordered)
+            .accessibilityHint("Shows a sample desktop notification")
+            .help("Shows a sample desktop notification")
+        }
+    }
+
+    // MARK: - File Sharing Settings
+    @ViewBuilder
+    var fileSharingSettings: some View {
+        SettingsSection(title: "Receive Mode") {
+            Picker("When receiving files", selection: $settings.fileReceiveMode) {
+                ForEach(FileReceiveMode.allCases, id: \.self) { mode in
+                    Label(mode.displayName, systemImage: mode.icon).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+        }
+
+        SettingsSection(title: "Auto-Receive Time Limit") {
+            HStack {
+                Slider(value: Binding(
+                    get: { Double(settings.autoReceiveTimeLimit) },
+                    set: { settings.autoReceiveTimeLimit = Int($0) }
+                ), in: 0...120, step: 10)
+                Text(settings.autoReceiveTimeLimit == 0 ? "Always" : "\(settings.autoReceiveTimeLimit) min")
+                    .frame(width: 60)
+            }
+            Text("How long to auto-receive files after joining a room (0 = always)")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+
+        SettingsSection(title: "Max Auto-Receive Size") {
+            HStack {
+                Slider(value: Binding(
+                    get: { Double(settings.maxAutoReceiveSize) },
+                    set: { settings.maxAutoReceiveSize = Int($0) }
+                ), in: 10...1000, step: 10)
+                Text("\(settings.maxAutoReceiveSize) MB")
+                    .frame(width: 60)
+            }
+            Text("Maximum file size to auto-receive without confirmation")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+
+        SettingsSection(title: "Save Location") {
+            HStack {
+                TextField("Save path", text: $settings.saveReceivedFilesTo)
+                    .textFieldStyle(.roundedBorder)
+                Button("Choose...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let url = panel.url {
+                        settings.saveReceivedFilesTo = url.path
+                    }
+                }
+            }
         }
     }
 
@@ -1768,10 +2726,178 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
 
-            Button("Export My Data") {
-                // Export user data
+            Button(exportButtonLabel) {
+                exportMyDataArchive()
             }
+            .disabled(isExportingData)
             .buttonStyle(.bordered)
+
+            if let status = dataExportStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+
+    private func exportMyDataArchive() {
+        guard !isExportingData else { return }
+        isExportingData = true
+        dataExportStatus = nil
+
+        let serverBase = appState.serverManager.baseURL ?? ServerManager.mainServer
+        guard let url = URL(string: "\(serverBase)/api/export/my-data") else {
+            isExportingData = false
+            dataExportStatus = "Export failed: invalid server URL"
+            return
+        }
+
+        let authUser = AuthenticationManager.shared.currentUser
+        let fallbackUserId = appState.username
+        let payload: [String: Any] = [
+            "userId": authUser?.id ?? fallbackUserId,
+            "username": authUser?.username ?? appState.username,
+            "includeMessages": true,
+            "includeRooms": true,
+            "useCopyParty": true
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                self.isExportingData = false
+            }
+
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.dataExportStatus = "Export failed: \(error.localizedDescription)"
+                }
+                return
+            }
+
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                DispatchQueue.main.async {
+                    self.dataExportStatus = "Export failed: invalid response"
+                }
+                return
+            }
+
+            let success = (json["success"] as? Bool) ?? false
+            guard success else {
+                let message = json["error"] as? String ?? "unknown error"
+                DispatchQueue.main.async {
+                    self.dataExportStatus = "Export failed: \(message)"
+                }
+                return
+            }
+
+            var exportURL: String?
+            if let copyParty = json["copyParty"] as? [String: Any],
+               let uploaded = copyParty["uploaded"] as? Bool,
+               uploaded,
+               let urlString = copyParty["url"] as? String {
+                exportURL = urlString
+            } else if let archive = json["archive"] as? [String: Any],
+                      let relativePath = archive["downloadUrl"] as? String,
+                      let localUrl = URL(string: relativePath, relativeTo: URL(string: serverBase)) {
+                exportURL = localUrl.absoluteString
+            }
+
+            let statusMessage = exportURL != nil
+                ? "Data export ready. Opened download link."
+                : "Data export completed on server."
+
+            DispatchQueue.main.async {
+                self.dataExportStatus = statusMessage
+
+                let notification = NSUserNotification()
+                notification.title = "VoiceLink Data Export"
+                notification.informativeText = statusMessage
+                NSUserNotificationCenter.default.deliver(notification)
+
+                if let urlString = exportURL, let downloadURL = URL(string: urlString) {
+                    NSWorkspace.shared.open(downloadURL)
+                }
+            }
+        }.resume()
+    }
+
+    // MARK: - Mastodon Settings
+    @ViewBuilder
+    var mastodonSettings: some View {
+        let authManager = AuthenticationManager.shared
+
+        if authManager.authState == .authenticated {
+            if let user = authManager.currentUser {
+                SettingsSection(title: "Connected Account") {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(user.displayName)
+                                .font(.headline)
+                            if let instance = user.mastodonInstance {
+                                Text("@\(user.username ?? "")@\(instance)")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        Spacer()
+                        Button("Logout") {
+                            authManager.logout()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            SettingsSection(title: "Direct Messages") {
+                Toggle("Use Mastodon for DMs with mutual followers", isOn: $settings.useMastodonForDM)
+                Text("Send DMs via Mastodon when both users follow each other")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                Toggle("Keep local copy of Mastodon DMs", isOn: $settings.storeMastodonDMsLocally)
+                    .disabled(!settings.useMastodonForDM)
+            }
+
+            SettingsSection(title: "Long Messages") {
+                Toggle("Auto-create threads for long messages", isOn: $settings.autoCreateThreads)
+                Text("Messages over 500 characters will be split into threads")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+
+            SettingsSection(title: "Media Storage (Coming Soon)") {
+                Toggle("Use Mastodon instance for file storage", isOn: $settings.useMastodonForFileStorage)
+                    .disabled(true)
+                Text("Store shared media on your Mastodon instance")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        } else {
+            SettingsSection(title: "Not Connected") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Connect your Mastodon account to enable federated features:")
+                        .foregroundColor(.gray)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Direct messages with mutual followers", systemImage: "envelope")
+                        Label("Threaded conversations for long messages", systemImage: "text.bubble")
+                        Label("Media storage on your instance", systemImage: "photo.on.rectangle")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                    Button("Login with Mastodon") {
+                        appState.currentScreen = .login
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
         }
     }
 
