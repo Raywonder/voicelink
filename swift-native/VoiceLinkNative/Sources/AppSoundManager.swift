@@ -6,6 +6,13 @@ import AppKit
 /// Uses actual sound files from Resources/sounds directory
 class AppSoundManager: ObservableObject {
     static let shared = AppSoundManager()
+    
+    private struct IndexedSound {
+        let url: URL
+        let fileNameLower: String
+        let baseNameLower: String
+        let relativePathLower: String
+    }
 
     // Sound types with their file mappings
     enum SoundType: String, CaseIterable {
@@ -115,6 +122,8 @@ class AppSoundManager: ObservableObject {
     // Audio players cache
     private var audioPlayers: [SoundType: AVAudioPlayer] = [:]
     private var startupIntroPlayer: AVAudioPlayer?
+    private var indexedSounds: [IndexedSound] = []
+    private var soundsRootURL: URL?
     private var isInitialized = false
     private var startupIntroPlayed = false
 
@@ -126,6 +135,7 @@ class AppSoundManager: ObservableObject {
     // MARK: - Preload Sounds
 
     private func preloadSounds() {
+        buildSoundLibraryIndex()
         for soundType in SoundType.allCases {
             loadSound(soundType)
         }
@@ -134,6 +144,18 @@ class AppSoundManager: ObservableObject {
     }
 
     private func loadSound(_ soundType: SoundType) {
+        if let smartURL = resolveMappedSoundURL(for: soundType) {
+            do {
+                let player = try AVAudioPlayer(contentsOf: smartURL)
+                player.prepareToPlay()
+                player.volume = volume
+                audioPlayers[soundType] = player
+                return
+            } catch {
+                print("AppSoundManager: Failed smart-load for \(soundType.rawValue): \(error)")
+            }
+        }
+
         if soundType == .soundTest, let testURL = resolveSoundTestURL() {
             do {
                 let player = try AVAudioPlayer(contentsOf: testURL)
@@ -180,10 +202,145 @@ class AppSoundManager: ObservableObject {
 
         print("AppSoundManager: Sound file not found for \(soundType.rawValue)")
     }
+    
+    private func buildSoundLibraryIndex() {
+        guard let resourcesRoot = Bundle.main.resourceURL else { return }
+        let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
+        soundsRootURL = soundsRoot
+        var index: [IndexedSound] = []
+        
+        if let enumerator = FileManager.default.enumerator(
+            at: soundsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let fileURL as URL in enumerator {
+                guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { continue }
+                let ext = fileURL.pathExtension.lowercased()
+                guard ["wav", "flac", "mp3", "m4a", "aiff", "ogg"].contains(ext) else { continue }
+                let relative = fileURL.path.replacingOccurrences(of: soundsRoot.path + "/", with: "")
+                let fileName = fileURL.lastPathComponent.lowercased()
+                let base = fileURL.deletingPathExtension().lastPathComponent.lowercased()
+                index.append(
+                    IndexedSound(
+                        url: fileURL,
+                        fileNameLower: fileName,
+                        baseNameLower: base,
+                        relativePathLower: relative.lowercased()
+                    )
+                )
+            }
+        }
+        
+        indexedSounds = index
+    }
+    
+    private func resolveMappedSoundURL(for soundType: SoundType) -> URL? {
+        if indexedSounds.isEmpty {
+            buildSoundLibraryIndex()
+        }
+        guard !indexedSounds.isEmpty else { return nil }
+        
+        let targetBase = soundType.rawValue.lowercased()
+        let preferredExt = soundType.fileExtension.lowercased()
+        
+        // 1) Exact name mapping wins.
+        let exact = indexedSounds.filter { $0.baseNameLower == targetBase }
+        if let direct = bestMatch(from: exact, preferredExt: preferredExt, soundType: soundType) {
+            return direct.url
+        }
+        
+        // 2) Smart keyword mapping from optional packs.
+        let keywords = smartKeywords(for: soundType)
+        guard !keywords.isEmpty else { return nil }
+        let fuzzy = indexedSounds.filter { item in
+            let haystack = "\(item.baseNameLower) \(item.relativePathLower)"
+            return keywords.contains { haystack.contains($0) }
+        }
+        
+        return bestMatch(from: fuzzy, preferredExt: preferredExt, soundType: soundType)?.url
+    }
+    
+    private func bestMatch(from candidates: [IndexedSound], preferredExt: String, soundType: SoundType) -> IndexedSound? {
+        guard !candidates.isEmpty else { return nil }
+        let coreUI = isCoreUISound(soundType)
+        
+        return candidates.max { lhs, rhs in
+            score(lhs, preferredExt: preferredExt, coreUI: coreUI, soundType: soundType) <
+            score(rhs, preferredExt: preferredExt, coreUI: coreUI, soundType: soundType)
+        }
+    }
+    
+    private func score(_ item: IndexedSound, preferredExt: String, coreUI: Bool, soundType: SoundType) -> Int {
+        var total = 0
+        if item.url.pathExtension.lowercased() == preferredExt { total += 25 }
+        
+        let rel = item.relativePathLower
+        let depth = rel.split(separator: "/").count
+        total += max(0, 10 - depth)
+        
+        if rel.contains("ui-sounds") || rel.contains("ui/") { total += 20 }
+        if rel.hasPrefix("sounds/") || !rel.contains("/") { total += 8 }
+        
+        if coreUI {
+            if rel.contains("pack") || rel.contains("theme") || rel.contains("sfx-pack") { total -= 8 }
+            if rel.contains("ui") || rel.contains("menu") || rel.contains("toggle") || rel.contains("button") { total += 12 }
+        } else {
+            if rel.contains(soundType.rawValue.lowercased()) { total += 12 }
+        }
+        
+        return total
+    }
+    
+    private func isCoreUISound(_ soundType: SoundType) -> Bool {
+        switch soundType {
+        case .success, .error, .notification, .buttonClick,
+             .menuOpen, .menuClose, .wooshFast, .wooshMedium, .wooshSlow,
+             .uiAppear, .uiDisappear, .toggleOn, .toggleOff,
+             .connected, .disconnected, .reconnected:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    private func smartKeywords(for soundType: SoundType) -> [String] {
+        switch soundType {
+        case .connected: return ["connected", "online", "connect"]
+        case .disconnected: return ["disconnect", "offline", "lost"]
+        case .reconnected: return ["reconnected", "reconnect", "rejoin"]
+        case .success: return ["success", "ok", "confirm", "done"]
+        case .error: return ["error", "fail", "alert"]
+        case .notification: return ["notification", "notify", "ping", "chime"]
+        case .buttonClick: return ["button", "click", "tap", "press"]
+        case .userJoin: return ["join", "entered", "user-in"]
+        case .userLeave: return ["leave", "left", "user-out"]
+        case .whisperStart: return ["whisper-start", "whisper_on", "whisper on"]
+        case .whisperStop: return ["whisper-stop", "whisper_off", "whisper off"]
+        case .peekIn: return ["peek-in", "peek in", "enter-view", "whoosh_in"]
+        case .peekOut: return ["peek-out", "peek out", "exit-view", "whoosh_out"]
+        case .pttStart: return ["ptt-start", "transmit-start", "key-down", "beep-high"]
+        case .pttStop: return ["ptt-stop", "transmit-stop", "key-up", "beep-low"]
+        case .messageIncoming: return ["message-incoming", "incoming", "new-message"]
+        case .messageReceived: return ["message-received", "received", "chat-receive"]
+        case .doorbell: return ["doorbell", "ding-dong", "ring"]
+        case .fileTransferComplete: return ["file-transfer-complete", "transfer-done", "upload-complete", "download-complete"]
+        case .menuOpen: return ["menu-open", "open-menu", "whoosh-open"]
+        case .menuClose: return ["menu-close", "close-menu", "whoosh-close"]
+        case .wooshFast: return ["whoosh_fast", "woosh_fast", "swoosh_fast"]
+        case .wooshMedium: return ["whoosh_medium", "woosh_medium", "swoosh_medium"]
+        case .wooshSlow: return ["whoosh_slow", "woosh_slow", "swoosh_slow"]
+        case .uiAppear: return ["ui-appear", "appear", "pop-in", "show"]
+        case .uiDisappear: return ["ui-disappear", "disappear", "hide", "pop-out"]
+        case .toggleOn: return ["toggle-on", "switch-on", "enable", "on"]
+        case .toggleOff: return ["toggle-off", "switch-off", "disable", "off"]
+        case .soundTest: return ["sound-test", "test-tone", "test"]
+        }
+    }
 
     private func resolveSoundTestURL() -> URL? {
-        guard let resourcesRoot = Bundle.main.resourceURL else { return nil }
-        let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
+        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: soundsRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
