@@ -15,6 +15,9 @@ struct AdminSettingsView: View {
         case streams = "Background Streams"
         case apiSync = "API Sync"
         case federation = "Federation"
+        case agents = "Agents"
+        case migration = "Migration"
+        case jellyfin = "Jellyfin"
     }
 
     var body: some View {
@@ -86,6 +89,12 @@ struct AdminSettingsView: View {
                         AdminAPISyncSection()
                     case .federation:
                         AdminFederationSection()
+                    case .agents:
+                        AdminAgentsSection()
+                    case .migration:
+                        AdminMigrationSection()
+                    case .jellyfin:
+                        AdminJellyfinSection()
                     }
                 }
                 .padding()
@@ -115,6 +124,7 @@ struct AdminSettingsView: View {
         .task {
             await adminManager.fetchServerStats()
             await adminManager.fetchServerConfig()
+            await adminManager.fetchSchedulerHealth()
         }
     }
 
@@ -144,7 +154,7 @@ struct AdminSettingsView: View {
             return adminManager.adminRole.canManageUsers
         case .rooms:
             return adminManager.adminRole.canManageRooms
-        case .config, .streams, .apiSync, .federation:
+        case .config, .streams, .apiSync, .federation, .agents, .migration, .jellyfin:
             return adminManager.adminRole.canManageConfig
         }
     }
@@ -217,11 +227,37 @@ struct AdminOverviewSection: View {
                 .cornerRadius(12)
             }
 
+            if let schedulerHealth = adminManager.schedulerHealth {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: schedulerHealth.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundColor(schedulerHealth.ok ? .green : .red)
+                        Text("Scheduler Health")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    }
+
+                    Text(schedulerHealth.guidance)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    HStack(spacing: 20) {
+                        ConfigSummaryItem(label: "System Cron", value: schedulerHealth.systemCronRunning ? "Running" : "Stopped")
+                        ConfigSummaryItem(label: "Built-in Cron", value: schedulerHealth.builtinCronRunning ? "Running" : "Stopped")
+                        ConfigSummaryItem(label: "Enabled Tasks", value: "\(schedulerHealth.enabledBuiltinTasks)")
+                    }
+                }
+                .padding()
+                .background((schedulerHealth.ok ? Color.green : Color.red).opacity(0.08))
+                .cornerRadius(12)
+            }
+
             // Quick actions
             HStack(spacing: 15) {
                 AdminQuickAction(title: "Refresh Stats", icon: "arrow.clockwise") {
                     Task {
                         await adminManager.fetchServerStats()
+                        await adminManager.fetchSchedulerHealth()
                     }
                 }
 
@@ -473,6 +509,7 @@ struct UserAdminRow: View {
 struct AdminRoomsSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var showCreateRoom = false
+    @State private var selectedAgentRoom: AdminRoomInfo?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -504,9 +541,14 @@ struct AdminRoomsSection: View {
                     case .edit:
                         // TODO: Show edit sheet
                         break
+                    case .agentSettings:
+                        selectedAgentRoom = room
                     }
                 }
             }
+        }
+        .sheet(item: $selectedAgentRoom) { room in
+            RoomAgentSettingsSheet(room: room)
         }
         .task {
             await adminManager.fetchRooms()
@@ -520,7 +562,7 @@ struct RoomAdminRow: View {
     let onAction: (RoomAction) -> Void
 
     enum RoomAction {
-        case edit, delete
+        case edit, delete, agentSettings
     }
 
     var body: some View {
@@ -555,6 +597,9 @@ struct RoomAdminRow: View {
             .foregroundColor(.white.opacity(0.6))
 
             Menu {
+                Button(action: { onAction(.agentSettings) }) {
+                    Label("Agent AI Settings", systemImage: "cpu")
+                }
                 Button(action: { onAction(.edit) }) {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -570,6 +615,158 @@ struct RoomAdminRow: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(10)
+    }
+}
+
+// MARK: - Room Agent Settings Sheet
+struct RoomAgentSettingsSheet: View {
+    let room: AdminRoomInfo
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var enabled = false
+    @State private var aiProvider = "ollama"
+    @State private var aiModel = "llama3.2"
+    @State private var statusType = "available"
+    @State private var statusText = "I'm here to help you manage your room."
+    @State private var saveMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Agent AI Settings")
+                .font(.title3.bold())
+                .foregroundColor(.white)
+
+            Text(room.name)
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.85))
+
+            Toggle("Enable Room Agent", isOn: $enabled)
+                .toggleStyle(.switch)
+                .foregroundColor(.white)
+                .help("Enable or disable the room AI agent.")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AI Provider")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                TextField("Provider", text: $aiProvider)
+                    .textFieldStyle(.roundedBorder)
+                    .help("Set provider, for example ollama.")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AI Model")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                TextField("Model", text: $aiModel)
+                    .textFieldStyle(.roundedBorder)
+                    .help("Set model used by the room agent.")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Status Type")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                TextField("Status Type", text: $statusType)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Status Text")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                TextField("Status Text", text: $statusText)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if let saveMessage {
+                Text(saveMessage)
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            HStack {
+                Button("Close") { dismiss() }
+                    .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button(action: saveSettings) {
+                    if isSaving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSaving || aiProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || aiModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 480)
+        .background(Color(red: 0.10, green: 0.10, blue: 0.16))
+        .task {
+            await loadCurrentSettings()
+        }
+        .overlay {
+            if isLoading {
+                ZStack {
+                    Color.black.opacity(0.25)
+                    ProgressView("Loading...")
+                        .padding(12)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(10)
+                        .foregroundColor(.white)
+                }
+            }
+        }
+    }
+
+    private func loadCurrentSettings() async {
+        isLoading = true
+        if let current = await adminManager.fetchRoomAgentStatus(roomId: room.id) {
+            enabled = current.enabled
+            if let provider = current.aiProvider, !provider.isEmpty {
+                aiProvider = provider
+            }
+            if let model = current.aiModel, !model.isEmpty {
+                aiModel = model
+            }
+            if let currentStatusType = current.statusType, !currentStatusType.isEmpty {
+                statusType = currentStatusType
+            }
+            if let currentStatusText = current.statusText, !currentStatusText.isEmpty {
+                statusText = currentStatusText
+            }
+        }
+        isLoading = false
+    }
+
+    private func saveSettings() {
+        saveMessage = nil
+        isSaving = true
+        Task {
+            let provider = aiProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let model = aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            let type = statusType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let result = await adminManager.updateRoomAgentStatus(
+                roomId: room.id,
+                enabled: enabled,
+                aiProvider: provider,
+                aiModel: model,
+                statusType: type.isEmpty ? nil : type,
+                statusText: text.isEmpty ? nil : text
+            )
+            isSaving = false
+            if result != nil {
+                saveMessage = "Saved."
+            }
+        }
     }
 }
 
@@ -1060,6 +1257,315 @@ struct AdminFederationSection: View {
         Task {
             await adminManager.updateFederationSettings(config)
             isSaving = false
+        }
+    }
+}
+
+// MARK: - Agents Section
+struct AdminAgentsSection: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var aiProvider = "ollama"
+    @State private var aiModel = "llama3.2"
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var statusMessage = "Set global defaults for room agents."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(title: "Global Agent Defaults")
+
+            Text("These defaults are used for room agents unless a room has its own override.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            ConfigTextField(label: "AI Provider", text: $aiProvider)
+            ConfigTextField(label: "AI Model", text: $aiModel)
+
+            HStack(spacing: 10) {
+                Button("Refresh") {
+                    Task { await loadDefaults() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isLoading || isSaving)
+
+                Button(action: saveDefaults) {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("Save Agent Defaults")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    isLoading || isSaving ||
+                    aiProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    aiModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+            }
+
+            Text(statusMessage)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .task {
+            await loadDefaults()
+        }
+    }
+
+    private func loadDefaults() async {
+        isLoading = true
+        if let response = await adminManager.fetchAgentDefaults(), response.success, let defaults = response.defaults {
+            aiProvider = defaults.aiProvider
+            aiModel = defaults.aiModel
+            statusMessage = "Loaded current defaults."
+        } else {
+            statusMessage = adminManager.error ?? "Failed to load agent defaults."
+        }
+        isLoading = false
+    }
+
+    private func saveDefaults() {
+        isSaving = true
+        statusMessage = "Saving agent defaults..."
+        Task {
+            let provider = aiProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let model = aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let response = await adminManager.updateAgentDefaults(aiProvider: provider, aiModel: model),
+               response.success,
+               let defaults = response.defaults {
+                aiProvider = defaults.aiProvider
+                aiModel = defaults.aiModel
+                statusMessage = "Agent defaults saved."
+            } else {
+                statusMessage = adminManager.error ?? "Failed to save agent defaults."
+            }
+            isSaving = false
+        }
+    }
+}
+
+// MARK: - Migration Section
+struct AdminMigrationSection: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var sourceRoomId = ""
+    @State private var targetRoomId = ""
+    @State private var targetServerUrl = ""
+    @State private var useCopyParty = true
+    @State private var pushViaApi = false
+    @State private var isRunning = false
+    @State private var statusMessage = "Run export and room transfer tools from here."
+    @State private var lastArchiveUrl: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(title: "Migration Export")
+
+            Toggle("Upload export archive to CopyParty", isOn: $useCopyParty)
+                .foregroundColor(.white)
+            Toggle("Push snapshot to target server API", isOn: $pushViaApi)
+                .foregroundColor(.white)
+
+            ConfigTextField(label: "Target Server URL (optional)", text: $targetServerUrl)
+
+            HStack(spacing: 10) {
+                Button("Run Migration Export") {
+                    runMigrationExport()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isRunning)
+
+                if let archiveUrl = lastArchiveUrl, let url = URL(string: archiveUrl) {
+                    Button("Open Last Archive") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            Divider().overlay(Color.white.opacity(0.2))
+
+            SectionHeader(title: "Escort Room Transfer")
+            ConfigTextField(label: "Source Room ID", text: $sourceRoomId)
+            ConfigTextField(label: "Target Room ID", text: $targetRoomId)
+
+            Button("Start Room Transfer") {
+                startRoomTransfer()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isRunning || sourceRoomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || targetRoomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Text(statusMessage)
+                .font(.caption)
+                .foregroundColor(.gray)
+                .padding(.top, 6)
+        }
+    }
+
+    private func runMigrationExport() {
+        isRunning = true
+        statusMessage = "Running migration export..."
+        Task {
+            let response = await adminManager.exportMigrationSnapshot(
+                useCopyParty: useCopyParty,
+                pushViaApi: pushViaApi,
+                targetServerUrl: targetServerUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : targetServerUrl.trimmingCharacters(in: .whitespacesAndNewlines),
+                sourceRoomId: sourceRoomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : sourceRoomId.trimmingCharacters(in: .whitespacesAndNewlines),
+                targetRoomId: targetRoomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : targetRoomId.trimmingCharacters(in: .whitespacesAndNewlines),
+                triggerRoomTransfer: false
+            )
+
+            isRunning = false
+            guard let response else {
+                statusMessage = adminManager.error ?? "Migration export failed."
+                return
+            }
+            if response.success {
+                lastArchiveUrl = response.archive?.downloadUrl
+                statusMessage = "Migration export completed."
+            } else {
+                statusMessage = response.error ?? "Migration export failed."
+            }
+        }
+    }
+
+    private func startRoomTransfer() {
+        isRunning = true
+        statusMessage = "Starting room transfer..."
+        let source = sourceRoomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = targetRoomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let server = targetServerUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            let response = await adminManager.triggerRoomTransfer(
+                sourceRoomId: source,
+                targetRoomId: target,
+                targetServerUrl: server.isEmpty ? nil : server
+            )
+            isRunning = false
+            if let response, response.success {
+                statusMessage = "Room transfer started successfully."
+            } else {
+                statusMessage = response?.error ?? adminManager.error ?? "Room transfer failed."
+            }
+        }
+    }
+}
+
+// MARK: - Jellyfin Section
+struct AdminJellyfinSection: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var configuredPaths: [String] = []
+    @State private var pathStatus: [JellyfinLibraryPathStatus] = []
+    @State private var newPath = ""
+    @State private var isSaving = false
+    @State private var statusMessage = "Only /home/*/apps/media* paths are allowed."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                SectionHeader(title: "Jellyfin Library Paths")
+                Spacer()
+                Button("Refresh") {
+                    Task { await loadPaths() }
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack {
+                TextField("/home/dom/apps/media", text: $newPath)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add Path") {
+                    let trimmed = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    if !configuredPaths.contains(trimmed) {
+                        configuredPaths.append(trimmed)
+                    }
+                    newPath = ""
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if configuredPaths.isEmpty {
+                Text("No Jellyfin library paths configured.")
+                    .foregroundColor(.gray)
+            } else {
+                ForEach(configuredPaths, id: \.self) { path in
+                    HStack {
+                        Text(path)
+                            .foregroundColor(.white)
+                            .font(.callout.monospaced())
+                        Spacer()
+                        Button {
+                            configuredPaths.removeAll { $0 == path }
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            if !pathStatus.isEmpty {
+                Divider().overlay(Color.white.opacity(0.2))
+                ForEach(pathStatus) { status in
+                    HStack {
+                        Text(status.path)
+                            .foregroundColor(.white.opacity(0.9))
+                            .font(.caption.monospaced())
+                        Spacer()
+                        Text(status.exists ? "exists" : "missing")
+                            .foregroundColor(status.exists ? .green : .red)
+                            .font(.caption)
+                        Text(status.readable ? "read" : "no-read")
+                            .foregroundColor(status.readable ? .green : .red)
+                            .font(.caption)
+                        Text(status.writable ? "write" : "no-write")
+                            .foregroundColor(status.writable ? .green : .red)
+                            .font(.caption)
+                    }
+                }
+            }
+
+            Button("Save Jellyfin Paths") {
+                savePaths()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isSaving || configuredPaths.isEmpty)
+
+            Text(statusMessage)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .task {
+            await loadPaths()
+        }
+    }
+
+    private func loadPaths() async {
+        if let response = await adminManager.fetchJellyfinLibraryPaths() {
+            configuredPaths = response.paths
+            pathStatus = response.status ?? []
+            statusMessage = "Loaded Jellyfin library path settings."
+        } else {
+            statusMessage = adminManager.error ?? "Failed to load Jellyfin paths."
+        }
+    }
+
+    private func savePaths() {
+        isSaving = true
+        statusMessage = "Saving Jellyfin paths..."
+        Task {
+            let response = await adminManager.updateJellyfinLibraryPaths(configuredPaths)
+            isSaving = false
+            if let response, response.success {
+                configuredPaths = response.paths
+                pathStatus = response.status ?? []
+                statusMessage = "Saved Jellyfin library paths."
+            } else {
+                statusMessage = response?.error ?? adminManager.error ?? "Failed to save Jellyfin paths."
+            }
         }
     }
 }

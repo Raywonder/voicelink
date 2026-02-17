@@ -12,6 +12,7 @@ class AdminServerManager: ObservableObject {
     @Published var connectedUsers: [AdminUserInfo] = []
     @Published var serverRooms: [AdminRoomInfo] = []
     @Published var serverStats: ServerStats?
+    @Published var schedulerHealth: SchedulerHealth?
     @Published var isLoading: Bool = false
     @Published var error: String?
 
@@ -342,6 +343,32 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    // MARK: - Scheduler Health
+
+    func fetchSchedulerHealth() async {
+        guard let url = URL(string: "\(currentServerURL)/api/scheduler/health") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return
+            }
+            let decoder = JSONDecoder()
+            schedulerHealth = try decoder.decode(SchedulerHealth.self, from: data)
+        } catch {
+            print("Failed to fetch scheduler health: \(error)")
+        }
+    }
+
     // MARK: - Background Streams
 
     func updateBackgroundStreams(_ streams: [BackgroundStreamConfig]) async -> Bool {
@@ -475,7 +502,198 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    // MARK: - Migration APIs
+
+    func exportMigrationSnapshot(
+        useCopyParty: Bool = true,
+        pushViaApi: Bool = false,
+        targetServerUrl: String? = nil,
+        sourceRoomId: String? = nil,
+        targetRoomId: String? = nil,
+        triggerRoomTransfer: Bool = false
+    ) async -> MigrationExportResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/admin/migration/export") else { return nil }
+
+        var payload: [String: Any] = [
+            "useCopyParty": useCopyParty,
+            "pushViaApi": pushViaApi,
+            "triggerRoomTransfer": triggerRoomTransfer
+        ]
+        if let targetServerUrl, !targetServerUrl.isEmpty {
+            payload["targetServerUrl"] = targetServerUrl
+        }
+        if let sourceRoomId, !sourceRoomId.isEmpty {
+            payload["sourceRoomId"] = sourceRoomId
+        }
+        if let targetRoomId, !targetRoomId.isEmpty {
+            payload["targetRoomId"] = targetRoomId
+        }
+
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "POST", body: payload)
+            return try JSONDecoder().decode(MigrationExportResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func triggerRoomTransfer(sourceRoomId: String, targetRoomId: String, targetServerUrl: String?) async -> MigrationRoomTransferResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/admin/migration/room-transfer") else { return nil }
+
+        var payload: [String: Any] = [
+            "sourceRoomId": sourceRoomId,
+            "targetRoomId": targetRoomId
+        ]
+        if let targetServerUrl, !targetServerUrl.isEmpty {
+            payload["targetServerUrl"] = targetServerUrl
+        }
+
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "POST", body: payload)
+            return try JSONDecoder().decode(MigrationRoomTransferResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - Jellyfin Admin APIs
+
+    func fetchJellyfinLibraryPaths() async -> JellyfinLibraryPathsResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/jellyfin/admin/library-paths") else { return nil }
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "GET", body: nil)
+            return try JSONDecoder().decode(JellyfinLibraryPathsResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func updateJellyfinLibraryPaths(_ paths: [String]) async -> JellyfinLibraryPathsResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/jellyfin/admin/library-paths") else { return nil }
+        let payload: [String: Any] = ["paths": paths]
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "POST", body: payload)
+            return try JSONDecoder().decode(JellyfinLibraryPathsResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - Room Agent AI Settings
+
+    func fetchRoomAgentStatus(roomId: String) async -> RoomAgentState? {
+        guard adminRole.canManageRooms else { return nil }
+        guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(currentServerURL)/api/rooms/\(encodedRoomId)/agent/status") else {
+            return nil
+        }
+
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "GET", body: nil)
+            let response = try JSONDecoder().decode(RoomAgentStatusResponse.self, from: data)
+            return response.agent
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func updateRoomAgentStatus(
+        roomId: String,
+        enabled: Bool,
+        aiProvider: String,
+        aiModel: String,
+        statusType: String? = nil,
+        statusText: String? = nil
+    ) async -> RoomAgentState? {
+        guard adminRole.canManageRooms else { return nil }
+        guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(currentServerURL)/api/rooms/\(encodedRoomId)/agent/status") else {
+            return nil
+        }
+
+        var payload: [String: Any] = [
+            "enabled": enabled,
+            "aiProvider": aiProvider,
+            "aiModel": aiModel
+        ]
+        if let statusType, !statusType.isEmpty {
+            payload["statusType"] = statusType
+        }
+        if let statusText, !statusText.isEmpty {
+            payload["statusText"] = statusText
+        }
+
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "PUT", body: payload)
+            let response = try JSONDecoder().decode(RoomAgentStatusResponse.self, from: data)
+            return response.agent
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func fetchAgentDefaults() async -> AgentDefaultsResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/admin/agent/defaults") else { return nil }
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "GET", body: nil)
+            return try JSONDecoder().decode(AgentDefaultsResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func updateAgentDefaults(aiProvider: String, aiModel: String) async -> AgentDefaultsResponse? {
+        guard adminRole.canManageConfig else { return nil }
+        guard let url = URL(string: "\(currentServerURL)/api/admin/agent/defaults") else { return nil }
+        let payload: [String: Any] = [
+            "aiProvider": aiProvider,
+            "aiModel": aiModel
+        ]
+        do {
+            let (data, _) = try await performJSONRequest(url: url, method: "PUT", body: payload)
+            return try JSONDecoder().decode(AgentDefaultsResponse.self, from: data)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
     // MARK: - Helper
+
+    private func performJSONRequest(url: URL, method: String, body: [String: Any]?) async throws -> (Data, HTTPURLResponse) {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "AdminServerManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"])
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "Request failed (\(httpResponse.statusCode))"
+            throw NSError(domain: "AdminServerManager", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        return (data, httpResponse)
+    }
 
     private func getClientId() -> String {
         if let clientId = UserDefaults.standard.string(forKey: "clientId") {
@@ -559,6 +777,15 @@ struct ServerStats: Codable {
     let bandwidthUsage: Double
 }
 
+struct SchedulerHealth: Codable {
+    let ok: Bool
+    let role: String
+    let systemCronRunning: Bool
+    let builtinCronRunning: Bool
+    let enabledBuiltinTasks: Int
+    let guidance: String
+}
+
 struct APISyncSettings: Codable {
     var hubNodeEnabled: Bool
     var hubNodeUrl: String?
@@ -581,4 +808,78 @@ struct FederationSettings: Codable {
     var blockedServers: [String]
     var autoAcceptTrusted: Bool
     var requireApproval: Bool
+}
+
+struct MigrationArchiveInfo: Codable {
+    let fileName: String?
+    let size: Int?
+    let createdAt: String?
+    let downloadUrl: String?
+}
+
+struct MigrationRoomTransferResponse: Codable {
+    let success: Bool
+    let roomTransfer: [String: String]?
+    let session: [String: String]?
+    let error: String?
+}
+
+struct MigrationExportResponse: Codable {
+    let success: Bool
+    let archive: MigrationArchiveInfo?
+    let roomTransfer: [String: String]?
+    let error: String?
+}
+
+struct JellyfinLibraryPathStatus: Codable, Identifiable {
+    let path: String
+    let exists: Bool
+    let readable: Bool
+    let writable: Bool
+    let resolvedPath: String?
+    var id: String { path }
+}
+
+struct JellyfinLibraryPathsResponse: Codable {
+    let success: Bool
+    let paths: [String]
+    let defaults: [String]?
+    let status: [JellyfinLibraryPathStatus]?
+    let error: String?
+}
+
+struct RoomAgentStatusResponse: Codable {
+    let success: Bool
+    let roomId: String?
+    let roomName: String?
+    let agent: RoomAgentState?
+    let error: String?
+}
+
+struct RoomAgentState: Codable {
+    let enabled: Bool
+    let roomScoped: Bool?
+    let present: Bool?
+    let agentId: String?
+    let agentName: String?
+    let aiProvider: String?
+    let aiModel: String?
+    let statusType: String?
+    let statusText: String?
+    let allowedActions: [String]?
+    let updatedAt: String?
+    let updatedBy: String?
+}
+
+struct AgentAIDefaults: Codable {
+    let aiProvider: String
+    let aiModel: String
+}
+
+struct AgentDefaultsResponse: Codable {
+    let success: Bool
+    let defaults: AgentAIDefaults?
+    let updatedAt: String?
+    let updatedBy: String?
+    let error: String?
 }

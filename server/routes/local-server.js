@@ -90,6 +90,7 @@ class VoiceLinkLocalServer {
         this.joinTokens = new Map(); // joinToken -> session-bound identity
         this.roomAgents = new Map(); // roomId -> { enabled, statusText, agentId, agentName, roomScoped }
         this.agentPolicy = this.loadAgentPolicy();
+        this.agentAIConfig = this.loadAgentAIConfig();
         this.soundFileLookup = new Map();
         this.pushoverConfig = this.loadPushoverConfig();
         this.pendingPushoverActivation = null;
@@ -673,6 +674,67 @@ class VoiceLinkLocalServer {
         };
     }
 
+    getAgentAIDefaults() {
+        const defaults = this.agentPolicy?.defaults || {};
+        return {
+            aiProvider: String(
+                this.agentAIConfig?.aiProvider ||
+                defaults.aiProvider ||
+                defaults.defaultProvider ||
+                'ollama'
+            ).trim().toLowerCase(),
+            aiModel: String(
+                this.agentAIConfig?.aiModel ||
+                defaults.aiModel ||
+                defaults.defaultModel ||
+                process.env.OPENCLAW_OLLAMA_MODEL ||
+                process.env.OLLAMA_MODEL ||
+                'llama3.2'
+            ).trim()
+        };
+    }
+
+    loadAgentAIConfig() {
+        const fallback = {
+            aiProvider: String(this.agentPolicy?.defaults?.aiProvider || this.agentPolicy?.defaults?.defaultProvider || 'ollama').trim().toLowerCase(),
+            aiModel: String(
+                this.agentPolicy?.defaults?.aiModel ||
+                this.agentPolicy?.defaults?.defaultModel ||
+                process.env.OPENCLAW_OLLAMA_MODEL ||
+                process.env.OLLAMA_MODEL ||
+                'llama3.2'
+            ).trim(),
+            updatedAt: null,
+            updatedBy: 'system'
+        };
+        try {
+            const cfgPath = path.join(__dirname, '../../data/agent-ai-defaults.json');
+            if (!fs.existsSync(cfgPath)) return fallback;
+            const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            return {
+                ...fallback,
+                ...parsed,
+                aiProvider: String(parsed?.aiProvider || fallback.aiProvider).trim().toLowerCase(),
+                aiModel: String(parsed?.aiModel || fallback.aiModel).trim()
+            };
+        } catch (error) {
+            console.warn('[AgentAI] Failed to load defaults, using fallback:', error.message);
+            return fallback;
+        }
+    }
+
+    saveAgentAIConfig() {
+        try {
+            const cfgPath = path.join(__dirname, '../../data/agent-ai-defaults.json');
+            fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+            fs.writeFileSync(cfgPath, JSON.stringify(this.agentAIConfig, null, 2), 'utf8');
+            return true;
+        } catch (error) {
+            console.error('[AgentAI] Failed to save defaults:', error.message);
+            return false;
+        }
+    }
+
     loadPushoverConfig() {
         const fallback = {
             enabled: false,
@@ -948,12 +1010,15 @@ class VoiceLinkLocalServer {
     getRoomAgentState(roomId) {
         const existing = this.roomAgents.get(roomId);
         if (existing) return existing;
+        const defaults = this.getAgentAIDefaults();
         return {
             enabled: false,
             roomScoped: true,
             present: false,
             agentId: 'openclaw',
             agentName: 'VoiceLink Agent',
+            aiProvider: defaults.aiProvider,
+            aiModel: defaults.aiModel,
             statusType: 'offline',
             statusText: 'No room agent active.',
             allowedActions: ['chat'],
@@ -2749,6 +2814,60 @@ class VoiceLinkLocalServer {
             });
         });
 
+        this.app.get('/api/admin/agent/defaults', (req, res) => {
+            const principal = ensureAuthorized(req, res, { requiredPermissions: [] });
+            if (!principal) return;
+            const canManage = Boolean(principal.isAdmin) ||
+                this.hasTokenPermission(principal.permissions, 'agent.admin') ||
+                this.hasTokenPermission(principal.permissions, 'admin.panel');
+            if (!canManage) {
+                return res.status(403).json({ success: false, error: 'Admin permission required' });
+            }
+            res.json({
+                success: true,
+                defaults: this.getAgentAIDefaults(),
+                updatedAt: this.agentAIConfig?.updatedAt || null,
+                updatedBy: this.agentAIConfig?.updatedBy || null
+            });
+        });
+
+        this.app.put('/api/admin/agent/defaults', (req, res) => {
+            const principal = ensureAuthorized(req, res, { requiredPermissions: [] });
+            if (!principal) return;
+            const canManage = Boolean(principal.isAdmin) ||
+                this.hasTokenPermission(principal.permissions, 'agent.admin') ||
+                this.hasTokenPermission(principal.permissions, 'admin.panel');
+            if (!canManage) {
+                return res.status(403).json({ success: false, error: 'Admin permission required' });
+            }
+
+            const aiProvider = String(req.body?.aiProvider || '').trim().toLowerCase();
+            const aiModel = String(req.body?.aiModel || '').trim();
+            if (!aiProvider || !aiModel) {
+                return res.status(400).json({ success: false, error: 'aiProvider and aiModel are required' });
+            }
+
+            this.agentAIConfig = {
+                aiProvider,
+                aiModel,
+                updatedAt: new Date().toISOString(),
+                updatedBy: principal.userName || principal.userId || principal.name || 'system'
+            };
+            this.agentPolicy.defaults = this.agentPolicy.defaults || {};
+            this.agentPolicy.defaults.aiProvider = aiProvider;
+            this.agentPolicy.defaults.aiModel = aiModel;
+            if (!this.saveAgentAIConfig()) {
+                return res.status(500).json({ success: false, error: 'Failed to persist defaults' });
+            }
+
+            res.json({
+                success: true,
+                defaults: this.getAgentAIDefaults(),
+                updatedAt: this.agentAIConfig.updatedAt,
+                updatedBy: this.agentAIConfig.updatedBy
+            });
+        });
+
         // Exchange session/api key auth into a scoped integration token for room agents/OpenClaw.
         this.app.post('/api/auth/token', (req, res) => {
             const requestedPermissions = this.normalizeTokenPermissions(
@@ -2998,6 +3117,7 @@ class VoiceLinkLocalServer {
             }
 
             const previous = this.getRoomAgentState(roomId);
+            const aiDefaults = this.getAgentAIDefaults();
             const enabled = req.body?.enabled !== undefined ? Boolean(req.body.enabled) : previous.enabled;
             const statusType = String(req.body?.statusType || (enabled ? 'available' : 'offline')).trim().toLowerCase();
             const templates = this.agentPolicy?.defaultStatusTemplates || {};
@@ -3016,6 +3136,12 @@ class VoiceLinkLocalServer {
                 statusText,
                 agentId: String(req.body?.agentId || previous.agentId || 'openclaw'),
                 agentName: String(req.body?.agentName || previous.agentName || 'VoiceLink Agent'),
+                aiProvider: String(req.body?.aiProvider || previous.aiProvider || aiDefaults.aiProvider).trim().toLowerCase(),
+                aiModel: String(
+                    req.body?.aiModel ||
+                    previous.aiModel ||
+                    aiDefaults.aiModel
+                ).trim(),
                 allowedActions: this.normalizeTokenPermissions(req.body?.allowedActions || previous.allowedActions || ['chat']),
                 updatedAt: new Date().toISOString(),
                 updatedBy: principal.userName || principal.userId || principal.name || 'system'
@@ -3093,6 +3219,13 @@ class VoiceLinkLocalServer {
                 roomName: room.name,
                 message,
                 intent,
+                provider: String(req.body?.provider || agentState.aiProvider || this.getAgentAIDefaults().aiProvider).trim().toLowerCase(),
+                model: String(
+                    req.body?.model ||
+                    req.body?.aiModel ||
+                    agentState.aiModel ||
+                    this.getAgentAIDefaults().aiModel
+                ).trim(),
                 actor: {
                     tokenType: principal.tokenType,
                     userId: principal.userId || null,
@@ -3102,6 +3235,10 @@ class VoiceLinkLocalServer {
                     permissions: principal.permissions || []
                 },
                 metadata: req.body?.metadata || {}
+            };
+            upstreamPayload.ai = {
+                provider: upstreamPayload.provider,
+                model: upstreamPayload.model
             };
 
             try {
