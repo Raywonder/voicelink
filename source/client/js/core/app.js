@@ -17,6 +17,21 @@ class VoiceLinkApp {
         // Audio playback management
         this.currentAudio = null;
         this.isAudioPlaying = false;
+        this.userInitiatedOffline = false;
+        this.apiReachable = false;
+        this.isReconnectInProgress = false;
+        this.networkRefreshInterval = null;
+
+        // Room data cache for join screen
+        this.roomDataCache = new Map();
+        this.activeRoomContextMenu = null;
+        this.boundHandleRoomMenuOutsideClick = (event) => this.handleRoomMenuOutsideClick(event);
+        this.boundHandleRoomMenuEscape = (event) => this.handleRoomMenuEscape(event);
+        this.escapeSequenceArmed = false;
+        this.escapeSequenceTimeout = null;
+        this.inRoomActionsMenu = null;
+        this.boundInRoomMenuOutsideClick = (event) => this.handleInRoomMenuOutsideClick(event);
+        this.boundInRoomMenuEscape = (event) => this.handleInRoomMenuEscape(event);
 
         this.ui = {
             currentScreen: 'loading-screen',
@@ -33,18 +48,102 @@ class VoiceLinkApp {
         this.init();
     }
 
+    /**
+     * Get the API base URL for making HTTP requests
+     * Handles both nginx proxy (no port) and direct connections (with port)
+     */
+    getApiBaseUrl() {
+        const protocol = window.location.protocol;
+        const host = this.socket?.io?.opts?.hostname || window.location.hostname || 'localhost';
+        const socketPort = this.socket?.io?.opts?.port;
+        const locationPort = window.location.port;
+
+        // If we have a socket port (direct connection), use it
+        // If we have a location port (non-standard port), use it
+        // Otherwise, we're behind a proxy on standard ports, no port needed
+        if (socketPort) {
+            return `${protocol}//${host}:${socketPort}`;
+        } else if (locationPort) {
+            return `${protocol}//${host}:${locationPort}`;
+        } else {
+            // Standard port (80/443), no port needed in URL
+            return `${protocol}//${host}`;
+        }
+    }
+
     async init() {
         console.log('Initializing VoiceLink Local...');
 
+        // IMMEDIATE: Hide platform-specific elements based on environment
+        // This must run FIRST to prevent flash of unwanted content
+        const isElectronApp = !!(window.electronAPI || window.nodeAPI?.versions?.electron || navigator.userAgent.toLowerCase().includes('electron'));
+        console.log('IMMEDIATE platform check:', { isElectronApp, hasElectronAPI: !!window.electronAPI });
+
+        if (isElectronApp) {
+            // Desktop app: hide web-only elements (download links, login benefits for guests)
+            document.getElementById('login-benefits')?.remove();
+            document.getElementById('download-app-section')?.remove();
+            document.querySelectorAll('.web-only').forEach(el => el.remove());
+            // Swap label visibility for desktop
+            document.querySelectorAll('.web-label').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.desktop-label').forEach(el => el.style.display = 'inline');
+            console.log('Desktop mode: removed web-only elements');
+        } else {
+            // Web browser: hide desktop-only elements
+            document.getElementById('copy-local-url-btn')?.remove();
+            document.getElementById('copy-localhost-url-btn')?.remove();
+            document.getElementById('refresh-network-btn')?.remove();
+            document.querySelectorAll('.desktop-only').forEach(el => el.remove());
+            document.querySelector('.network-interface-section')?.remove();
+            console.log('Web mode: removed desktop-only elements');
+
+            // Web browser: hide auth-required elements for guests (until they log in)
+            // Check if user is authenticated via Mastodon OAuth
+            const isAuthenticated = localStorage.getItem('mastodon_access_token') || sessionStorage.getItem('mastodon_access_token');
+            if (!isAuthenticated) {
+                document.querySelectorAll('.auth-required').forEach(el => {
+                    el.style.display = 'none';
+                    el.dataset.hiddenForAuth = 'true';
+                });
+                console.log('Web guest mode: hidden auth-required elements (Settings, etc.)');
+
+                // Listen for successful login to show auth-required elements
+                window.addEventListener('mastodon-login', () => {
+                    document.querySelectorAll('[data-hidden-for-auth="true"]').forEach(el => {
+                        el.style.display = '';
+                        delete el.dataset.hiddenForAuth;
+                    });
+                    // Also hide login benefits after successful auth
+                    document.getElementById('login-benefits')?.remove();
+                    console.log('User authenticated: showing auth-required elements');
+                }, { once: true });
+            }
+        }
+
         try {
+            // CRITICAL: Register IPC listener FIRST before any async operations
+            // This ensures we don't miss network info updates from main process
+            if (window.electronAPI?.onNetworkInfoUpdated) {
+                window.electronAPI.onNetworkInfoUpdated((data) => {
+                    console.log('Network info updated from main process:', data);
+                    this.handleNetworkInfoUpdate(data);
+                });
+                console.log('Network info IPC listener registered');
+            }
+
             // Initialize iOS compatibility first
             if (typeof iOSCompatibility !== 'undefined') {
                 window.iosCompatibility = new iOSCompatibility();
                 console.log('iOS compatibility layer initialized');
             }
 
-            // Connect to local server first (this doesn't require audio permissions)
-            await this.connectToServer();
+            // Connect automatically unless user status is explicitly offline/invisible.
+            this.userInitiatedOffline = this.isOfflineStatusSelected();
+            if (!this.userInitiatedOffline) {
+                await this.connectToServer();
+            } else {
+                this.updateServerStatus('offline');
+            }
 
             // Initialize audio systems (with error handling for Chrome)
             await this.initializeAudioSystems();
@@ -55,15 +154,35 @@ class VoiceLinkApp {
             // Setup UI event listeners
             this.setupUIEventListeners();
 
+            // Setup network event handlers (for Electron)
+            this.setupNetworkEventHandlers();
+
+            // Initial network info update (listener already registered at start of init)
+            this.updateNetworkInfo();
+
             // Load rooms
             await this.loadRooms();
 
-            // Show main menu
-            setTimeout(() => {
-                this.showScreen('main-menu');
-                // Start periodic server status monitoring
-                this.startServerStatusMonitoring();
-            }, 2000);
+            // Check for demo mode (interactive documentation testing)
+            const urlParams = new URLSearchParams(window.location.search);
+            const isDemoMode = urlParams.get('demo') === 'true';
+            const testFeature = urlParams.get('test'); // Specific feature to test (e.g., 'audio', '3d', 'media')
+
+            if (isDemoMode) {
+                console.log('Demo mode activated - creating private test room');
+                // Auto-create and join a private test room for documentation testing
+                setTimeout(() => {
+                    this.startServerStatusMonitoring();
+                    this.createDemoRoom(testFeature);
+                }, 2500);
+            } else {
+                // Show main menu
+                setTimeout(() => {
+                    this.showScreen('main-menu');
+                    // Start periodic server status monitoring
+                    this.startServerStatusMonitoring();
+                }, 2000);
+            }
 
         } catch (error) {
             console.error('Failed to initialize VoiceLink:', error);
@@ -72,6 +191,7 @@ class VoiceLinkApp {
                 this.showScreen('main-menu');
                 // Don't show error - this is normal browser behavior
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
+                this.startServerStatusMonitoring();
             }, 2000);
         }
     }
@@ -203,11 +323,31 @@ class VoiceLinkApp {
             console.log('Media metadata detector initialized');
         }
 
-        // Initialize user settings manager
-        if (typeof UserSettingsManager !== 'undefined') {
-            window.userSettingsManager = new UserSettingsManager();
-            console.log('User settings manager initialized');
+        // Initialize whisper mode manager
+        if (typeof WhisperModeManager !== 'undefined' && this.audioEngine) {
+            this.whisperMode = new WhisperModeManager(this.audioEngine);
+            this.whisperMode.setupWhisperPTT();
+
+            // Set up UI callbacks
+            this.whisperMode.onWhisperStart = (userId, username) => {
+                this.showWhisperStatus(true, username);
+            };
+            this.whisperMode.onWhisperStop = () => {
+                this.showWhisperStatus(false);
+            };
+            this.whisperMode.onTargetChange = (userId, username) => {
+                this.updateWhisperTargetUI(userId, username);
+            };
+
+            console.log('Whisper mode manager initialized');
         }
+
+            // Initialize user settings manager
+            if (typeof UserSettingsManager !== 'undefined') {
+                window.userSettingsManager = new UserSettingsManager();
+                console.log('User settings manager initialized');
+                this.setupUserStatusConnectionBehavior();
+            }
 
         // Initialize user settings interface
         if (typeof UserSettingsInterface !== 'undefined' && window.userSettingsManager) {
@@ -259,6 +399,12 @@ class VoiceLinkApp {
             );
         }
 
+        // Initialize Jukebox Manager for Jellyfin integration
+        if (typeof JukeboxManager !== 'undefined') {
+            window.jukeboxManager = new JukeboxManager(this);
+            console.log('Jukebox manager initialized');
+        }
+
         console.log('Advanced systems initialized');
     }
 
@@ -287,12 +433,58 @@ class VoiceLinkApp {
 
     async connectToServer() {
         return new Promise((resolve, reject) => {
-            // Try port sequence: 4004 (Electron default), 4005, 4006, 3000, 3001
-            const portSequence = [4004, 4005, 4006, 3000, 3001];
+            // Determine host - use page host for web access, localhost for Electron
+            const pageHost = window.location.hostname || 'localhost';
+            const pagePort = window.location.port;
+            const pageProtocol = window.location.protocol;
+            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+            const isWebProduction = !isElectron && (pageProtocol === 'https:' ||
+                pageHost.includes('voicelink.devinecreations.net') ||
+                pageHost.includes('voicelink.tappedin.fm'));
+
+            // For production web, connect via the same origin (nginx proxy)
+            if (isWebProduction) {
+                const url = `${pageProtocol}//${pageHost}`;
+                console.log(`Connecting via nginx proxy at ${url}`);
+                this.socket = io(url, {
+                    timeout: 10000,
+                    reconnection: true,
+                    reconnectionAttempts: 5,
+                    transports: ['websocket', 'polling']
+                });
+
+                this.socket.on('connect', () => {
+                    console.log('Connected to VoiceLink server via nginx proxy');
+                    this.updateServerStatus('online');
+                    if (window.serverEncryptionManager) {
+                        window.dispatchEvent(new CustomEvent('serverConnected', {
+                            detail: { serverId: 'production-server', isOwner: false }
+                        }));
+                        window.dispatchEvent(new CustomEvent('userAuthenticated', {
+                            detail: { userId: 'web-user-' + Date.now() }
+                        }));
+                    }
+                    this.setupSocketEventListeners();
+                    resolve();
+                });
+
+                this.socket.on('connect_error', (error) => {
+                    console.error('Failed to connect to server:', error.message);
+                    this.updateServerStatus('offline');
+                    reject(new Error('Server not available'));
+                });
+                return;
+            }
+
+            // For Electron/local dev, use port sequence
+            const host = isElectron ? 'localhost' : pageHost;
+            // If page was loaded from a specific port, try that first
+            // Port sequence: page port (if any), 3010, 4004 (Electron), etc.
+            const portSequence = pagePort ? [parseInt(pagePort), 3010, 4004, 4005, 4006] : [3010, 4004, 4005, 4006, 3000, 3001];
             let currentPortIndex = 0;
 
             const tryConnect = (port) => {
-                const url = `http://localhost:${port}`;
+                const url = `http://${host}:${port}`;
                 console.log(`Attempting to connect to server at ${url}`);
                 this.socket = io(url, {
                     timeout: 5000,
@@ -318,7 +510,7 @@ class VoiceLinkApp {
                     console.log(`Connected to VoiceLink local server on port ${port}`);
 
                     // Update server status display
-                    this.updateServerStatus('online', port);
+                    this.updateServerStatus('online');
 
                     // Initialize encryption manager events
                     if (window.serverEncryptionManager) {
@@ -359,6 +551,15 @@ class VoiceLinkApp {
     }
 
     setupSocketEventListeners() {
+        // Remove existing listeners to prevent duplicates on reconnect
+        const events = [
+            'joined-room', 'user-joined', 'user-left', 'user-audio-routing-changed',
+            'user-position-changed', 'user-audio-settings-changed', 'chat-message',
+            'error', 'room-expiring', 'room-expired', 'forced-leave', 'background-stream',
+            'room-agent-status', 'agent-message', 'notification-received'
+        ];
+        events.forEach(event => this.socket.off(event));
+
         // Room events
         this.socket.on('joined-room', (data) => {
             this.handleJoinedRoom(data.room, data.user);
@@ -394,11 +595,539 @@ class VoiceLinkApp {
         this.socket.on('error', (error) => {
             this.showError(error.message);
         });
+
+        // Room expiration events (for guest/non-logged-in users)
+        this.socket.on('room-expiring', (data) => {
+            this.handleRoomExpiring(data);
+        });
+
+        this.socket.on('room-expired', (data) => {
+            this.handleRoomExpired(data);
+        });
+
+        this.socket.on('forced-leave', (data) => {
+            this.handleForcedLeave(data);
+        });
+
+        // Background stream events
+        this.socket.on('background-stream', (data) => {
+            this.handleBackgroundStream(data);
+        });
+
+        // Room agent events
+        this.socket.on('room-agent-status', (payload) => {
+            this.handleRoomAgentStatus(payload);
+        });
+
+        this.socket.on('agent-message', (message) => {
+            this.handleAgentMessage(message);
+        });
+
+        this.socket.on('notification-received', (event) => {
+            if (event?.title || event?.message) {
+                this.showNotification(event.title || event.message, 'info');
+            }
+            this.loadIncomingNotifications?.();
+        });
+    }
+
+    /**
+     * Handle room expiring warning
+     */
+    handleRoomExpiring(data) {
+        const { message, timeRemaining, expiresAt } = data;
+        console.log('Room expiring warning:', message, 'Time remaining:', timeRemaining);
+
+        // Show notification
+        this.showNotification(message, 'warning', 10000);
+
+        // Start or update countdown timer display
+        this.startExpirationCountdown(expiresAt, timeRemaining);
+    }
+
+    /**
+     * Handle room expired event
+     */
+    handleRoomExpired(data) {
+        const { message } = data;
+        console.log('Room expired:', message);
+
+        // Stop countdown timer
+        this.stopExpirationCountdown();
+
+        // Show expiration modal
+        this.showRoomExpiredModal(message);
+    }
+
+    /**
+     * Handle forced leave from room
+     */
+    handleForcedLeave(data) {
+        const { reason, roomId } = data;
+        console.log('Forced to leave room:', reason);
+
+        // Clean up room state
+        this.currentRoomId = null;
+        this.stopExpirationCountdown();
+        this.stopBackgroundStream();
+
+        // Return to main menu
+        this.showScreen('main-menu');
+        this.showNotification('You have been disconnected: ' + reason, 'info');
+    }
+
+    /**
+     * Handle background stream event - plays ambient/radio stream in room
+     */
+    handleBackgroundStream(data) {
+        console.log('[BackgroundStream] Received stream config:', data);
+
+        const { id, name, url, volume, hidden, autoPlay, fadeInDuration } = data;
+
+        if (!url) {
+            console.warn('[BackgroundStream] No stream URL provided');
+            return;
+        }
+
+        // Create or get background audio element
+        let bgAudio = document.getElementById('background-stream-audio');
+        if (!bgAudio) {
+            bgAudio = document.createElement('audio');
+            bgAudio.id = 'background-stream-audio';
+            bgAudio.className = hidden ? 'hidden-stream' : '';
+            bgAudio.crossOrigin = 'anonymous';
+            bgAudio.preload = 'none';
+            document.body.appendChild(bgAudio);
+        }
+
+        // Store stream info for controls
+        this.backgroundStream = {
+            id,
+            name,
+            url,
+            volume: volume / 100,
+            hidden,
+            element: bgAudio
+        };
+
+        bgAudio.src = url;
+        bgAudio.volume = 0;
+
+        if (autoPlay) {
+            bgAudio.play().then(() => {
+                console.log(`[BackgroundStream] Playing: ${name}`);
+                // Fade in
+                const targetVolume = volume / 100;
+                const fadeSteps = 20;
+                const fadeStepTime = fadeInDuration / fadeSteps;
+                let currentStep = 0;
+
+                const fadeInterval = setInterval(() => {
+                    currentStep++;
+                    bgAudio.volume = (currentStep / fadeSteps) * targetVolume;
+                    if (currentStep >= fadeSteps) {
+                        clearInterval(fadeInterval);
+                        bgAudio.volume = targetVolume;
+                    }
+                }, fadeStepTime);
+            }).catch(err => {
+                console.warn('[BackgroundStream] Autoplay blocked:', err.message);
+                // Try again on user interaction
+                document.addEventListener('click', () => bgAudio.play(), { once: true });
+            });
+        }
+    }
+
+    /**
+     * Stop background stream
+     */
+    stopBackgroundStream() {
+        const bgAudio = document.getElementById('background-stream-audio');
+        if (bgAudio) {
+            bgAudio.pause();
+            bgAudio.src = '';
+        }
+        this.backgroundStream = null;
+    }
+
+    /**
+     * Set background stream volume (0-100)
+     */
+    setBackgroundStreamVolume(volume) {
+        const bgAudio = document.getElementById('background-stream-audio');
+        if (bgAudio) {
+            bgAudio.volume = volume / 100;
+            if (this.backgroundStream) {
+                this.backgroundStream.volume = volume / 100;
+            }
+        }
+    }
+
+    handleRoomAgentStatus(payload = {}) {
+        const roomId = payload.roomId || '';
+        const roomMismatch = this.currentRoomId && roomId && this.currentRoomId !== roomId;
+        if (roomMismatch) return;
+
+        const agent = payload.agent || {};
+        const status = String(agent.statusText || 'Room agent status updated.').trim();
+        const type = agent.statusType === 'offline' ? 'warning' : 'info';
+        this.showLinkedNotification(status, type);
+    }
+
+    handleAgentMessage(message = {}) {
+        const roomMismatch = this.currentRoomId && message.roomId && this.currentRoomId !== message.roomId;
+        if (roomMismatch) return;
+
+        const agentName = message.agentName || 'Room Agent';
+        const text = String(message.message || '').trim();
+        if (!text) return;
+        this.addSystemMessage(`${agentName}: ${text}`);
+    }
+
+    appendTextWithSafeLinks(container, text) {
+        const content = String(text || '');
+        const linkRegex = /(https?:\/\/[^\s<>"')]+|voicelink:\/\/[^\s<>"')]+)/gi;
+        let cursor = 0;
+        let match;
+
+        while ((match = linkRegex.exec(content)) !== null) {
+            const url = match[0];
+            const start = match.index;
+            if (start > cursor) {
+                container.appendChild(document.createTextNode(content.slice(cursor, start)));
+            }
+
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = url;
+            link.style.color = '#fff';
+            link.style.textDecoration = 'underline';
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                this.openLinkWithSafetyOptions(url);
+            });
+            container.appendChild(link);
+
+            cursor = start + url.length;
+        }
+
+        if (cursor < content.length) {
+            container.appendChild(document.createTextNode(content.slice(cursor)));
+        }
+    }
+
+    isDirectEmbeddableMediaUrl(url) {
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch {
+            return false;
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+        const pathname = parsed.pathname.toLowerCase();
+        const mediaExtensions = [
+            '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus',
+            '.mp4', '.m4v', '.mov', '.webm', '.mkv',
+            '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'
+        ];
+        return mediaExtensions.some((ext) => pathname.endsWith(ext));
+    }
+
+    openDirectMediaPreview(url) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 11000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        `;
+
+        const panel = document.createElement('div');
+        panel.style.cssText = `
+            width: min(960px, 100%);
+            max-height: 90vh;
+            background: #121212;
+            color: #fff;
+            border-radius: 10px;
+            padding: 12px;
+            overflow: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+        `;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close Preview';
+        closeBtn.style.cssText = 'margin-bottom: 10px;';
+        closeBtn.addEventListener('click', () => overlay.remove());
+        panel.appendChild(closeBtn);
+
+        const urlLabel = document.createElement('div');
+        urlLabel.style.cssText = 'font-size: 12px; opacity: 0.85; margin-bottom: 10px; word-break: break-all;';
+        urlLabel.textContent = url;
+        panel.appendChild(urlLabel);
+
+        const lower = url.toLowerCase();
+        let mediaElement = null;
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].some((ext) => lower.includes(ext))) {
+            mediaElement = document.createElement('img');
+            mediaElement.src = url;
+            mediaElement.alt = 'Media preview';
+            mediaElement.style.cssText = 'max-width: 100%; height: auto; border-radius: 8px;';
+        } else if (['.mp4', '.m4v', '.mov', '.webm', '.mkv'].some((ext) => lower.includes(ext))) {
+            mediaElement = document.createElement('video');
+            mediaElement.src = url;
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+            mediaElement.style.cssText = 'max-width: 100%; max-height: 70vh; border-radius: 8px;';
+        } else {
+            mediaElement = document.createElement('audio');
+            mediaElement.src = url;
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+            mediaElement.style.cssText = 'width: 100%;';
+        }
+
+        panel.appendChild(mediaElement);
+        overlay.appendChild(panel);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) overlay.remove();
+        });
+        document.body.appendChild(overlay);
+    }
+
+    openLinkWithSafetyOptions(url) {
+        const cleanUrl = String(url || '').trim();
+        if (!cleanUrl) return;
+
+        const warningConfirmed = window.confirm(`You are about to open this link:\n${cleanUrl}\n\nContinue?`);
+        if (!warningConfirmed) return;
+
+        if (cleanUrl.toLowerCase().startsWith('voicelink://')) {
+            window.location.href = cleanUrl;
+            return;
+        }
+
+        const isEmbeddable = this.isDirectEmbeddableMediaUrl(cleanUrl);
+        if (isEmbeddable) {
+            const choice = window.prompt(
+                `Link looks like direct media.\nChoose action:\n1 = View safely in app\n2 = Open in browser\n\nEnter 1 or 2:`,
+                '1'
+            );
+            if (choice === '1') {
+                this.openDirectMediaPreview(cleanUrl);
+                return;
+            }
+            if (choice !== '2') return;
+        }
+
+        window.open(cleanUrl, '_blank', 'noopener,noreferrer');
+    }
+
+    /**
+     * Start expiration countdown timer display
+     */
+    startExpirationCountdown(expiresAt, initialTimeRemaining) {
+        // Stop any existing countdown
+        this.stopExpirationCountdown();
+
+        const expirationTime = new Date(expiresAt).getTime();
+
+        // Create or update countdown display
+        let countdownEl = document.getElementById('room-expiration-countdown');
+        if (!countdownEl) {
+            countdownEl = document.createElement('div');
+            countdownEl.id = 'room-expiration-countdown';
+            countdownEl.className = 'room-expiration-countdown';
+
+            // Build countdown UI using DOM methods (safer than innerHTML)
+            const iconDiv = document.createElement('div');
+            iconDiv.className = 'countdown-icon';
+            iconDiv.textContent = '⏱️';
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'countdown-text';
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'countdown-label';
+            labelSpan.textContent = 'Guest Room Expires In:';
+
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'countdown-time';
+            timeSpan.textContent = '--:--';
+
+            textDiv.appendChild(labelSpan);
+            textDiv.appendChild(document.createElement('br'));
+            textDiv.appendChild(timeSpan);
+
+            const loginDiv = document.createElement('div');
+            loginDiv.className = 'countdown-login';
+
+            const loginBtn = document.createElement('button');
+            loginBtn.className = 'login-to-extend';
+            loginBtn.textContent = 'Login for Unlimited Time';
+            loginBtn.onclick = () => this.showMastodonLoginModal();
+            loginDiv.appendChild(loginBtn);
+
+            countdownEl.appendChild(iconDiv);
+            countdownEl.appendChild(textDiv);
+            countdownEl.appendChild(loginDiv);
+
+            // Add styles
+            countdownEl.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                box-shadow: 0 4px 20px rgba(238, 90, 36, 0.4);
+                z-index: 10000;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            `;
+            document.body.appendChild(countdownEl);
+        }
+
+        const timeDisplay = countdownEl.querySelector('.countdown-time');
+
+        // Update countdown every second
+        this.expirationCountdownInterval = setInterval(() => {
+            const now = Date.now();
+            const remaining = expirationTime - now;
+
+            if (remaining <= 0) {
+                this.stopExpirationCountdown();
+                return;
+            }
+
+            const minutes = Math.floor(remaining / 60000);
+            const seconds = Math.floor((remaining % 60000) / 1000);
+            timeDisplay.textContent = minutes + ':' + seconds.toString().padStart(2, '0');
+
+            // Pulse effect when under 1 minute
+            if (remaining < 60000) {
+                countdownEl.style.animation = 'pulse 0.5s ease-in-out infinite';
+            }
+        }, 1000);
+    }
+
+    /**
+     * Stop expiration countdown
+     */
+    stopExpirationCountdown() {
+        if (this.expirationCountdownInterval) {
+            clearInterval(this.expirationCountdownInterval);
+            this.expirationCountdownInterval = null;
+        }
+
+        const countdownEl = document.getElementById('room-expiration-countdown');
+        if (countdownEl) {
+            countdownEl.remove();
+        }
+    }
+
+    /**
+     * Show room expired modal using DOM methods
+     */
+    showRoomExpiredModal(message) {
+        const modal = document.createElement('div');
+        modal.className = 'room-expired-modal';
+
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.style.cssText = 'position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 10001;';
+
+        // Create content container
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        content.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 30px;
+            border-radius: 16px;
+            text-align: center;
+            z-index: 10002;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        `;
+
+        // Icon
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size: 4rem; margin-bottom: 20px;';
+        icon.textContent = '⏰';
+
+        // Title
+        const title = document.createElement('h2');
+        title.style.cssText = 'color: #ff6b6b; margin-bottom: 15px;';
+        title.textContent = 'Room Expired';
+
+        // Message
+        const msgEl = document.createElement('p');
+        msgEl.style.cssText = 'color: #aaa; margin-bottom: 25px;';
+        msgEl.textContent = message;
+
+        // Button container
+        const btnContainer = document.createElement('div');
+        btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+
+        // Login button
+        const loginBtn = document.createElement('button');
+        loginBtn.style.cssText = `
+            background: linear-gradient(135deg, #7b2cbf, #00d4ff);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+        `;
+        loginBtn.textContent = '🐘 Login with Mastodon';
+        loginBtn.onclick = () => {
+            modal.remove();
+            this.showMastodonLoginModal();
+        };
+
+        // Return button
+        const returnBtn = document.createElement('button');
+        returnBtn.style.cssText = `
+            background: transparent;
+            color: #888;
+            border: 1px solid #444;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+        `;
+        returnBtn.textContent = 'Return to Menu';
+        returnBtn.onclick = () => {
+            modal.remove();
+            this.showScreen('main-menu');
+        };
+
+        btnContainer.appendChild(loginBtn);
+        btnContainer.appendChild(returnBtn);
+
+        content.appendChild(icon);
+        content.appendChild(title);
+        content.appendChild(msgEl);
+        content.appendChild(btnContainer);
+
+        modal.appendChild(overlay);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
     }
 
     setupUIEventListeners() {
-        this.setupCollapsiblePanels();
-
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
             this.showScreen('create-room-screen');
@@ -406,7 +1135,6 @@ class VoiceLinkApp {
         });
 
         document.getElementById('join-room-btn')?.addEventListener('click', () => {
-            this.applyAuthIdentityDefaults();
             this.showScreen('join-room-screen');
         });
 
@@ -520,17 +1248,36 @@ class VoiceLinkApp {
             this.initializeSettingsScreen();
         });
 
+        // Jukebox button - opens Jellyfin music player
+        document.getElementById('room-jukebox-btn')?.addEventListener('click', () => {
+            if (window.jukeboxManager) {
+                window.jukeboxManager.togglePanel();
+            } else {
+                this.showToast('Jukebox not available. Configure Jellyfin in settings.');
+            }
+        });
+
         document.getElementById('quick-audio-room-btn')?.addEventListener('click', () => {
             this.showQuickAudioPanel();
         });
 
         // Settings screen navigation
         document.getElementById('close-settings')?.addEventListener('click', () => {
-            this.showScreen('main-menu');
+            // Go back to previous screen (main menu or room)
+            if (this.currentRoom) {
+                this.showScreen('voice-chat-screen');
+            } else {
+                this.showScreen('main-menu');
+            }
         });
 
-        document.getElementById('cancel-settings')?.addEventListener('click', () => {
-            this.showScreen('main-menu');
+        document.getElementById('back-from-settings')?.addEventListener('click', () => {
+            // Go back to previous screen (main menu or room)
+            if (this.currentRoom) {
+                this.showScreen('voice-chat-screen');
+            } else {
+                this.showScreen('main-menu');
+            }
         });
 
         // Desktop app controls (only available in Electron)
@@ -579,6 +1326,22 @@ class VoiceLinkApp {
             this.createRoom();
         });
 
+        // Visibility option toggle
+        document.querySelectorAll('.visibility-option').forEach(option => {
+            option.addEventListener('click', function() {
+                document.querySelectorAll('.visibility-option').forEach(o => o.classList.remove('selected'));
+                this.classList.add('selected');
+            });
+        });
+
+        // Access type option toggle
+        document.querySelectorAll('.access-option').forEach(option => {
+            option.addEventListener('click', function() {
+                document.querySelectorAll('.access-option').forEach(o => o.classList.remove('selected'));
+                this.classList.add('selected');
+            });
+        });
+
         // Join room
         document.getElementById('join-room-form')?.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -602,6 +1365,13 @@ class VoiceLinkApp {
             this.leaveRoom();
         });
 
+        // Share room button (in room header)
+        document.getElementById('share-room-btn')?.addEventListener('click', () => {
+            if (this.currentRoom) {
+                this.shareRoom(this.currentRoom.id);
+            }
+        });
+
         document.getElementById('settings-btn')?.addEventListener('click', () => {
             this.toggleAudioRoutingPanel();
         });
@@ -616,6 +1386,9 @@ class VoiceLinkApp {
                 this.sendChatMessage();
             }
         });
+
+        // Double-Escape in room opens room actions menu
+        document.addEventListener('keydown', (e) => this.handleGlobalEscapeKey(e));
 
         // Audio settings
         document.getElementById('test-microphone')?.addEventListener('click', () => {
@@ -656,30 +1429,319 @@ class VoiceLinkApp {
 
         // Initialize button click audio feedback
         this.initializeButtonAudio();
+
+        // Setup Mastodon authentication
+        this.setupMastodonAuth();
+
+        // Check for OAuth callback
+        this.checkOAuthCallback();
     }
 
-    setupCollapsiblePanels() {
-        const bindToggle = (buttonId, contentId, iconId, defaultExpanded) => {
-            const button = document.getElementById(buttonId);
-            const content = document.getElementById(contentId);
-            const icon = document.getElementById(iconId);
-            if (!button || !content || !icon) return;
+    handleGlobalEscapeKey(event) {
+        if (event.key !== 'Escape') return;
 
-            const setExpanded = (expanded) => {
-                button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-                content.classList.toggle('collapsed', !expanded);
-                icon.textContent = expanded ? '▾' : '▸';
-            };
+        const inRoomScreen = this.ui.currentScreen === 'voice-chat-screen';
+        const hasCurrentRoom = !!(this.currentRoom && this.currentRoom.id);
+        if (!inRoomScreen || !hasCurrentRoom) return;
 
-            setExpanded(defaultExpanded);
-            button.addEventListener('click', () => {
-                const isExpanded = button.getAttribute('aria-expanded') === 'true';
-                setExpanded(!isExpanded);
-            });
+        // If menu is open, one Escape closes it.
+        if (this.inRoomActionsMenu) {
+            event.preventDefault();
+            this.hideInRoomActionsMenu();
+            return;
+        }
+
+        // First escape arms the menu.
+        if (!this.escapeSequenceArmed) {
+            this.escapeSequenceArmed = true;
+            this.showNotification('Press Escape again to open room actions.', 'info');
+            if (this.escapeSequenceTimeout) clearTimeout(this.escapeSequenceTimeout);
+            this.escapeSequenceTimeout = setTimeout(() => {
+                this.escapeSequenceArmed = false;
+                this.escapeSequenceTimeout = null;
+            }, 1400);
+            return;
+        }
+
+        // Second escape opens room actions.
+        event.preventDefault();
+        this.escapeSequenceArmed = false;
+        if (this.escapeSequenceTimeout) {
+            clearTimeout(this.escapeSequenceTimeout);
+            this.escapeSequenceTimeout = null;
+        }
+        this.showInRoomActionsMenu();
+    }
+
+    showInRoomActionsMenu() {
+        this.hideInRoomActionsMenu();
+        const room = this.currentRoom;
+        if (!room?.id) return;
+
+        const isAdmin = this.isRoomAdminForCurrentUser();
+        const isLocked = !!room.locked;
+        const lockActionLabel = isLocked ? 'Unlock Room' : 'Lock Room';
+        const lockActionIcon = isLocked ? '🔓' : '🔒';
+
+        const menu = document.createElement('div');
+        menu.className = 'context-menu room-actions-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', `Room actions for ${room.name || 'current room'}`);
+        menu.style.position = 'fixed';
+        menu.style.right = '16px';
+        menu.style.top = '72px';
+        menu.style.zIndex = '10020';
+
+        menu.innerHTML = `
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="share-room">
+                <span class="menu-icon">📣</span>
+                <span class="menu-label">Share Room</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="invite-user">
+                <span class="menu-icon">✉️</span>
+                <span class="menu-label">Invite User</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-link">
+                <span class="menu-icon">🔗</span>
+                <span class="menu-label">Copy Room Link</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-id">
+                <span class="menu-icon">📋</span>
+                <span class="menu-label">Copy Room ID</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-room-settings">
+                <span class="menu-icon">⚙️</span>
+                <span class="menu-label">Room Settings</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="upload-profile-photo">
+                <span class="menu-icon">🖼️</span>
+                <span class="menu-label">Upload Avatar Photo</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-jukebox">
+                <span class="menu-icon">🎵</span>
+                <span class="menu-label">Open Jukebox</span>
+            </div>
+            ${isAdmin ? `
+                <div class="menu-separator" role="separator"></div>
+                <div class="menu-item" role="menuitem" tabindex="0" data-action="toggle-room-lock">
+                    <span class="menu-icon">${lockActionIcon}</span>
+                    <span class="menu-label">${lockActionLabel}</span>
+                </div>
+            ` : ''}
+            <div class="menu-separator" role="separator"></div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="leave-room">
+                <span class="menu-icon">🚪</span>
+                <span class="menu-label">Leave Room</span>
+            </div>
+        `;
+
+        document.body.appendChild(menu);
+        this.inRoomActionsMenu = menu;
+
+        const handleActivate = async (action) => {
+            if (!action) return;
+            if (action === 'share-room') {
+                await this.shareRoom(room.id);
+            } else if (action === 'invite-user') {
+                await this.shareRoom(room.id);
+                this.showNotification('Invite link ready to send.', 'success');
+            } else if (action === 'copy-room-link') {
+                await this.copyCurrentRoomLink();
+            } else if (action === 'copy-room-id') {
+                const copied = await this.copyText(room.id);
+                this.showNotification(copied ? 'Room ID copied.' : `Room ID: ${room.id}`, copied ? 'success' : 'info');
+            } else if (action === 'open-room-settings') {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+            } else if (action === 'upload-profile-photo') {
+                this.openAvatarUploadShortcut();
+            } else if (action === 'open-jukebox') {
+                this.openJukeboxFromRoomActions();
+            } else if (action === 'toggle-room-lock') {
+                if (room.locked) {
+                    await this.unlockCurrentRoom();
+                } else {
+                    await this.lockCurrentRoom();
+                }
+            } else if (action === 'leave-room') {
+                this.leaveRoom();
+            }
+            this.hideInRoomActionsMenu();
         };
 
-        bindToggle('toggle-server-status', 'server-status-content', 'toggle-server-status-icon', false);
-        bindToggle('toggle-room-status', 'room-status-content', 'toggle-room-status-icon', true);
+        menu.addEventListener('click', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            await handleActivate(item.getAttribute('data-action'));
+        });
+
+        menu.addEventListener('keydown', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                await handleActivate(item.getAttribute('data-action'));
+            }
+        });
+
+        const first = menu.querySelector('.menu-item');
+        if (first) first.focus();
+        setTimeout(() => {
+            document.addEventListener('click', this.boundInRoomMenuOutsideClick, true);
+            document.addEventListener('keydown', this.boundInRoomMenuEscape, true);
+        }, 0);
+    }
+
+    handleInRoomMenuOutsideClick(event) {
+        if (!this.inRoomActionsMenu) return;
+        if (!this.inRoomActionsMenu.contains(event.target)) {
+            this.hideInRoomActionsMenu();
+        }
+    }
+
+    handleInRoomMenuEscape(event) {
+        if (event.key === 'Escape') {
+            this.hideInRoomActionsMenu();
+        }
+    }
+
+    hideInRoomActionsMenu() {
+        if (this.inRoomActionsMenu) {
+            this.inRoomActionsMenu.remove();
+            this.inRoomActionsMenu = null;
+        }
+        document.removeEventListener('click', this.boundInRoomMenuOutsideClick, true);
+        document.removeEventListener('keydown', this.boundInRoomMenuEscape, true);
+    }
+
+    isRoomAdminForCurrentUser() {
+        const user = this.currentUser || {};
+        if (user.isAdmin || user.isModerator) return true;
+        const creatorHandle = this.currentRoom?.creatorHandle;
+        const userHandle = user.fullHandle || user.handle || user.username || user.name || '';
+        if (creatorHandle && userHandle && creatorHandle === userHandle) return true;
+        return false;
+    }
+
+    async lockCurrentRoom() {
+        if (!this.currentRoom?.id) return;
+        if (!this.isRoomAdminForCurrentUser()) {
+            this.showNotification('Only room admins can lock this room.', 'error');
+            return;
+        }
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const actor = this.currentUser?.displayName || this.currentUser?.name || 'admin';
+            const response = await fetch(`${apiBase}/api/rooms/${this.currentRoom.id}/lock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lockedBy: actor, reason: 'Locked from room actions menu' })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to lock room.', 'error');
+                return;
+            }
+            this.currentRoom.locked = true;
+            this.showNotification(result.message || 'Room locked.', 'success');
+        } catch (error) {
+            console.error('lockCurrentRoom failed:', error);
+            this.showNotification('Failed to lock room.', 'error');
+        }
+    }
+
+    async unlockCurrentRoom() {
+        if (!this.currentRoom?.id) return;
+        if (!this.isRoomAdminForCurrentUser()) {
+            this.showNotification('Only room admins can unlock this room.', 'error');
+            return;
+        }
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const actor = this.currentUser?.displayName || this.currentUser?.name || 'admin';
+            const response = await fetch(`${apiBase}/api/rooms/${this.currentRoom.id}/unlock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ unlockedBy: actor })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to unlock room.', 'error');
+                return;
+            }
+            this.currentRoom.locked = false;
+            this.showNotification(result.message || 'Room unlocked.', 'success');
+        } catch (error) {
+            console.error('unlockCurrentRoom failed:', error);
+            this.showNotification('Failed to unlock room.', 'error');
+        }
+    }
+
+    async copyCurrentRoomLink() {
+        if (!this.currentRoom?.id) return;
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${this.currentRoom.id}`);
+            const data = await response.json();
+            const link = data.joinUrl || `${window.location.origin}/?room=${encodeURIComponent(this.currentRoom.id)}`;
+            const copied = await this.copyText(link);
+            this.showNotification(copied ? 'Room link copied.' : link, copied ? 'success' : 'info');
+        } catch (error) {
+            console.error('copyCurrentRoomLink failed:', error);
+            const fallback = `${window.location.origin}/?room=${encodeURIComponent(this.currentRoom.id)}`;
+            const copied = await this.copyText(fallback);
+            this.showNotification(copied ? 'Room link copied.' : fallback, copied ? 'success' : 'info');
+        }
+    }
+
+    async copyText(text) {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (error) {
+            console.warn('Clipboard write failed:', error.message);
+        }
+        return false;
+    }
+
+    openJukeboxFromRoomActions() {
+        if (!this.currentRoom?.id) {
+            this.showNotification('Join a room to open Jukebox controls.', 'info');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            // Ensure room-scoped jukebox is enabled and visible.
+            window.jukeboxManager.enable?.();
+            window.jukeboxManager.openPanel?.();
+            this.showNotification('Jukebox opened. You can manage playback and playlists.', 'success');
+            return;
+        }
+
+        this.showNotification('Jukebox is not available right now.', 'error');
+    }
+
+    openAvatarUploadShortcut() {
+        if (!window.userSettingsInterface) {
+            this.showNotification('Profile settings are not available right now.', 'error');
+            return;
+        }
+
+        this.showScreen('settings-screen');
+        this.initializeSettingsScreen();
+        window.userSettingsInterface.show();
+        window.userSettingsInterface.switchTab?.('profile');
+
+        setTimeout(() => {
+            const uploadBtn = document.getElementById('upload-avatar-btn');
+            if (!uploadBtn) {
+                this.showNotification('Avatar upload control not found.', 'error');
+                return;
+            }
+            uploadBtn.click();
+        }, 80);
     }
 
     showScreen(screenId) {
@@ -695,22 +1757,23 @@ class VoiceLinkApp {
         console.log('Switched to screen:', screenId);
     }
 
-    updateServerStatus(status, port = null) {
+    updateServerStatus(status) {
         const statusValue = document.getElementById('server-status-value');
-        const portValue = document.getElementById('server-port-value');
 
         if (statusValue) {
             if (status === 'online') {
-                statusValue.textContent = '🟢 Online';
-                statusValue.style.color = '#4CAF50';
+                statusValue.textContent = 'Online';
+                statusValue.className = 'status-value status-online';
             } else {
-                statusValue.textContent = '🔴 Offline';
-                statusValue.style.color = '#f44336';
+                if (this.userInitiatedOffline && this.apiReachable) {
+                    statusValue.textContent = 'Offline (Reachable)';
+                } else if (this.userInitiatedOffline) {
+                    statusValue.textContent = 'Offline (Paused)';
+                } else {
+                    statusValue.textContent = 'Offline';
+                }
+                statusValue.className = 'status-value status-offline';
             }
-        }
-
-        if (portValue && port) {
-            portValue.textContent = port;
         }
 
         // Also update user and room counts when we have socket events
@@ -732,6 +1795,285 @@ class VoiceLinkApp {
 
         // Update server control button states
         this.setServerButtonState(status);
+
+        // Update network info if in Electron
+        this.updateNetworkInfo();
+    }
+
+    async updateNetworkInfo() {
+        if (!window.electronAPI) return;
+
+        try {
+            const info = await window.electronAPI.getServerInfo();
+            if (!info) return;
+
+            // Update internet status
+            const internetStatus = document.getElementById('internet-status-value');
+            if (internetStatus) {
+                if (info.isOnline) {
+                    internetStatus.textContent = 'Online';
+                    internetStatus.className = 'status-value status-online';
+                } else {
+                    internetStatus.textContent = 'Offline';
+                    internetStatus.className = 'status-value status-offline';
+                }
+            }
+
+            // Update local IP
+            const localIp = document.getElementById('local-ip-value');
+            if (localIp) {
+                localIp.textContent = info.localIP || 'Not detected';
+            }
+
+            // Update public IP
+            const publicIp = document.getElementById('public-ip-value');
+            if (publicIp) {
+                publicIp.textContent = info.externalIP || 'Not available';
+            }
+
+            // Update port
+            const portValue = document.getElementById('server-port-value');
+            if (portValue) {
+                portValue.textContent = info.port || '--';
+            }
+
+            // Enable/disable public URL button
+            const publicUrlBtn = document.getElementById('copy-public-url-btn');
+            if (publicUrlBtn) {
+                publicUrlBtn.disabled = !info.externalIP;
+            }
+
+            // Update network binding display
+            this.updateNetworkBindingDisplay(info.networkInterfaces, info.selectedInterface);
+
+        } catch (error) {
+            console.error('Failed to update network info:', error);
+        }
+    }
+
+    // Handle network info update from main process IPC
+    handleNetworkInfoUpdate(info) {
+        if (!info) return;
+
+        console.log('Updating UI with network info:', info);
+
+        // Update server status (from main process)
+        const serverStatus = document.getElementById('server-status-value');
+        if (serverStatus) {
+            if (info.isServerRunning) {
+                serverStatus.textContent = 'Running';
+                serverStatus.className = 'status-value status-online';
+            } else {
+                serverStatus.textContent = 'Stopped';
+                serverStatus.className = 'status-value status-offline';
+            }
+        }
+
+        // Update internet status
+        const internetStatus = document.getElementById('internet-status-value');
+        if (internetStatus) {
+            if (info.isOnline) {
+                internetStatus.textContent = 'Online';
+                internetStatus.className = 'status-value status-online';
+            } else {
+                internetStatus.textContent = 'Offline';
+                internetStatus.className = 'status-value status-offline';
+            }
+        }
+
+        // Update local IP
+        const localIp = document.getElementById('local-ip-value');
+        if (localIp) {
+            localIp.textContent = info.localIP || 'Not detected';
+        }
+
+        // Update public IP
+        const publicIp = document.getElementById('public-ip-value');
+        if (publicIp) {
+            publicIp.textContent = info.externalIP || 'Not available';
+        }
+
+        // Update port
+        const portValue = document.getElementById('server-port-value');
+        if (portValue && info.port) {
+            portValue.textContent = info.port;
+        }
+
+        // Enable/disable public URL button
+        const publicUrlBtn = document.getElementById('copy-public-url-btn');
+        if (publicUrlBtn) {
+            publicUrlBtn.disabled = !info.externalIP;
+        }
+
+        // Update network binding display
+        if (info.networkInterfaces && info.selectedInterface) {
+            this.updateNetworkBindingDisplay(info.networkInterfaces, info.selectedInterface);
+        }
+    }
+
+    updateNetworkBindingDisplay(interfaces, selectedInterface) {
+        const bindingValue = document.getElementById('network-binding-value');
+        if (!bindingValue) return;
+
+        // Find the selected interface
+        const selected = interfaces.find(i => i.name === selectedInterface);
+
+        if (selectedInterface === 'all' || !selected) {
+            bindingValue.textContent = 'All Networks';
+        } else {
+            // Show display name with IP address
+            const displayName = selected.displayName || selected.name;
+            bindingValue.textContent = `${displayName} (${selected.address})`;
+        }
+    }
+
+    setupNetworkEventHandlers() {
+        // Detect if running in Electron desktop app using multiple methods
+        // 1. Check window.electronAPI (exposed via preload)
+        // 2. Check window.nodeAPI (exposed via preload)
+        // 3. Check navigator.userAgent for Electron
+        const isElectron = !!(
+            window.electronAPI ||
+            window.nodeAPI?.versions?.electron ||
+            navigator.userAgent.toLowerCase().includes('electron')
+        );
+
+        console.log('Platform detection:', {
+            isElectron,
+            hasElectronAPI: !!window.electronAPI,
+            hasNodeAPI: !!window.nodeAPI,
+            userAgent: navigator.userAgent
+        });
+
+        if (!isElectron) {
+            // WEB BROWSER: Hide desktop-only elements
+            document.getElementById('copy-local-url-btn')?.remove();
+            document.getElementById('copy-localhost-url-btn')?.remove();
+            document.getElementById('refresh-network-btn')?.remove();
+            // Hide all desktop-only sections (network binding, menubar references)
+            document.querySelectorAll('.desktop-only').forEach(el => el.remove());
+            document.querySelector('.network-interface-section')?.remove();
+        } else {
+            // DESKTOP APP: Hide login benefits and download section (already have the app)
+            console.log('Desktop app detected - hiding web-only elements');
+            const loginBenefits = document.getElementById('login-benefits');
+            const downloadSection = document.getElementById('download-app-section');
+            console.log('Elements to remove:', { loginBenefits: !!loginBenefits, downloadSection: !!downloadSection });
+            loginBenefits?.remove();
+            downloadSection?.remove();
+            // Hide all web-only elements (download links, etc.)
+            const webOnlyElements = document.querySelectorAll('.web-only');
+            console.log('Web-only elements found:', webOnlyElements.length);
+            webOnlyElements.forEach(el => el.remove());
+        }
+
+        // Copy URL buttons
+        document.getElementById('copy-local-url-btn')?.addEventListener('click', async () => {
+            if (window.electronAPI) {
+                const result = await window.electronAPI.copyUrl('local');
+                if (result?.success) {
+                    this.showToast('Local URL copied to clipboard');
+                }
+            }
+        });
+
+        document.getElementById('copy-public-url-btn')?.addEventListener('click', async () => {
+            if (window.electronAPI) {
+                const result = await window.electronAPI.copyUrl('public');
+                if (result?.success) {
+                    this.showToast('Public URL copied (requires port forwarding)');
+                } else {
+                    this.showToast('Public IP not available');
+                }
+            }
+        });
+
+        document.getElementById('copy-localhost-url-btn')?.addEventListener('click', async () => {
+            if (window.electronAPI) {
+                const result = await window.electronAPI.copyUrl('localhost');
+                if (result?.success) {
+                    this.showToast('Localhost URL copied to clipboard');
+                }
+            }
+        });
+
+        // Manual refresh removed. Network info is refreshed automatically.
+        document.getElementById('refresh-network-btn')?.remove();
+
+        // Network interface selection moved to menubar/tray menu
+        // Use tray menu to change which interface the server listens on
+    }
+
+    showToast(message, duration = 3000) {
+        // Create or reuse toast element
+        let toast = document.getElementById('app-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'app-toast';
+            toast.className = 'app-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            document.body.appendChild(toast);
+        }
+
+        toast.textContent = message;
+        toast.classList.add('show');
+
+        setTimeout(() => {
+            toast.classList.remove('show');
+        }, duration);
+    }
+
+    /**
+     * Show whisper mode status indicator
+     */
+    showWhisperStatus(isWhispering, targetUsername = null) {
+        let indicator = document.getElementById('whisper-status-indicator');
+
+        if (isWhispering) {
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.id = 'whisper-status-indicator';
+                indicator.className = 'whisper-status-indicator';
+                indicator.setAttribute('role', 'status');
+                indicator.setAttribute('aria-live', 'assertive');
+                document.body.appendChild(indicator);
+            }
+            indicator.innerHTML = `<span class="whisper-icon">Whispering</span> to ${targetUsername || 'user'}`;
+            indicator.classList.add('active');
+        } else if (indicator) {
+            indicator.classList.remove('active');
+        }
+    }
+
+    /**
+     * Update whisper target UI indicator
+     */
+    updateWhisperTargetUI(userId, username) {
+        // Update any UI elements showing current whisper target
+        const targetDisplay = document.getElementById('whisper-target-display');
+        if (targetDisplay) {
+            if (userId) {
+                targetDisplay.textContent = `Whisper target: ${username || userId}`;
+                targetDisplay.style.display = 'block';
+            } else {
+                targetDisplay.style.display = 'none';
+            }
+        }
+
+        // Show toast notification
+        if (userId) {
+            this.showToast(`Whisper target set: ${username || userId}. Hold Enter to whisper.`, 4000);
+        }
+    }
+
+    /**
+     * Set whisper target from user context menu
+     */
+    setWhisperTarget(userId, username) {
+        if (this.whisperMode) {
+            this.whisperMode.setWhisperTarget(userId, username);
+        }
     }
 
     setServerButtonState(status) {
@@ -739,7 +2081,17 @@ class VoiceLinkApp {
         const stopBtn = document.getElementById('stop-server-btn');
         const restartBtn = document.getElementById('restart-server-btn');
 
-        // Show/hide buttons based on status
+        // Only show server control buttons in Electron app, not in browser
+        const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+        if (!isElectron) {
+            // Hide all server control buttons for web visitors
+            if (startBtn) startBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = 'none';
+            if (restartBtn) restartBtn.style.display = 'none';
+            return;
+        }
+
+        // Show/hide buttons based on status (Electron only)
         if (startBtn && stopBtn && restartBtn) {
             switch (status) {
                 case 'online':
@@ -789,28 +2141,52 @@ class VoiceLinkApp {
     }
 
     startServerStatusMonitoring() {
-        // Initial status check - if no socket connection, server is offline
-        if (!this.socket || !this.socket.connected) {
-            this.updateServerStatus('offline');
-        }
+        const monitorTick = async () => {
+            await this.probeApiReachability();
 
-        // Periodic status monitoring every 10 seconds
-        this.statusMonitorInterval = setInterval(() => {
-            if (this.socket && this.socket.connected) {
-                // Server is responsive
-                this.updateServerStatus('online', this.getCurrentPort());
-            } else {
-                // Server is not responsive, try to reconnect
+            if (this.userInitiatedOffline) {
                 this.updateServerStatus('offline');
-                // Optionally attempt reconnection
-                if (this.socket && !this.socket.connected) {
-                    console.log('Attempting to reconnect to server...');
-                    this.connectToServer().catch(() => {
+                return;
+            }
+
+            if (this.socket && this.socket.connected) {
+                this.updateServerStatus('online');
+                return;
+            }
+
+            this.updateServerStatus('offline');
+
+            if (!this.isReconnectInProgress) {
+                this.isReconnectInProgress = true;
+                console.log('Attempting to reconnect to server...');
+                this.connectToServer()
+                    .catch(() => {
                         console.log('Reconnection failed, server remains offline');
+                    })
+                    .finally(() => {
+                        this.isReconnectInProgress = false;
                     });
+            }
+        };
+
+        clearInterval(this.statusMonitorInterval);
+        clearInterval(this.networkRefreshInterval);
+        monitorTick();
+
+        // Connection/API status monitoring every 10 seconds
+        this.statusMonitorInterval = setInterval(monitorTick, 10000);
+
+        // Network display auto-refresh every 15 seconds
+        this.networkRefreshInterval = setInterval(async () => {
+            if (window.electronAPI?.refreshNetworkInfo) {
+                try {
+                    await window.electronAPI.refreshNetworkInfo();
+                } catch (error) {
+                    console.debug('Auto refreshNetworkInfo failed:', error?.message || error);
                 }
             }
-        }, 10000);
+            await this.updateNetworkInfo();
+        }, 15000);
 
         // Also monitor socket events for real-time updates
         if (this.socket) {
@@ -821,8 +2197,61 @@ class VoiceLinkApp {
 
             this.socket.on('reconnect', () => {
                 console.log('Server reconnected');
-                this.updateServerStatus('online', this.getCurrentPort());
+                this.updateServerStatus('online');
             });
+        }
+    }
+
+    isOfflineStatusSelected() {
+        try {
+            const settings = JSON.parse(localStorage.getItem('voicelink_global_settings') || '{}');
+            const status = (settings.status || '').toLowerCase();
+            return status === 'offline' || status === 'invisible';
+        } catch (error) {
+            console.debug('Could not read saved status from localStorage:', error?.message || error);
+        }
+        return false;
+    }
+
+    setupUserStatusConnectionBehavior() {
+        window.addEventListener('userSettingChanged', (event) => {
+            const detail = event?.detail || {};
+            if (detail.key !== 'status') return;
+
+            const status = String(detail.value || '').toLowerCase();
+            const shouldDisconnect = status === 'offline' || status === 'invisible';
+
+            if (shouldDisconnect) {
+                this.userInitiatedOffline = true;
+                if (this.socket?.connected) {
+                    this.socket.disconnect();
+                }
+                this.updateServerStatus('offline');
+                this.showToast('Status set to offline. Connection paused.');
+                return;
+            }
+
+            const wasOffline = this.userInitiatedOffline;
+            this.userInitiatedOffline = false;
+            this.updateServerStatus(this.socket?.connected ? 'online' : 'offline');
+            if (wasOffline && !this.socket?.connected && !this.isReconnectInProgress) {
+                this.connectToServer().catch(() => {
+                    console.log('Reconnect after status change failed');
+                });
+            }
+        });
+    }
+
+    async probeApiReachability() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/health`, {
+                method: 'GET',
+                cache: 'no-store'
+            });
+            this.apiReachable = response.ok;
+        } catch (error) {
+            this.apiReachable = false;
         }
     }
 
@@ -839,27 +2268,107 @@ class VoiceLinkApp {
 
     async loadRooms() {
         try {
-            // Get the correct port from socket connection
-            const port = this.socket?.io?.opts?.port || 3000;
-            const response = await fetch(`http://localhost:${port}/api/rooms`);
-            if (!response.ok) {
-                throw new Error('Failed to fetch rooms');
+            const apiBase = this.getApiBaseUrl();
+
+            // Fetch rooms from local server (which now proxies main server rooms)
+            let rooms = [];
+            try {
+                console.log('Fetching rooms from:', apiBase);
+                const response = await fetch(`${apiBase}/api/rooms?source=app`);
+                console.log('Room fetch response status:', response.status);
+                if (response.ok) {
+                    rooms = await response.json();
+                    console.log('Got', rooms.length, 'rooms');
+
+                    // Update room count display
+                    const roomsValue = document.getElementById('server-rooms-value');
+                    if (roomsValue) {
+                        roomsValue.textContent = rooms.length;
+                    }
+                }
+            } catch (e) {
+                console.error('Room fetch error:', e.message);
             }
-            const rooms = await response.json();
+
+            rooms = this.deduplicateRoomList(rooms);
+
+            // Check if user is authenticated
+            const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
+            const currentUser = window.mastodonAuth?.getUser();
+
+            // Filter rooms based on authentication state
+            if (!isAuthenticated) {
+                // Guests can only see rooms that are:
+                // 1. Marked as public/visible to visitors (or not explicitly private)
+                // 2. Default rooms (always visible)
+                // 3. Rooms from main server (null visibility = public by default)
+                rooms = rooms.filter(room =>
+                    room.visibility === 'public' ||
+                    room.visibility === null ||
+                    room.visibility === undefined ||
+                    room.visibleToGuests === true ||
+                    room.isDefault === true ||
+                    room.serverSource === 'main'  // Main server rooms always visible
+                );
+            }
+
+            // Calculate how many rooms are hidden from guests
+            const totalServerRooms = rooms.length; // This is already filtered
+            let hiddenCount = 0;
+
+            if (!isAuthenticated) {
+                // Show up to 50 rooms for guests (increased from 5 for better discovery)
+                const guestRoomLimit = 50;
+                if (rooms.length > guestRoomLimit) {
+                    hiddenCount = rooms.length - guestRoomLimit;
+                    rooms = rooms.slice(0, guestRoomLimit);
+                }
+            }
 
             const roomList = document.getElementById('room-list');
             if (roomList) {
                 if (rooms.length === 0) {
-                    roomList.innerHTML = `
-                        <div class="no-rooms-message">
-                            <p class="text-muted">No rooms available</p>
-                            <p class="text-small">Default rooms will be generated automatically if enabled</p>
-                        </div>
-                    `;
+                    const message = isAuthenticated
+                        ? `<div class="no-rooms-message">
+                               <p class="text-muted">No rooms available</p>
+                               <p class="text-small">Create a room to get started</p>
+                           </div>`
+                        : `<div class="no-rooms-message">
+                               <p class="text-muted">No public rooms available</p>
+                               <p class="text-small">Login with Mastodon to see all rooms or create your own</p>
+                               <button class="auth-btn mastodon-btn" onclick="document.getElementById('mastodon-login-btn')?.click()">
+                                   Login with Mastodon
+                               </button>
+                           </div>`;
+                    roomList.innerHTML = message;
                 } else {
                     // Group rooms by category for better organization
                     const groupedRooms = this.groupRoomsByCategory(rooms);
-                    roomList.innerHTML = this.renderGroupedRooms(groupedRooms);
+                    let html = this.renderGroupedRooms(groupedRooms);
+
+                    // Add login prompt for guests if there are hidden rooms
+                    if (!isAuthenticated && hiddenCount > 0) {
+                        html += `
+                            <div class="login-to-see-more">
+                                <p>+${hiddenCount} more room${hiddenCount > 1 ? 's' : ''} available</p>
+                                <button class="auth-btn mastodon-btn small" onclick="document.getElementById('mastodon-login-btn')?.click()">
+                                    Login to see all rooms
+                                </button>
+                            </div>
+                        `;
+                    } else if (!isAuthenticated) {
+                        html += `
+                            <div class="login-prompt-small">
+                                <p>Have a direct room link? Join with ID above.</p>
+                                <button class="auth-btn mastodon-btn small" onclick="document.getElementById('mastodon-login-btn')?.click()">
+                                    Login for more features
+                                </button>
+                            </div>
+                        `;
+                    }
+
+                    roomList.innerHTML = html;
+                    this.attachRoomContextMenuHandlers();
                 }
 
                 // Update encryption status indicators for all rooms
@@ -871,6 +2380,15 @@ class VoiceLinkApp {
             }
         } catch (error) {
             console.error('Failed to load rooms:', error);
+            // Show error message in room list
+            const roomList = document.getElementById('room-list');
+            if (roomList) {
+                roomList.innerHTML = `<div class="no-rooms-message">
+                    <p class="text-muted">Could not load rooms</p>
+                    <p class="text-small">${error.message}</p>
+                    <button class="btn btn-secondary" onclick="window.voiceLinkApp?.loadRooms()">Retry</button>
+                </div>`;
+            }
         }
     }
 
@@ -909,9 +2427,8 @@ class VoiceLinkApp {
                 html += `
                     <div class="room-category">
                         <div class="category-header">
-                            <span class="category-icon">${categoryData.icon}</span>
-                            <h4 class="category-title">${category}</h4>
-                            <span class="category-count">${categoryData.rooms.length}</span>
+                            <h4 class="category-title">${category} (Federated)</h4>
+                            <span class="category-count">${categoryData.rooms.length} room${categoryData.rooms.length !== 1 ? 's' : ''}</span>
                         </div>
                         <div class="category-rooms">
                             ${categoryData.rooms.map(room => this.renderRoomItem(room, true)).join('')}
@@ -923,13 +2440,13 @@ class VoiceLinkApp {
             html += '</div>';
         }
 
-        // Render user-created rooms
+        // Render federated rooms (rooms from the server/federation)
         if (groupedRooms.user.length > 0) {
             html += `
                 <div class="user-rooms-section">
                     <div class="section-header">
-                        <h4>👥 User Created Rooms</h4>
-                        <span class="section-count">${groupedRooms.user.length}</span>
+                        <h4>Federated Rooms</h4>
+                        <span class="section-count">${groupedRooms.user.length} room${groupedRooms.user.length !== 1 ? 's' : ''}</span>
                     </div>
                     <div class="user-rooms">
                         ${groupedRooms.user.map(room => this.renderRoomItem(room, false)).join('')}
@@ -945,67 +2462,110 @@ class VoiceLinkApp {
         const roomData = {
             id: room.id || room.roomId,
             name: room.name,
+            description: room.description || '',
             users: room.users || 0,
             maxUsers: room.maxUsers,
             hasPassword: room.hasPassword || !!room.password,
             template: room.template || null,
             privacyLevel: room.privacyLevel || 'public',
-            encrypted: room.encrypted || false
+            encrypted: room.encrypted || false,
+            locked: room.locked || false,
+            canJoin: room.canJoin !== false,
+            isDefault: isDefault,
+            isFederated: isDefault || room.isFederated || false
         };
 
-        const statusIcons = this.getRoomStatusIcons(roomData);
+        // Cache room data for join screen
+        this.roomDataCache.set(roomData.id, roomData);
+
+        const statusLabels = this.getRoomStatusLabels(roomData);
         const tags = isDefault && room.template?.tags ?
             room.template.tags.slice(0, 3).map(tag => `<span class="room-tag">${tag}</span>`).join('') : '';
+
+        // Description text - show placeholder if none provided
+        const descriptionText = room.description && room.description.trim()
+            ? room.description
+            : 'No description for this room';
+        const descriptionClass = room.description && room.description.trim()
+            ? 'room-description'
+            : 'room-description no-description';
+
+        // User count message for accessibility
+        const userCountText = roomData.users === 0
+            ? 'Empty'
+            : roomData.users === 1
+                ? '1 user'
+                : `${roomData.users} users`;
+
+        // Show peek button only for rooms with active users
+        const showPeekButton = roomData.users > 0;
+        const peekButton = showPeekButton ? `
+            <button class="peek-room-btn"
+                    onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
+                    title="Preview room audio (5-20 seconds)"
+                    aria-label="Peek into ${roomData.name} - hear room audio preview">
+                👁️ Peek In
+            </button>
+        ` : '';
 
         return `
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
                  data-room-id="${roomData.id}"
-                 onclick="app.quickJoinRoom('${roomData.id}')">
+                 onclick="app.quickJoinRoom('${roomData.id}')"
+                 role="button"
+                 tabindex="0"
+                 aria-label="${roomData.name}, ${descriptionText}, ${userCountText} of ${roomData.maxUsers} max">
                 <div class="room-header">
                     <div class="room-info">
                         <h5 class="room-name">${roomData.name}</h5>
-                        ${room.description ? `<p class="room-description">${room.description}</p>` : ''}
+                        <p class="${descriptionClass}">${descriptionText}</p>
                     </div>
                     <div class="room-status">
-                        ${statusIcons}
+                        ${statusLabels}
                     </div>
                 </div>
                 <div class="room-details">
                     <div class="room-stats">
-                        <span class="user-count">👥 ${roomData.users}/${roomData.maxUsers}</span>
-                        ${roomData.hasPassword ? '<span class="password-protected">🔒 Protected</span>' : ''}
+                        <span class="user-count">${userCountText} / ${roomData.maxUsers} max</span>
+                        ${roomData.hasPassword ? '<span class="password-protected">[Password Protected]</span>' : ''}
                         ${this.getRoomDurationDisplay(room)}
                     </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
+                    ${peekButton}
                 </div>
             </div>
         `;
     }
 
-    getRoomStatusIcons(roomData) {
-        let icons = [];
+    getRoomStatusLabels(roomData) {
+        let labels = [];
 
-        // Privacy level icon
-        const privacyIcons = {
-            'public': '🌐',
-            'unlisted': '🔗',
-            'private': '👥',
-            'encrypted': '🔐',
-            'secure': '🛡️'
+        // Privacy level label
+        const privacyLabels = {
+            'public': '[Public]',
+            'unlisted': '[Unlisted]',
+            'private': '[Private]',
+            'encrypted': '[Encrypted]',
+            'secure': '[Secure]'
         };
-        icons.push(privacyIcons[roomData.privacyLevel] || '🌐');
+        labels.push(privacyLabels[roomData.privacyLevel] || '[Public]');
 
         // Encryption status
         if (roomData.encrypted) {
-            icons.push('🔒');
+            labels.push('[End-to-End Encrypted]');
         }
 
-        return icons.join(' ');
+        return labels.map(label => `<span class="status-label">${label}</span>`).join(' ');
+    }
+
+    // Legacy alias for compatibility
+    getRoomStatusIcons(roomData) {
+        return this.getRoomStatusLabels(roomData);
     }
 
     getRoomDurationDisplay(room) {
         if (!room.duration) {
-            return '<span class="room-duration">♾️ Permanent</span>';
+            return '<span class="room-duration">[Permanent Room]</span>';
         }
 
         const hours = Math.floor(room.duration / 3600000);
@@ -1013,12 +2573,27 @@ class VoiceLinkApp {
 
         let durationText = '';
         if (hours > 0) {
-            durationText = `${hours}h${minutes > 0 ? ` ${minutes}m` : ''}`;
+            durationText = `${hours}h${minutes > 0 ? ` ${minutes}m` : ''} remaining`;
         } else {
-            durationText = `${minutes}m`;
+            durationText = `${minutes}m remaining`;
         }
 
-        return `<span class="room-duration">⏱️ ${durationText}</span>`;
+        return `<span class="room-duration">[${durationText}]</span>`;
+    }
+
+    /**
+     * Format room ID for display - strips prefix like 'default_' for cleaner display
+     * @param {string} roomId - Full room ID
+     * @returns {string} Formatted room ID
+     */
+    formatRoomIdForDisplay(roomId) {
+        if (!roomId) return '';
+        // If room ID has a prefix like 'default_', strip it
+        const underscoreIndex = roomId.indexOf('_');
+        if (underscoreIndex > 0 && underscoreIndex < 10) {
+            return roomId.substring(underscoreIndex + 1);
+        }
+        return roomId;
     }
 
     async createRoom() {
@@ -1026,7 +2601,15 @@ class VoiceLinkApp {
         const password = document.getElementById('room-password').value;
         const maxUsers = parseInt(document.getElementById('max-users').value);
         const duration = document.getElementById('room-duration').value;
-        const privacyLevel = document.querySelector('input[name="privacy-level"]:checked')?.value || 'public';
+        // Get visibility from radio buttons (public, unlisted, private)
+        const visibility = document.querySelector('input[name="room-visibility"]:checked')?.value || 'public';
+        // Get access type (hybrid, app-only, web-only, hidden)
+        const accessType = document.querySelector('input[name="room-access"]:checked')?.value || 'hybrid';
+        // Legacy privacy level support
+        const privacyLevel = document.querySelector('input[name="privacy-level"]:checked')?.value || visibility;
+
+        // Determine if room should be visible to guests based on visibility and access type
+        const visibleToGuests = visibility === 'public' && accessType !== 'hidden';
 
         try {
             // Set room privacy settings in the encryption manager
@@ -1040,7 +2623,12 @@ class VoiceLinkApp {
                 }
             }
 
-            const response = await fetch('/api/rooms', {
+            const apiBase = this.getApiBaseUrl();
+
+            // Check if user is authenticated for room time limits
+            const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
+
+            const response = await fetch(`${apiBase}/api/rooms`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1051,8 +2639,13 @@ class VoiceLinkApp {
                     password: password || undefined,
                     maxUsers,
                     duration: duration === 'lifetime' ? null : parseInt(duration),
+                    visibility,
+                    accessType,
+                    visibleToGuests,
                     privacyLevel,
-                    encrypted: window.serverEncryptionManager?.isRoomEncrypted(roomId) || false
+                    encrypted: window.serverEncryptionManager?.isRoomEncrypted(roomId) || false,
+                    creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null,
+                    isAuthenticated  // Pass auth status for room time limits
                 })
             });
 
@@ -1066,7 +2659,7 @@ class VoiceLinkApp {
 
                 this.showScreen('join-room-screen');
             } else {
-                this.showError(result.message || 'Failed to create room');
+                this.showError(result.error || result.message || 'Failed to create room');
             }
         } catch (error) {
             console.error('Failed to create room:', error);
@@ -1074,17 +2667,129 @@ class VoiceLinkApp {
         }
     }
 
+    /**
+     * Create a private demo room for interactive documentation testing
+     * These rooms are hidden from the public room list and expire quickly
+     * @param {string} testFeature - Optional specific feature to test ('audio', '3d', 'media')
+     */
+    async createDemoRoom(testFeature = null) {
+        const demoRoomId = `demo_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        const demoRoomName = testFeature
+            ? `Demo: ${testFeature.charAt(0).toUpperCase() + testFeature.slice(1)} Testing`
+            : 'Interactive Demo Room';
+
+        try {
+            this.showNotification('Creating private demo room...', 'info');
+
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roomId: demoRoomId,
+                    name: demoRoomName,
+                    maxUsers: 5,
+                    duration: 3600000, // 1 hour
+                    visibility: 'hidden',      // Not visible in room listings
+                    accessType: 'hidden',      // Hidden from all public access
+                    visibleToGuests: false,    // Never show to guests
+                    privacyLevel: 'hidden',    // Maximum privacy
+                    encrypted: false,
+                    isDemo: true,              // Mark as demo room for cleanup
+                    creatorHandle: null,
+                    isAuthenticated: false
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                // Auto-join the demo room with a demo user name
+                const userName = `Demo_${Math.random().toString(36).substr(2, 4)}`;
+                document.getElementById('join-room-id').value = result.roomId;
+                document.getElementById('user-name').value = userName;
+                document.getElementById('join-room-password').value = '';
+
+                // Clear demo URL params after creating room
+                const cleanUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, cleanUrl);
+
+                // Show the join screen and display help based on test feature
+                this.showScreen('join-room-screen');
+
+                // Show feature-specific demo help panel
+                if (testFeature) {
+                    setTimeout(() => {
+                        this.showDemoFeatureHelp(testFeature);
+                    }, 500);
+                }
+
+                this.showNotification(`Demo room ready! Room ID: ${result.roomId}`, 'success');
+            } else {
+                // Fall back to main menu on failure
+                this.showError('Could not create demo room. Showing main menu.');
+                this.showScreen('main-menu');
+            }
+        } catch (error) {
+            console.error('Failed to create demo room:', error);
+            this.showScreen('main-menu');
+        }
+    }
+
+    /**
+     * Show feature-specific help for demo mode
+     */
+    showDemoFeatureHelp(feature) {
+        const helpContent = {
+            audio: {
+                title: 'Audio Testing Demo',
+                steps: [
+                    'Click "Join Room" to enter the demo room',
+                    'Allow microphone access when prompted',
+                    'Test your microphone level in the meter',
+                    'Try muting/unmuting with the microphone button',
+                    'Adjust your volume slider to test output'
+                ]
+            },
+            '3d': {
+                title: '3D Spatial Audio Demo',
+                steps: [
+                    'Join the room and enable 3D audio in settings',
+                    'Drag user icons to position them in 3D space',
+                    'Notice how audio pans left/right as you move users',
+                    'Try the distance attenuation - farther users sound quieter',
+                    'Experiment with different reverb environments'
+                ]
+            },
+            media: {
+                title: 'Media Streaming Demo',
+                steps: [
+                    'Open the Media Player panel after joining',
+                    'Try playing a YouTube URL or local file',
+                    'Connect your Jellyfin server for library access',
+                    'Test the playback controls and volume',
+                    'See how media syncs for all room members'
+                ]
+            }
+        };
+
+        const help = helpContent[feature];
+        if (!help) return;
+
+        this.showNotification(
+            `${help.title}: ${help.steps[0]}`,
+            'info',
+            8000
+        );
+    }
+
     async joinRoom() {
         const roomId = document.getElementById('join-room-id').value;
-        const userNameInput = document.getElementById('user-name');
-        const enteredName = userNameInput?.value?.trim();
+        const userName = document.getElementById('user-name').value;
         const password = document.getElementById('join-room-password').value;
-        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
-        const authDisplayName = authUser?.displayName || authUser?.username || '';
-        const userName = enteredName || authDisplayName;
 
         if (!roomId || !userName) {
-            this.showError('Please enter room ID and your name, or sign in first');
+            this.showError('Please enter room ID and your name');
             return;
         }
 
@@ -1121,9 +2826,641 @@ class VoiceLinkApp {
     }
 
     quickJoinRoom(roomId) {
+        // Get cached room data
+        const roomData = this.roomDataCache.get(roomId);
+
+        // Set room ID (hidden field)
         document.getElementById('join-room-id').value = roomId;
-        this.applyAuthIdentityDefaults(true);
+
+        // Populate room preview info
+        if (roomData) {
+            document.getElementById('join-room-name').textContent = roomData.name;
+            document.getElementById('join-room-description').textContent =
+                roomData.description || 'No description for this room';
+
+            // User count
+            const userText = roomData.users === 0 ? 'Empty' :
+                roomData.users === 1 ? '1 user' : `${roomData.users} users`;
+            document.getElementById('join-room-users').textContent = `${userText} / ${roomData.maxUsers} max`;
+
+            // Privacy label
+            const privacyLabels = {
+                'public': '[Public]',
+                'unlisted': '[Unlisted]',
+                'private': '[Private]',
+                'encrypted': '[Encrypted]'
+            };
+            document.getElementById('join-room-privacy').textContent =
+                privacyLabels[roomData.privacyLevel] || '[Public]';
+
+            // Show/hide password field based on room requirements
+            const passwordGroup = document.getElementById('join-password-group');
+            if (roomData.hasPassword) {
+                passwordGroup.style.display = 'block';
+                document.getElementById('join-room-password').value = '';
+            } else {
+                passwordGroup.style.display = 'none';
+                document.getElementById('join-room-password').value = '';
+            }
+
+            // Show peek button if room has users
+            const peekBtn = document.getElementById('join-peek-btn');
+            if (roomData.users > 0) {
+                peekBtn.style.display = 'inline-block';
+                peekBtn.onclick = () => this.peekIntoRoom(roomId, roomData.name);
+            } else {
+                peekBtn.style.display = 'none';
+            }
+        } else {
+            // Fallback for manual room ID entry
+            document.getElementById('join-room-name').textContent = 'Join Room';
+            document.getElementById('join-room-description').textContent = 'Enter room details to join';
+            document.getElementById('join-room-users').textContent = '';
+            document.getElementById('join-room-privacy').textContent = '';
+            document.getElementById('join-password-group').style.display = 'block'; // Show password just in case
+            document.getElementById('join-peek-btn').style.display = 'none';
+        }
+
+        // Set default username if not already set
+        const userNameField = document.getElementById('user-name');
+        if (!userNameField.value) {
+            userNameField.value = `User_${Date.now().toString().slice(-4)}`;
+        }
+
         this.showScreen('join-room-screen');
+    }
+
+    deduplicateRoomList(rooms) {
+        const normalize = (value) =>
+            String(value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, ' ');
+
+        const byKey = new Map();
+        const orderedKeys = [];
+
+        for (const room of rooms || []) {
+            const name = normalize(room.name);
+            const id = normalize(room.roomId || room.id);
+            const key = name || id;
+            if (!key) continue;
+
+            if (!byKey.has(key)) {
+                byKey.set(key, room);
+                orderedKeys.push(key);
+                continue;
+            }
+
+            const existing = byKey.get(key) || {};
+            const existingUsers = Number(existing.users || existing.userCount || 0);
+            const incomingUsers = Number(room.users || room.userCount || 0);
+            const incomingHasDescription = normalize(room.description).length > 0;
+            const existingHasDescription = normalize(existing.description).length > 0;
+
+            if (incomingUsers > existingUsers || (incomingHasDescription && !existingHasDescription)) {
+                byKey.set(key, room);
+            }
+        }
+
+        return orderedKeys.map((key) => byKey.get(key)).filter(Boolean);
+    }
+
+    attachRoomContextMenuHandlers() {
+        const roomItems = document.querySelectorAll('.room-item');
+        roomItems.forEach((item) => {
+            if (item.dataset.roomContextAttached === 'true') return;
+
+            item.addEventListener('contextmenu', (event) => {
+                event.preventDefault();
+                const roomId = item.getAttribute('data-room-id');
+                if (!roomId) return;
+                this.showRoomContextMenu(roomId, item, event.clientX, event.clientY);
+            });
+
+            item.addEventListener('keydown', (event) => {
+                const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+                if (!isContextKey) return;
+                event.preventDefault();
+                const roomId = item.getAttribute('data-room-id');
+                if (!roomId) return;
+                this.showRoomContextMenu(roomId, item);
+            });
+
+            item.dataset.roomContextAttached = 'true';
+        });
+    }
+
+    showRoomContextMenu(roomId, anchorEl, x = null, y = null) {
+        this.hideRoomContextMenu();
+        const roomData = this.roomDataCache.get(roomId);
+        if (!roomData) return;
+
+        const preview = this.getRoomPreviewEligibility(roomData);
+        const menu = document.createElement('div');
+        menu.className = 'context-menu room-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', `Room actions for ${roomData.name}`);
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '10015';
+
+        if (x !== null && y !== null) {
+            menu.style.left = `${x}px`;
+            menu.style.top = `${y}px`;
+        } else if (anchorEl) {
+            const rect = anchorEl.getBoundingClientRect();
+            menu.style.left = `${Math.max(8, Math.min(rect.left + 8, window.innerWidth - 320))}px`;
+            menu.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 260))}px`;
+        }
+
+        menu.innerHTML = `
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="join-room">
+                <span class="menu-icon">🎧</span>
+                <span class="menu-label">Join Room</span>
+            </div>
+            <div class="menu-item ${preview.allowed ? '' : 'disabled'}" role="menuitem" tabindex="0" data-action="preview-room" aria-disabled="${preview.allowed ? 'false' : 'true'}">
+                <span class="menu-icon">👁️</span>
+                <span class="menu-label">Preview Room Audio${preview.allowed ? '' : ` (${preview.reason})`}</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-join-details">
+                <span class="menu-icon">📝</span>
+                <span class="menu-label">Open Join Details</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-id">
+                <span class="menu-icon">📋</span>
+                <span class="menu-label">Copy Room ID</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-link">
+                <span class="menu-icon">🔗</span>
+                <span class="menu-label">Copy Room Link</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="share-room">
+                <span class="menu-icon">📣</span>
+                <span class="menu-label">Share Room</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="invite-user">
+                <span class="menu-icon">✉️</span>
+                <span class="menu-label">Invite User</span>
+            </div>
+        `;
+
+        const activate = async (action) => {
+            if (!action) return;
+            if (action === 'join-room' || action === 'open-join-details') {
+                this.quickJoinRoom(roomId);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'preview-room') {
+                if (!preview.allowed) {
+                    this.showNotification(preview.reason, 'info');
+                    this.hideRoomContextMenu();
+                    return;
+                }
+                await this.peekIntoRoom(roomId, roomData.name);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'copy-room-id') {
+                const copied = await this.copyText(roomId);
+                this.showNotification(copied ? 'Room ID copied.' : `Room ID: ${roomId}`, copied ? 'success' : 'info');
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'copy-room-link') {
+                await this.copyRoomLinkById(roomId);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'share-room' || action === 'invite-user') {
+                await this.shareRoom(roomId);
+                if (action === 'invite-user') {
+                    this.showNotification('Invite link ready to send.', 'success');
+                }
+                this.hideRoomContextMenu();
+            }
+        };
+
+        menu.addEventListener('click', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            await activate(item.getAttribute('data-action'));
+        });
+
+        menu.addEventListener('keydown', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                await activate(item.getAttribute('data-action'));
+            }
+        });
+
+        document.body.appendChild(menu);
+        this.activeRoomContextMenu = menu;
+
+        const first = menu.querySelector('.menu-item');
+        if (first) first.focus();
+
+        setTimeout(() => {
+            document.addEventListener('click', this.boundHandleRoomMenuOutsideClick, true);
+            document.addEventListener('keydown', this.boundHandleRoomMenuEscape, true);
+        }, 0);
+    }
+
+    hideRoomContextMenu() {
+        if (this.activeRoomContextMenu) {
+            this.activeRoomContextMenu.remove();
+            this.activeRoomContextMenu = null;
+        }
+        document.removeEventListener('click', this.boundHandleRoomMenuOutsideClick, true);
+        document.removeEventListener('keydown', this.boundHandleRoomMenuEscape, true);
+    }
+
+    handleRoomMenuOutsideClick(event) {
+        if (!this.activeRoomContextMenu) return;
+        if (!this.activeRoomContextMenu.contains(event.target)) {
+            this.hideRoomContextMenu();
+        }
+    }
+
+    handleRoomMenuEscape(event) {
+        if (event.key === 'Escape') {
+            this.hideRoomContextMenu();
+        }
+    }
+
+    getRoomPreviewEligibility(roomData) {
+        if (!roomData) return { allowed: false, reason: 'Room preview unavailable' };
+        if (roomData.users <= 0) return { allowed: false, reason: 'No active participants to preview' };
+        if (roomData.locked || roomData.canJoin === false) return { allowed: false, reason: 'Room is currently unavailable' };
+        if (roomData.privacyLevel === 'private') return { allowed: false, reason: 'Room owner requested privacy' };
+        if (roomData.hasPassword) return { allowed: false, reason: 'Password-protected rooms cannot be previewed' };
+        return { allowed: true, reason: '' };
+    }
+
+    async copyRoomLinkById(roomId) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${roomId}`);
+            const data = await response.json();
+            const link = data.joinUrl || `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+            const copied = await this.copyText(link);
+            this.showNotification(copied ? 'Room link copied.' : link, copied ? 'success' : 'info');
+        } catch (error) {
+            console.error('copyRoomLinkById failed:', error);
+            const fallback = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+            const copied = await this.copyText(fallback);
+            this.showNotification(copied ? 'Room link copied.' : fallback, copied ? 'success' : 'info');
+        }
+    }
+
+    // ========================================
+    // PEEK INTO ROOM - Audio Preview Feature
+    // ========================================
+
+    /**
+     * Peek into a room - hear audio preview with "behind the door" effect
+     * @param {string} roomId - Room to peek into
+     * @param {string} roomName - Room name for display
+     */
+    async peekIntoRoom(roomId, roomName) {
+        // Prevent multiple simultaneous peeks
+        if (this.isPeeking) {
+            this.showNotification('Already peeking into a room...', 'info');
+            return;
+        }
+
+        console.log(`Peeking into room: ${roomName} (${roomId})`);
+        this.isPeeking = true;
+        this.peekRoomId = roomId;
+
+        // Update button state
+        const peekBtn = document.querySelector(`[data-room-id="${roomId}"] .peek-room-btn`);
+        if (peekBtn) {
+            peekBtn.textContent = '👁️ Peeking...';
+            peekBtn.disabled = true;
+            peekBtn.classList.add('peeking');
+        }
+
+        try {
+            // Create audio context for preview
+            this.peekAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+            // Create lowpass filter for "behind the door" effect
+            this.peekLowpassFilter = this.peekAudioContext.createBiquadFilter();
+            this.peekLowpassFilter.type = 'lowpass';
+            this.peekLowpassFilter.frequency.value = 800; // Muffled sound
+            this.peekLowpassFilter.Q.value = 0.7;
+
+            // Create gain node for volume control
+            this.peekGainNode = this.peekAudioContext.createGain();
+            this.peekGainNode.gain.value = 0.7;
+
+            // Connect filter chain
+            this.peekLowpassFilter.connect(this.peekGainNode);
+            this.peekGainNode.connect(this.peekAudioContext.destination);
+
+            // Play whoosh/door opening sound
+            await this.playPeekSound('start');
+
+            // Show peek overlay
+            this.showPeekOverlay(roomName);
+
+            // Connect to room as listener (read-only mode)
+            await this.connectToPeekStream(roomId);
+
+            // Auto-stop after 15 seconds (adjustable 5-20s)
+            this.peekTimeout = setTimeout(() => {
+                this.stopPeeking();
+            }, 15000);
+
+        } catch (error) {
+            console.error('Failed to peek into room:', error);
+            this.showNotification('Failed to peek into room', 'error');
+            this.stopPeeking();
+        }
+    }
+
+    /**
+     * Connect to room audio stream for preview
+     */
+    async connectToPeekStream(roomId) {
+        const apiBase = this.getApiBaseUrl();
+
+        // Request room audio stream for preview
+        // This creates a temporary listen-only connection
+        try {
+            const response = await fetch(`${apiBase}/api/rooms/${roomId}/peek`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ duration: 15 })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.streamUrl) {
+                    // Connect to WebRTC stream
+                    await this.setupPeekWebRTC(data);
+                } else if (data.audioData) {
+                    // Play buffered audio preview if provided
+                    await this.playBufferedPreview(data.audioData);
+                }
+            } else {
+                // Fallback: Show "no preview available" with ambient sound
+                console.log('Room peek not available, playing ambient preview');
+                this.showNotification('Preview not available - room may be quiet', 'info');
+            }
+        } catch (error) {
+            console.log('Peek stream unavailable:', error.message);
+            // Still show the peek overlay for ambiance
+        }
+    }
+
+    /**
+     * Setup WebRTC connection for peek audio
+     */
+    async setupPeekWebRTC(streamData) {
+        // Simplified WebRTC for audio-only receive
+        const pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+
+        pc.ontrack = (event) => {
+            const audioElement = new Audio();
+            audioElement.srcObject = event.streams[0];
+
+            // Create media stream source and connect through filter
+            const source = this.peekAudioContext.createMediaStreamSource(event.streams[0]);
+            source.connect(this.peekLowpassFilter);
+
+            this.peekMediaSource = source;
+            console.log('Peek audio stream connected with lowpass filter');
+        };
+
+        this.peekPeerConnection = pc;
+
+        // Handle signaling if provided
+        if (streamData.offer) {
+            await pc.setRemoteDescription(new RTCSessionDescription(streamData.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+        }
+    }
+
+    /**
+     * Play buffered audio preview
+     */
+    async playBufferedPreview(audioData) {
+        try {
+            const audioBuffer = await this.peekAudioContext.decodeAudioData(audioData);
+            const source = this.peekAudioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.peekLowpassFilter);
+            source.start();
+            this.peekBufferSource = source;
+        } catch (error) {
+            console.error('Failed to play buffered preview:', error);
+        }
+    }
+
+    /**
+     * Play peek transition sounds (blinds up/down + random whoosh layered)
+     * @param {string} type - 'start' or 'end'
+     */
+    async playPeekSound(type) {
+        try {
+            const ctx = this.peekAudioContext || new AudioContext();
+
+            // Primary peek sounds (blinds going up for peek in, down for peek out)
+            const peekSounds = {
+                start: 'assets/sounds/peek/Peek-In-To-Room-Raised-Fast.flac',
+                end: 'assets/sounds/peek/Peek-Out-Of-Room-Blinds-Lowered-Fast.flac'
+            };
+
+            // Random whoosh sounds to layer with the blinds sound
+            const whooshSounds = [
+                'assets/sounds/peek/whoosh_fast1.wav',
+                'assets/sounds/peek/whoosh_fast2.wav',
+                'assets/sounds/peek/whoosh_fast3.wav',
+                'assets/sounds/peek/whoosh_medium1.wav',
+                'assets/sounds/peek/whoosh_medium2.wav',
+                'assets/sounds/peek/whoosh_medium3.wav',
+                'assets/sounds/peek/whoosh_medium4.wav',
+                'assets/sounds/peek/whoosh_slow1.wav',
+                'assets/sounds/peek/whoosh_slow2.wav',
+                'assets/sounds/peek/whoosh_slower1.wav'
+            ];
+
+            // Randomly select a whoosh sound
+            const randomWhoosh = whooshSounds[Math.floor(Math.random() * whooshSounds.length)];
+
+            // Helper to play a sound file
+            const playSound = async (soundFile, volume = 0.6) => {
+                try {
+                    const response = await fetch(soundFile);
+                    if (!response.ok) return 0;
+
+                    const arrayBuffer = await response.arrayBuffer();
+                    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+                    const source = ctx.createBufferSource();
+                    source.buffer = audioBuffer;
+
+                    const gainNode = ctx.createGain();
+                    gainNode.gain.value = volume;
+
+                    source.connect(gainNode);
+                    gainNode.connect(ctx.destination);
+                    source.start();
+
+                    return audioBuffer.duration * 1000;
+                } catch (e) {
+                    console.log('Sound load failed:', soundFile);
+                    return 0;
+                }
+            };
+
+            // Play blinds sound and random whoosh layered together
+            const [peekDuration, whooshDuration] = await Promise.all([
+                playSound(peekSounds[type], 0.5),   // Blinds up/down
+                playSound(randomWhoosh, 0.35)       // Random whoosh overlay
+            ]);
+
+            // Wait for the longer sound to finish
+            const maxDuration = Math.max(peekDuration, whooshDuration);
+            if (maxDuration > 0) {
+                await new Promise(resolve => setTimeout(resolve, Math.min(maxDuration, 1500)));
+            } else {
+                // Fallback if both sounds failed
+                await this.playWhooshFallback(ctx, type);
+            }
+
+        } catch (error) {
+            console.log('Could not play peek sound, using fallback:', error.message);
+            await this.playWhooshFallback(this.peekAudioContext, type);
+        }
+    }
+
+    /**
+     * Fallback whoosh sound if audio files unavailable
+     */
+    async playWhooshFallback(ctx, type) {
+        try {
+            const duration = 0.4;
+            const oscillator = ctx.createOscillator();
+            const masterGain = ctx.createGain();
+
+            oscillator.type = 'sine';
+            if (type === 'start') {
+                oscillator.frequency.setValueAtTime(100, ctx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + duration);
+                masterGain.gain.setValueAtTime(0, ctx.currentTime);
+                masterGain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + duration * 0.3);
+                masterGain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+            } else {
+                oscillator.frequency.setValueAtTime(600, ctx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + duration);
+                masterGain.gain.setValueAtTime(0.3, ctx.currentTime);
+                masterGain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+            }
+
+            oscillator.connect(masterGain);
+            masterGain.connect(ctx.destination);
+            oscillator.start(ctx.currentTime);
+            oscillator.stop(ctx.currentTime + duration);
+
+            await new Promise(resolve => setTimeout(resolve, duration * 1000));
+        } catch (e) {
+            console.log('Whoosh fallback failed:', e.message);
+        }
+    }
+
+    /**
+     * Show peek overlay UI
+     */
+    showPeekOverlay(roomName) {
+        // Remove existing overlay
+        document.querySelector('.peek-overlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'peek-overlay';
+        overlay.innerHTML = `
+            <div class="peek-content">
+                <div class="peek-icon">👁️</div>
+                <div class="peek-info">
+                    <h3>Peeking into "${roomName}"</h3>
+                    <p>Listening through the door...</p>
+                    <div class="peek-progress">
+                        <div class="peek-progress-bar"></div>
+                    </div>
+                    <p class="peek-hint">Audio is filtered for preview</p>
+                </div>
+                <button class="peek-stop-btn" onclick="app.stopPeeking()">Stop Peeking</button>
+                <button class="peek-join-btn" onclick="app.stopPeeking(); app.quickJoinRoom('${this.peekRoomId}')">Join Room</button>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Animate progress bar
+        const progressBar = overlay.querySelector('.peek-progress-bar');
+        if (progressBar) {
+            progressBar.style.animation = 'peekProgress 15s linear forwards';
+        }
+    }
+
+    /**
+     * Stop peeking and cleanup
+     */
+    async stopPeeking() {
+        if (!this.isPeeking) return;
+
+        console.log('Stopping peek...');
+
+        // Play end whoosh sound
+        await this.playPeekSound('end');
+
+        // Cleanup timeout
+        if (this.peekTimeout) {
+            clearTimeout(this.peekTimeout);
+            this.peekTimeout = null;
+        }
+
+        // Cleanup audio
+        if (this.peekMediaSource) {
+            this.peekMediaSource.disconnect();
+            this.peekMediaSource = null;
+        }
+
+        if (this.peekBufferSource) {
+            try { this.peekBufferSource.stop(); } catch (e) {}
+            this.peekBufferSource = null;
+        }
+
+        if (this.peekPeerConnection) {
+            this.peekPeerConnection.close();
+            this.peekPeerConnection = null;
+        }
+
+        if (this.peekAudioContext) {
+            this.peekAudioContext.close();
+            this.peekAudioContext = null;
+        }
+
+        // Remove overlay
+        document.querySelector('.peek-overlay')?.remove();
+
+        // Reset button state
+        const peekBtn = document.querySelector(`[data-room-id="${this.peekRoomId}"] .peek-room-btn`);
+        if (peekBtn) {
+            peekBtn.textContent = '👁️ Peek In';
+            peekBtn.disabled = false;
+            peekBtn.classList.remove('peeking');
+        }
+
+        this.isPeeking = false;
+        this.peekRoomId = null;
     }
 
     handleJoinedRoom(room, user) {
@@ -1132,15 +3469,7 @@ class VoiceLinkApp {
 
         // Update UI
         document.getElementById('current-room-name').textContent = room.name;
-        document.getElementById('room-id-display').textContent = `Room ID: ${room.id}`;
-        const roomStatusId = document.getElementById('room-status-room-id');
-        if (roomStatusId) {
-            roomStatusId.textContent = room.id;
-        }
-        const connectionStatus = document.getElementById('room-status-connection');
-        if (connectionStatus) {
-            connectionStatus.textContent = this.socket?.connected ? 'Connected' : 'Disconnected';
-        }
+        document.getElementById('room-id-display').textContent = `Room ID: ${this.formatRoomIdForDisplay(room.id)}`;
 
         // Add existing users
         room.users.forEach(existingUser => {
@@ -1152,6 +3481,15 @@ class VoiceLinkApp {
 
         this.updateUserCount();
         this.showScreen('voice-chat-screen');
+
+        // Enable jukebox for room
+        if (window.jukeboxManager) {
+            window.jukeboxManager.enable();
+        }
+
+        // Update share button visibility based on room settings and auth state
+        const isAuthenticated = !!(localStorage.getItem('mastodon_access_token') || sessionStorage.getItem('mastodon_access_token'));
+        this.updateShareButtons(isAuthenticated);
 
         console.log('Successfully joined room:', room.name);
     }
@@ -1182,17 +3520,21 @@ class VoiceLinkApp {
         const userElement = document.createElement('div');
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
+        userElement.dataset.userName = user.name || 'User';
+        userElement.dataset.userStatus = user.status || 'online';
+        userElement.dataset.userAvatar = user.avatar || '👤';
+        userElement.dataset.userStatusMessage = user.statusMessage || user.customStatus || '';
 
         userElement.innerHTML = `
             <div class="user-info">
                 <div class="user-status connected" title="Connected"></div>
                 <span class="user-name">${user.name}</span>
-                <span class="audio-indicator" style="display: none;">🔊</span>
+                <span class="audio-indicator" style="display: none;">[Speaking]</span>
             </div>
             <div class="user-controls">
-                <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Volume Down">🔉</button>
-                <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Volume Up">🔊</button>
-                <button onclick="app.toggleUserMute('${user.id}')" title="Mute User">🔇</button>
+                <button onclick="app.adjustUserVolume('${user.id}', -0.1)" title="Decrease volume" aria-label="Decrease volume for ${user.name}">Vol -</button>
+                <button onclick="app.adjustUserVolume('${user.id}', 0.1)" title="Increase volume" aria-label="Increase volume for ${user.name}">Vol +</button>
+                <button onclick="app.toggleUserMute('${user.id}')" title="Mute user" aria-label="Mute ${user.name}">Mute</button>
             </div>
         `;
 
@@ -1212,14 +3554,33 @@ class VoiceLinkApp {
     }
 
     updateUserCount() {
-        const count = this.users.size + 1; // +1 for current user
         const userCountElement = document.getElementById('user-count');
+        const totalUsers = this.users.size + 1; // +1 for current user
+
         if (userCountElement) {
-            userCountElement.textContent = count;
+            userCountElement.textContent = totalUsers;
         }
-        const roomStatusUsers = document.getElementById('room-status-users');
-        if (roomStatusUsers) {
-            roomStatusUsers.textContent = String(count);
+
+        // Show/hide the "alone in room" message
+        this.updateAloneInRoomMessage(totalUsers === 1);
+    }
+
+    updateAloneInRoomMessage(isAlone) {
+        const existingMessage = document.getElementById('alone-in-room-message');
+        const chatMessages = document.getElementById('chat-messages');
+
+        if (isAlone && !existingMessage && chatMessages) {
+            const messageElement = document.createElement('div');
+            messageElement.id = 'alone-in-room-message';
+            messageElement.className = 'alone-room-notice';
+            messageElement.innerHTML = `
+                <p class="alone-message">You are the only one here!</p>
+                <p class="invite-prompt">Why not invite someone to join?</p>
+            `;
+            // Insert at the top of chat messages
+            chatMessages.insertBefore(messageElement, chatMessages.firstChild);
+        } else if (!isAlone && existingMessage) {
+            existingMessage.remove();
         }
     }
 
@@ -1338,6 +3699,19 @@ class VoiceLinkApp {
     }
 
     leaveRoom() {
+        // Disable jukebox - it's room-scoped, playback stops when leaving
+        if (window.jukeboxManager) {
+            window.jukeboxManager.disable();
+        }
+
+        // Stop background stream when leaving room
+        this.stopBackgroundStream();
+
+        // Clean up whisper mode
+        if (this.whisperMode) {
+            this.whisperMode.cleanup();
+        }
+
         if (this.webrtcManager) {
             this.webrtcManager.destroy();
             this.webrtcManager = null;
@@ -1351,14 +3725,9 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users.clear();
-        const roomStatusUsers = document.getElementById('room-status-users');
-        if (roomStatusUsers) {
-            roomStatusUsers.textContent = '0';
-        }
-        const roomStatusConnection = document.getElementById('room-status-connection');
-        if (roomStatusConnection) {
-            roomStatusConnection.textContent = 'Disconnected';
-        }
+
+        // Hide share button (no longer in room)
+        this.updateShareButtons(false);
 
         // Reconnect to server
         this.connectToServer().then(() => {
@@ -1384,21 +3753,6 @@ class VoiceLinkApp {
     showSuccess(message) {
         console.log('Success:', message);
         this.showNotification(message, 'success');
-    }
-
-    applyAuthIdentityDefaults(forceGuest = false) {
-        const input = document.getElementById('user-name');
-        if (!input) return;
-
-        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
-        if (authUser && !forceGuest) {
-            input.value = authUser.displayName || authUser.username || input.value || '';
-            return;
-        }
-
-        if (!input.value) {
-            input.value = `User_${Date.now().toString().slice(-4)}`;
-        }
     }
 
     // Simple notification system without dialogs
@@ -1442,6 +3796,47 @@ class VoiceLinkApp {
                 }
             }, 300);
         }, 3000);
+    }
+
+    showLinkedNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : type === 'warning' ? '#ff9800' : '#2196F3'};
+            color: white;
+            padding: 15px 20px;
+            border-radius: 5px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 10000;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            max-width: 380px;
+            line-height: 1.4;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+            overflow-wrap: anywhere;
+        `;
+
+        this.appendTextWithSafeLinks(notification, message);
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.opacity = '1';
+            notification.style.transform = 'translateY(0)';
+        }, 10);
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateY(-20px)';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, 7000);
     }
 
     // Play audio file with stop capability
@@ -1756,7 +4151,6 @@ class VoiceLinkApp {
 
         // Load current settings
         this.loadCurrentSettings();
-        this.syncAuthenticationSettings();
 
         // Setup settings event listeners
         this.setupSettingsEventListeners();
@@ -1793,9 +4187,15 @@ class VoiceLinkApp {
     }
 
     setupSettingsEventListeners() {
-        // Save all settings button
+        // Save all settings button - saves and returns to previous screen
         document.getElementById('save-all-settings')?.addEventListener('click', () => {
             this.saveAllSettings();
+            // Return to previous screen after saving
+            if (this.currentRoom) {
+                this.showScreen('voice-chat-screen');
+            } else {
+                this.showScreen('main-menu');
+            }
         });
 
         // Test audio in advanced tab
@@ -1826,44 +4226,6 @@ class VoiceLinkApp {
                 window.electronAPI.restartServer();
             }
         });
-
-        document.getElementById('auth-open-login-btn')?.addEventListener('click', () => {
-            document.getElementById('authelia-login-btn')?.click();
-        });
-
-        document.getElementById('auth-open-logout-btn')?.addEventListener('click', () => {
-            document.getElementById('authelia-logout-btn')?.click();
-        });
-    }
-
-    syncAuthenticationSettings() {
-        const authUser = window.autheliaAuth?.user || window.mastodonAuth?.getUser?.();
-        const statusEl = document.getElementById('auth-settings-status');
-        const displayNameEl = document.getElementById('auth-settings-display-name');
-        const usernameEl = document.getElementById('auth-settings-username');
-        const providerEl = document.getElementById('auth-settings-provider');
-        const groupsEl = document.getElementById('auth-settings-groups');
-
-        if (!statusEl || !displayNameEl || !usernameEl || !providerEl || !groupsEl) {
-            return;
-        }
-
-        if (!authUser) {
-            statusEl.textContent = 'Not signed in';
-            displayNameEl.textContent = '-';
-            usernameEl.textContent = '-';
-            providerEl.textContent = '-';
-            groupsEl.textContent = '-';
-            return;
-        }
-
-        statusEl.textContent = 'Signed in';
-        displayNameEl.textContent = authUser.displayName || authUser.username || '-';
-        usernameEl.textContent = authUser.username || '-';
-        providerEl.textContent = authUser.authProvider || 'mastodon';
-        groupsEl.textContent = Array.isArray(authUser.groups) && authUser.groups.length
-            ? authUser.groups.join(', ')
-            : (authUser.isAdmin ? 'admins' : 'users');
     }
 
     loadServerInfo() {
@@ -2166,12 +4528,2724 @@ class VoiceLinkApp {
         });
     }
 
+    // ========================================
+    // MASTODON AUTHENTICATION SYSTEM
+    // ========================================
+
+    setupMastodonAuth() {
+        // Login button
+        document.getElementById('mastodon-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal();
+        });
+
+        // Close modal button
+        document.getElementById('close-login-modal')?.addEventListener('click', () => {
+            this.hideMastodonLoginModal();
+        });
+
+        // Auth Tab Switching
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabId = tab.dataset.tab;
+                // Update tab active state
+                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                // Update content visibility
+                document.querySelectorAll('.auth-tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                document.getElementById(`${tabId}-tab`)?.classList.add('active');
+            });
+        });
+
+        // Show/Hide Registration Form
+        document.getElementById('show-register-form')?.addEventListener('click', () => {
+            document.getElementById('email-login-form').style.display = 'none';
+            document.getElementById('show-register-form').style.display = 'none';
+            document.querySelector('.auth-divider').style.display = 'none';
+            document.getElementById('email-register-form').style.display = 'block';
+        });
+
+        document.getElementById('back-to-login')?.addEventListener('click', () => {
+            document.getElementById('email-register-form').style.display = 'none';
+            document.getElementById('email-login-form').style.display = 'block';
+            document.getElementById('show-register-form').style.display = 'block';
+            document.querySelector('.auth-divider').style.display = 'flex';
+        });
+
+        // Email Login Form Submit
+        document.getElementById('email-login-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('login-email')?.value;
+            const password = document.getElementById('login-password')?.value;
+            const remember = document.getElementById('remember-me')?.checked;
+
+            if (email && password) {
+                await this.handleEmailLogin(email, password, remember);
+            }
+        });
+
+        // Email Registration Form Submit
+        document.getElementById('email-register-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('register-name')?.value;
+            const email = document.getElementById('register-email')?.value;
+            const password = document.getElementById('register-password')?.value;
+            const confirm = document.getElementById('register-confirm')?.value;
+
+            if (password !== confirm) {
+                this.showNotification('Passwords do not match', 'error');
+                return;
+            }
+
+            if (name && email && password) {
+                await this.handleEmailRegister(name, email, password);
+            }
+        });
+
+        // Connect button (Mastodon)
+        document.getElementById('mastodon-connect-btn')?.addEventListener('click', () => {
+            const instanceInput = document.getElementById('mastodon-instance-input');
+            if (instanceInput?.value) {
+                this.startMastodonAuth(instanceInput.value);
+            }
+        });
+
+        const elevatedScopeToggle = document.getElementById('mastodon-request-elevated-scope');
+        if (elevatedScopeToggle) {
+            const savedPreference = localStorage.getItem('voicelink_mastodon_request_elevated_scope');
+            elevatedScopeToggle.checked = savedPreference === '1';
+            elevatedScopeToggle.addEventListener('change', () => {
+                localStorage.setItem(
+                    'voicelink_mastodon_request_elevated_scope',
+                    elevatedScopeToggle.checked ? '1' : '0'
+                );
+            });
+        }
+
+        // Instance input - allow Enter key
+        document.getElementById('mastodon-instance-input')?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('mastodon-connect-btn')?.click();
+            }
+        });
+
+        // Suggested instance buttons
+        document.querySelectorAll('.instance-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const instance = btn.dataset.instance;
+                if (instance) {
+                    this.startMastodonAuth(instance);
+                }
+            });
+        });
+
+        // Manual OAuth code submit (for Electron)
+        document.getElementById('oauth-code-submit')?.addEventListener('click', () => {
+            const codeInput = document.getElementById('oauth-code-input');
+            if (codeInput?.value) {
+                this.handleManualOAuthCode(codeInput.value);
+            }
+        });
+
+        // Logout button
+        document.getElementById('mastodon-logout-btn')?.addEventListener('click', () => {
+            this.handleMastodonLogout();
+        });
+
+        // Manage authorized app permissions on Mastodon instance
+        document.getElementById('mastodon-manage-apps-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.openMastodonApplicationsSettings();
+        });
+
+        // Listen for Mastodon auth events
+        window.addEventListener('mastodon-login', (e) => {
+            this.updateUIForAuthState(e.detail.user);
+        });
+
+        window.addEventListener('mastodon-logout', () => {
+            this.updateUIForAuthState(null);
+        });
+
+        // Check existing session
+        if (window.mastodonAuth?.isAuthenticated()) {
+            this.updateUIForAuthState(window.mastodonAuth.getUser());
+        }
+    }
+
+    showMastodonLoginModal() {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+        }
+    }
+
+    hideMastodonLoginModal() {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+        // Hide code entry section
+        const codeEntry = document.getElementById('oauth-code-entry');
+        if (codeEntry) {
+            codeEntry.style.display = 'none';
+        }
+    }
+
+    async startMastodonAuth(instanceUrl) {
+        try {
+            if (!window.mastodonAuth) {
+                throw new Error('Mastodon OAuth manager not initialized');
+            }
+
+            this.showNotification('Connecting to ' + instanceUrl + '...', 'info');
+
+            const existingMastodonUser = window.mastodonAuth.getUser?.() || null;
+            const requestElevated = (() => {
+                const checkbox = document.getElementById('mastodon-request-elevated-scope');
+                if (checkbox) return checkbox.checked;
+                return localStorage.getItem('voicelink_mastodon_request_elevated_scope') === '1';
+            })();
+            const authUrl = await window.mastodonAuth.startAuth(instanceUrl, {
+                apiBase: this.getApiBaseUrl(),
+                username: existingMastodonUser?.username || null,
+                email: existingMastodonUser?.email || null,
+                requestElevated
+            });
+
+            // Check if we're in Electron (need manual code entry)
+            const isElectron = typeof process !== 'undefined' && process.versions?.electron;
+
+            if (isElectron) {
+                // Open external browser and show code entry field
+                if (window.electronAPI?.openExternal) {
+                    window.electronAPI.openExternal(authUrl);
+                } else {
+                    window.open(authUrl, '_blank');
+                }
+
+                // Show code entry section
+                const codeEntry = document.getElementById('oauth-code-entry');
+                if (codeEntry) {
+                    codeEntry.style.display = 'block';
+                }
+            } else {
+                // Web flow - redirect to auth page
+                window.location.href = authUrl;
+            }
+        } catch (error) {
+            console.error('Failed to start Mastodon auth:', error);
+            this.showNotification('Failed to connect: ' + error.message, 'error');
+        }
+    }
+
+    async handleManualOAuthCode(code) {
+        try {
+            this.showNotification('Verifying authorization code...', 'info');
+
+            const user = await window.mastodonAuth.handleManualCode(code);
+
+            this.hideMastodonLoginModal();
+            this.showNotification('Welcome, ' + user.displayName + '!', 'success');
+        } catch (error) {
+            console.error('Failed to verify OAuth code:', error);
+            this.showNotification('Failed to verify code: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Handle email/password login
+     */
+    async handleEmailLogin(email, password, remember) {
+        try {
+            this.showNotification('Logging in...', 'info');
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, remember })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.message || 'Login failed');
+            }
+
+            const data = await response.json();
+
+            // Store auth token
+            if (remember) {
+                localStorage.setItem('voicelink_auth_token', data.token);
+            } else {
+                sessionStorage.setItem('voicelink_auth_token', data.token);
+            }
+
+            // Update UI with user data
+            this.hideMastodonLoginModal();
+            this.updateUIForAuthState(data.user);
+            this.showNotification('Welcome back, ' + data.user.displayName + '!', 'success');
+
+            // Dispatch login event
+            window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
+
+        } catch (error) {
+            console.error('Email login failed:', error);
+            this.showNotification(error.message || 'Login failed', 'error');
+        }
+    }
+
+    /**
+     * Handle email/password registration
+     */
+    async handleEmailRegister(name, email, password) {
+        try {
+            this.showNotification('Creating account...', 'info');
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/auth/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ displayName: name, email, password })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.message || 'Registration failed');
+            }
+
+            const data = await response.json();
+
+            // Store auth token
+            localStorage.setItem('voicelink_auth_token', data.token);
+
+            // Update UI with user data
+            this.hideMastodonLoginModal();
+            this.updateUIForAuthState(data.user);
+            this.showNotification('Welcome to VoiceLink, ' + data.user.displayName + '!', 'success');
+
+            // Dispatch login event
+            window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
+
+        } catch (error) {
+            console.error('Email registration failed:', error);
+            this.showNotification(error.message || 'Registration failed', 'error');
+        }
+    }
+
+    checkOAuthCallback() {
+        // Check URL for OAuth callback params
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('oauth_code') || urlParams.get('code');
+        const state = urlParams.get('oauth_state') || urlParams.get('state');
+
+        if (code) {
+            // Remove params from URL
+            const cleanUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, cleanUrl);
+
+            // Handle the callback
+            this.handleOAuthCallback(code, state);
+        }
+    }
+
+    async handleOAuthCallback(code, state) {
+        try {
+            this.showNotification('Completing login...', 'info');
+
+            const user = await window.mastodonAuth.handleCallback(code, state);
+
+            this.showNotification('Welcome, ' + user.displayName + '!', 'success');
+        } catch (error) {
+            console.error('OAuth callback failed:', error);
+            this.showNotification('Login failed: ' + error.message, 'error');
+        }
+    }
+
+    async handleMastodonLogout() {
+        try {
+            await window.mastodonAuth?.logout();
+            this.showNotification('Logged out successfully', 'info');
+        } catch (error) {
+            console.error('Logout failed:', error);
+        }
+    }
+
+    openMastodonApplicationsSettings() {
+        const appsUrl = window.mastodonAuth?.getApplicationsSettingsUrl?.();
+        if (!appsUrl) {
+            this.showNotification('Sign in with Mastodon to manage app permissions', 'warning');
+            return;
+        }
+
+        if (window.electronAPI?.openExternal) {
+            window.electronAPI.openExternal(appsUrl);
+            return;
+        }
+
+        window.open(appsUrl, '_blank', 'noopener,noreferrer');
+    }
+
+    updateUIForAuthState(user) {
+        const loginPrompt = document.getElementById('mastodon-login-prompt');
+        const userInfo = document.getElementById('mastodon-user-info');
+        const avatar = document.getElementById('mastodon-user-avatar');
+        const userName = document.getElementById('mastodon-user-name');
+        const userHandle = document.getElementById('mastodon-user-handle');
+        const userRole = document.getElementById('mastodon-user-role');
+
+        if (user) {
+            // Show logged-in state
+            if (loginPrompt) loginPrompt.style.display = 'none';
+            if (userInfo) userInfo.style.display = 'flex';
+
+            if (avatar) avatar.src = user.avatar || user.avatarStatic || '';
+            if (userName) userName.textContent = user.displayName;
+            if (userHandle) userHandle.textContent = user.fullHandle;
+            if (window.userSettingsManager) {
+                const autoSync = window.userSettingsManager.getSetting('mastodonAvatarAutoSync') !== false;
+                const mastodonAvatar = user.avatar || user.avatarStatic || '';
+                if (autoSync && mastodonAvatar) {
+                    const existingAvatar = String(window.userSettingsManager.getSetting('avatar') || '').trim();
+                    if (!existingAvatar || existingAvatar !== mastodonAvatar) {
+                        window.userSettingsManager.setGlobalSetting('avatar', mastodonAvatar);
+                        if (window.userSettingsInterface?.isVisible) {
+                            const avatarInput = document.getElementById('setting-avatar');
+                            if (avatarInput) avatarInput.value = mastodonAvatar;
+                        }
+                    }
+                }
+            }
+            const manageAppsBtn = document.getElementById('mastodon-manage-apps-btn');
+            const appsUrl = window.mastodonAuth?.getApplicationsSettingsUrl?.();
+            if (manageAppsBtn && appsUrl) {
+                manageAppsBtn.setAttribute('href', appsUrl);
+            }
+
+            // Show role badge
+            if (userRole) {
+                if (user.isAdmin) {
+                    userRole.textContent = 'Admin';
+                    userRole.className = 'user-role admin';
+                } else if (user.isModerator) {
+                    userRole.textContent = 'Moderator';
+                    userRole.className = 'user-role moderator';
+                } else {
+                    userRole.textContent = 'User';
+                    userRole.className = 'user-role user';
+                }
+            }
+
+            // Update role-based UI
+            this.updateRoleBasedUI(user);
+        } else {
+            // Show logged-out state
+            if (loginPrompt) loginPrompt.style.display = 'block';
+            if (userInfo) userInfo.style.display = 'none';
+
+            // Hide admin controls
+            this.hideAdminControls();
+        }
+    }
+
+    updateRoleBasedUI(user) {
+        const isAdmin = user?.isAdmin === true;
+        const isModerator = user?.isModerator === true || isAdmin;
+
+        // Server control buttons - only for admins
+        const serverControls = document.querySelector('.server-control-buttons');
+        if (serverControls) {
+            if (isAdmin) {
+                serverControls.style.display = 'flex';
+            } else {
+                serverControls.style.display = 'none';
+            }
+        }
+
+        // Show admin panel button
+        let adminPanelBtn = document.getElementById('admin-panel-btn');
+        if (isAdmin && !adminPanelBtn) {
+            this.createAdminPanelButton();
+        } else if (!isAdmin && adminPanelBtn) {
+            adminPanelBtn.remove();
+        }
+
+        // Show share room button for all authenticated users
+        this.updateShareButtons(!!user);
+
+        console.log('UI updated for ' + user?.displayName + ' - Admin: ' + isAdmin + ', Moderator: ' + isModerator);
+    }
+
+    hideAdminControls() {
+        const serverControls = document.querySelector('.server-control-buttons');
+        if (serverControls) {
+            serverControls.style.display = 'none';
+        }
+
+        const adminPanelBtn = document.getElementById('admin-panel-btn');
+        if (adminPanelBtn) {
+            adminPanelBtn.remove();
+        }
+    }
+
+    updateShareButtons(isAuthenticated) {
+        // Share button in room header - only show when inside a room and sharing is allowed
+        const shareRoomBtn = document.getElementById('share-room-btn');
+        if (shareRoomBtn) {
+            // Show share button only when: authenticated AND inside a room AND room allows sharing
+            const roomAllowsShare = this.currentRoom?.allowShare !== false; // Default to true if not set
+            if (isAuthenticated && this.currentRoom && roomAllowsShare) {
+                shareRoomBtn.style.display = '';
+            } else {
+                shareRoomBtn.style.display = 'none';
+            }
+        }
+    }
+
+    async shareRoom(roomId) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${roomId}`);
+            const data = await response.json();
+
+            if (data.shareUrls?.mastodon) {
+                window.open(data.shareUrls.mastodon, '_blank');
+            } else {
+                // Fallback - copy link
+                const joinUrl = data.joinUrl || (window.location.origin + '/?room=' + roomId);
+                await navigator.clipboard.writeText(joinUrl);
+                this.showNotification('Room link copied to clipboard!', 'success');
+            }
+        } catch (error) {
+            console.error('Failed to share room:', error);
+            this.showNotification('Failed to share room', 'error');
+        }
+    }
+
+    // ========================================
+    // EMBED CODE GENERATOR
+    // ========================================
+
+    async showEmbedCodeModal(roomId, roomName) {
+        // Remove existing modal
+        document.querySelector('.embed-code-modal')?.remove();
+
+        const modal = document.createElement('div');
+        modal.className = 'embed-code-modal modal';
+        modal.style.display = 'flex';
+
+        const content = document.createElement('div');
+        content.className = 'modal-content embed-modal';
+
+        // Title
+        const title = document.createElement('h2');
+        title.textContent = 'Embed Room';
+        content.appendChild(title);
+
+        // Room name
+        const roomLabel = document.createElement('p');
+        roomLabel.textContent = `Room: ${roomName}`;
+        roomLabel.style.color = '#888';
+        content.appendChild(roomLabel);
+
+        // Generate token button
+        const generateBtn = document.createElement('button');
+        generateBtn.className = 'primary-btn';
+        generateBtn.textContent = 'Generate Embed Code';
+        generateBtn.style.marginTop = '15px';
+        content.appendChild(generateBtn);
+
+        // Embed code container (hidden initially)
+        const embedContainer = document.createElement('div');
+        embedContainer.className = 'embed-code-container';
+        embedContainer.style.display = 'none';
+
+        const embedCode = document.createElement('pre');
+        embedCode.className = 'embed-code';
+        embedContainer.appendChild(embedCode);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-embed-btn';
+        copyBtn.textContent = 'Copy';
+        embedContainer.appendChild(copyBtn);
+
+        content.appendChild(embedContainer);
+
+        // Size options
+        const sizeOptions = document.createElement('div');
+        sizeOptions.className = 'embed-options';
+        sizeOptions.style.display = 'none';
+
+        const widthOption = document.createElement('div');
+        widthOption.className = 'embed-option';
+        const widthLabel = document.createElement('label');
+        widthLabel.textContent = 'Size';
+        const sizeInputs = document.createElement('div');
+        sizeInputs.className = 'embed-size-inputs';
+
+        const widthInput = document.createElement('input');
+        widthInput.type = 'number';
+        widthInput.value = '400';
+        widthInput.id = 'embed-width';
+
+        const sizeX = document.createElement('span');
+        sizeX.textContent = 'x';
+
+        const heightInput = document.createElement('input');
+        heightInput.type = 'number';
+        heightInput.value = '300';
+        heightInput.id = 'embed-height';
+
+        sizeInputs.appendChild(widthInput);
+        sizeInputs.appendChild(sizeX);
+        sizeInputs.appendChild(heightInput);
+        widthOption.appendChild(widthLabel);
+        widthOption.appendChild(sizeInputs);
+        sizeOptions.appendChild(widthOption);
+
+        content.appendChild(sizeOptions);
+
+        // Close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'close-modal-btn';
+        closeBtn.textContent = '\u2715';
+        closeBtn.addEventListener('click', () => modal.remove());
+        content.appendChild(closeBtn);
+
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        // Generate token handler
+        generateBtn.addEventListener('click', async () => {
+            generateBtn.disabled = true;
+            generateBtn.textContent = 'Generating...';
+
+            try {
+                const apiBase = this.getApiBaseUrl();
+
+                const response = await fetch(`${apiBase}/api/embed/token`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        roomId,
+                        creatorHandle: window.mastodonAuth?.getUser()?.fullHandle || null,
+                        expiresIn: 86400000 * 30 // 30 days
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    embedCode.textContent = data.embedCode;
+                    embedContainer.style.display = 'block';
+                    sizeOptions.style.display = 'flex';
+                    generateBtn.style.display = 'none';
+
+                    // Update embed code when size changes
+                    const updateEmbed = () => {
+                        const w = widthInput.value || 400;
+                        const h = heightInput.value || 300;
+                        embedCode.textContent = data.embedCode.replace('width="400"', `width="${w}"`).replace('height="300"', `height="${h}"`);
+                    };
+
+                    widthInput.addEventListener('input', updateEmbed);
+                    heightInput.addEventListener('input', updateEmbed);
+
+                    // Copy handler
+                    copyBtn.addEventListener('click', () => {
+                        navigator.clipboard.writeText(embedCode.textContent);
+                        copyBtn.textContent = 'Copied!';
+                        setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+                    });
+                } else {
+                    alert('Failed to generate embed code: ' + (data.error || 'Unknown error'));
+                    generateBtn.disabled = false;
+                    generateBtn.textContent = 'Generate Embed Code';
+                }
+            } catch (error) {
+                console.error('Embed generation error:', error);
+                alert('Error generating embed code');
+                generateBtn.disabled = false;
+                generateBtn.textContent = 'Generate Embed Code';
+            }
+        });
+    }
+
+    // ========================================
+    // ADMIN PANEL & CONTROLS
+    // ========================================
+
+    createAdminPanelButton() {
+        const menuSection = document.querySelector('.menu-section');
+        if (!menuSection) return;
+
+        const adminSection = document.createElement('div');
+        adminSection.className = 'menu-section admin-section';
+
+        const header = document.createElement('h3');
+        header.textContent = 'Admin Controls';
+
+        const adminBtn = document.createElement('button');
+        adminBtn.id = 'admin-panel-btn';
+        adminBtn.className = 'primary-btn admin-btn';
+        adminBtn.textContent = 'Open Admin Panel';
+
+        adminSection.appendChild(header);
+        adminSection.appendChild(adminBtn);
+
+        menuSection.parentNode.insertBefore(adminSection, menuSection);
+
+        adminBtn.addEventListener('click', () => {
+            this.showAdminPanel();
+        });
+    }
+
+    showAdminPanel() {
+        // Remove existing panel
+        document.querySelector('.admin-panel-modal')?.remove();
+
+        const modal = document.createElement('div');
+        modal.className = 'admin-panel-modal modal';
+        modal.style.display = 'flex';
+
+        // Build admin panel content using DOM methods
+        const content = document.createElement('div');
+        content.className = 'modal-content admin-panel';
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'admin-header';
+        const title = document.createElement('h2');
+        title.textContent = 'VoiceLink Admin Panel';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'close-admin-panel';
+        closeBtn.textContent = 'X';
+        header.appendChild(title);
+        header.appendChild(closeBtn);
+        content.appendChild(header);
+
+        // Tabs
+        const tabs = document.createElement('div');
+        tabs.className = 'admin-tabs';
+        const tabData = [
+            { id: 'server', label: 'Server' },
+            { id: 'rooms', label: 'Rooms' },
+            { id: 'users', label: 'Users' },
+            { id: 'mastodon', label: 'Mastodon' },
+            { id: 'notifications', label: 'Notifications' },
+            { id: 'federation', label: 'Federation' }
+        ];
+        tabData.forEach((tab, index) => {
+            const tabBtn = document.createElement('button');
+            tabBtn.className = 'admin-tab' + (index === 0 ? ' active' : '');
+            tabBtn.dataset.tab = tab.id;
+            tabBtn.textContent = tab.label;
+            tabs.appendChild(tabBtn);
+        });
+        content.appendChild(tabs);
+
+        // Content area
+        const contentArea = document.createElement('div');
+        contentArea.className = 'admin-content';
+
+        // Server Tab
+        const serverTab = this.createServerTab();
+        contentArea.appendChild(serverTab);
+
+        // Rooms Tab
+        const roomsTab = this.createRoomsTab();
+        contentArea.appendChild(roomsTab);
+
+        // Users Tab
+        const usersTab = this.createUsersTab();
+        contentArea.appendChild(usersTab);
+
+        // Mastodon Tab
+        const mastodonTab = this.createMastodonTab();
+        contentArea.appendChild(mastodonTab);
+
+        // Notifications Tab
+        const notificationsTab = this.createNotificationsTab();
+        contentArea.appendChild(notificationsTab);
+
+        // Federation Tab
+        const federationTab = this.createFederationTab();
+        contentArea.appendChild(federationTab);
+
+        content.appendChild(contentArea);
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        // Setup tab switching
+        modal.querySelectorAll('.admin-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                modal.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+                modal.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+
+                tab.classList.add('active');
+                const tabId = 'admin-' + tab.dataset.tab + '-tab';
+                document.getElementById(tabId)?.classList.add('active');
+            });
+        });
+
+        // Close button
+        closeBtn.addEventListener('click', () => modal.remove());
+
+        // Click outside to close
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+
+        // Load initial data
+        this.loadAdminData();
+    }
+
+    createServerTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content active';
+        tab.id = 'admin-server-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Server Management';
+        tab.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'admin-grid';
+
+        // Status card
+        const statusCard = document.createElement('div');
+        statusCard.className = 'admin-card';
+
+        const statusTitle = document.createElement('h4');
+        statusTitle.textContent = 'Server Status';
+        statusCard.appendChild(statusTitle);
+
+        const stats = document.createElement('div');
+        stats.className = 'server-stats';
+
+        const statusItem = this.createStatItem('Status:', 'admin-server-status', 'Online');
+        const uptimeItem = this.createStatItem('Uptime:', 'admin-server-uptime', 'Loading...');
+        const connItem = this.createStatItem('Connections:', 'admin-connections', '0');
+
+        stats.appendChild(statusItem);
+        stats.appendChild(uptimeItem);
+        stats.appendChild(connItem);
+        statusCard.appendChild(stats);
+
+        const actions = document.createElement('div');
+        actions.className = 'admin-actions';
+
+        const restartBtn = document.createElement('button');
+        restartBtn.className = 'admin-action-btn';
+        restartBtn.textContent = 'Restart';
+        restartBtn.onclick = () => this.adminRestartServer();
+
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'admin-action-btn danger';
+        stopBtn.textContent = 'Stop';
+        stopBtn.onclick = () => this.adminStopServer();
+
+        actions.appendChild(restartBtn);
+        actions.appendChild(stopBtn);
+        statusCard.appendChild(actions);
+
+        grid.appendChild(statusCard);
+
+        // Settings card
+        const settingsCard = document.createElement('div');
+        settingsCard.className = 'admin-card';
+
+        const settingsTitle = document.createElement('h4');
+        settingsTitle.textContent = 'Server Settings';
+        settingsCard.appendChild(settingsTitle);
+
+        const maxRoomsRow = this.createSettingRow('Max Concurrent Rooms:', 'admin-max-rooms', 'number', '100');
+        settingsCard.appendChild(maxRoomsRow);
+
+        const requireAuthRow = this.createCheckboxRow('Require Authentication', 'admin-require-auth');
+        settingsCard.appendChild(requireAuthRow);
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'primary-btn';
+        saveBtn.textContent = 'Save Settings';
+        saveBtn.onclick = () => this.saveServerSettings();
+        settingsCard.appendChild(saveBtn);
+
+        grid.appendChild(settingsCard);
+        tab.appendChild(grid);
+
+        return tab;
+    }
+
+    createRoomsTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-rooms-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Room Management';
+        tab.appendChild(title);
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'admin-toolbar';
+
+        const defaultRoomsBtn = document.createElement('button');
+        defaultRoomsBtn.className = 'admin-action-btn';
+        defaultRoomsBtn.textContent = 'Generate Default Rooms';
+        defaultRoomsBtn.onclick = () => this.createDefaultRooms();
+
+        const cleanupBtn = document.createElement('button');
+        cleanupBtn.className = 'admin-action-btn';
+        cleanupBtn.textContent = 'Cleanup Expired';
+        cleanupBtn.onclick = () => this.cleanupExpiredRooms();
+
+        toolbar.appendChild(defaultRoomsBtn);
+        toolbar.appendChild(cleanupBtn);
+        tab.appendChild(toolbar);
+
+        const roomsList = document.createElement('div');
+        roomsList.id = 'admin-rooms-list';
+        roomsList.className = 'admin-list';
+        roomsList.textContent = 'Loading rooms...';
+        tab.appendChild(roomsList);
+
+        return tab;
+    }
+
+    createUsersTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-users-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Connected Users';
+        tab.appendChild(title);
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'admin-toolbar';
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'admin-action-btn';
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.onclick = () => this.refreshUserList();
+
+        const broadcastBtn = document.createElement('button');
+        broadcastBtn.className = 'admin-action-btn';
+        broadcastBtn.textContent = 'Broadcast Message';
+        broadcastBtn.onclick = () => this.broadcastMessage();
+
+        toolbar.appendChild(refreshBtn);
+        toolbar.appendChild(broadcastBtn);
+        tab.appendChild(toolbar);
+
+        const usersList = document.createElement('div');
+        usersList.id = 'admin-users-list';
+        usersList.className = 'admin-list';
+        usersList.textContent = 'Loading users...';
+        tab.appendChild(usersList);
+
+        return tab;
+    }
+
+    createMastodonTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-mastodon-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Mastodon Integration';
+        tab.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'admin-grid';
+
+        // Bot Accounts card
+        const botCard = document.createElement('div');
+        botCard.className = 'admin-card';
+
+        const botTitle = document.createElement('h4');
+        botTitle.textContent = 'Bot Accounts';
+        botCard.appendChild(botTitle);
+
+        const botList = document.createElement('div');
+        botList.id = 'admin-bot-list';
+        botList.textContent = 'Loading bots...';
+        botCard.appendChild(botList);
+
+        // Add bot form
+        const addBotForm = document.createElement('div');
+        addBotForm.className = 'add-bot-form';
+
+        const instanceInput = document.createElement('input');
+        instanceInput.type = 'text';
+        instanceInput.id = 'new-bot-instance';
+        instanceInput.placeholder = 'Instance URL';
+
+        const tokenInput = document.createElement('input');
+        tokenInput.type = 'text';
+        tokenInput.id = 'new-bot-token';
+        tokenInput.placeholder = 'Access Token';
+
+        const addBotBtn = document.createElement('button');
+        addBotBtn.className = 'primary-btn';
+        addBotBtn.textContent = 'Add Bot';
+        addBotBtn.onclick = () => this.registerBot();
+
+        addBotForm.appendChild(instanceInput);
+        addBotForm.appendChild(tokenInput);
+        addBotForm.appendChild(addBotBtn);
+        botCard.appendChild(addBotForm);
+
+        grid.appendChild(botCard);
+
+        // Quick Actions card
+        const actionsCard = document.createElement('div');
+        actionsCard.className = 'admin-card';
+
+        const actionsTitle = document.createElement('h4');
+        actionsTitle.textContent = 'Quick Actions';
+        actionsCard.appendChild(actionsTitle);
+
+        const announceBtn = document.createElement('button');
+        announceBtn.className = 'admin-action-btn';
+        announceBtn.textContent = 'Announce Online';
+        announceBtn.onclick = () => this.announceServerOnline();
+
+        const customBtn = document.createElement('button');
+        customBtn.className = 'admin-action-btn';
+        customBtn.textContent = 'Custom Announcement';
+        customBtn.onclick = () => this.showAnnouncementForm();
+
+        actionsCard.appendChild(announceBtn);
+        actionsCard.appendChild(customBtn);
+
+        // Announcement form
+        const announcementForm = document.createElement('div');
+        announcementForm.id = 'announcement-form';
+        announcementForm.style.display = 'none';
+        announcementForm.style.marginTop = '10px';
+
+        const textarea = document.createElement('textarea');
+        textarea.id = 'announcement-text';
+        textarea.placeholder = 'Enter announcement...';
+        textarea.rows = 3;
+        textarea.style.width = '100%';
+
+        const postBtn = document.createElement('button');
+        postBtn.className = 'primary-btn';
+        postBtn.textContent = 'Post';
+        postBtn.onclick = () => this.postAnnouncement();
+
+        announcementForm.appendChild(textarea);
+        announcementForm.appendChild(postBtn);
+        actionsCard.appendChild(announcementForm);
+
+        grid.appendChild(actionsCard);
+        tab.appendChild(grid);
+
+        return tab;
+    }
+
+    createNotificationsTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-notifications-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Notifications (Pushover + Incoming)';
+        tab.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'admin-grid';
+
+        const pushCard = document.createElement('div');
+        pushCard.className = 'admin-card';
+        const pushTitle = document.createElement('h4');
+        pushTitle.textContent = 'Pushover Settings';
+        pushCard.appendChild(pushTitle);
+
+        pushCard.appendChild(this.createCheckboxRow('Enable Pushover', 'admin-pushover-enabled'));
+        pushCard.appendChild(this.createSettingRow('App Token:', 'admin-pushover-app-token', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('User Key:', 'admin-pushover-user-key', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Device (optional):', 'admin-pushover-device', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Sound (optional):', 'admin-pushover-sound', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Title Prefix:', 'admin-pushover-title-prefix', 'text', 'VoiceLink'));
+        pushCard.appendChild(this.createSettingRow('Min Deferred Seconds:', 'admin-pushover-min-delay', 'number', '15'));
+        pushCard.appendChild(this.createSettingRow('Max Deferred Seconds:', 'admin-pushover-max-delay', 'number', '120'));
+
+        const pushActions = document.createElement('div');
+        pushActions.className = 'admin-actions';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'primary-btn';
+        saveBtn.textContent = 'Save Pushover Settings';
+        saveBtn.onclick = () => this.savePushoverSettings();
+        const testBtn = document.createElement('button');
+        testBtn.className = 'admin-action-btn';
+        testBtn.textContent = 'Send Test Notification';
+        testBtn.onclick = () => this.testPushoverNotification();
+        pushActions.appendChild(saveBtn);
+        pushActions.appendChild(testBtn);
+        pushCard.appendChild(pushActions);
+        grid.appendChild(pushCard);
+
+        const inboxCard = document.createElement('div');
+        inboxCard.className = 'admin-card';
+        const inboxTitle = document.createElement('h4');
+        inboxTitle.textContent = 'Incoming Notification Inbox';
+        inboxCard.appendChild(inboxTitle);
+        const inboxToolbar = document.createElement('div');
+        inboxToolbar.className = 'admin-toolbar';
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'admin-action-btn';
+        refreshBtn.textContent = 'Refresh Inbox';
+        refreshBtn.onclick = () => this.loadIncomingNotifications();
+        inboxToolbar.appendChild(refreshBtn);
+        inboxCard.appendChild(inboxToolbar);
+        const inboxList = document.createElement('div');
+        inboxList.id = 'admin-notification-inbox';
+        inboxList.className = 'admin-list';
+        inboxList.textContent = 'Loading notifications...';
+        inboxCard.appendChild(inboxList);
+        grid.appendChild(inboxCard);
+
+        tab.appendChild(grid);
+        return tab;
+    }
+
+    createFederationTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-federation-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Server Federation';
+        tab.appendChild(title);
+
+        const card = document.createElement('div');
+        card.className = 'admin-card';
+
+        const cardTitle = document.createElement('h4');
+        cardTitle.textContent = 'Connected Servers';
+        card.appendChild(cardTitle);
+
+        const serverList = document.createElement('div');
+        serverList.id = 'admin-federation-list';
+        serverList.textContent = 'Loading federated servers...';
+        card.appendChild(serverList);
+
+        // Add server form
+        const addServerForm = document.createElement('div');
+        addServerForm.className = 'add-server-form';
+
+        const serverInput = document.createElement('input');
+        serverInput.type = 'text';
+        serverInput.id = 'new-federated-server';
+        serverInput.placeholder = 'Server URL';
+
+        const addServerBtn = document.createElement('button');
+        addServerBtn.className = 'primary-btn';
+        addServerBtn.textContent = 'Connect Server';
+        addServerBtn.onclick = () => this.addFederatedServer();
+
+        addServerForm.appendChild(serverInput);
+        addServerForm.appendChild(addServerBtn);
+        card.appendChild(addServerForm);
+
+        tab.appendChild(card);
+
+        return tab;
+    }
+
+    createStatItem(label, id, defaultValue) {
+        const item = document.createElement('div');
+        item.className = 'stat-item';
+
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'stat-label';
+        labelSpan.textContent = label;
+
+        const valueSpan = document.createElement('span');
+        valueSpan.className = 'stat-value';
+        valueSpan.id = id;
+        valueSpan.textContent = defaultValue;
+
+        item.appendChild(labelSpan);
+        item.appendChild(valueSpan);
+        return item;
+    }
+
+    createSettingRow(label, id, type, defaultValue) {
+        const row = document.createElement('div');
+        row.className = 'setting-row';
+
+        const labelEl = document.createElement('label');
+        labelEl.textContent = label;
+
+        const input = document.createElement('input');
+        input.type = type;
+        input.id = id;
+        input.value = defaultValue;
+
+        row.appendChild(labelEl);
+        row.appendChild(input);
+        return row;
+    }
+
+    createCheckboxRow(label, id) {
+        const row = document.createElement('div');
+        row.className = 'setting-row';
+
+        const labelEl = document.createElement('label');
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = id;
+
+        labelEl.appendChild(checkbox);
+        labelEl.appendChild(document.createTextNode(' ' + label));
+
+        row.appendChild(labelEl);
+        return row;
+    }
+
+    async loadAdminData() {
+        await Promise.all([
+            this.loadAdminServerStats(),
+            this.loadAdminRooms(),
+            this.loadAdminUsers(),
+            this.loadAdminBots(),
+            this.loadPushoverStatus(),
+            this.loadIncomingNotifications(),
+            this.loadFederatedServers()
+        ]);
+    }
+
+    async loadAdminServerStats() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/stats`);
+            const stats = await response.json();
+
+            const statusEl = document.getElementById('admin-server-status');
+            const uptimeEl = document.getElementById('admin-server-uptime');
+            const connEl = document.getElementById('admin-connections');
+
+            if (statusEl) statusEl.textContent = 'Online';
+            if (uptimeEl) uptimeEl.textContent = this.formatUptime(stats.uptime);
+            if (connEl) connEl.textContent = stats.connections || 0;
+        } catch (error) {
+            console.error('Failed to load server stats:', error);
+        }
+    }
+
+    formatUptime(ms) {
+        if (!ms) return 'Unknown';
+        const hours = Math.floor(ms / 3600000);
+        const minutes = Math.floor((ms % 3600000) / 60000);
+        return hours + 'h ' + minutes + 'm';
+    }
+
+    async loadAdminRooms() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms`);
+            const rooms = await response.json();
+
+            const roomsList = document.getElementById('admin-rooms-list');
+            if (roomsList) {
+                roomsList.textContent = '';
+
+                if (rooms.length === 0) {
+                    roomsList.textContent = 'No active rooms';
+                } else {
+                    rooms.forEach(room => {
+                        const item = this.createAdminListItem(
+                            room.name,
+                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
+                            [
+                                { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
+                                { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }
+                            ]
+                        );
+                        item.dataset.roomId = room.id || room.roomId;
+                        roomsList.appendChild(item);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load admin rooms:', error);
+        }
+    }
+
+    async loadAdminUsers() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/users`);
+            const users = await response.json();
+
+            const usersList = document.getElementById('admin-users-list');
+            if (usersList) {
+                usersList.textContent = '';
+
+                if (!users || users.length === 0) {
+                    usersList.textContent = 'No connected users';
+                } else {
+                    users.forEach(user => {
+                        const item = this.createAdminListItem(
+                            user.name || user.username || 'Anonymous',
+                            'Room: ' + (user.room || 'Lobby') + ' - ' + (user.mastodonHandle || 'No Mastodon'),
+                            [
+                                { label: 'Kick', action: () => this.kickUser(user.id) },
+                                { label: 'Ban', action: () => this.banUser(user.id), danger: true }
+                            ]
+                        );
+                        item.dataset.userId = user.id;
+                        usersList.appendChild(item);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load admin users:', error);
+        }
+    }
+
+    async loadAdminBots() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/mastodon/bots`);
+            const bots = await response.json();
+
+            const botList = document.getElementById('admin-bot-list');
+            if (botList) {
+                botList.textContent = '';
+
+                if (!bots || bots.length === 0) {
+                    botList.textContent = 'No bots configured';
+                } else {
+                    bots.forEach(bot => {
+                        const item = this.createAdminListItem(
+                            '@' + bot.username,
+                            bot.instance + ' - ' + (bot.enabled ? 'Active' : 'Disabled'),
+                            [
+                                { label: bot.enabled ? 'Disable' : 'Enable', action: () => this.toggleBot(encodeURIComponent(bot.instance)) },
+                                { label: 'Remove', action: () => this.removeBot(encodeURIComponent(bot.instance)), danger: true }
+                            ]
+                        );
+                        item.dataset.botInstance = bot.instance;
+                        botList.appendChild(item);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load admin bots:', error);
+        }
+    }
+
+    async loadFederatedServers() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/federation/servers`);
+            const servers = await response.json();
+
+            const serverList = document.getElementById('admin-federation-list');
+            if (serverList) {
+                serverList.textContent = '';
+
+                if (!servers || servers.length === 0) {
+                    serverList.textContent = 'No federated servers';
+                } else {
+                    servers.forEach(server => {
+                        const item = this.createAdminListItem(
+                            server.name || server.url,
+                            (server.status === 'connected' ? 'Connected' : 'Disconnected') + ' - ' + (server.rooms || 0) + ' rooms',
+                            [
+                                { label: 'Ping', action: () => this.pingServer(encodeURIComponent(server.url)) },
+                                { label: 'Disconnect', action: () => this.disconnectServer(encodeURIComponent(server.url)), danger: true }
+                            ]
+                        );
+                        item.dataset.serverUrl = server.url;
+                        serverList.appendChild(item);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load federated servers:', error);
+        }
+    }
+
+    getNotificationAdminHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        const token =
+            localStorage.getItem('voicelink_auth_token') ||
+            sessionStorage.getItem('voicelink_auth_token') ||
+            localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token') ||
+            '';
+        if (token) headers.Authorization = `Bearer ${token}`;
+        return headers;
+    }
+
+    async loadPushoverStatus() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/pushover/status`, {
+                headers: this.getNotificationAdminHeaders()
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            const cfg = data.config || {};
+            const enabled = document.getElementById('admin-pushover-enabled');
+            const appToken = document.getElementById('admin-pushover-app-token');
+            const userKey = document.getElementById('admin-pushover-user-key');
+            const device = document.getElementById('admin-pushover-device');
+            const sound = document.getElementById('admin-pushover-sound');
+            const prefix = document.getElementById('admin-pushover-title-prefix');
+            const minDelay = document.getElementById('admin-pushover-min-delay');
+            const maxDelay = document.getElementById('admin-pushover-max-delay');
+            if (enabled) enabled.checked = !!cfg.enabled;
+            if (appToken && !appToken.value) appToken.value = '';
+            if (userKey && !userKey.value) userKey.value = '';
+            if (device) device.value = cfg.device || '';
+            if (sound) sound.value = cfg.sound || '';
+            if (prefix) prefix.value = cfg.titlePrefix || 'VoiceLink';
+            if (minDelay) minDelay.value = String(cfg.minDeferredSeconds || 15);
+            if (maxDelay) maxDelay.value = String(cfg.maxDeferredSeconds || 120);
+        } catch (error) {
+            console.error('Failed to load pushover status:', error);
+        }
+    }
+
+    async savePushoverSettings() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const payload = {
+                enabled: !!document.getElementById('admin-pushover-enabled')?.checked,
+                appToken: document.getElementById('admin-pushover-app-token')?.value || '',
+                userKey: document.getElementById('admin-pushover-user-key')?.value || '',
+                device: document.getElementById('admin-pushover-device')?.value || '',
+                sound: document.getElementById('admin-pushover-sound')?.value || '',
+                titlePrefix: document.getElementById('admin-pushover-title-prefix')?.value || 'VoiceLink',
+                minDeferredSeconds: Number(document.getElementById('admin-pushover-min-delay')?.value || 15),
+                maxDeferredSeconds: Number(document.getElementById('admin-pushover-max-delay')?.value || 120),
+                deferApply: true
+            };
+            const response = await fetch(`${apiBase}/api/notifications/pushover/config`, {
+                method: 'POST',
+                headers: this.getNotificationAdminHeaders(),
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to save Pushover settings', 'error');
+                return;
+            }
+            this.showNotification('Pushover settings saved', 'success');
+        } catch (error) {
+            console.error('Failed to save Pushover settings:', error);
+            this.showNotification('Failed to save Pushover settings', 'error');
+        }
+    }
+
+    async testPushoverNotification() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/pushover/test`, {
+                method: 'POST',
+                headers: this.getNotificationAdminHeaders(),
+                body: JSON.stringify({
+                    title: 'VoiceLink Test',
+                    message: `Pushover test sent at ${new Date().toLocaleString()}`
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Test notification failed', 'error');
+                return;
+            }
+            this.showNotification('Pushover test notification sent', 'success');
+        } catch (error) {
+            console.error('Failed to test Pushover:', error);
+            this.showNotification('Failed to test Pushover', 'error');
+        }
+    }
+
+    async loadIncomingNotifications() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/incoming?limit=50`, {
+                headers: this.getNotificationAdminHeaders()
+            });
+            const inbox = document.getElementById('admin-notification-inbox');
+            if (!inbox) return;
+            if (!response.ok) {
+                inbox.textContent = 'Unable to load incoming notifications.';
+                return;
+            }
+            const result = await response.json();
+            const notifications = Array.isArray(result.notifications) ? result.notifications : [];
+            inbox.textContent = '';
+            if (notifications.length === 0) {
+                inbox.textContent = 'No incoming notifications yet.';
+                return;
+            }
+            notifications.forEach((entry) => {
+                const item = document.createElement('div');
+                item.className = 'admin-list-item';
+                const title = entry.title || 'Notification';
+                const message = entry.message || '';
+                const detail = `${entry.source || 'unknown'} • ${entry.level || 'info'} • ${new Date(entry.receivedAt || Date.now()).toLocaleString()}`;
+                item.innerHTML = `
+                    <div class="list-item-main">
+                        <strong>${this.escapeHtml(title)}</strong>
+                        <small>${this.escapeHtml(detail)}</small>
+                        <p>${this.escapeHtml(message)}</p>
+                    </div>
+                `;
+                inbox.appendChild(item);
+            });
+        } catch (error) {
+            console.error('Failed to load incoming notifications:', error);
+        }
+    }
+
+    createAdminListItem(name, meta, actions) {
+        const item = document.createElement('div');
+        item.className = 'admin-list-item';
+
+        const info = document.createElement('div');
+        info.className = 'item-info';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'item-name';
+        nameSpan.textContent = name;
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'item-meta';
+        metaSpan.textContent = meta;
+
+        info.appendChild(nameSpan);
+        info.appendChild(metaSpan);
+        item.appendChild(info);
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'item-actions';
+
+        actions.forEach(action => {
+            const btn = document.createElement('button');
+            btn.className = 'small-btn' + (action.danger ? ' danger' : '');
+            btn.textContent = action.label;
+            btn.onclick = action.action;
+            actionsDiv.appendChild(btn);
+        });
+
+        item.appendChild(actionsDiv);
+        return item;
+    }
+
+    // Admin actions
+    async adminRestartServer() {
+        if (confirm('Are you sure you want to restart the server?')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/restart`, { method: 'POST' });
+                this.showNotification('Server restarting...', 'info');
+            } catch (error) {
+                this.showNotification('Failed to restart server', 'error');
+            }
+        }
+    }
+
+    async adminStopServer() {
+        if (confirm('Are you sure you want to stop the server? All users will be disconnected.')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/stop`, { method: 'POST' });
+                this.showNotification('Server stopping...', 'info');
+            } catch (error) {
+                this.showNotification('Failed to stop server', 'error');
+            }
+        }
+    }
+
+    async createDefaultRooms() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms/generate-defaults`, { method: 'POST' });
+            const result = await response.json();
+
+            this.showNotification('Created ' + (result.count || 0) + ' default rooms', 'success');
+            this.loadAdminRooms();
+            this.loadRooms();
+        } catch (error) {
+            this.showNotification('Failed to create default rooms', 'error');
+        }
+    }
+
+    async cleanupExpiredRooms() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/rooms/cleanup`, { method: 'POST' });
+            const result = await response.json();
+
+            this.showNotification('Cleaned up ' + (result.removed || 0) + ' expired rooms', 'success');
+            this.loadAdminRooms();
+            this.loadRooms();
+        } catch (error) {
+            this.showNotification('Failed to cleanup rooms', 'error');
+        }
+    }
+
+    async deleteRoom(roomId) {
+        if (confirm('Delete this room? All users will be disconnected.')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/rooms/${roomId}`, { method: 'DELETE' });
+                this.showNotification('Room deleted', 'success');
+                this.loadAdminRooms();
+                this.loadRooms();
+            } catch (error) {
+                this.showNotification('Failed to delete room', 'error');
+            }
+        }
+    }
+
+    async registerBot() {
+        const instanceInput = document.getElementById('new-bot-instance');
+        const tokenInput = document.getElementById('new-bot-token');
+
+        if (!instanceInput?.value || !tokenInput?.value) {
+            this.showNotification('Please enter instance URL and access token', 'error');
+            return;
+        }
+
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/mastodon/bots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    instanceUrl: instanceInput.value,
+                    accessToken: tokenInput.value
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.showNotification('Bot @' + result.bot.username + ' registered!', 'success');
+                instanceInput.value = '';
+                tokenInput.value = '';
+                this.loadAdminBots();
+            } else {
+                this.showNotification(result.error || 'Failed to register bot', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Failed to register bot', 'error');
+        }
+    }
+
+    async removeBot(instance) {
+        if (confirm('Remove this bot?')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/mastodon/bots/${instance}`, { method: 'DELETE' });
+                this.showNotification('Bot removed', 'success');
+                this.loadAdminBots();
+            } catch (error) {
+                this.showNotification('Failed to remove bot', 'error');
+            }
+        }
+    }
+
+    showAnnouncementForm() {
+        const form = document.getElementById('announcement-form');
+        if (form) {
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        }
+    }
+
+    async postAnnouncement() {
+        const textArea = document.getElementById('announcement-text');
+
+        if (!textArea?.value.trim()) {
+            this.showNotification('Please enter an announcement', 'error');
+            return;
+        }
+
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/mastodon/announce`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: textArea.value,
+                    visibility: 'public'
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.showNotification('Announcement posted!', 'success');
+                textArea.value = '';
+                document.getElementById('announcement-form').style.display = 'none';
+            } else {
+                this.showNotification('Failed to post announcement', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Failed to post announcement', 'error');
+        }
+    }
+
+    async announceServerOnline() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/mastodon/announce`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: `VoiceLink Server is now online!\n\n${apiBase}\n\n#VoiceLink #VoiceChat #P2P`,
+                    visibility: 'public'
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.showNotification('Server online announcement posted!', 'success');
+            } else {
+                this.showNotification('Failed to post announcement', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Failed to post announcement', 'error');
+        }
+    }
+
+    async broadcastMessage() {
+        const message = prompt('Enter message to broadcast to all users:');
+        if (!message) return;
+
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            await fetch(`${apiBase}/api/admin/broadcast`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+
+            this.showNotification('Broadcast sent', 'success');
+        } catch (error) {
+            this.showNotification('Failed to send broadcast', 'error');
+        }
+    }
+
+    async kickUser(userId) {
+        if (confirm('Kick this user?')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/users/${userId}/kick`, { method: 'POST' });
+                this.showNotification('User kicked', 'success');
+                this.loadAdminUsers();
+            } catch (error) {
+                this.showNotification('Failed to kick user', 'error');
+            }
+        }
+    }
+
+    async banUser(userId) {
+        if (confirm('Ban this user? They will not be able to reconnect.')) {
+            try {
+                const apiBase = this.getApiBaseUrl();
+                await fetch(`${apiBase}/api/admin/users/${userId}/ban`, { method: 'POST' });
+                this.showNotification('User banned', 'success');
+                this.loadAdminUsers();
+            } catch (error) {
+                this.showNotification('Failed to ban user', 'error');
+            }
+        }
+    }
+
+    async addFederatedServer() {
+        const serverInput = document.getElementById('new-federated-server');
+        if (!serverInput?.value) {
+            this.showNotification('Please enter a server URL', 'error');
+            return;
+        }
+
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/federation/connect`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ serverUrl: serverInput.value })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                this.showNotification('Server connected!', 'success');
+                serverInput.value = '';
+                this.loadFederatedServers();
+            } else {
+                this.showNotification(result.error || 'Failed to connect', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Failed to connect to server', 'error');
+        }
+    }
+
+    async saveServerSettings() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+
+            const settings = {
+                maxRooms: document.getElementById('admin-max-rooms')?.value,
+                requireAuth: document.getElementById('admin-require-auth')?.checked
+            };
+
+            await fetch(`${apiBase}/api/admin/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+
+            this.showNotification('Settings saved!', 'success');
+        } catch (error) {
+            this.showNotification('Failed to save settings', 'error');
+        }
+    }
+
+    refreshUserList() {
+        this.loadAdminUsers();
+        this.showNotification('User list refreshed', 'info');
+    }
+
+    editRoom(roomId) {
+        this.showNotification('Room editor coming soon', 'info');
+    }
+
+    toggleBot(instance) {
+        this.showNotification('Bot toggle coming soon', 'info');
+    }
+
+    pingServer(serverUrl) {
+        this.showNotification('Pinging server...', 'info');
+    }
+
+    disconnectServer(serverUrl) {
+        this.showNotification('Server disconnect coming soon', 'info');
+    }
+
+}
+
+/**
+ * JukeboxManager - Manages Jellyfin media streaming integration
+ * Provides UI controls for browsing, queuing, and playing media in rooms
+ */
+class JukeboxManager {
+    constructor(app) {
+        this.app = app;
+        this.isEnabled = false;
+        this.isMinimized = false;
+        this.servers = [];
+        this.currentServer = null;
+        this.queue = [];
+        this.currentTrack = null;
+        this.currentIndex = -1;
+        this.isPlaying = false;
+        this.isLooping = false;
+        this.volume = 50;
+        this.audioElement = null;
+        this.progressInterval = null;
+
+        this.elements = {
+            panel: document.getElementById('jukebox-panel'),
+            toggleBtn: document.getElementById('jukebox-toggle-btn'),
+            configBtn: document.getElementById('jukebox-config-btn'),
+            minimizeBtn: document.getElementById('jukebox-minimize-btn'),
+            closeBtn: document.getElementById('jukebox-close-btn'),
+            nowPlaying: document.getElementById('jukebox-now-playing'),
+            progress: document.getElementById('jukebox-progress'),
+            currentTime: document.getElementById('jukebox-current-time'),
+            duration: document.getElementById('jukebox-duration'),
+            prevBtn: document.getElementById('jukebox-prev-btn'),
+            playBtn: document.getElementById('jukebox-play-btn'),
+            nextBtn: document.getElementById('jukebox-next-btn'),
+            loopBtn: document.getElementById('jukebox-loop-btn'),
+            volumeSlider: document.getElementById('jukebox-volume'),
+            queueList: document.getElementById('jukebox-queue-list'),
+            libraryList: document.getElementById('jukebox-library-list'),
+            searchInput: document.getElementById('jukebox-search'),
+            searchBtn: document.getElementById('jukebox-search-btn')
+        };
+
+        this.init();
+    }
+
+    init() {
+        this.setupEventListeners();
+        this.createAudioElement();
+        this.loadServers();
+        console.log('JukeboxManager initialized');
+    }
+
+    setupEventListeners() {
+        // Toggle button
+        this.elements.toggleBtn?.addEventListener('click', () => this.togglePanel());
+
+        // Header controls
+        this.elements.configBtn?.addEventListener('click', () => this.openServerConfig());
+        this.elements.minimizeBtn?.addEventListener('click', () => this.minimize());
+        this.elements.closeBtn?.addEventListener('click', () => this.closePanel());
+
+        // Playback controls
+        this.elements.prevBtn?.addEventListener('click', () => this.previous());
+        this.elements.playBtn?.addEventListener('click', () => this.togglePlayPause());
+        this.elements.nextBtn?.addEventListener('click', () => this.next());
+        this.elements.loopBtn?.addEventListener('click', () => this.toggleLoop());
+
+        // Progress and volume
+        this.elements.progress?.addEventListener('input', (e) => this.seek(e.target.value));
+        this.elements.volumeSlider?.addEventListener('input', (e) => this.setVolume(e.target.value));
+
+        // Search
+        this.elements.searchBtn?.addEventListener('click', () => this.searchLibrary());
+        this.elements.searchInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.searchLibrary();
+        });
+
+        // Socket events for synced playback
+        if (this.app.socket) {
+            this.app.socket.on('jukebox-play', (data) => this.handleRemotePlay(data));
+            this.app.socket.on('jukebox-pause', () => this.handleRemotePause());
+            this.app.socket.on('jukebox-skip', (data) => this.handleRemoteSkip(data));
+            this.app.socket.on('jukebox-queue-update', (data) => this.handleRemoteQueueUpdate(data));
+        }
+    }
+
+    createAudioElement() {
+        this.audioElement = new Audio();
+        this.audioElement.crossOrigin = 'anonymous';
+        this.audioElement.volume = this.volume / 100;
+
+        this.audioElement.addEventListener('timeupdate', () => this.updateProgress());
+        this.audioElement.addEventListener('ended', () => this.handleTrackEnded());
+        this.audioElement.addEventListener('loadedmetadata', () => this.updateDuration());
+        this.audioElement.addEventListener('error', (e) => this.handlePlaybackError(e));
+    }
+
+    async loadServers() {
+        try {
+            const apiBase = this.app.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/jellyfin/servers`);
+            const data = await response.json();
+
+            if (data.success && data.servers) {
+                this.servers = data.servers;
+                if (this.servers.length > 0) {
+                    this.currentServer = this.servers[0];
+                    this.loadLibrary();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load Jellyfin servers:', error);
+        }
+    }
+
+    async loadLibrary(parentId = null) {
+        if (!this.currentServer) return;
+
+        try {
+            const apiBase = this.app.getApiBaseUrl();
+
+            const params = new URLSearchParams({
+                serverId: this.currentServer.id
+            });
+            if (parentId) params.append('parentId', parentId);
+
+            const response = await fetch(`${apiBase}/api/jellyfin/library?${params}`);
+            const data = await response.json();
+
+            if (data.success && data.items) {
+                this.renderLibrary(data.items, parentId);
+            }
+        } catch (error) {
+            console.error('Failed to load library:', error);
+        }
+    }
+
+    renderLibrary(items, parentId = null) {
+        if (!this.elements.libraryList) return;
+
+        this.elements.libraryList.innerHTML = '';
+
+        // Add back button if in subfolder
+        if (parentId) {
+            const backItem = document.createElement('div');
+            backItem.className = 'library-item back-item';
+            backItem.innerHTML = '⬅️ Back';
+            backItem.addEventListener('click', () => this.loadLibrary());
+            this.elements.libraryList.appendChild(backItem);
+        }
+
+        items.forEach(item => {
+            const itemEl = document.createElement('div');
+            itemEl.className = 'library-item';
+            itemEl.dataset.id = item.Id;
+            itemEl.dataset.type = item.Type;
+
+            const icon = this.getItemIcon(item.Type);
+            const name = item.Name || 'Unknown';
+            const artist = item.AlbumArtist || item.Artists?.[0] || '';
+
+            itemEl.innerHTML = `
+                <span class="item-icon">${icon}</span>
+                <div class="item-info">
+                    <span class="item-name">${name}</span>
+                    ${artist ? `<span class="item-artist">${artist}</span>` : ''}
+                </div>
+                ${item.Type === 'Audio' ? '<button class="add-queue-btn" title="Add to queue">+</button>' : ''}
+            `;
+
+            // Click handler
+            if (item.Type === 'Audio') {
+                itemEl.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('add-queue-btn')) {
+                        this.addToQueue(item);
+                    } else {
+                        this.playItem(item);
+                    }
+                });
+            } else if (['Folder', 'MusicAlbum', 'MusicArtist', 'CollectionFolder'].includes(item.Type)) {
+                itemEl.addEventListener('click', () => this.loadLibrary(item.Id));
+            }
+
+            this.elements.libraryList.appendChild(itemEl);
+        });
+    }
+
+    getItemIcon(type) {
+        const icons = {
+            'Audio': '🎵',
+            'MusicAlbum': '💿',
+            'MusicArtist': '👤',
+            'Folder': '📁',
+            'CollectionFolder': '📚',
+            'Video': '🎬',
+            'Movie': '🎥',
+            'Episode': '📺'
+        };
+        return icons[type] || '📄';
+    }
+
+    async searchLibrary() {
+        const query = this.elements.searchInput?.value?.trim();
+        if (!query || !this.currentServer) return;
+
+        try {
+            const apiBase = this.app.getApiBaseUrl();
+
+            const params = new URLSearchParams({
+                serverId: this.currentServer.id,
+                query: query
+            });
+
+            const response = await fetch(`${apiBase}/api/jellyfin/search?${params}`);
+            const data = await response.json();
+
+            if (data.success && data.items) {
+                this.renderLibrary(data.items);
+            }
+        } catch (error) {
+            console.error('Failed to search library:', error);
+        }
+    }
+
+    async playItem(item) {
+        if (!this.currentServer || !item) return;
+
+        try {
+            const apiBase = this.app.getApiBaseUrl();
+
+            const response = await fetch(`${apiBase}/api/jellyfin/stream-url`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    serverId: this.currentServer.id,
+                    itemId: item.Id,
+                    type: item.Type === 'Audio' ? 'audio' : 'video'
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.streamUrl) {
+                this.currentTrack = {
+                    ...item,
+                    streamUrl: data.streamUrl
+                };
+
+                this.audioElement.src = data.streamUrl;
+                this.audioElement.play();
+                this.isPlaying = true;
+                this.updateNowPlaying();
+                this.updatePlayButton();
+
+                // Broadcast to room
+                this.broadcastPlay();
+            }
+        } catch (error) {
+            console.error('Failed to play item:', error);
+            this.app.showNotification('Failed to play media', 'error');
+        }
+    }
+
+    addToQueue(item) {
+        this.queue.push(item);
+        this.renderQueue();
+        this.app.showNotification(`Added "${item.Name}" to queue`, 'success');
+
+        // If nothing playing, start playback
+        if (!this.currentTrack) {
+            this.currentIndex = 0;
+            this.playItem(this.queue[0]);
+        }
+
+        this.broadcastQueueUpdate();
+    }
+
+    renderQueue() {
+        if (!this.elements.queueList) return;
+
+        this.elements.queueList.innerHTML = '';
+
+        if (this.queue.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'queue-empty';
+            empty.textContent = 'Queue is empty';
+            this.elements.queueList.appendChild(empty);
+            return;
+        }
+
+        this.queue.forEach((item, index) => {
+            const queueItem = document.createElement('div');
+            queueItem.className = 'queue-item' + (index === this.currentIndex ? ' active' : '');
+            queueItem.innerHTML = `
+                <span class="queue-number">${index + 1}</span>
+                <div class="queue-info">
+                    <span class="queue-name">${item.Name}</span>
+                    <span class="queue-artist">${item.AlbumArtist || item.Artists?.[0] || ''}</span>
+                </div>
+                <button class="remove-queue-btn" data-index="${index}" title="Remove">✕</button>
+            `;
+
+            queueItem.querySelector('.remove-queue-btn')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeFromQueue(index);
+            });
+
+            queueItem.addEventListener('click', () => {
+                this.currentIndex = index;
+                this.playItem(this.queue[index]);
+            });
+
+            this.elements.queueList.appendChild(queueItem);
+        });
+    }
+
+    removeFromQueue(index) {
+        this.queue.splice(index, 1);
+        if (index < this.currentIndex) {
+            this.currentIndex--;
+        } else if (index === this.currentIndex) {
+            if (this.queue.length > 0) {
+                this.currentIndex = Math.min(this.currentIndex, this.queue.length - 1);
+                this.playItem(this.queue[this.currentIndex]);
+            } else {
+                this.stop();
+            }
+        }
+        this.renderQueue();
+        this.broadcastQueueUpdate();
+    }
+
+    togglePlayPause() {
+        if (this.isPlaying) {
+            this.pause();
+        } else {
+            this.play();
+        }
+    }
+
+    play() {
+        if (this.audioElement.src) {
+            this.audioElement.play();
+            this.isPlaying = true;
+            this.updatePlayButton();
+            this.broadcastPlay();
+        } else if (this.queue.length > 0) {
+            this.currentIndex = 0;
+            this.playItem(this.queue[0]);
+        }
+    }
+
+    pause() {
+        this.audioElement.pause();
+        this.isPlaying = false;
+        this.updatePlayButton();
+        this.broadcastPause();
+    }
+
+    stop() {
+        this.audioElement.pause();
+        this.audioElement.currentTime = 0;
+        this.audioElement.src = '';
+        this.isPlaying = false;
+        this.currentTrack = null;
+        this.currentIndex = -1;
+        this.updatePlayButton();
+        this.updateNowPlaying();
+    }
+
+    previous() {
+        if (this.queue.length === 0) return;
+
+        // If more than 3 seconds in, restart; otherwise go to previous
+        if (this.audioElement.currentTime > 3) {
+            this.audioElement.currentTime = 0;
+        } else {
+            this.currentIndex = (this.currentIndex - 1 + this.queue.length) % this.queue.length;
+            this.playItem(this.queue[this.currentIndex]);
+        }
+        this.renderQueue();
+    }
+
+    next() {
+        if (this.queue.length === 0) return;
+
+        this.currentIndex = (this.currentIndex + 1) % this.queue.length;
+        this.playItem(this.queue[this.currentIndex]);
+        this.renderQueue();
+        this.broadcastSkip(this.currentIndex);
+    }
+
+    toggleLoop() {
+        this.isLooping = !this.isLooping;
+        this.audioElement.loop = this.isLooping && this.queue.length <= 1;
+
+        if (this.elements.loopBtn) {
+            this.elements.loopBtn.classList.toggle('active', this.isLooping);
+        }
+    }
+
+    seek(value) {
+        if (this.audioElement.duration) {
+            this.audioElement.currentTime = (value / 100) * this.audioElement.duration;
+        }
+    }
+
+    setVolume(value) {
+        this.volume = parseInt(value);
+        this.audioElement.volume = this.volume / 100;
+    }
+
+    updateProgress() {
+        if (!this.audioElement.duration) return;
+
+        const progress = (this.audioElement.currentTime / this.audioElement.duration) * 100;
+        if (this.elements.progress) {
+            this.elements.progress.value = progress;
+        }
+        if (this.elements.currentTime) {
+            this.elements.currentTime.textContent = this.formatTime(this.audioElement.currentTime);
+        }
+    }
+
+    updateDuration() {
+        if (this.elements.duration) {
+            this.elements.duration.textContent = this.formatTime(this.audioElement.duration);
+        }
+    }
+
+    formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    updateNowPlaying() {
+        if (!this.elements.nowPlaying) return;
+
+        if (this.currentTrack) {
+            const titleEl = this.elements.nowPlaying.querySelector('.now-playing-title');
+            const artistEl = this.elements.nowPlaying.querySelector('.now-playing-artist');
+
+            if (titleEl) titleEl.textContent = this.currentTrack.Name || 'Unknown';
+            if (artistEl) artistEl.textContent = this.currentTrack.AlbumArtist || this.currentTrack.Artists?.[0] || '';
+        }
+    }
+
+    updatePlayButton() {
+        if (this.elements.playBtn) {
+            this.elements.playBtn.textContent = this.isPlaying ? '⏸️' : '▶️';
+        }
+    }
+
+    handleTrackEnded() {
+        if (this.queue.length > 0) {
+            if (this.isLooping && this.queue.length === 1) {
+                this.audioElement.currentTime = 0;
+                this.audioElement.play();
+            } else {
+                this.next();
+            }
+        } else {
+            this.stop();
+        }
+    }
+
+    handlePlaybackError(e) {
+        console.error('Playback error:', e);
+        this.app.showNotification('Playback error. Trying next track...', 'error');
+        if (this.queue.length > 1) {
+            this.next();
+        } else {
+            this.stop();
+        }
+    }
+
+    // Socket broadcast methods
+    broadcastPlay() {
+        if (this.app.socket && this.app.currentRoom) {
+            this.app.socket.emit('jukebox-play', {
+                roomId: this.app.currentRoom.id,
+                track: this.currentTrack,
+                position: this.audioElement.currentTime
+            });
+        }
+    }
+
+    broadcastPause() {
+        if (this.app.socket && this.app.currentRoom) {
+            this.app.socket.emit('jukebox-pause', {
+                roomId: this.app.currentRoom.id
+            });
+        }
+    }
+
+    broadcastSkip(index) {
+        if (this.app.socket && this.app.currentRoom) {
+            this.app.socket.emit('jukebox-skip', {
+                roomId: this.app.currentRoom.id,
+                index: index
+            });
+        }
+    }
+
+    broadcastQueueUpdate() {
+        if (this.app.socket && this.app.currentRoom) {
+            this.app.socket.emit('jukebox-queue-update', {
+                roomId: this.app.currentRoom.id,
+                queue: this.queue
+            });
+        }
+    }
+
+    // Remote event handlers
+    handleRemotePlay(data) {
+        if (data.track && data.track.streamUrl) {
+            this.currentTrack = data.track;
+            this.audioElement.src = data.track.streamUrl;
+            if (data.position) {
+                this.audioElement.currentTime = data.position;
+            }
+            this.audioElement.play();
+            this.isPlaying = true;
+            this.updateNowPlaying();
+            this.updatePlayButton();
+        }
+    }
+
+    handleRemotePause() {
+        this.audioElement.pause();
+        this.isPlaying = false;
+        this.updatePlayButton();
+    }
+
+    handleRemoteSkip(data) {
+        if (this.queue[data.index]) {
+            this.currentIndex = data.index;
+            this.playItem(this.queue[data.index]);
+        }
+    }
+
+    handleRemoteQueueUpdate(data) {
+        if (data.queue) {
+            this.queue = data.queue;
+            this.renderQueue();
+        }
+    }
+
+    // Panel visibility
+    togglePanel() {
+        if (this.elements.panel?.classList.contains('hidden')) {
+            this.openPanel();
+        } else {
+            this.closePanel();
+        }
+    }
+
+    openPanel() {
+        this.elements.panel?.classList.remove('hidden', 'minimized');
+        this.elements.toggleBtn?.classList.add('hidden');
+        this.isMinimized = false;
+    }
+
+    closePanel() {
+        this.elements.panel?.classList.add('hidden');
+        this.elements.toggleBtn?.classList.remove('hidden');
+    }
+
+    minimize() {
+        this.elements.panel?.classList.toggle('minimized');
+        this.isMinimized = !this.isMinimized;
+    }
+
+    // Open server configuration (MediaStreamingInterface)
+    openServerConfig() {
+        if (window.mediaStreamingInterface) {
+            window.mediaStreamingInterface.show();
+        } else {
+            this.app?.showToast('Media Streaming interface not available');
+        }
+    }
+
+    // Enable/disable for room
+    enable() {
+        this.isEnabled = true;
+        this.elements.toggleBtn?.classList.remove('hidden');
+    }
+
+    disable() {
+        this.isEnabled = false;
+        this.closePanel();
+        this.elements.toggleBtn?.classList.add('hidden');
+        this.stop();
+    }
+
+    // Stop room sync but keep playing (for when leaving room but wanting to continue listening)
+    stopRoomSync() {
+        // Just stop broadcasting to room, keep local playback going
+        console.log('Jukebox: Stopped room sync, playback continues locally');
+    }
+
+    // Get current state for admin controls
+    getState() {
+        return {
+            isEnabled: this.isEnabled,
+            isPlaying: this.isPlaying,
+            currentTrack: this.currentTrack,
+            queue: this.queue,
+            volume: this.volume
+        };
+    }
+
+    // ============================================
+    // ROOM-LOCALIZED JUKEBOX WITH SPATIAL AUDIO
+    // ============================================
+
+    /**
+     * Initialize room-specific audio with binaural 3D spatial processing
+     */
+    initRoomAudio() {
+        if (this.audioContext) return; // Already initialized
+
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.roomVolume = 50; // Default room volume (50%)
+        this.isAdminOnlyVolume = false;
+        this.currentRoom = null;
+        this.fadeInDuration = 1.5; // seconds
+
+        // Create audio nodes for spatial processing
+        this.setupSpatialAudioNodes();
+
+        console.log('Room audio initialized with binaural 3D processing');
+    }
+
+    /**
+     * Setup binaural 3D spatial audio processing chain
+     */
+    setupSpatialAudioNodes() {
+        // Master gain for room volume control
+        this.masterGain = this.audioContext.createGain();
+        this.masterGain.gain.value = this.roomVolume / 100;
+
+        // HRTF Panner for binaural 3D audio (cafe-like ambience)
+        this.binauralPanner = this.audioContext.createPanner();
+        this.binauralPanner.panningModel = 'HRTF'; // Head-related transfer function
+        this.binauralPanner.distanceModel = 'inverse';
+        this.binauralPanner.refDistance = 1;
+        this.binauralPanner.maxDistance = 50;
+        this.binauralPanner.rolloffFactor = 1;
+        this.binauralPanner.coneInnerAngle = 360;
+        this.binauralPanner.coneOuterAngle = 360;
+        this.binauralPanner.coneOuterGain = 0;
+
+        // Position audio source slightly in front and to the side (like cafe speakers)
+        this.binauralPanner.positionX.value = 2;
+        this.binauralPanner.positionY.value = 1;
+        this.binauralPanner.positionZ.value = -3;
+
+        // Stereo widener using delay
+        this.stereoDelay = this.audioContext.createDelay(0.05);
+        this.stereoDelay.delayTime.value = 0.02; // 20ms delay for spatial feel
+
+        // Subtle reverb/ambience using convolver (optional)
+        this.createAmbienceReverb();
+
+        // Connect the chain: source -> panner -> gain -> destination
+        this.binauralPanner.connect(this.masterGain);
+        this.masterGain.connect(this.audioContext.destination);
+    }
+
+    /**
+     * Create subtle room ambience reverb for cafe-like sound
+     */
+    createAmbienceReverb() {
+        // Create a simple impulse response for room ambience
+        const sampleRate = this.audioContext.sampleRate;
+        const duration = 0.8; // Short reverb for ambient sound
+        const channels = 2;
+        const frameCount = sampleRate * duration;
+
+        const impulseBuffer = this.audioContext.createBuffer(channels, frameCount, sampleRate);
+
+        for (let channel = 0; channel < channels; channel++) {
+            const channelData = impulseBuffer.getChannelData(channel);
+            for (let i = 0; i < frameCount; i++) {
+                // Exponential decay with some randomness for natural feel
+                channelData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / frameCount, 2) * 0.3;
+            }
+        }
+
+        this.convolver = this.audioContext.createConvolver();
+        this.convolver.buffer = impulseBuffer;
+
+        // Wet/dry mix
+        this.reverbGain = this.audioContext.createGain();
+        this.reverbGain.gain.value = 0.15; // Subtle reverb
+
+        this.convolver.connect(this.reverbGain);
+        this.reverbGain.connect(this.audioContext.destination);
+    }
+
+    /**
+     * Connect audio element to spatial processing
+     */
+    connectToSpatialAudio() {
+        if (!this.audioContext || !this.audioElement) return;
+
+        // Resume audio context if suspended
+        if (this.audioContext.state === 'suspended') {
+            this.audioContext.resume();
+        }
+
+        // Disconnect existing source if any
+        if (this.mediaSource) {
+            try {
+                this.mediaSource.disconnect();
+            } catch (e) {
+                // Ignore disconnect errors
+            }
+        }
+
+        // Create new media source from audio element
+        try {
+            this.mediaSource = this.audioContext.createMediaElementSource(this.audioElement);
+            this.mediaSource.connect(this.binauralPanner);
+
+            // Also send to reverb for ambience
+            if (this.convolver) {
+                this.mediaSource.connect(this.convolver);
+            }
+        } catch (e) {
+            // Already connected - use existing source
+            console.log('Audio source already connected');
+        }
+    }
+
+    /**
+     * Play media for room with fade-in and spatial audio
+     */
+    playForRoom(streamUrl, trackName, options = {}) {
+        if (!this.audioContext) {
+            this.initRoomAudio();
+        }
+
+        this.currentTrack = {
+            Name: trackName,
+            streamUrl: streamUrl
+        };
+
+        this.audioElement.src = streamUrl;
+
+        // Start at 0 volume for fade-in
+        if (this.masterGain) {
+            this.masterGain.gain.value = 0;
+        }
+
+        this.audioElement.play().then(() => {
+            this.isPlaying = true;
+            this.updateNowPlaying();
+            this.updatePlayButton();
+
+            // Connect to spatial processing
+            this.connectToSpatialAudio();
+
+            // Fade in over 1.5 seconds
+            this.fadeIn(this.fadeInDuration);
+
+            // Broadcast to room
+            this.broadcastPlay();
+        }).catch(e => {
+            console.error('Failed to play for room:', e);
+        });
+    }
+
+    /**
+     * Smooth fade-in for room audio
+     */
+    fadeIn(duration = 1.5) {
+        if (!this.masterGain) return;
+
+        const targetVolume = this.roomVolume / 100;
+        const currentTime = this.audioContext.currentTime;
+
+        this.masterGain.gain.cancelScheduledValues(currentTime);
+        this.masterGain.gain.setValueAtTime(0, currentTime);
+        this.masterGain.gain.linearRampToValueAtTime(targetVolume, currentTime + duration);
+    }
+
+    /**
+     * Smooth fade-out when leaving room
+     */
+    fadeOut(duration = 0.5) {
+        if (!this.masterGain) return;
+
+        const currentTime = this.audioContext.currentTime;
+        const currentVolume = this.masterGain.gain.value;
+
+        this.masterGain.gain.cancelScheduledValues(currentTime);
+        this.masterGain.gain.setValueAtTime(currentVolume, currentTime);
+        this.masterGain.gain.linearRampToValueAtTime(0, currentTime + duration);
+    }
+
+    /**
+     * Set room volume (respects admin-only restrictions)
+     */
+    setRoomVolume(value, isAdmin = false) {
+        if (this.isAdminOnlyVolume && !isAdmin) {
+            console.log('Volume control is admin-only for this room');
+            return false;
+        }
+
+        this.roomVolume = Math.max(0, Math.min(100, parseInt(value)));
+
+        if (this.masterGain) {
+            this.masterGain.gain.value = this.roomVolume / 100;
+        }
+
+        // Also update the regular audio element volume as backup
+        this.audioElement.volume = this.roomVolume / 100;
+
+        return true;
+    }
+
+    /**
+     * Set room volume restrictions (admin control)
+     */
+    setAdminOnlyVolume(enabled) {
+        this.isAdminOnlyVolume = enabled;
+        console.log(`Room volume control: ${enabled ? 'Admin only' : 'Anyone'}`);
+    }
+
+    /**
+     * Set 3D position for spatial audio (for different room types)
+     */
+    setSpatialPosition(preset = 'cafe') {
+        if (!this.binauralPanner) return;
+
+        const presets = {
+            cafe: { x: 2, y: 1, z: -3 },      // Speakers to the front-right
+            lounge: { x: 0, y: 0.5, z: -2 },  // Centered, slightly above
+            studio: { x: 0, y: 0, z: -1 },    // Direct front
+            surround: { x: 3, y: 2, z: -4 }   // Wider, more immersive
+        };
+
+        const pos = presets[preset] || presets.cafe;
+
+        this.binauralPanner.positionX.value = pos.x;
+        this.binauralPanner.positionY.value = pos.y;
+        this.binauralPanner.positionZ.value = pos.z;
+
+        console.log(`Spatial audio preset: ${preset}`);
+    }
+
+    /**
+     * Handle room join - fade in any playing audio
+     */
+    onRoomJoin(roomId, roomSettings = {}) {
+        this.currentRoom = roomId;
+
+        // Apply room-specific settings
+        if (roomSettings.adminOnlyVolume !== undefined) {
+            this.setAdminOnlyVolume(roomSettings.adminOnlyVolume);
+        }
+        if (roomSettings.defaultVolume !== undefined) {
+            this.roomVolume = roomSettings.defaultVolume;
+        } else {
+            this.roomVolume = 50; // Default 50%
+        }
+        if (roomSettings.spatialPreset) {
+            this.setSpatialPosition(roomSettings.spatialPreset);
+        }
+
+        // If audio was playing, fade it in
+        if (this.isPlaying && this.masterGain) {
+            this.fadeIn(this.fadeInDuration);
+        }
+    }
+
+    /**
+     * Handle room leave - fade out but keep audio playing for next person
+     */
+    onRoomLeave() {
+        // Fade out audio when leaving
+        this.fadeOut(0.5);
+
+        // Keep the stream playing - it persists for the room
+        // Just stop syncing locally
+        this.currentRoom = null;
+    }
 }
 
 // Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new VoiceLinkApp();
     window.voiceLinkApp = window.app; // For compatibility
+
+    // Initialize accessible dropdowns for VoiceOver support
+    if (typeof initAccessibleDropdowns === 'function') {
+        initAccessibleDropdowns('select');
+        console.log('Accessible dropdowns initialized for VoiceOver compatibility');
+    }
 });
 
 // Export for testing
