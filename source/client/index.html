@@ -52,16 +52,10 @@
                     <!-- Download Desktop App (hidden in Electron) -->
                     <div id="download-app-section" class="download-app-section web-only">
                         <p class="download-title">Get the Desktop App</p>
-                        <p class="download-subtitle">For the best experience with all features</p>
+                        <p class="download-subtitle">macOS app with full features and auto-updates</p>
                         <div class="download-buttons">
-                            <a href="https://voicelink.devinecreations.net/downloads/VoiceLink-mac.dmg" class="download-btn mac-btn">
-                                <span class="platform-icon">🍎</span> Mac
-                            </a>
-                            <a href="https://voicelink.devinecreations.net/downloads/VoiceLink-win.exe" class="download-btn win-btn">
-                                <span class="platform-icon">🪟</span> Windows
-                            </a>
-                            <a href="https://voicelink.devinecreations.net/downloads/VoiceLink-linux.AppImage" class="download-btn linux-btn">
-                                <span class="platform-icon">🐧</span> Linux
+                            <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip" class="download-btn mac-btn" download>
+                                <span class="platform-icon">🍎</span> macOS v1.0.0
                             </a>
                         </div>
                     </div>
@@ -74,6 +68,7 @@
                         <span id="mastodon-user-handle" class="user-handle"></span>
                         <span id="mastodon-user-role" class="user-role"></span>
                     </div>
+                    <a id="mastodon-manage-apps-btn" class="auth-btn" href="#" target="_blank" rel="noopener noreferrer">Apps</a>
                     <button id="mastodon-logout-btn" class="auth-btn logout-btn">Logout</button>
                 </div>
             </div>
@@ -149,6 +144,12 @@
                                    placeholder="mastodon.social"
                                    class="instance-input">
                             <button id="mastodon-connect-btn" class="primary-btn">Connect</button>
+                        </div>
+                        <div class="auth-options" style="margin-top: 10px;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="mastodon-request-elevated-scope">
+                                Request full Mastodon access (read write) for advanced features
+                            </label>
                         </div>
 
                         <div class="suggested-instances">
@@ -629,9 +630,6 @@
                                 Copy Localhost
                             </button>
                         </div>
-                        <button id="refresh-network-btn" class="settings-btn" aria-label="Refresh network information">
-                            Refresh Network
-                        </button>
                     </div>
 
                     <!-- Network Binding Status (desktop app only) -->

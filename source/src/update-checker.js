@@ -19,6 +19,7 @@ class UpdateChecker {
         this.lastCheckTime = 0;
         this.checkInterval = 24 * 60 * 60 * 1000; // 24 hours
         this.isChecking = false;
+        this.pendingRequiredUpdate = null;
     }
 
     /**
@@ -145,27 +146,47 @@ class UpdateChecker {
         const platform = process.platform;
         const arch = process.arch;
         const downloadUrl = this.getDownloadUrl(updateInfo.downloads, platform, arch);
+        const isRequired = this.isUpdateRequired(updateInfo);
+        this.pendingRequiredUpdate = updateInfo;
 
         const messageOptions = {
-            type: 'info',
+            type: isRequired ? 'warning' : 'info',
             title: 'VoiceLink Local - Update Available',
             message: `New version ${updateInfo.version} is available!`,
             detail: this.formatUpdateDetails(updateInfo),
-            buttons: downloadUrl ? ['Download Update', 'View Release Notes', 'Later'] : ['View Release Notes', 'Later'],
+            buttons: downloadUrl ? ['Update Now', 'Download Installer for Later', 'Remind Me Later', 'View Release Notes'] : ['Remind Me Later', 'View Release Notes'],
             defaultId: 0
         };
 
         dialog.showMessageBox(messageOptions).then((result) => {
             if (result.response === 0 && downloadUrl) {
-                // Download Update
+                // Download installer now (manual channel)
                 shell.openExternal(downloadUrl);
-            } else if ((result.response === 1 && downloadUrl) || (result.response === 0 && !downloadUrl)) {
+            } else if (result.response === 1 && downloadUrl) {
+                // Download for later on this/another machine
+                shell.openExternal(downloadUrl);
+            } else if ((result.response === 3 && downloadUrl) || (result.response === 1 && !downloadUrl)) {
                 // View Release Notes
                 if (updateInfo.releaseNotes) {
                     shell.openExternal(updateInfo.releaseNotes);
                 }
             }
         });
+    }
+
+    isUpdateRequired(updateInfo) {
+        if (!updateInfo) return false;
+        if (updateInfo.minimumSupportedVersion && this.currentVersion) {
+            try {
+                if (semver.lt(this.currentVersion, updateInfo.minimumSupportedVersion)) return true;
+            } catch (_) {}
+        }
+        if (updateInfo.required === true) {
+            if (!updateInfo.enforcedAfter) return true;
+            const enforcedAt = Date.parse(updateInfo.enforcedAfter);
+            if (!Number.isNaN(enforcedAt) && Date.now() >= enforcedAt) return true;
+        }
+        return false;
     }
 
     /**
@@ -199,6 +220,16 @@ class UpdateChecker {
 
         if (updateInfo.critical) {
             details += '\n⚠️ This is a critical update with important security or stability fixes.';
+        }
+
+        if (updateInfo.minimumSupportedVersion) {
+            details += `\n\nMinimum supported version: ${updateInfo.minimumSupportedVersion}`;
+        }
+        if (updateInfo.requiredReason) {
+            details += `\nReason: ${updateInfo.requiredReason}`;
+        }
+        if (updateInfo.enforcedAfter) {
+            details += `\nEnforced after: ${updateInfo.enforcedAfter}`;
         }
 
         return details;

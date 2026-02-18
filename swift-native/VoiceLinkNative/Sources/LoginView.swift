@@ -36,7 +36,6 @@ struct LoginView: View {
 
                     TextField("mastodon.social", text: $mastodonInstance)
                         .textFieldStyle(.roundedBorder)
-                        .autocapitalization(.none)
                         .disableAutocorrection(true)
                         .disabled(isLoading)
 
@@ -94,6 +93,9 @@ struct LoginView: View {
         .frame(maxWidth: 500)
         .padding()
         .onAppear {
+            if mastodonInstance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                mastodonInstance = "md.tappedin.fm"
+            }
             // Check if already authenticated
             if authManager.authState == .authenticated {
                 appState.currentScreen = .mainMenu
@@ -125,7 +127,10 @@ struct LoginView: View {
     }
 }
 
-#Preview {
-    LoginView()
-        .environmentObject(AppState())
-}
+// Preview disabled for SPM builds
+// struct LoginView_Previews: PreviewProvider {
+//     static var previews: some View {
+//         LoginView()
+//             .environmentObject(AppState())
+//     }
+// }

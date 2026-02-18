@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "updatedAt": "2026-02-17",
+  "defaultStatusTemplates": {
+    "offline": "No room agent active.",
+    "available": "I'm here to help you manage your room.",
+    "busy": "I am handling a request. Please wait.",
+    "restricted": "I can help with chat and allowed actions for this room."
+  },
+  "defaults": {
+    "maxMessageLength": 2000,
+    "allowedIntents": ["chat", "help", "account"],
+    "allowedActions": []
+  },
+  "roles": {
+    "guest": {
+      "allowedIntents": ["chat", "help"],
+      "allowedActions": []
+    },
+    "member": {
+      "allowedIntents": ["chat", "help", "account"],
+      "allowedActions": []
+    },
+    "moderator": {
+      "allowedIntents": ["chat", "help", "account", "moderate"],
+      "allowedActions": ["announce"]
+    },
+    "admin": {
+      "allowedIntents": ["chat", "help", "account", "moderate", "manage_room", "run_admin_action"],
+      "allowedActions": ["announce", "lock_room", "unlock_room"]
+    }
+  },
+  "safetyRules": [
+    "Room scope first: agent can only operate in explicitly targeted room.",
+    "Least privilege: tokens must include only required permissions.",
+    "No cross-user account changes unless caller has admin policy.",
+    "No destructive actions without explicit admin action request.",
+    "Never expose secrets, keys, session tokens, or private room passwords.",
+    "Do not auto-join all rooms; agent presence must be explicitly enabled per room.",
+    "All admin actions should be logged with actor identity and timestamp."
+  ]
+}

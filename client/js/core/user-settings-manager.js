@@ -81,6 +81,7 @@ class UserSettingsManager {
             nickname: 'User',
             displayName: '',
             avatar: '',
+            mastodonAvatarAutoSync: true,
 
             // Status & Presence
             status: 'online',

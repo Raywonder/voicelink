@@ -32,6 +32,7 @@ class UpdateChecker {
         this.isChecking = false;
         this.downloadProgress = 0;
         this.isDownloading = false;
+        this.pendingRequiredUpdate = null;
 
         // Setup electron-updater events if available
         if (autoUpdater) {
@@ -77,17 +78,24 @@ class UpdateChecker {
      * Show dialog when auto-update is available
      */
     showAutoUpdateDialog(info) {
+        const requiredInfo = this.pendingRequiredUpdate || {};
+        const isRequired = requiredInfo.required === true;
+        const enforcedAfter = requiredInfo.enforcedAfter ? `\nEnforced after: ${requiredInfo.enforcedAfter}` : '';
+        const requiredReason = requiredInfo.requiredReason ? `\nReason: ${requiredInfo.requiredReason}` : '';
         dialog.showMessageBox({
-            type: 'info',
+            type: isRequired ? 'warning' : 'info',
             title: 'VoiceLink Local - Update Available',
             message: `New version ${info.version} is available!`,
-            detail: `Current version: ${this.currentVersion}\nNew version: ${info.version}\n\nWould you like to download and install this update?`,
-            buttons: ['Download & Install', 'Later'],
+            detail: `Current version: ${this.currentVersion}\nNew version: ${info.version}${requiredReason}${enforcedAfter}\n\nChoose an action:`,
+            buttons: ['Update Now', 'Download Installer for Later', 'Remind Me Later'],
             defaultId: 0
         }).then((result) => {
             if (result.response === 0) {
                 this.isDownloading = true;
                 autoUpdater.downloadUpdate();
+            } else if (result.response === 1) {
+                const downloadUrl = this.getDownloadUrl(requiredInfo.downloads || {}, process.platform, process.arch);
+                if (downloadUrl) shell.openExternal(downloadUrl);
             }
         });
     }
@@ -251,27 +259,50 @@ class UpdateChecker {
         const platform = process.platform;
         const arch = process.arch;
         const downloadUrl = this.getDownloadUrl(updateInfo.downloads, platform, arch);
+        const isRequired = this.isUpdateRequired(updateInfo);
+        this.pendingRequiredUpdate = updateInfo;
 
         const messageOptions = {
-            type: 'info',
+            type: isRequired ? 'warning' : 'info',
             title: 'VoiceLink Local - Update Available',
             message: `New version ${updateInfo.version} is available!`,
             detail: this.formatUpdateDetails(updateInfo),
-            buttons: downloadUrl ? ['Download Update', 'View Release Notes', 'Later'] : ['View Release Notes', 'Later'],
+            buttons: downloadUrl ? ['Update Now', 'Download Installer for Later', 'Remind Me Later', 'View Release Notes'] : ['Remind Me Later', 'View Release Notes'],
             defaultId: 0
         };
 
         dialog.showMessageBox(messageOptions).then((result) => {
             if (result.response === 0 && downloadUrl) {
-                // Download Update
+                if (autoUpdater) {
+                    this.isDownloading = true;
+                    autoUpdater.downloadUpdate();
+                } else {
+                    shell.openExternal(downloadUrl);
+                }
+            } else if (result.response === 1 && downloadUrl) {
                 shell.openExternal(downloadUrl);
-            } else if ((result.response === 1 && downloadUrl) || (result.response === 0 && !downloadUrl)) {
+            } else if ((result.response === 3 && downloadUrl) || (result.response === 1 && !downloadUrl)) {
                 // View Release Notes
                 if (updateInfo.releaseNotes) {
                     shell.openExternal(updateInfo.releaseNotes);
                 }
             }
         });
+    }
+
+    isUpdateRequired(updateInfo) {
+        if (!updateInfo) return false;
+        if (updateInfo.minimumSupportedVersion && this.currentVersion) {
+            try {
+                if (semver.lt(this.currentVersion, updateInfo.minimumSupportedVersion)) return true;
+            } catch (_) {}
+        }
+        if (updateInfo.required === true) {
+            if (!updateInfo.enforcedAfter) return true;
+            const enforcedAt = Date.parse(updateInfo.enforcedAfter);
+            if (!Number.isNaN(enforcedAt) && Date.now() >= enforcedAt) return true;
+        }
+        return false;
     }
 
     /**
@@ -305,6 +336,16 @@ class UpdateChecker {
 
         if (updateInfo.critical) {
             details += '\n⚠️ This is a critical update with important security or stability fixes.';
+        }
+
+        if (updateInfo.minimumSupportedVersion) {
+            details += `\n\nMinimum supported version: ${updateInfo.minimumSupportedVersion}`;
+        }
+        if (updateInfo.requiredReason) {
+            details += `\nReason: ${updateInfo.requiredReason}`;
+        }
+        if (updateInfo.enforcedAfter) {
+            details += `\nEnforced after: ${updateInfo.enforcedAfter}`;
         }
 
         return details;

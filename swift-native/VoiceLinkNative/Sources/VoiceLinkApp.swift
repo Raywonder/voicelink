@@ -4,12 +4,14 @@ import AppKit
 import SocketIO
 import CoreAudio
 import Combine
+import WebKit
 
 @main
 struct VoiceLinkApp: App {
     @StateObject private var appState = AppState()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var localDiscovery = LocalServerDiscovery.shared
+    @State private var showJukebox = false
 
     var body: some Scene {
         WindowGroup {
@@ -23,6 +25,9 @@ struct VoiceLinkApp: App {
                 }
                 .sheet(isPresented: $appState.showBugReport) {
                     BugReportView()
+                }
+                .sheet(isPresented: $showJukebox) {
+                    JellyfinView()
                 }
         }
         .defaultSize(width: 1000, height: 750)
@@ -60,6 +65,29 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("j", modifiers: .command)
 
                 Divider()
+
+                Button("Open Room View") {
+                    appState.currentScreen = .voiceChat
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.currentRoom == nil)
+
+                Button("Open Jukebox...") {
+                    showJukebox = true
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+
+                Button("Pause Ambient Audio") {
+                    JellyfinManager.shared.pauseAmbientForPlayback()
+                }
+
+                Button("Resume Ambient Audio") {
+                    JellyfinManager.shared.resumeAmbientMusic()
+                }
+
+                Button("Stop Ambient Audio") {
+                    JellyfinManager.shared.stopAmbientMusic(reason: "user")
+                }
 
                 Button("Export Room Snapshot...") {
                     appState.exportRoomSnapshot()
@@ -149,6 +177,7 @@ struct VoiceLinkApp: App {
 
             CommandMenu("Server") {
                 let serverManager = ServerManager.shared
+                let settings = SettingsManager.shared
 
                 // Connection status
                 if serverManager.isConnected {
@@ -166,11 +195,13 @@ struct VoiceLinkApp: App {
                 }
                 .disabled(serverManager.isConnected && serverManager.connectedServer == "Federation")
 
-                Button("Connect to Local Server") {
-                    serverManager.connectToLocalServer()
-                    UserDefaults.standard.set("local", forKey: "lastConnectedServer")
+                if settings.showLocalServerControls {
+                    Button("Connect to Local Server") {
+                        serverManager.connectToLocalServer()
+                        UserDefaults.standard.set("local", forKey: "lastConnectedServer")
+                    }
+                    .disabled(serverManager.isConnected && serverManager.connectedServer == "Local Server")
                 }
-                .disabled(serverManager.isConnected && serverManager.connectedServer == "Local Server")
 
                 Divider()
 
@@ -194,7 +225,7 @@ struct VoiceLinkApp: App {
                 .help("View and manage servers you've linked to this device")
 
                 // Local server discovery - requires license
-                if LicensingManager.shared.licenseStatus == .licensed {
+                if SettingsManager.shared.showLocalServerControls && LicensingManager.shared.licenseStatus == .licensed {
                     Divider()
 
                     Button("Discover Local Servers") {
@@ -220,6 +251,32 @@ struct VoiceLinkApp: App {
                     }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                     .help("Manage remote server settings (admin only)")
+                    
+                    Button("Refresh Admin Overview") {
+                        Task {
+                            await AdminServerManager.shared.fetchServerStats()
+                            await AdminServerManager.shared.fetchServerConfig()
+                            await AdminServerManager.shared.fetchSchedulerHealth()
+                            appState.currentScreen = .admin
+                        }
+                    }
+                    .help("Refresh server stats, config, and scheduler health")
+
+                    Button("Refresh Connected Users") {
+                        Task {
+                            await AdminServerManager.shared.fetchConnectedUsers()
+                            appState.currentScreen = .admin
+                        }
+                    }
+                    .help("Refresh connected user list in admin UI")
+
+                    Button("Refresh Rooms") {
+                        Task {
+                            await AdminServerManager.shared.fetchRooms()
+                            appState.currentScreen = .admin
+                        }
+                    }
+                    .help("Refresh room list in admin UI")
                 }
             }
 
@@ -268,6 +325,7 @@ extension Notification.Name {
     static let discoverServers = Notification.Name("discoverServers")
     static let goToMainMenu = Notification.Name("goToMainMenu")
     static let openProfileSettings = Notification.Name("openProfileSettings")
+    static let openNotificationInbox = Notification.Name("openNotificationInbox")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -956,6 +1014,7 @@ struct MainMenuView: View {
     @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
     @State private var roomViewMode: RoomViewMode = .list
     @State private var roomSortMode: RoomSortMode = .mostUsers
+    @State private var selectedRoomForDetails: Room?
 
     enum RoomViewMode: String, CaseIterable, Identifiable {
         case list = "List"
@@ -1138,6 +1197,8 @@ struct MainMenuView: View {
                                     )
                                     appState.currentRoom = room
                                     appState.currentScreen = .voiceChat
+                                } onDetails: {
+                                    selectedRoomForDetails = room
                                 }
                             }
                         }
@@ -1151,6 +1212,8 @@ struct MainMenuView: View {
                                     )
                                     appState.currentRoom = room
                                     appState.currentScreen = .voiceChat
+                                } onDetails: {
+                                    selectedRoomForDetails = room
                                 }
                             }
                         }
@@ -1200,6 +1263,8 @@ struct MainMenuView: View {
                                         )
                                         appState.currentRoom = room
                                         appState.currentScreen = .voiceChat
+                                    } onDetails: {
+                                        selectedRoomForDetails = room
                                     }
                                 }
                             }
@@ -1212,6 +1277,8 @@ struct MainMenuView: View {
                                         )
                                         appState.currentRoom = room
                                         appState.currentScreen = .voiceChat
+                                    } onDetails: {
+                                        selectedRoomForDetails = room
                                     }
                                 }
                             }
@@ -1257,9 +1324,10 @@ struct MainMenuView: View {
                                     .foregroundColor(.white)
                                     .font(.subheadline)
                                 if let instance = user.mastodonInstance {
-                                    Text("@\(instance)")
+                                    Text("You are logged in as @\(user.username) on instance host \(instance)")
                                         .foregroundColor(.gray)
                                         .font(.caption)
+                                        .lineLimit(2)
                                 }
                             }
                             Spacer()
@@ -1291,30 +1359,6 @@ struct MainMenuView: View {
                 ConnectionHealthView()
                     .frame(maxWidth: 280)
 
-                // Connection Status (auto-connects to available server)
-                HStack {
-                    Circle()
-                        .fill(ServerManager.shared.isConnected ? Color.green : Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text("Server")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                    Spacer()
-                    Text(ServerManager.shared.isConnected ? "Connected" : "Disconnected")
-                        .font(.caption2)
-                        .foregroundColor(ServerManager.shared.isConnected ? .green : .gray)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(8)
-                .onTapGesture {
-                    if !ServerManager.shared.isConnected {
-                        appState.connectToServer()
-                    }
-                }
-                .accessibilityLabel("Server \(ServerManager.shared.isConnected ? "connected" : "disconnected"). Tap to connect.")
-
                 // Servers Button - navigate to servers screen instead of sheet
                 Button(action: { appState.currentScreen = .servers }) {
                     HStack {
@@ -1340,7 +1384,7 @@ struct MainMenuView: View {
                 Spacer()
 
                 // Settings tip at bottom of sidebar
-                Text("Cmd+, for Settings")
+                Text("Use Command Comma to open settings.")
                     .font(.caption)
                     .foregroundColor(.gray.opacity(0.6))
                     .padding(.bottom, 8)
@@ -1349,6 +1393,9 @@ struct MainMenuView: View {
             .padding()
             .background(Color.black.opacity(0.2))
         }
+        .sheet(item: $selectedRoomForDetails) { room in
+            RoomDetailsSheet(room: room)
+        }
     }
 }
 
@@ -1356,6 +1403,7 @@ struct MainMenuView: View {
 struct RoomCard: View {
     let room: Room
     let onJoin: () -> Void
+    let onDetails: () -> Void
 
     var body: some View {
         HStack {
@@ -1370,11 +1418,14 @@ struct RoomCard: View {
                             .foregroundColor(.yellow)
                             .font(.caption)
                     }
-                }
 
-                Text(room.description)
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                    if !room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("• \(room.description)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .lineLimit(1)
+                    }
+                }
 
                 if !room.serverName.isEmpty {
                     Text(room.serverName)
@@ -1401,6 +1452,68 @@ struct RoomCard: View {
         .padding()
         .background(Color.white.opacity(0.1))
         .cornerRadius(12)
+        .contextMenu {
+            Button {
+                onJoin()
+            } label: {
+                Label("Join Room", systemImage: "arrow.right.circle")
+            }
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(room.roomId, forType: .string)
+            } label: {
+                Label("Copy Room Code", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                let url = "voicelink://join/\(room.roomId)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url, forType: .string)
+            } label: {
+                Label("Copy Join Link", systemImage: "link")
+            }
+
+            Button {
+                onDetails()
+            } label: {
+                Label("Room Details", systemImage: "info.circle")
+            }
+        }
+    }
+}
+
+struct RoomDetailsSheet: View {
+    let room: Room
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(room.name)
+                .font(.title2)
+                .fontWeight(.bold)
+            Text("Room Code: \(room.roomId)")
+                .font(.callout)
+            if !room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(room.description)
+                    .font(.body)
+            }
+            Text("Users: \(room.userCount)/\(room.maxUsers)")
+                .font(.callout)
+            Text("Type: \(room.isPrivate ? "Private" : "Public")")
+                .font(.callout)
+            if !room.serverName.isEmpty {
+                Text("Server: \(room.serverName)")
+                    .font(.callout)
+            }
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
 
@@ -1512,9 +1625,25 @@ struct JoinRoomView: View {
 
             HStack {
                 Button("Join") {
-                    // Join room logic
+                    let code = roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !code.isEmpty else { return }
+                    appState.serverManager.joinRoom(roomId: code, username: appState.username)
+                    if let matched = appState.rooms.first(where: { $0.roomId == code || $0.id == code }) {
+                        appState.currentRoom = matched
+                    } else {
+                        appState.currentRoom = Room(
+                            id: code,
+                            roomId: code,
+                            name: "Room \(code)",
+                            description: "Joined by code",
+                            userCount: 0,
+                            isPrivate: false
+                        )
+                    }
+                    appState.currentScreen = .voiceChat
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(roomCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !appState.isConnected)
 
                 Button("Back") {
                     appState.currentScreen = .mainMenu
@@ -1580,11 +1709,23 @@ struct VoiceChatView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             // Show yourself
-                            UserRow(username: appState.username + " (You)", isMuted: isMuted, isDeafened: isDeafened, isSpeaking: false)
+                            UserRow(
+                                username: appState.username + " (You)",
+                                serverName: appState.serverManager.connectedServer.isEmpty ? "Current" : appState.serverManager.connectedServer,
+                                isMuted: isMuted,
+                                isDeafened: isDeafened,
+                                isSpeaking: false
+                            )
 
                             // Show other users from server
                             ForEach(appState.serverManager.currentRoomUsers) { user in
-                                UserRow(username: user.username, isMuted: user.isMuted, isDeafened: user.isDeafened, isSpeaking: user.isSpeaking)
+                                UserRow(
+                                    username: user.username,
+                                    serverName: user.serverName,
+                                    isMuted: user.isMuted,
+                                    isDeafened: user.isDeafened,
+                                    isSpeaking: user.isSpeaking
+                                )
                             }
                         }
                     }
@@ -1625,6 +1766,13 @@ struct VoiceChatView: View {
                                       label: showChat ? "Hide Chat" : "Show Chat",
                                       isActive: showChat) {
                         showChat.toggle()
+                    }
+
+                    VoiceControlButton(icon: "tray.full",
+                                      label: "Inbox",
+                                      isActive: false) {
+                        appState.currentScreen = .settings
+                        NotificationCenter.default.post(name: .openNotificationInbox, object: nil)
                     }
                 }
                 .padding(.bottom, 20)
@@ -1807,6 +1955,7 @@ struct ChatMessageRow: View {
 
 struct UserRow: View {
     let username: String
+    let serverName: String?
     let isMuted: Bool
     let isDeafened: Bool
     let isSpeaking: Bool
@@ -1825,8 +1974,15 @@ struct UserRow: View {
                     .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
                     .frame(width: 10, height: 10)
 
-                Text(username)
-                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(username)
+                        .foregroundColor(.white)
+                    if let serverName = serverName, !serverName.isEmpty {
+                        Text(serverName)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
 
                 Spacer()
 
@@ -2086,6 +2242,7 @@ class SettingsManager: ObservableObject {
 
     // UI Settings
     @Published var showAudioControlsOnStartup: Bool = true
+    @Published var showLocalServerControls: Bool = false
 
     // Profile Settings
     @Published var userNickname: String = ""
@@ -2136,6 +2293,7 @@ class SettingsManager: ObservableObject {
 
         // UI settings
         showAudioControlsOnStartup = UserDefaults.standard.object(forKey: "showAudioControlsOnStartup") as? Bool ?? true
+        showLocalServerControls = boolSetting("showLocalServerControls", default: false)
 
         // Profile settings
         userNickname = UserDefaults.standard.string(forKey: "userNickname") ?? ""
@@ -2176,6 +2334,7 @@ class SettingsManager: ObservableObject {
             spatialAudioEnabled = true
             reconnectOnDisconnect = true
             showAudioControlsOnStartup = true
+            showLocalServerControls = false
             autoJoinLastRoomOnLaunch = false
             UserDefaults.standard.set(true, forKey: "settingsInitialized")
         }
@@ -2203,6 +2362,7 @@ class SettingsManager: ObservableObject {
 
         // UI settings
         UserDefaults.standard.set(showAudioControlsOnStartup, forKey: "showAudioControlsOnStartup")
+        UserDefaults.standard.set(showLocalServerControls, forKey: "showLocalServerControls")
 
         // Profile settings
         UserDefaults.standard.set(userNickname, forKey: "userNickname")
@@ -2282,6 +2442,387 @@ class SettingsManager: ObservableObject {
     }
 }
 
+// MARK: - Pushover Settings Manager
+@MainActor
+class PushoverSettingsManager: ObservableObject {
+    static let shared = PushoverSettingsManager()
+
+    @Published var enabled: Bool = false
+    @Published var appToken: String = ""
+    @Published var userKey: String = ""
+    @Published var device: String = ""
+    @Published var sound: String = ""
+    @Published var titlePrefix: String = "VoiceLink"
+    @Published var minDeferredSeconds: Int = 15
+    @Published var maxDeferredSeconds: Int = 120
+    @Published var triggerRoomCreated: Bool = false
+    @Published var triggerRoomJoined: Bool = false
+    @Published var triggerRoomAnnouncement: Bool = true
+    @Published var triggerIncomingWebhook: Bool = true
+    @Published var triggerAdminNotice: Bool = true
+    @Published var pendingActivationUntil: String?
+    @Published var customTitle: String = ""
+    @Published var customMessage: String = ""
+    @Published var customURL: String = ""
+    @Published var customURLTitle: String = ""
+    @Published var incomingNotifications: [IncomingPushoverNotification] = []
+    @Published var isLoading: Bool = false
+    @Published var isSaving: Bool = false
+    @Published var isSending: Bool = false
+    @Published var statusMessage: String?
+
+    private init() {}
+
+    private func apiBase() -> String {
+        ServerManager.shared.baseURL ?? ServerManager.mainServer
+    }
+
+    func loadStatus() {
+        guard !isLoading else { return }
+        isLoading = true
+        statusMessage = nil
+
+        guard let url = URL(string: "\(apiBase())/api/notifications/pushover/status") else {
+            isLoading = false
+            statusMessage = "Pushover status URL is invalid."
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isLoading = false
+
+                if let error {
+                    self.statusMessage = "Failed to load Pushover: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool,
+                      success,
+                      let config = json["config"] as? [String: Any] else {
+                    self.statusMessage = "Failed to load Pushover configuration."
+                    return
+                }
+
+                self.enabled = config["enabled"] as? Bool ?? false
+                self.appToken = config["appToken"] as? String ?? ""
+                self.userKey = config["userKey"] as? String ?? ""
+                self.device = config["device"] as? String ?? ""
+                self.sound = config["sound"] as? String ?? ""
+                self.titlePrefix = (config["titlePrefix"] as? String) ?? "VoiceLink"
+                self.minDeferredSeconds = config["minDeferredSeconds"] as? Int ?? 15
+                self.maxDeferredSeconds = config["maxDeferredSeconds"] as? Int ?? 120
+                if let triggerEvents = config["triggerEvents"] as? [String: Any] {
+                    self.triggerRoomCreated = triggerEvents["roomCreated"] as? Bool ?? false
+                    self.triggerRoomJoined = triggerEvents["roomJoined"] as? Bool ?? false
+                    self.triggerRoomAnnouncement = triggerEvents["roomAnnouncement"] as? Bool ?? true
+                    self.triggerIncomingWebhook = triggerEvents["incomingWebhook"] as? Bool ?? true
+                    self.triggerAdminNotice = triggerEvents["adminNotice"] as? Bool ?? true
+                }
+                self.pendingActivationUntil = config["pendingActivationUntil"] as? String
+                self.statusMessage = "Loaded Pushover configuration."
+            }
+        }.resume()
+    }
+
+    func saveConfig() {
+        guard !isSaving else { return }
+        isSaving = true
+        statusMessage = nil
+
+        guard let url = URL(string: "\(apiBase())/api/notifications/pushover/config") else {
+            isSaving = false
+            statusMessage = "Pushover config URL is invalid."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "enabled": enabled,
+            "appToken": appToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            "userKey": userKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            "device": device.trimmingCharacters(in: .whitespacesAndNewlines),
+            "sound": sound.trimmingCharacters(in: .whitespacesAndNewlines),
+            "titlePrefix": titlePrefix.trimmingCharacters(in: .whitespacesAndNewlines),
+            "minDeferredSeconds": max(1, minDeferredSeconds),
+            "maxDeferredSeconds": max(max(1, minDeferredSeconds), maxDeferredSeconds),
+            "triggerEvents": [
+                "roomCreated": triggerRoomCreated,
+                "roomJoined": triggerRoomJoined,
+                "roomAnnouncement": triggerRoomAnnouncement,
+                "incomingWebhook": triggerIncomingWebhook,
+                "adminNotice": triggerAdminNotice
+            ]
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSaving = false
+
+                if let error {
+                    self.statusMessage = "Failed to save Pushover: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool else {
+                    self.statusMessage = "Failed to save Pushover configuration."
+                    return
+                }
+
+                if success {
+                    self.statusMessage = "Pushover settings saved."
+                    if let config = json["config"] as? [String: Any] {
+                        self.pendingActivationUntil = config["pendingActivationUntil"] as? String
+                    }
+                } else {
+                    self.statusMessage = (json["error"] as? String) ?? "Pushover save failed."
+                }
+            }
+        }.resume()
+    }
+
+    func testNotification() {
+        guard let url = URL(string: "\(apiBase())/api/notifications/pushover/test") else {
+            statusMessage = "Pushover test URL is invalid."
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": "\(titlePrefix.isEmpty ? "VoiceLink" : titlePrefix) Test",
+            "message": "Pushover test from VoiceLink macOS app."
+        ])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    self.statusMessage = "Pushover test failed: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool else {
+                    self.statusMessage = "Pushover test failed."
+                    return
+                }
+
+                self.statusMessage = success ? "Pushover test sent." : ((json["error"] as? String) ?? "Pushover test failed.")
+            }
+        }.resume()
+    }
+
+    func sendCustomNotification() {
+        guard !isSending else { return }
+        isSending = true
+        statusMessage = nil
+
+        guard let url = URL(string: "\(apiBase())/api/notifications/pushover/send") else {
+            isSending = false
+            statusMessage = "Custom send URL is invalid."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let title = customTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "\(titlePrefix.isEmpty ? "VoiceLink" : titlePrefix) Event"
+            : customTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = customMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "VoiceLink notification"
+            : customMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": title,
+            "message": message,
+            "url": customURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            "urlTitle": customURLTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        ])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isSending = false
+
+                if let error {
+                    self.statusMessage = "Custom send failed: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool else {
+                    self.statusMessage = "Custom send failed."
+                    return
+                }
+                self.statusMessage = success ? "Custom Pushover notification sent." : ((json["error"] as? String) ?? "Custom send failed.")
+                if success {
+                    self.loadIncoming()
+                }
+            }
+        }.resume()
+    }
+
+    func loadIncoming() {
+        guard let url = URL(string: "\(apiBase())/api/notifications/incoming?limit=25") else {
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let items = json["notifications"] as? [[String: Any]] else {
+                    return
+                }
+
+                self.incomingNotifications = items.map { item in
+                    let payload = item["payload"] as? [String: Any]
+                    let htmlFromPayload = payload?["html"] as? String
+                    let linkURL = (payload?["url"] as? String) ?? ""
+                    let linkTitle = (payload?["urlTitle"] as? String) ?? ""
+                    let rawMessage = (item["message"] as? String) ?? ""
+                    let htmlBody = htmlFromPayload?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? (htmlFromPayload ?? "")
+                        : Self.defaultHTMLBody(title: (item["title"] as? String) ?? "Notification", message: rawMessage, linkURL: linkURL, linkTitle: linkTitle)
+                    return IncomingPushoverNotification(
+                        id: String(describing: item["id"] ?? UUID().uuidString),
+                        source: (item["source"] as? String) ?? "unknown",
+                        title: (item["title"] as? String) ?? "Notification",
+                        message: rawMessage,
+                        level: (item["level"] as? String) ?? "info",
+                        htmlBody: htmlBody,
+                        linkURL: linkURL,
+                        linkTitle: linkTitle,
+                        createdAt: (item["createdAt"] as? String) ?? ((item["timestamp"] as? String) ?? "")
+                    )
+                }
+            }
+        }.resume()
+    }
+
+    func updateIncomingNotification(id: String, title: String, message: String, htmlBody: String, linkURL: String, linkTitle: String, completion: ((Bool, String?) -> Void)? = nil) {
+        guard let url = URL(string: "\(apiBase())/api/notifications/incoming/\(id)") else {
+            completion?(false, "Invalid update URL")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": title,
+            "message": message,
+            "payload": [
+                "html": htmlBody,
+                "url": linkURL,
+                "urlTitle": linkTitle
+            ]
+        ])
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                if let error {
+                    completion?(false, error.localizedDescription)
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool else {
+                    completion?(false, "Update failed")
+                    return
+                }
+                if success {
+                    self?.loadIncoming()
+                    completion?(true, nil)
+                } else {
+                    completion?(false, (json["error"] as? String) ?? "Update failed")
+                }
+            }
+        }.resume()
+    }
+
+    func deleteIncomingNotification(id: String, completion: ((Bool, String?) -> Void)? = nil) {
+        guard let url = URL(string: "\(apiBase())/api/notifications/incoming/\(id)") else {
+            completion?(false, "Invalid delete URL")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            Task { @MainActor in
+                if let error {
+                    completion?(false, error.localizedDescription)
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool else {
+                    completion?(false, "Delete failed")
+                    return
+                }
+                if success {
+                    self?.incomingNotifications.removeAll { $0.id == id }
+                    completion?(true, nil)
+                } else {
+                    completion?(false, (json["error"] as? String) ?? "Delete failed")
+                }
+            }
+        }.resume()
+    }
+
+    private static func defaultHTMLBody(title: String, message: String, linkURL: String, linkTitle: String) -> String {
+        let escapedTitle = escapeHTML(title)
+        let escapedMessage = escapeHTML(message).replacingOccurrences(of: "\n", with: "<br/>")
+        let escapedLinkURL = escapeHTML(linkURL)
+        let escapedLinkTitle = escapeHTML(linkTitle.isEmpty ? linkURL : linkTitle)
+        let linkLine = linkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ""
+            : "<p><a href=\"\(escapedLinkURL)\">\(escapedLinkTitle)</a></p>"
+        return """
+        <html><body style="font-family: -apple-system; padding: 14px;">
+        <h3>\(escapedTitle)</h3>
+        <p>\(escapedMessage)</p>
+        \(linkLine)
+        </body></html>
+        """
+    }
+
+    private static func escapeHTML(_ input: String) -> String {
+        input
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+}
+
+struct IncomingPushoverNotification: Identifiable {
+    let id: String
+    let source: String
+    let title: String
+    let message: String
+    let level: String
+    let htmlBody: String
+    let linkURL: String
+    let linkTitle: String
+    let createdAt: String
+}
+
 extension Notification.Name {
     static let syncModeChanged = Notification.Name("syncModeChanged")
 }
@@ -2290,24 +2831,46 @@ extension Notification.Name {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var settings = SettingsManager.shared
+    @StateObject private var serverProfiles = ServerProfilesManager.shared
+    @StateObject private var pushover = PushoverSettingsManager.shared
     @State private var selectedTab: SettingsTab = .audio
     @State private var isSoundTestPlaying = false
     @State private var isExportingData = false
     @State private var dataExportStatus: String?
+    @State private var newServerName: String = ""
+    @State private var newServerURL: String = ""
+    @State private var serverProfileError: String?
+    @State private var didLoadPushover = false
+    @State private var selectedInboxNotificationId: String?
+    @State private var inboxEditorTitle: String = ""
+    @State private var inboxEditorMessage: String = ""
+    @State private var inboxEditorHTML: String = ""
+    @State private var inboxEditorLinkURL: String = ""
+    @State private var inboxEditorLinkTitle: String = ""
+    @State private var inboxEditorStatus: String?
 
     enum SettingsTab: String, CaseIterable {
-        case profile = "Profile"
+        case profile = "Profile & Authentication"
         case audio = "Audio"
         case sync = "Sync & Filters"
         case fileSharing = "File Sharing"
         case notifications = "Notifications"
+        case notificationInbox = "Notification Inbox"
         case privacy = "Privacy"
-        case mastodon = "Mastodon"
         case advanced = "Advanced"
     }
 
     private var exportButtonLabel: String {
         isExportingData ? "Exporting..." : "Export My Data"
+    }
+
+    private var visibleTabs: [SettingsTab] {
+        SettingsTab.allCases.filter { tab in
+            if tab == .notificationInbox && !AdminServerManager.shared.isAdmin {
+                return false
+            }
+            return true
+        }
     }
 
     var body: some View {
@@ -2351,7 +2914,7 @@ struct SettingsView: View {
             HSplitView {
                 // Sidebar
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    ForEach(visibleTabs, id: \.self) { tab in
                         Button(action: { selectedTab = tab }) {
                             HStack {
                                 Image(systemName: iconForTab(tab))
@@ -2391,10 +2954,10 @@ struct SettingsView: View {
                             fileSharingSettings
                         case .notifications:
                             notificationSettings
+                        case .notificationInbox:
+                            notificationInboxSettings
                         case .privacy:
                             privacySettings
-                        case .mastodon:
-                            mastodonSettings
                         case .advanced:
                             advancedSettings
                         }
@@ -2407,6 +2970,12 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openProfileSettings)) { _ in
             selectedTab = .profile
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openNotificationInbox)) { _ in
+            selectedTab = .notificationInbox
+            if AdminServerManager.shared.isAdmin {
+                pushover.loadIncoming()
+            }
+        }
     }
 
     func iconForTab(_ tab: SettingsTab) -> String {
@@ -2416,8 +2985,8 @@ struct SettingsView: View {
         case .sync: return "arrow.triangle.2.circlepath"
         case .fileSharing: return "folder.badge.person.crop"
         case .notifications: return "bell"
+        case .notificationInbox: return "tray.full"
         case .privacy: return "lock.shield"
-        case .mastodon: return "bubble.left.and.bubble.right"
         case .advanced: return "gear"
         }
     }
@@ -2443,6 +3012,8 @@ struct SettingsView: View {
                     .foregroundColor(.gray)
             }
         }
+
+        mastodonSettings
     }
 
     // MARK: - Audio Settings
@@ -2604,6 +3175,8 @@ struct SettingsView: View {
     // MARK: - Notification Settings
     @ViewBuilder
     var notificationSettings: some View {
+        let isAdmin = AdminServerManager.shared.isAdmin
+
         SettingsSection(title: "Sound Notifications") {
             Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
                 .onChange(of: settings.soundNotifications) { _ in
@@ -2650,6 +3223,292 @@ struct SettingsView: View {
             .accessibilityHint("Shows a sample desktop notification")
             .help("Shows a sample desktop notification")
         }
+
+        if isAdmin {
+            SettingsSection(title: "Pushover (Admin Only)") {
+                Toggle("Enable Pushover", isOn: $pushover.enabled)
+                    .accessibilityHint("Enable sending VoiceLink notifications through Pushover")
+                    .help("Enable sending VoiceLink notifications through Pushover")
+
+                TextField("App Token", text: $pushover.appToken)
+                    .textFieldStyle(.roundedBorder)
+                TextField("User Key", text: $pushover.userKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Device (optional)", text: $pushover.device)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Sound (optional)", text: $pushover.sound)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Title Prefix", text: $pushover.titlePrefix)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Text("Min Delay")
+                    Stepper(value: $pushover.minDeferredSeconds, in: 1...600) {
+                        Text("\(pushover.minDeferredSeconds) sec")
+                    }
+                    Spacer()
+                    Text("Max Delay")
+                    Stepper(value: $pushover.maxDeferredSeconds, in: 1...3600) {
+                        Text("\(pushover.maxDeferredSeconds) sec")
+                    }
+                }
+
+                Divider()
+                Text("Auto-Send Event Triggers")
+                    .font(.subheadline)
+                Toggle("Room Created", isOn: $pushover.triggerRoomCreated)
+                Toggle("Room Joined", isOn: $pushover.triggerRoomJoined)
+                Toggle("Room Announcement", isOn: $pushover.triggerRoomAnnouncement)
+                Toggle("Incoming Webhook", isOn: $pushover.triggerIncomingWebhook)
+                Toggle("Admin Notices", isOn: $pushover.triggerAdminNotice)
+
+                HStack {
+                    Button("Load") {
+                        pushover.loadStatus()
+                        pushover.loadIncoming()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(pushover.isLoading || pushover.isSaving)
+
+                    Button(pushover.isSaving ? "Saving..." : "Save Pushover Keys") {
+                        pushover.saveConfig()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(pushover.isLoading || pushover.isSaving)
+
+                    Button("Send Test") {
+                        pushover.testNotification()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(pushover.isLoading || pushover.isSaving)
+                }
+
+                Divider()
+                Text("Send Custom Notification")
+                    .font(.subheadline)
+                TextField("Title", text: $pushover.customTitle)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Message", text: $pushover.customMessage)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Link URL (optional)", text: $pushover.customURL)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Link Label (optional)", text: $pushover.customURLTitle)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button(pushover.isSending ? "Sending..." : "Send Custom") {
+                        pushover.sendCustomNotification()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(pushover.isLoading || pushover.isSaving || pushover.isSending)
+
+                    Button("Refresh Incoming") {
+                        pushover.loadIncoming()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if !pushover.incomingNotifications.isEmpty {
+                    Divider()
+                    Text("Recent Incoming")
+                        .font(.subheadline)
+                    ForEach(pushover.incomingNotifications.prefix(10)) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.title)
+                                .font(.caption.bold())
+                            Text(item.message)
+                                .font(.caption)
+                            if !item.createdAt.isEmpty {
+                                Text(item.createdAt)
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.white.opacity(0.04))
+                        .cornerRadius(6)
+                    }
+                }
+
+                if let pending = pushover.pendingActivationUntil, !pending.isEmpty {
+                    Text("Pending activation until \(pending)")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if let status = pushover.statusMessage, !status.isEmpty {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            .onAppear {
+                guard !didLoadPushover else { return }
+                didLoadPushover = true
+                pushover.loadStatus()
+                pushover.loadIncoming()
+            }
+        }
+    }
+
+    // MARK: - Notification Inbox
+    @ViewBuilder
+    var notificationInboxSettings: some View {
+        let isAdmin = AdminServerManager.shared.isAdmin
+        let messageManager = MessagingManager.shared
+        let roomMessages = messageManager.messages
+        let directMessages = Array(messageManager.directMessages.values.joined())
+        let combinedMessages = Array((roomMessages + directMessages).sorted { $0.timestamp > $1.timestamp }.prefix(100))
+
+        SettingsSection(title: "User Messages Inbox") {
+            if combinedMessages.isEmpty {
+                Text("No user messages yet.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            } else {
+                ForEach(combinedMessages.prefix(20)) { msg in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("\(msg.senderName) • \(msg.type.rawValue.capitalized)")
+                            .font(.caption.bold())
+                        Text(msg.content)
+                            .font(.caption)
+                        Text(msg.timestamp.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(8)
+                }
+            }
+        }
+
+        if isAdmin {
+            SettingsSection(title: "Pushover/System Inbox (Admin)") {
+                HStack {
+                    Button("Refresh") {
+                        pushover.loadIncoming()
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                    Text("\(pushover.incomingNotifications.count) items")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if pushover.incomingNotifications.isEmpty {
+                    Text("No incoming notifications.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    Picker("Select Notification", selection: Binding(
+                        get: { selectedInboxNotificationId ?? "" },
+                        set: { newValue in
+                            selectedInboxNotificationId = newValue.isEmpty ? nil : newValue
+                            loadSelectedInboxNotification()
+                        }
+                    )) {
+                        Text("Choose notification").tag("")
+                        ForEach(pushover.incomingNotifications) { item in
+                            Text("\(item.title) • \(item.createdAt)").tag(item.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    if selectedInboxNotificationId != nil {
+                        TextField("Title", text: $inboxEditorTitle)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Message", text: $inboxEditorMessage)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Link URL", text: $inboxEditorLinkURL)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Link Label", text: $inboxEditorLinkTitle)
+                            .textFieldStyle(.roundedBorder)
+
+                        Text("HTML Body")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        TextEditor(text: $inboxEditorHTML)
+                            .frame(minHeight: 120)
+                            .padding(6)
+                            .background(Color.white.opacity(0.06))
+                            .cornerRadius(8)
+
+                        Text("Preview")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        HTMLContentView(html: inboxEditorHTML)
+                            .frame(minHeight: 160)
+                            .background(Color.white.opacity(0.04))
+                            .cornerRadius(8)
+
+                        HStack {
+                            Button("Save Changes") {
+                                guard let id = selectedInboxNotificationId else { return }
+                                pushover.updateIncomingNotification(
+                                    id: id,
+                                    title: inboxEditorTitle,
+                                    message: inboxEditorMessage,
+                                    htmlBody: inboxEditorHTML,
+                                    linkURL: inboxEditorLinkURL,
+                                    linkTitle: inboxEditorLinkTitle
+                                ) { success, error in
+                                    inboxEditorStatus = success ? "Notification updated." : (error ?? "Update failed.")
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button(role: .destructive) {
+                                guard let id = selectedInboxNotificationId else { return }
+                                pushover.deleteIncomingNotification(id: id) { success, error in
+                                    inboxEditorStatus = success ? "Notification removed." : (error ?? "Delete failed.")
+                                    if success {
+                                        selectedInboxNotificationId = nil
+                                        inboxEditorTitle = ""
+                                        inboxEditorMessage = ""
+                                        inboxEditorHTML = ""
+                                        inboxEditorLinkURL = ""
+                                        inboxEditorLinkTitle = ""
+                                    }
+                                }
+                            } label: {
+                                Text("Remove")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let status = inboxEditorStatus, !status.isEmpty {
+                            Text(status)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                pushover.loadIncoming()
+                if selectedInboxNotificationId == nil {
+                    selectedInboxNotificationId = pushover.incomingNotifications.first?.id
+                    loadSelectedInboxNotification()
+                }
+            }
+        } else {
+            SettingsSection(title: "Pushover/System Inbox") {
+                Text("Admin access is required to view and manage system notification inbox.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+
+    private func loadSelectedInboxNotification() {
+        guard let id = selectedInboxNotificationId,
+              let selected = pushover.incomingNotifications.first(where: { $0.id == id }) else { return }
+        inboxEditorTitle = selected.title
+        inboxEditorMessage = selected.message
+        inboxEditorHTML = selected.htmlBody
+        inboxEditorLinkURL = selected.linkURL
+        inboxEditorLinkTitle = selected.linkTitle
     }
 
     // MARK: - File Sharing Settings
@@ -2840,9 +3699,10 @@ struct SettingsView: View {
                             Text(user.displayName)
                                 .font(.headline)
                             if let instance = user.mastodonInstance {
-                                Text("@\(user.username ?? "")@\(instance)")
+                                Text("You are logged in as @\(user.username) on instance host \(instance)")
                                     .font(.caption)
                                     .foregroundColor(.gray)
+                                    .lineLimit(2)
                             }
                         }
                         Spacer()
@@ -2904,6 +3764,92 @@ struct SettingsView: View {
     // MARK: - Advanced Settings
     @ViewBuilder
     var advancedSettings: some View {
+        SettingsSection(title: "Menu Visibility") {
+            Toggle("Show Local Server controls in menus", isOn: $settings.showLocalServerControls)
+                .onChange(of: settings.showLocalServerControls) { _ in
+                    settings.saveSettings()
+                }
+                .accessibilityHint("When enabled, local server connect and discovery options appear in menus")
+                .help("When enabled, local server connect and discovery options appear in menus")
+            Text("Hidden by default to keep menus focused on federation and hosted servers.")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+
+        SettingsSection(title: "Servers Manager") {
+            Toggle("Enable multi-server directory mode", isOn: $serverProfiles.multiServerDirectoryEnabled)
+                .accessibilityHint("Lets you save multiple server endpoints and quickly connect between them")
+                .help("Lets you save multiple server endpoints and quickly connect between them")
+
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Server name", text: $newServerName)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Server URL (https://...)", text: $newServerURL)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button("Add Server Profile") {
+                        let added = serverProfiles.addProfile(name: newServerName, url: newServerURL)
+                        if added {
+                            newServerName = ""
+                            newServerURL = ""
+                            serverProfileError = nil
+                        } else {
+                            serverProfileError = "Could not add server. Check name/URL or duplicate entry."
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if let error = serverProfileError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+
+            if serverProfiles.profiles.isEmpty {
+                Text("No saved server profiles yet.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            } else {
+                ForEach(serverProfiles.profiles) { profile in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(profile.name)
+                                .fontWeight(.semibold)
+                            Text(profile.url)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        Spacer()
+                        Toggle("Enabled", isOn: Binding(
+                            get: { profile.isEnabled },
+                            set: { serverProfiles.updateEnabled(profile, enabled: $0) }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+
+                        Button("Connect") {
+                            appState.serverManager.connectToURL(profile.url)
+                            UserDefaults.standard.set(profile.url, forKey: "lastConnectedServer")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive) {
+                            serverProfiles.removeProfile(profile)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(8)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(8)
+                }
+            }
+        }
+
         SettingsSection(title: "Developer Options") {
             Toggle("Enable debug logging", isOn: .constant(false))
             Toggle("Show connection stats", isOn: .constant(false))
@@ -2952,6 +3898,21 @@ struct SettingsSection<Content: View>: View {
             .cornerRadius(10)
         }
         .foregroundColor(.white.opacity(0.9))
+    }
+}
+
+struct HTMLContentView: NSViewRepresentable {
+    let html: String
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        nsView.loadHTMLString(html, baseURL: nil)
     }
 }
 

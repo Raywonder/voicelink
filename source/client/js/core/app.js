@@ -17,9 +17,21 @@ class VoiceLinkApp {
         // Audio playback management
         this.currentAudio = null;
         this.isAudioPlaying = false;
+        this.userInitiatedOffline = false;
+        this.apiReachable = false;
+        this.isReconnectInProgress = false;
+        this.networkRefreshInterval = null;
 
         // Room data cache for join screen
         this.roomDataCache = new Map();
+        this.activeRoomContextMenu = null;
+        this.boundHandleRoomMenuOutsideClick = (event) => this.handleRoomMenuOutsideClick(event);
+        this.boundHandleRoomMenuEscape = (event) => this.handleRoomMenuEscape(event);
+        this.escapeSequenceArmed = false;
+        this.escapeSequenceTimeout = null;
+        this.inRoomActionsMenu = null;
+        this.boundInRoomMenuOutsideClick = (event) => this.handleInRoomMenuOutsideClick(event);
+        this.boundInRoomMenuEscape = (event) => this.handleInRoomMenuEscape(event);
 
         this.ui = {
             currentScreen: 'loading-screen',
@@ -125,8 +137,13 @@ class VoiceLinkApp {
                 console.log('iOS compatibility layer initialized');
             }
 
-            // Connect to local server first (this doesn't require audio permissions)
-            await this.connectToServer();
+            // Connect automatically unless user status is explicitly offline/invisible.
+            this.userInitiatedOffline = this.isOfflineStatusSelected();
+            if (!this.userInitiatedOffline) {
+                await this.connectToServer();
+            } else {
+                this.updateServerStatus('offline');
+            }
 
             // Initialize audio systems (with error handling for Chrome)
             await this.initializeAudioSystems();
@@ -155,6 +172,7 @@ class VoiceLinkApp {
                 console.log('Demo mode activated - creating private test room');
                 // Auto-create and join a private test room for documentation testing
                 setTimeout(() => {
+                    this.startServerStatusMonitoring();
                     this.createDemoRoom(testFeature);
                 }, 2500);
             } else {
@@ -173,6 +191,7 @@ class VoiceLinkApp {
                 this.showScreen('main-menu');
                 // Don't show error - this is normal browser behavior
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
+                this.startServerStatusMonitoring();
             }, 2000);
         }
     }
@@ -323,11 +342,12 @@ class VoiceLinkApp {
             console.log('Whisper mode manager initialized');
         }
 
-        // Initialize user settings manager
-        if (typeof UserSettingsManager !== 'undefined') {
-            window.userSettingsManager = new UserSettingsManager();
-            console.log('User settings manager initialized');
-        }
+            // Initialize user settings manager
+            if (typeof UserSettingsManager !== 'undefined') {
+                window.userSettingsManager = new UserSettingsManager();
+                console.log('User settings manager initialized');
+                this.setupUserStatusConnectionBehavior();
+            }
 
         // Initialize user settings interface
         if (typeof UserSettingsInterface !== 'undefined' && window.userSettingsManager) {
@@ -535,7 +555,8 @@ class VoiceLinkApp {
         const events = [
             'joined-room', 'user-joined', 'user-left', 'user-audio-routing-changed',
             'user-position-changed', 'user-audio-settings-changed', 'chat-message',
-            'error', 'room-expiring', 'room-expired', 'forced-leave', 'background-stream'
+            'error', 'room-expiring', 'room-expired', 'forced-leave', 'background-stream',
+            'room-agent-status', 'agent-message', 'notification-received'
         ];
         events.forEach(event => this.socket.off(event));
 
@@ -591,6 +612,22 @@ class VoiceLinkApp {
         // Background stream events
         this.socket.on('background-stream', (data) => {
             this.handleBackgroundStream(data);
+        });
+
+        // Room agent events
+        this.socket.on('room-agent-status', (payload) => {
+            this.handleRoomAgentStatus(payload);
+        });
+
+        this.socket.on('agent-message', (message) => {
+            this.handleAgentMessage(message);
+        });
+
+        this.socket.on('notification-received', (event) => {
+            if (event?.title || event?.message) {
+                this.showNotification(event.title || event.message, 'info');
+            }
+            this.loadIncomingNotifications?.();
         });
     }
 
@@ -724,6 +761,169 @@ class VoiceLinkApp {
                 this.backgroundStream.volume = volume / 100;
             }
         }
+    }
+
+    handleRoomAgentStatus(payload = {}) {
+        const roomId = payload.roomId || '';
+        const roomMismatch = this.currentRoomId && roomId && this.currentRoomId !== roomId;
+        if (roomMismatch) return;
+
+        const agent = payload.agent || {};
+        const status = String(agent.statusText || 'Room agent status updated.').trim();
+        const type = agent.statusType === 'offline' ? 'warning' : 'info';
+        this.showLinkedNotification(status, type);
+    }
+
+    handleAgentMessage(message = {}) {
+        const roomMismatch = this.currentRoomId && message.roomId && this.currentRoomId !== message.roomId;
+        if (roomMismatch) return;
+
+        const agentName = message.agentName || 'Room Agent';
+        const text = String(message.message || '').trim();
+        if (!text) return;
+        this.addSystemMessage(`${agentName}: ${text}`);
+    }
+
+    appendTextWithSafeLinks(container, text) {
+        const content = String(text || '');
+        const linkRegex = /(https?:\/\/[^\s<>"')]+|voicelink:\/\/[^\s<>"')]+)/gi;
+        let cursor = 0;
+        let match;
+
+        while ((match = linkRegex.exec(content)) !== null) {
+            const url = match[0];
+            const start = match.index;
+            if (start > cursor) {
+                container.appendChild(document.createTextNode(content.slice(cursor, start)));
+            }
+
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = url;
+            link.style.color = '#fff';
+            link.style.textDecoration = 'underline';
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                this.openLinkWithSafetyOptions(url);
+            });
+            container.appendChild(link);
+
+            cursor = start + url.length;
+        }
+
+        if (cursor < content.length) {
+            container.appendChild(document.createTextNode(content.slice(cursor)));
+        }
+    }
+
+    isDirectEmbeddableMediaUrl(url) {
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch {
+            return false;
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+        const pathname = parsed.pathname.toLowerCase();
+        const mediaExtensions = [
+            '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus',
+            '.mp4', '.m4v', '.mov', '.webm', '.mkv',
+            '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'
+        ];
+        return mediaExtensions.some((ext) => pathname.endsWith(ext));
+    }
+
+    openDirectMediaPreview(url) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 11000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        `;
+
+        const panel = document.createElement('div');
+        panel.style.cssText = `
+            width: min(960px, 100%);
+            max-height: 90vh;
+            background: #121212;
+            color: #fff;
+            border-radius: 10px;
+            padding: 12px;
+            overflow: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+        `;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close Preview';
+        closeBtn.style.cssText = 'margin-bottom: 10px;';
+        closeBtn.addEventListener('click', () => overlay.remove());
+        panel.appendChild(closeBtn);
+
+        const urlLabel = document.createElement('div');
+        urlLabel.style.cssText = 'font-size: 12px; opacity: 0.85; margin-bottom: 10px; word-break: break-all;';
+        urlLabel.textContent = url;
+        panel.appendChild(urlLabel);
+
+        const lower = url.toLowerCase();
+        let mediaElement = null;
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].some((ext) => lower.includes(ext))) {
+            mediaElement = document.createElement('img');
+            mediaElement.src = url;
+            mediaElement.alt = 'Media preview';
+            mediaElement.style.cssText = 'max-width: 100%; height: auto; border-radius: 8px;';
+        } else if (['.mp4', '.m4v', '.mov', '.webm', '.mkv'].some((ext) => lower.includes(ext))) {
+            mediaElement = document.createElement('video');
+            mediaElement.src = url;
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+            mediaElement.style.cssText = 'max-width: 100%; max-height: 70vh; border-radius: 8px;';
+        } else {
+            mediaElement = document.createElement('audio');
+            mediaElement.src = url;
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+            mediaElement.style.cssText = 'width: 100%;';
+        }
+
+        panel.appendChild(mediaElement);
+        overlay.appendChild(panel);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) overlay.remove();
+        });
+        document.body.appendChild(overlay);
+    }
+
+    openLinkWithSafetyOptions(url) {
+        const cleanUrl = String(url || '').trim();
+        if (!cleanUrl) return;
+
+        const warningConfirmed = window.confirm(`You are about to open this link:\n${cleanUrl}\n\nContinue?`);
+        if (!warningConfirmed) return;
+
+        if (cleanUrl.toLowerCase().startsWith('voicelink://')) {
+            window.location.href = cleanUrl;
+            return;
+        }
+
+        const isEmbeddable = this.isDirectEmbeddableMediaUrl(cleanUrl);
+        if (isEmbeddable) {
+            const choice = window.prompt(
+                `Link looks like direct media.\nChoose action:\n1 = View safely in app\n2 = Open in browser\n\nEnter 1 or 2:`,
+                '1'
+            );
+            if (choice === '1') {
+                this.openDirectMediaPreview(cleanUrl);
+                return;
+            }
+            if (choice !== '2') return;
+        }
+
+        window.open(cleanUrl, '_blank', 'noopener,noreferrer');
     }
 
     /**
@@ -1187,6 +1387,9 @@ class VoiceLinkApp {
             }
         });
 
+        // Double-Escape in room opens room actions menu
+        document.addEventListener('keydown', (e) => this.handleGlobalEscapeKey(e));
+
         // Audio settings
         document.getElementById('test-microphone')?.addEventListener('click', () => {
             this.audioEngine.startMicrophoneTest();
@@ -1234,6 +1437,313 @@ class VoiceLinkApp {
         this.checkOAuthCallback();
     }
 
+    handleGlobalEscapeKey(event) {
+        if (event.key !== 'Escape') return;
+
+        const inRoomScreen = this.ui.currentScreen === 'voice-chat-screen';
+        const hasCurrentRoom = !!(this.currentRoom && this.currentRoom.id);
+        if (!inRoomScreen || !hasCurrentRoom) return;
+
+        // If menu is open, one Escape closes it.
+        if (this.inRoomActionsMenu) {
+            event.preventDefault();
+            this.hideInRoomActionsMenu();
+            return;
+        }
+
+        // First escape arms the menu.
+        if (!this.escapeSequenceArmed) {
+            this.escapeSequenceArmed = true;
+            this.showNotification('Press Escape again to open room actions.', 'info');
+            if (this.escapeSequenceTimeout) clearTimeout(this.escapeSequenceTimeout);
+            this.escapeSequenceTimeout = setTimeout(() => {
+                this.escapeSequenceArmed = false;
+                this.escapeSequenceTimeout = null;
+            }, 1400);
+            return;
+        }
+
+        // Second escape opens room actions.
+        event.preventDefault();
+        this.escapeSequenceArmed = false;
+        if (this.escapeSequenceTimeout) {
+            clearTimeout(this.escapeSequenceTimeout);
+            this.escapeSequenceTimeout = null;
+        }
+        this.showInRoomActionsMenu();
+    }
+
+    showInRoomActionsMenu() {
+        this.hideInRoomActionsMenu();
+        const room = this.currentRoom;
+        if (!room?.id) return;
+
+        const isAdmin = this.isRoomAdminForCurrentUser();
+        const isLocked = !!room.locked;
+        const lockActionLabel = isLocked ? 'Unlock Room' : 'Lock Room';
+        const lockActionIcon = isLocked ? '🔓' : '🔒';
+
+        const menu = document.createElement('div');
+        menu.className = 'context-menu room-actions-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', `Room actions for ${room.name || 'current room'}`);
+        menu.style.position = 'fixed';
+        menu.style.right = '16px';
+        menu.style.top = '72px';
+        menu.style.zIndex = '10020';
+
+        menu.innerHTML = `
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="share-room">
+                <span class="menu-icon">📣</span>
+                <span class="menu-label">Share Room</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="invite-user">
+                <span class="menu-icon">✉️</span>
+                <span class="menu-label">Invite User</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-link">
+                <span class="menu-icon">🔗</span>
+                <span class="menu-label">Copy Room Link</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-id">
+                <span class="menu-icon">📋</span>
+                <span class="menu-label">Copy Room ID</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-room-settings">
+                <span class="menu-icon">⚙️</span>
+                <span class="menu-label">Room Settings</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="upload-profile-photo">
+                <span class="menu-icon">🖼️</span>
+                <span class="menu-label">Upload Avatar Photo</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-jukebox">
+                <span class="menu-icon">🎵</span>
+                <span class="menu-label">Open Jukebox</span>
+            </div>
+            ${isAdmin ? `
+                <div class="menu-separator" role="separator"></div>
+                <div class="menu-item" role="menuitem" tabindex="0" data-action="toggle-room-lock">
+                    <span class="menu-icon">${lockActionIcon}</span>
+                    <span class="menu-label">${lockActionLabel}</span>
+                </div>
+            ` : ''}
+            <div class="menu-separator" role="separator"></div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="leave-room">
+                <span class="menu-icon">🚪</span>
+                <span class="menu-label">Leave Room</span>
+            </div>
+        `;
+
+        document.body.appendChild(menu);
+        this.inRoomActionsMenu = menu;
+
+        const handleActivate = async (action) => {
+            if (!action) return;
+            if (action === 'share-room') {
+                await this.shareRoom(room.id);
+            } else if (action === 'invite-user') {
+                await this.shareRoom(room.id);
+                this.showNotification('Invite link ready to send.', 'success');
+            } else if (action === 'copy-room-link') {
+                await this.copyCurrentRoomLink();
+            } else if (action === 'copy-room-id') {
+                const copied = await this.copyText(room.id);
+                this.showNotification(copied ? 'Room ID copied.' : `Room ID: ${room.id}`, copied ? 'success' : 'info');
+            } else if (action === 'open-room-settings') {
+                this.showScreen('settings-screen');
+                this.initializeSettingsScreen();
+            } else if (action === 'upload-profile-photo') {
+                this.openAvatarUploadShortcut();
+            } else if (action === 'open-jukebox') {
+                this.openJukeboxFromRoomActions();
+            } else if (action === 'toggle-room-lock') {
+                if (room.locked) {
+                    await this.unlockCurrentRoom();
+                } else {
+                    await this.lockCurrentRoom();
+                }
+            } else if (action === 'leave-room') {
+                this.leaveRoom();
+            }
+            this.hideInRoomActionsMenu();
+        };
+
+        menu.addEventListener('click', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            await handleActivate(item.getAttribute('data-action'));
+        });
+
+        menu.addEventListener('keydown', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                await handleActivate(item.getAttribute('data-action'));
+            }
+        });
+
+        const first = menu.querySelector('.menu-item');
+        if (first) first.focus();
+        setTimeout(() => {
+            document.addEventListener('click', this.boundInRoomMenuOutsideClick, true);
+            document.addEventListener('keydown', this.boundInRoomMenuEscape, true);
+        }, 0);
+    }
+
+    handleInRoomMenuOutsideClick(event) {
+        if (!this.inRoomActionsMenu) return;
+        if (!this.inRoomActionsMenu.contains(event.target)) {
+            this.hideInRoomActionsMenu();
+        }
+    }
+
+    handleInRoomMenuEscape(event) {
+        if (event.key === 'Escape') {
+            this.hideInRoomActionsMenu();
+        }
+    }
+
+    hideInRoomActionsMenu() {
+        if (this.inRoomActionsMenu) {
+            this.inRoomActionsMenu.remove();
+            this.inRoomActionsMenu = null;
+        }
+        document.removeEventListener('click', this.boundInRoomMenuOutsideClick, true);
+        document.removeEventListener('keydown', this.boundInRoomMenuEscape, true);
+    }
+
+    isRoomAdminForCurrentUser() {
+        const user = this.currentUser || {};
+        if (user.isAdmin || user.isModerator) return true;
+        const creatorHandle = this.currentRoom?.creatorHandle;
+        const userHandle = user.fullHandle || user.handle || user.username || user.name || '';
+        if (creatorHandle && userHandle && creatorHandle === userHandle) return true;
+        return false;
+    }
+
+    async lockCurrentRoom() {
+        if (!this.currentRoom?.id) return;
+        if (!this.isRoomAdminForCurrentUser()) {
+            this.showNotification('Only room admins can lock this room.', 'error');
+            return;
+        }
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const actor = this.currentUser?.displayName || this.currentUser?.name || 'admin';
+            const response = await fetch(`${apiBase}/api/rooms/${this.currentRoom.id}/lock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lockedBy: actor, reason: 'Locked from room actions menu' })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to lock room.', 'error');
+                return;
+            }
+            this.currentRoom.locked = true;
+            this.showNotification(result.message || 'Room locked.', 'success');
+        } catch (error) {
+            console.error('lockCurrentRoom failed:', error);
+            this.showNotification('Failed to lock room.', 'error');
+        }
+    }
+
+    async unlockCurrentRoom() {
+        if (!this.currentRoom?.id) return;
+        if (!this.isRoomAdminForCurrentUser()) {
+            this.showNotification('Only room admins can unlock this room.', 'error');
+            return;
+        }
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const actor = this.currentUser?.displayName || this.currentUser?.name || 'admin';
+            const response = await fetch(`${apiBase}/api/rooms/${this.currentRoom.id}/unlock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ unlockedBy: actor })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to unlock room.', 'error');
+                return;
+            }
+            this.currentRoom.locked = false;
+            this.showNotification(result.message || 'Room unlocked.', 'success');
+        } catch (error) {
+            console.error('unlockCurrentRoom failed:', error);
+            this.showNotification('Failed to unlock room.', 'error');
+        }
+    }
+
+    async copyCurrentRoomLink() {
+        if (!this.currentRoom?.id) return;
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${this.currentRoom.id}`);
+            const data = await response.json();
+            const link = data.joinUrl || `${window.location.origin}/?room=${encodeURIComponent(this.currentRoom.id)}`;
+            const copied = await this.copyText(link);
+            this.showNotification(copied ? 'Room link copied.' : link, copied ? 'success' : 'info');
+        } catch (error) {
+            console.error('copyCurrentRoomLink failed:', error);
+            const fallback = `${window.location.origin}/?room=${encodeURIComponent(this.currentRoom.id)}`;
+            const copied = await this.copyText(fallback);
+            this.showNotification(copied ? 'Room link copied.' : fallback, copied ? 'success' : 'info');
+        }
+    }
+
+    async copyText(text) {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (error) {
+            console.warn('Clipboard write failed:', error.message);
+        }
+        return false;
+    }
+
+    openJukeboxFromRoomActions() {
+        if (!this.currentRoom?.id) {
+            this.showNotification('Join a room to open Jukebox controls.', 'info');
+            return;
+        }
+
+        if (window.jukeboxManager) {
+            // Ensure room-scoped jukebox is enabled and visible.
+            window.jukeboxManager.enable?.();
+            window.jukeboxManager.openPanel?.();
+            this.showNotification('Jukebox opened. You can manage playback and playlists.', 'success');
+            return;
+        }
+
+        this.showNotification('Jukebox is not available right now.', 'error');
+    }
+
+    openAvatarUploadShortcut() {
+        if (!window.userSettingsInterface) {
+            this.showNotification('Profile settings are not available right now.', 'error');
+            return;
+        }
+
+        this.showScreen('settings-screen');
+        this.initializeSettingsScreen();
+        window.userSettingsInterface.show();
+        window.userSettingsInterface.switchTab?.('profile');
+
+        setTimeout(() => {
+            const uploadBtn = document.getElementById('upload-avatar-btn');
+            if (!uploadBtn) {
+                this.showNotification('Avatar upload control not found.', 'error');
+                return;
+            }
+            uploadBtn.click();
+        }, 80);
+    }
+
     showScreen(screenId) {
         // Hide all screens
         this.ui.screens.forEach(screen => {
@@ -1255,7 +1765,13 @@ class VoiceLinkApp {
                 statusValue.textContent = 'Online';
                 statusValue.className = 'status-value status-online';
             } else {
-                statusValue.textContent = 'Offline';
+                if (this.userInitiatedOffline && this.apiReachable) {
+                    statusValue.textContent = 'Offline (Reachable)';
+                } else if (this.userInitiatedOffline) {
+                    statusValue.textContent = 'Offline (Paused)';
+                } else {
+                    statusValue.textContent = 'Offline';
+                }
                 statusValue.className = 'status-value status-offline';
             }
         }
@@ -1481,15 +1997,8 @@ class VoiceLinkApp {
             }
         });
 
-        // Refresh network button
-        document.getElementById('refresh-network-btn')?.addEventListener('click', async () => {
-            if (window.electronAPI) {
-                this.showToast('Refreshing network info...');
-                await window.electronAPI.refreshNetworkInfo();
-                await this.updateNetworkInfo();
-                this.showToast('Network info refreshed');
-            }
-        });
+        // Manual refresh removed. Network info is refreshed automatically.
+        document.getElementById('refresh-network-btn')?.remove();
 
         // Network interface selection moved to menubar/tray menu
         // Use tray menu to change which interface the server listens on
@@ -1632,32 +2141,52 @@ class VoiceLinkApp {
     }
 
     startServerStatusMonitoring() {
-        // Initial status check - update based on current socket state
-        if (this.socket && this.socket.connected) {
-            this.updateServerStatus('online');
-            console.log('Server status: connected');
-        } else {
-            this.updateServerStatus('offline');
-            console.log('Server status: not connected');
-        }
+        const monitorTick = async () => {
+            await this.probeApiReachability();
 
-        // Periodic status monitoring every 10 seconds
-        this.statusMonitorInterval = setInterval(() => {
-            if (this.socket && this.socket.connected) {
-                // Server is responsive
-                this.updateServerStatus('online');
-            } else {
-                // Server is not responsive, try to reconnect
+            if (this.userInitiatedOffline) {
                 this.updateServerStatus('offline');
-                // Optionally attempt reconnection
-                if (this.socket && !this.socket.connected) {
-                    console.log('Attempting to reconnect to server...');
-                    this.connectToServer().catch(() => {
+                return;
+            }
+
+            if (this.socket && this.socket.connected) {
+                this.updateServerStatus('online');
+                return;
+            }
+
+            this.updateServerStatus('offline');
+
+            if (!this.isReconnectInProgress) {
+                this.isReconnectInProgress = true;
+                console.log('Attempting to reconnect to server...');
+                this.connectToServer()
+                    .catch(() => {
                         console.log('Reconnection failed, server remains offline');
+                    })
+                    .finally(() => {
+                        this.isReconnectInProgress = false;
                     });
+            }
+        };
+
+        clearInterval(this.statusMonitorInterval);
+        clearInterval(this.networkRefreshInterval);
+        monitorTick();
+
+        // Connection/API status monitoring every 10 seconds
+        this.statusMonitorInterval = setInterval(monitorTick, 10000);
+
+        // Network display auto-refresh every 15 seconds
+        this.networkRefreshInterval = setInterval(async () => {
+            if (window.electronAPI?.refreshNetworkInfo) {
+                try {
+                    await window.electronAPI.refreshNetworkInfo();
+                } catch (error) {
+                    console.debug('Auto refreshNetworkInfo failed:', error?.message || error);
                 }
             }
-        }, 10000);
+            await this.updateNetworkInfo();
+        }, 15000);
 
         // Also monitor socket events for real-time updates
         if (this.socket) {
@@ -1670,6 +2199,59 @@ class VoiceLinkApp {
                 console.log('Server reconnected');
                 this.updateServerStatus('online');
             });
+        }
+    }
+
+    isOfflineStatusSelected() {
+        try {
+            const settings = JSON.parse(localStorage.getItem('voicelink_global_settings') || '{}');
+            const status = (settings.status || '').toLowerCase();
+            return status === 'offline' || status === 'invisible';
+        } catch (error) {
+            console.debug('Could not read saved status from localStorage:', error?.message || error);
+        }
+        return false;
+    }
+
+    setupUserStatusConnectionBehavior() {
+        window.addEventListener('userSettingChanged', (event) => {
+            const detail = event?.detail || {};
+            if (detail.key !== 'status') return;
+
+            const status = String(detail.value || '').toLowerCase();
+            const shouldDisconnect = status === 'offline' || status === 'invisible';
+
+            if (shouldDisconnect) {
+                this.userInitiatedOffline = true;
+                if (this.socket?.connected) {
+                    this.socket.disconnect();
+                }
+                this.updateServerStatus('offline');
+                this.showToast('Status set to offline. Connection paused.');
+                return;
+            }
+
+            const wasOffline = this.userInitiatedOffline;
+            this.userInitiatedOffline = false;
+            this.updateServerStatus(this.socket?.connected ? 'online' : 'offline');
+            if (wasOffline && !this.socket?.connected && !this.isReconnectInProgress) {
+                this.connectToServer().catch(() => {
+                    console.log('Reconnect after status change failed');
+                });
+            }
+        });
+    }
+
+    async probeApiReachability() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/health`, {
+                method: 'GET',
+                cache: 'no-store'
+            });
+            this.apiReachable = response.ok;
+        } catch (error) {
+            this.apiReachable = false;
         }
     }
 
@@ -1707,6 +2289,8 @@ class VoiceLinkApp {
             } catch (e) {
                 console.error('Room fetch error:', e.message);
             }
+
+            rooms = this.deduplicateRoomList(rooms);
 
             // Check if user is authenticated
             const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
@@ -1784,6 +2368,7 @@ class VoiceLinkApp {
                     }
 
                     roomList.innerHTML = html;
+                    this.attachRoomContextMenuHandlers();
                 }
 
                 // Update encryption status indicators for all rooms
@@ -1884,6 +2469,8 @@ class VoiceLinkApp {
             template: room.template || null,
             privacyLevel: room.privacyLevel || 'public',
             encrypted: room.encrypted || false,
+            locked: room.locked || false,
+            canJoin: room.canJoin !== false,
             isDefault: isDefault,
             isFederated: isDefault || room.isFederated || false
         };
@@ -2072,7 +2659,7 @@ class VoiceLinkApp {
 
                 this.showScreen('join-room-screen');
             } else {
-                this.showError(result.message || 'Failed to create room');
+                this.showError(result.error || result.message || 'Failed to create room');
             }
         } catch (error) {
             console.error('Failed to create room:', error);
@@ -2301,6 +2888,231 @@ class VoiceLinkApp {
         }
 
         this.showScreen('join-room-screen');
+    }
+
+    deduplicateRoomList(rooms) {
+        const normalize = (value) =>
+            String(value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, ' ');
+
+        const byKey = new Map();
+        const orderedKeys = [];
+
+        for (const room of rooms || []) {
+            const name = normalize(room.name);
+            const id = normalize(room.roomId || room.id);
+            const key = name || id;
+            if (!key) continue;
+
+            if (!byKey.has(key)) {
+                byKey.set(key, room);
+                orderedKeys.push(key);
+                continue;
+            }
+
+            const existing = byKey.get(key) || {};
+            const existingUsers = Number(existing.users || existing.userCount || 0);
+            const incomingUsers = Number(room.users || room.userCount || 0);
+            const incomingHasDescription = normalize(room.description).length > 0;
+            const existingHasDescription = normalize(existing.description).length > 0;
+
+            if (incomingUsers > existingUsers || (incomingHasDescription && !existingHasDescription)) {
+                byKey.set(key, room);
+            }
+        }
+
+        return orderedKeys.map((key) => byKey.get(key)).filter(Boolean);
+    }
+
+    attachRoomContextMenuHandlers() {
+        const roomItems = document.querySelectorAll('.room-item');
+        roomItems.forEach((item) => {
+            if (item.dataset.roomContextAttached === 'true') return;
+
+            item.addEventListener('contextmenu', (event) => {
+                event.preventDefault();
+                const roomId = item.getAttribute('data-room-id');
+                if (!roomId) return;
+                this.showRoomContextMenu(roomId, item, event.clientX, event.clientY);
+            });
+
+            item.addEventListener('keydown', (event) => {
+                const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+                if (!isContextKey) return;
+                event.preventDefault();
+                const roomId = item.getAttribute('data-room-id');
+                if (!roomId) return;
+                this.showRoomContextMenu(roomId, item);
+            });
+
+            item.dataset.roomContextAttached = 'true';
+        });
+    }
+
+    showRoomContextMenu(roomId, anchorEl, x = null, y = null) {
+        this.hideRoomContextMenu();
+        const roomData = this.roomDataCache.get(roomId);
+        if (!roomData) return;
+
+        const preview = this.getRoomPreviewEligibility(roomData);
+        const menu = document.createElement('div');
+        menu.className = 'context-menu room-context-menu';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', `Room actions for ${roomData.name}`);
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '10015';
+
+        if (x !== null && y !== null) {
+            menu.style.left = `${x}px`;
+            menu.style.top = `${y}px`;
+        } else if (anchorEl) {
+            const rect = anchorEl.getBoundingClientRect();
+            menu.style.left = `${Math.max(8, Math.min(rect.left + 8, window.innerWidth - 320))}px`;
+            menu.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 260))}px`;
+        }
+
+        menu.innerHTML = `
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="join-room">
+                <span class="menu-icon">🎧</span>
+                <span class="menu-label">Join Room</span>
+            </div>
+            <div class="menu-item ${preview.allowed ? '' : 'disabled'}" role="menuitem" tabindex="0" data-action="preview-room" aria-disabled="${preview.allowed ? 'false' : 'true'}">
+                <span class="menu-icon">👁️</span>
+                <span class="menu-label">Preview Room Audio${preview.allowed ? '' : ` (${preview.reason})`}</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="open-join-details">
+                <span class="menu-icon">📝</span>
+                <span class="menu-label">Open Join Details</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-id">
+                <span class="menu-icon">📋</span>
+                <span class="menu-label">Copy Room ID</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="copy-room-link">
+                <span class="menu-icon">🔗</span>
+                <span class="menu-label">Copy Room Link</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="share-room">
+                <span class="menu-icon">📣</span>
+                <span class="menu-label">Share Room</span>
+            </div>
+            <div class="menu-item" role="menuitem" tabindex="0" data-action="invite-user">
+                <span class="menu-icon">✉️</span>
+                <span class="menu-label">Invite User</span>
+            </div>
+        `;
+
+        const activate = async (action) => {
+            if (!action) return;
+            if (action === 'join-room' || action === 'open-join-details') {
+                this.quickJoinRoom(roomId);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'preview-room') {
+                if (!preview.allowed) {
+                    this.showNotification(preview.reason, 'info');
+                    this.hideRoomContextMenu();
+                    return;
+                }
+                await this.peekIntoRoom(roomId, roomData.name);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'copy-room-id') {
+                const copied = await this.copyText(roomId);
+                this.showNotification(copied ? 'Room ID copied.' : `Room ID: ${roomId}`, copied ? 'success' : 'info');
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'copy-room-link') {
+                await this.copyRoomLinkById(roomId);
+                this.hideRoomContextMenu();
+                return;
+            }
+            if (action === 'share-room' || action === 'invite-user') {
+                await this.shareRoom(roomId);
+                if (action === 'invite-user') {
+                    this.showNotification('Invite link ready to send.', 'success');
+                }
+                this.hideRoomContextMenu();
+            }
+        };
+
+        menu.addEventListener('click', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            await activate(item.getAttribute('data-action'));
+        });
+
+        menu.addEventListener('keydown', async (event) => {
+            const item = event.target.closest('.menu-item');
+            if (!item) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                await activate(item.getAttribute('data-action'));
+            }
+        });
+
+        document.body.appendChild(menu);
+        this.activeRoomContextMenu = menu;
+
+        const first = menu.querySelector('.menu-item');
+        if (first) first.focus();
+
+        setTimeout(() => {
+            document.addEventListener('click', this.boundHandleRoomMenuOutsideClick, true);
+            document.addEventListener('keydown', this.boundHandleRoomMenuEscape, true);
+        }, 0);
+    }
+
+    hideRoomContextMenu() {
+        if (this.activeRoomContextMenu) {
+            this.activeRoomContextMenu.remove();
+            this.activeRoomContextMenu = null;
+        }
+        document.removeEventListener('click', this.boundHandleRoomMenuOutsideClick, true);
+        document.removeEventListener('keydown', this.boundHandleRoomMenuEscape, true);
+    }
+
+    handleRoomMenuOutsideClick(event) {
+        if (!this.activeRoomContextMenu) return;
+        if (!this.activeRoomContextMenu.contains(event.target)) {
+            this.hideRoomContextMenu();
+        }
+    }
+
+    handleRoomMenuEscape(event) {
+        if (event.key === 'Escape') {
+            this.hideRoomContextMenu();
+        }
+    }
+
+    getRoomPreviewEligibility(roomData) {
+        if (!roomData) return { allowed: false, reason: 'Room preview unavailable' };
+        if (roomData.users <= 0) return { allowed: false, reason: 'No active participants to preview' };
+        if (roomData.locked || roomData.canJoin === false) return { allowed: false, reason: 'Room is currently unavailable' };
+        if (roomData.privacyLevel === 'private') return { allowed: false, reason: 'Room owner requested privacy' };
+        if (roomData.hasPassword) return { allowed: false, reason: 'Password-protected rooms cannot be previewed' };
+        return { allowed: true, reason: '' };
+    }
+
+    async copyRoomLinkById(roomId) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/share/${roomId}`);
+            const data = await response.json();
+            const link = data.joinUrl || `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+            const copied = await this.copyText(link);
+            this.showNotification(copied ? 'Room link copied.' : link, copied ? 'success' : 'info');
+        } catch (error) {
+            console.error('copyRoomLinkById failed:', error);
+            const fallback = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+            const copied = await this.copyText(fallback);
+            this.showNotification(copied ? 'Room link copied.' : fallback, copied ? 'success' : 'info');
+        }
     }
 
     // ========================================
@@ -2708,6 +3520,10 @@ class VoiceLinkApp {
         const userElement = document.createElement('div');
         userElement.className = 'user-item';
         userElement.setAttribute('data-user-id', user.id);
+        userElement.dataset.userName = user.name || 'User';
+        userElement.dataset.userStatus = user.status || 'online';
+        userElement.dataset.userAvatar = user.avatar || '👤';
+        userElement.dataset.userStatusMessage = user.statusMessage || user.customStatus || '';
 
         userElement.innerHTML = `
             <div class="user-info">
@@ -2980,6 +3796,47 @@ class VoiceLinkApp {
                 }
             }, 300);
         }, 3000);
+    }
+
+    showLinkedNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : type === 'warning' ? '#ff9800' : '#2196F3'};
+            color: white;
+            padding: 15px 20px;
+            border-radius: 5px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            z-index: 10000;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            max-width: 380px;
+            line-height: 1.4;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+            overflow-wrap: anywhere;
+        `;
+
+        this.appendTextWithSafeLinks(notification, message);
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.opacity = '1';
+            notification.style.transform = 'translateY(0)';
+        }, 10);
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateY(-20px)';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, 7000);
     }
 
     // Play audio file with stop capability
@@ -3754,6 +4611,18 @@ class VoiceLinkApp {
             }
         });
 
+        const elevatedScopeToggle = document.getElementById('mastodon-request-elevated-scope');
+        if (elevatedScopeToggle) {
+            const savedPreference = localStorage.getItem('voicelink_mastodon_request_elevated_scope');
+            elevatedScopeToggle.checked = savedPreference === '1';
+            elevatedScopeToggle.addEventListener('change', () => {
+                localStorage.setItem(
+                    'voicelink_mastodon_request_elevated_scope',
+                    elevatedScopeToggle.checked ? '1' : '0'
+                );
+            });
+        }
+
         // Instance input - allow Enter key
         document.getElementById('mastodon-instance-input')?.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -3783,6 +4652,12 @@ class VoiceLinkApp {
         // Logout button
         document.getElementById('mastodon-logout-btn')?.addEventListener('click', () => {
             this.handleMastodonLogout();
+        });
+
+        // Manage authorized app permissions on Mastodon instance
+        document.getElementById('mastodon-manage-apps-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.openMastodonApplicationsSettings();
         });
 
         // Listen for Mastodon auth events
@@ -3827,7 +4702,18 @@ class VoiceLinkApp {
 
             this.showNotification('Connecting to ' + instanceUrl + '...', 'info');
 
-            const authUrl = await window.mastodonAuth.startAuth(instanceUrl);
+            const existingMastodonUser = window.mastodonAuth.getUser?.() || null;
+            const requestElevated = (() => {
+                const checkbox = document.getElementById('mastodon-request-elevated-scope');
+                if (checkbox) return checkbox.checked;
+                return localStorage.getItem('voicelink_mastodon_request_elevated_scope') === '1';
+            })();
+            const authUrl = await window.mastodonAuth.startAuth(instanceUrl, {
+                apiBase: this.getApiBaseUrl(),
+                username: existingMastodonUser?.username || null,
+                email: existingMastodonUser?.email || null,
+                requestElevated
+            });
 
             // Check if we're in Electron (need manual code entry)
             const isElectron = typeof process !== 'undefined' && process.versions?.electron;
@@ -3987,6 +4873,21 @@ class VoiceLinkApp {
         }
     }
 
+    openMastodonApplicationsSettings() {
+        const appsUrl = window.mastodonAuth?.getApplicationsSettingsUrl?.();
+        if (!appsUrl) {
+            this.showNotification('Sign in with Mastodon to manage app permissions', 'warning');
+            return;
+        }
+
+        if (window.electronAPI?.openExternal) {
+            window.electronAPI.openExternal(appsUrl);
+            return;
+        }
+
+        window.open(appsUrl, '_blank', 'noopener,noreferrer');
+    }
+
     updateUIForAuthState(user) {
         const loginPrompt = document.getElementById('mastodon-login-prompt');
         const userInfo = document.getElementById('mastodon-user-info');
@@ -4003,6 +4904,25 @@ class VoiceLinkApp {
             if (avatar) avatar.src = user.avatar || user.avatarStatic || '';
             if (userName) userName.textContent = user.displayName;
             if (userHandle) userHandle.textContent = user.fullHandle;
+            if (window.userSettingsManager) {
+                const autoSync = window.userSettingsManager.getSetting('mastodonAvatarAutoSync') !== false;
+                const mastodonAvatar = user.avatar || user.avatarStatic || '';
+                if (autoSync && mastodonAvatar) {
+                    const existingAvatar = String(window.userSettingsManager.getSetting('avatar') || '').trim();
+                    if (!existingAvatar || existingAvatar !== mastodonAvatar) {
+                        window.userSettingsManager.setGlobalSetting('avatar', mastodonAvatar);
+                        if (window.userSettingsInterface?.isVisible) {
+                            const avatarInput = document.getElementById('setting-avatar');
+                            if (avatarInput) avatarInput.value = mastodonAvatar;
+                        }
+                    }
+                }
+            }
+            const manageAppsBtn = document.getElementById('mastodon-manage-apps-btn');
+            const appsUrl = window.mastodonAuth?.getApplicationsSettingsUrl?.();
+            if (manageAppsBtn && appsUrl) {
+                manageAppsBtn.setAttribute('href', appsUrl);
+            }
 
             // Show role badge
             if (userRole) {
@@ -4314,6 +5234,7 @@ class VoiceLinkApp {
             { id: 'rooms', label: 'Rooms' },
             { id: 'users', label: 'Users' },
             { id: 'mastodon', label: 'Mastodon' },
+            { id: 'notifications', label: 'Notifications' },
             { id: 'federation', label: 'Federation' }
         ];
         tabData.forEach((tab, index) => {
@@ -4344,6 +5265,10 @@ class VoiceLinkApp {
         // Mastodon Tab
         const mastodonTab = this.createMastodonTab();
         contentArea.appendChild(mastodonTab);
+
+        // Notifications Tab
+        const notificationsTab = this.createNotificationsTab();
+        contentArea.appendChild(notificationsTab);
 
         // Federation Tab
         const federationTab = this.createFederationTab();
@@ -4623,6 +5548,72 @@ class VoiceLinkApp {
         return tab;
     }
 
+    createNotificationsTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-notifications-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Notifications (Pushover + Incoming)';
+        tab.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'admin-grid';
+
+        const pushCard = document.createElement('div');
+        pushCard.className = 'admin-card';
+        const pushTitle = document.createElement('h4');
+        pushTitle.textContent = 'Pushover Settings';
+        pushCard.appendChild(pushTitle);
+
+        pushCard.appendChild(this.createCheckboxRow('Enable Pushover', 'admin-pushover-enabled'));
+        pushCard.appendChild(this.createSettingRow('App Token:', 'admin-pushover-app-token', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('User Key:', 'admin-pushover-user-key', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Device (optional):', 'admin-pushover-device', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Sound (optional):', 'admin-pushover-sound', 'text', ''));
+        pushCard.appendChild(this.createSettingRow('Title Prefix:', 'admin-pushover-title-prefix', 'text', 'VoiceLink'));
+        pushCard.appendChild(this.createSettingRow('Min Deferred Seconds:', 'admin-pushover-min-delay', 'number', '15'));
+        pushCard.appendChild(this.createSettingRow('Max Deferred Seconds:', 'admin-pushover-max-delay', 'number', '120'));
+
+        const pushActions = document.createElement('div');
+        pushActions.className = 'admin-actions';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'primary-btn';
+        saveBtn.textContent = 'Save Pushover Settings';
+        saveBtn.onclick = () => this.savePushoverSettings();
+        const testBtn = document.createElement('button');
+        testBtn.className = 'admin-action-btn';
+        testBtn.textContent = 'Send Test Notification';
+        testBtn.onclick = () => this.testPushoverNotification();
+        pushActions.appendChild(saveBtn);
+        pushActions.appendChild(testBtn);
+        pushCard.appendChild(pushActions);
+        grid.appendChild(pushCard);
+
+        const inboxCard = document.createElement('div');
+        inboxCard.className = 'admin-card';
+        const inboxTitle = document.createElement('h4');
+        inboxTitle.textContent = 'Incoming Notification Inbox';
+        inboxCard.appendChild(inboxTitle);
+        const inboxToolbar = document.createElement('div');
+        inboxToolbar.className = 'admin-toolbar';
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'admin-action-btn';
+        refreshBtn.textContent = 'Refresh Inbox';
+        refreshBtn.onclick = () => this.loadIncomingNotifications();
+        inboxToolbar.appendChild(refreshBtn);
+        inboxCard.appendChild(inboxToolbar);
+        const inboxList = document.createElement('div');
+        inboxList.id = 'admin-notification-inbox';
+        inboxList.className = 'admin-list';
+        inboxList.textContent = 'Loading notifications...';
+        inboxCard.appendChild(inboxList);
+        grid.appendChild(inboxCard);
+
+        tab.appendChild(grid);
+        return tab;
+    }
+
     createFederationTab() {
         const tab = document.createElement('div');
         tab.className = 'admin-tab-content';
@@ -4725,6 +5716,8 @@ class VoiceLinkApp {
             this.loadAdminRooms(),
             this.loadAdminUsers(),
             this.loadAdminBots(),
+            this.loadPushoverStatus(),
+            this.loadIncomingNotifications(),
             this.loadFederatedServers()
         ]);
     }
@@ -4879,6 +5872,141 @@ class VoiceLinkApp {
             }
         } catch (error) {
             console.error('Failed to load federated servers:', error);
+        }
+    }
+
+    getNotificationAdminHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        const token =
+            localStorage.getItem('voicelink_auth_token') ||
+            sessionStorage.getItem('voicelink_auth_token') ||
+            localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token') ||
+            '';
+        if (token) headers.Authorization = `Bearer ${token}`;
+        return headers;
+    }
+
+    async loadPushoverStatus() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/pushover/status`, {
+                headers: this.getNotificationAdminHeaders()
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            const cfg = data.config || {};
+            const enabled = document.getElementById('admin-pushover-enabled');
+            const appToken = document.getElementById('admin-pushover-app-token');
+            const userKey = document.getElementById('admin-pushover-user-key');
+            const device = document.getElementById('admin-pushover-device');
+            const sound = document.getElementById('admin-pushover-sound');
+            const prefix = document.getElementById('admin-pushover-title-prefix');
+            const minDelay = document.getElementById('admin-pushover-min-delay');
+            const maxDelay = document.getElementById('admin-pushover-max-delay');
+            if (enabled) enabled.checked = !!cfg.enabled;
+            if (appToken && !appToken.value) appToken.value = '';
+            if (userKey && !userKey.value) userKey.value = '';
+            if (device) device.value = cfg.device || '';
+            if (sound) sound.value = cfg.sound || '';
+            if (prefix) prefix.value = cfg.titlePrefix || 'VoiceLink';
+            if (minDelay) minDelay.value = String(cfg.minDeferredSeconds || 15);
+            if (maxDelay) maxDelay.value = String(cfg.maxDeferredSeconds || 120);
+        } catch (error) {
+            console.error('Failed to load pushover status:', error);
+        }
+    }
+
+    async savePushoverSettings() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const payload = {
+                enabled: !!document.getElementById('admin-pushover-enabled')?.checked,
+                appToken: document.getElementById('admin-pushover-app-token')?.value || '',
+                userKey: document.getElementById('admin-pushover-user-key')?.value || '',
+                device: document.getElementById('admin-pushover-device')?.value || '',
+                sound: document.getElementById('admin-pushover-sound')?.value || '',
+                titlePrefix: document.getElementById('admin-pushover-title-prefix')?.value || 'VoiceLink',
+                minDeferredSeconds: Number(document.getElementById('admin-pushover-min-delay')?.value || 15),
+                maxDeferredSeconds: Number(document.getElementById('admin-pushover-max-delay')?.value || 120),
+                deferApply: true
+            };
+            const response = await fetch(`${apiBase}/api/notifications/pushover/config`, {
+                method: 'POST',
+                headers: this.getNotificationAdminHeaders(),
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to save Pushover settings', 'error');
+                return;
+            }
+            this.showNotification('Pushover settings saved', 'success');
+        } catch (error) {
+            console.error('Failed to save Pushover settings:', error);
+            this.showNotification('Failed to save Pushover settings', 'error');
+        }
+    }
+
+    async testPushoverNotification() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/pushover/test`, {
+                method: 'POST',
+                headers: this.getNotificationAdminHeaders(),
+                body: JSON.stringify({
+                    title: 'VoiceLink Test',
+                    message: `Pushover test sent at ${new Date().toLocaleString()}`
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Test notification failed', 'error');
+                return;
+            }
+            this.showNotification('Pushover test notification sent', 'success');
+        } catch (error) {
+            console.error('Failed to test Pushover:', error);
+            this.showNotification('Failed to test Pushover', 'error');
+        }
+    }
+
+    async loadIncomingNotifications() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/notifications/incoming?limit=50`, {
+                headers: this.getNotificationAdminHeaders()
+            });
+            const inbox = document.getElementById('admin-notification-inbox');
+            if (!inbox) return;
+            if (!response.ok) {
+                inbox.textContent = 'Unable to load incoming notifications.';
+                return;
+            }
+            const result = await response.json();
+            const notifications = Array.isArray(result.notifications) ? result.notifications : [];
+            inbox.textContent = '';
+            if (notifications.length === 0) {
+                inbox.textContent = 'No incoming notifications yet.';
+                return;
+            }
+            notifications.forEach((entry) => {
+                const item = document.createElement('div');
+                item.className = 'admin-list-item';
+                const title = entry.title || 'Notification';
+                const message = entry.message || '';
+                const detail = `${entry.source || 'unknown'} • ${entry.level || 'info'} • ${new Date(entry.receivedAt || Date.now()).toLocaleString()}`;
+                item.innerHTML = `
+                    <div class="list-item-main">
+                        <strong>${this.escapeHtml(title)}</strong>
+                        <small>${this.escapeHtml(detail)}</small>
+                        <p>${this.escapeHtml(message)}</p>
+                    </div>
+                `;
+                inbox.appendChild(item);
+            });
+        } catch (error) {
+            console.error('Failed to load incoming notifications:', error);
         }
     }
 

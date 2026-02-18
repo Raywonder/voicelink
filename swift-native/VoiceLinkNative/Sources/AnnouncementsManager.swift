@@ -49,7 +49,7 @@ class AnnouncementsManager: ObservableObject {
 
     private let lastReadDateKey = "lastReadAnnouncementDate"
     private var serverURL: String {
-        ServerManager.shared.baseURL ?? "https://voicelink.devinecreations.net"
+        ServerManager.shared.baseURL ?? APIEndpointResolver.canonicalMainBase
     }
 
     private init() {
@@ -61,36 +61,22 @@ class AnnouncementsManager: ObservableObject {
         isLoading = true
         error = nil
 
-        guard let url = URL(string: "\(serverURL)/api/announcements") else {
-            error = "Invalid URL"
-            isLoading = false
-            return
-        }
-
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                self?.isLoading = false
-
-                if let error = error {
-                    self?.error = error.localizedDescription
-                    return
+        Task {
+            do {
+                let response = try await fetchAnnouncementsWithFallback()
+                await MainActor.run {
+                    self.announcements = response.announcements
+                    self.bugTracker = response.bugTracker
+                    self.checkForUnread()
+                    self.isLoading = false
                 }
-
-                guard let data = data else {
-                    self?.error = "No data received"
-                    return
-                }
-
-                do {
-                    let response = try JSONDecoder().decode(AnnouncementsResponse.self, from: data)
-                    self?.announcements = response.announcements
-                    self?.bugTracker = response.bugTracker
-                    self?.checkForUnread()
-                } catch {
-                    self?.error = "Failed to parse announcements: \(error.localizedDescription)"
+            } catch {
+                await MainActor.run {
+                    self.error = error.localizedDescription
+                    self.isLoading = false
                 }
             }
-        }.resume()
+        }
     }
 
     // MARK: - Check for Unread
@@ -120,36 +106,36 @@ class AnnouncementsManager: ObservableObject {
 
     // MARK: - Submit Bug Report
     func submitBugReport(_ report: BugReport, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let url = URL(string: "\(serverURL)/api/bugs/submit") else {
-            completion(.failure(NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
-            return
-        }
+        Task {
+            do {
+                let encoder = JSONEncoder()
+                let payload = try encoder.encode(report)
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                for base in APIEndpointResolver.apiBaseCandidates(preferred: serverURL) {
+                    guard let url = APIEndpointResolver.url(base: base, path: "/api/bugs/submit") else { continue }
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.httpBody = payload
 
-        do {
-            request.httpBody = try JSONEncoder().encode(report)
-        } catch {
-            completion(.failure(error))
-            return
-        }
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    completion(.failure(error))
-                    return
+                    do {
+                        let (_, response) = try await URLSession.shared.data(for: request)
+                        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                            await MainActor.run { completion(.success(())) }
+                            return
+                        }
+                    } catch {
+                        continue
+                    }
                 }
 
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    completion(.success(()))
-                } else {
+                await MainActor.run {
                     completion(.failure(NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to submit bug report"])))
                 }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
             }
-        }.resume()
+        }
     }
 
     // MARK: - Open Announcements in Browser
@@ -166,6 +152,28 @@ class AnnouncementsManager: ObservableObject {
         } else if let url = URL(string: "\(serverURL)/report-bug.html") {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+private extension AnnouncementsManager {
+    func fetchAnnouncementsWithFallback() async throws -> AnnouncementsResponse {
+        var lastError: Error = URLError(.cannotFindHost)
+
+        for base in APIEndpointResolver.apiBaseCandidates(preferred: serverURL) {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/announcements") else { continue }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    continue
+                }
+                return try JSONDecoder().decode(AnnouncementsResponse.self, from: data)
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError
     }
 }
 

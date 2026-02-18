@@ -1,6 +1,6 @@
 {
   "name": "voicelink-local",
-  "version": "1.0.4",
+  "version": "1.0.13",
   "description": "VoiceLink Local - P2P Voice Chat with 3D Audio",
   "homepage": "https://devine-creations.com/",
   "main": "src/main.js",
@@ -24,7 +24,8 @@
     "build:linux": "npm run build:prod && electron-builder --linux",
     "build:all": "npm run build:prod && electron-builder --mac --win --linux",
     "build:portable": "npm run build:prod && electron-builder --win portable --mac zip --linux tar.gz",
-    "dist": "npm run build:all"
+    "dist": "npm run build:all",
+    "release:guard": "node scripts/release-guard.js"
   },
   "dependencies": {
     "auto-launch": "^5.0.6",

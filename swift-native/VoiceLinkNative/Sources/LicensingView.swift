@@ -57,6 +57,7 @@ struct LicensingView: View {
         case .licensed: return .green
         case .pending: return .orange
         case .deviceLimitReached: return .yellow
+        case .requires2FA: return .blue
         case .revoked, .error: return .red
         default: return .gray
         }
@@ -152,6 +153,34 @@ struct LicensingView: View {
                 Text("Error")
                     .font(.subheadline.bold())
                     .foregroundColor(.red)
+            }
+
+        case .requires2FA:
+            VStack(spacing: 12) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.largeTitle)
+                    .foregroundColor(.blue)
+                Text("2FA Required")
+                    .font(.subheadline.bold())
+                    .foregroundColor(.blue)
+                Text("Enter your two-factor authentication code")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+
+                HStack {
+                    TextField("2FA Code", text: $licensing.twoFactorCode)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+
+                    Button("Verify") {
+                        Task {
+                            await licensing.verifyWith2FA()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(licensing.twoFactorCode.count < 6)
+                }
             }
         }
     }
@@ -467,8 +496,11 @@ struct LicenseBadge: View {
     }
 }
 
-#Preview {
-    LicensingView()
-        .frame(width: 300)
-        .padding()
-}
+// Preview disabled for SPM builds
+// struct LicensingView_Previews: PreviewProvider {
+//     static var previews: some View {
+//         LicensingView()
+//             .frame(width: 300)
+//             .padding()
+//     }
+// }

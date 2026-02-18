@@ -70,6 +70,26 @@ class UserSettingsInterface {
                             <label>Avatar URL:</label>
                             <input type="url" id="setting-avatar" placeholder="https://example.com/avatar.jpg">
                             <small>Link to your profile picture</small>
+                            <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button type="button" id="upload-avatar-btn">Upload Avatar Photo</button>
+                                <input type="file" id="avatar-upload-input" accept="image/*" style="display: none;">
+                            </div>
+                            <label style="display: block; margin-top: 8px;">Photo Caption (optional):</label>
+                            <input type="text" id="avatar-caption-input" placeholder="Describe this photo (optional)">
+                            <label class="checkbox-label" style="margin-top: 8px;">
+                                <input type="checkbox" id="avatar-preserve-metadata" checked>
+                                Keep photo metadata when saving
+                            </label>
+                            <div style="margin-top: 6px; padding-left: 8px;">
+                                <small>Optional metadata removals:</small>
+                                <label class="checkbox-label"><input type="checkbox" id="avatar-remove-filename"> Remove filename</label>
+                                <label class="checkbox-label"><input type="checkbox" id="avatar-remove-lastModified"> Remove last-modified timestamp</label>
+                                <label class="checkbox-label"><input type="checkbox" id="avatar-remove-dimensions"> Remove width/height</label>
+                            </div>
+                            <label class="checkbox-label" style="margin-top: 8px;">
+                                <input type="checkbox" id="setting-mastodonAvatarAutoSync">
+                                Auto-sync Mastodon avatar when logged in
+                            </label>
                         </div>
 
                         <div class="setting-group">
@@ -108,6 +128,10 @@ class UserSettingsInterface {
                             <label>Status Message:</label>
                             <input type="text" id="setting-statusMessage" placeholder="Additional status info">
                             <small>Additional information about your current status</small>
+                            <div class="signature-preview">
+                                <strong>Status Preview:</strong>
+                                <div id="status-preview-content"></div>
+                            </div>
                         </div>
 
                         <div class="setting-group">
@@ -447,7 +471,16 @@ class UserSettingsInterface {
                     min-height: 20px;
                 }
 
+                #status-preview-content {
+                    margin-top: 5px;
+                    min-height: 20px;
+                }
+
                 #signature-preview-content a {
+                    color: #64c8ff;
+                }
+
+                #status-preview-content a {
                     color: #64c8ff;
                 }
 
@@ -529,6 +562,26 @@ class UserSettingsInterface {
         // Signature preview
         document.getElementById('setting-signature')?.addEventListener('input', (e) => {
             this.updateSignaturePreview(e.target.value);
+        });
+
+        // Status message preview (supports safe-link actions)
+        document.getElementById('setting-customStatus')?.addEventListener('input', () => {
+            this.updateStatusMessagePreview();
+        });
+        document.getElementById('setting-statusMessage')?.addEventListener('input', () => {
+            this.updateStatusMessagePreview();
+        });
+
+        // Avatar upload
+        document.getElementById('upload-avatar-btn')?.addEventListener('click', () => {
+            document.getElementById('avatar-upload-input')?.click();
+        });
+        document.getElementById('avatar-upload-input')?.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+                await this.uploadAvatarFile(file);
+            }
+            e.target.value = '';
         });
 
         // Slider updates
@@ -639,6 +692,187 @@ class UserSettingsInterface {
         }
     }
 
+    renderSafeLinkedText(container, text) {
+        if (!container) return;
+        container.innerHTML = '';
+
+        const value = String(text || '').trim();
+        if (!value) {
+            container.textContent = 'No status message set.';
+            return;
+        }
+
+        const linkRegex = /(https?:\/\/[^\s<>"')]+|voicelink:\/\/[^\s<>"')]+)/gi;
+        let cursor = 0;
+        let match;
+
+        while ((match = linkRegex.exec(value)) !== null) {
+            const url = match[0];
+            const start = match.index;
+            if (start > cursor) {
+                container.appendChild(document.createTextNode(value.slice(cursor, start)));
+            }
+
+            const a = document.createElement('a');
+            a.href = '#';
+            a.textContent = url;
+            a.rel = 'noopener noreferrer';
+            a.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (window.app?.openLinkWithSafetyOptions) {
+                    window.app.openLinkWithSafetyOptions(url);
+                    return;
+                }
+                window.open(url, '_blank', 'noopener,noreferrer');
+            });
+            container.appendChild(a);
+            cursor = start + url.length;
+        }
+
+        if (cursor < value.length) {
+            container.appendChild(document.createTextNode(value.slice(cursor)));
+        }
+    }
+
+    updateStatusMessagePreview() {
+        const custom = document.getElementById('setting-customStatus')?.value || '';
+        const status = document.getElementById('setting-statusMessage')?.value || '';
+        const combined = [custom.trim(), status.trim()].filter(Boolean).join(' ');
+        const preview = document.getElementById('status-preview-content');
+        this.renderSafeLinkedText(preview, combined);
+    }
+
+    getAuthTokenForUpload() {
+        return (
+            localStorage.getItem('voicelink_auth_token') ||
+            sessionStorage.getItem('voicelink_auth_token') ||
+            localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token') ||
+            ''
+        );
+    }
+
+    async uploadAvatarFile(file) {
+        if (!file || !file.type?.startsWith('image/')) {
+            this.showNotification('Please select an image file', 'error');
+            return;
+        }
+
+        const maxBytes = 8 * 1024 * 1024;
+        if (file.size > maxBytes) {
+            this.showNotification('Avatar image must be under 8MB', 'error');
+            return;
+        }
+
+        const token = this.getAuthTokenForUpload();
+        if (!token) {
+            this.showNotification('Please log in first to upload an avatar', 'error');
+            return;
+        }
+
+        const preserveMetadata = document.getElementById('avatar-preserve-metadata')?.checked !== false;
+        const caption = String(document.getElementById('avatar-caption-input')?.value || '').trim();
+        const removeMetadataFields = [];
+        if (document.getElementById('avatar-remove-filename')?.checked) removeMetadataFields.push('fileName');
+        if (document.getElementById('avatar-remove-lastModified')?.checked) removeMetadataFields.push('lastModified');
+        if (document.getElementById('avatar-remove-dimensions')?.checked) removeMetadataFields.push('width', 'height');
+
+        const originalData = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed to read image file'));
+            reader.readAsDataURL(file);
+        }).catch((error) => {
+            this.showNotification(error.message || 'Failed to read image', 'error');
+            return null;
+        });
+        if (!originalData) return;
+
+        const imageData = await this.buildAvatarImagePayload(originalData, preserveMetadata);
+        const metadata = await this.collectAvatarMetadata(file, originalData);
+        for (const key of removeMetadataFields) {
+            delete metadata[key];
+        }
+
+        try {
+            const apiBase = window.app?.getApiBaseUrl?.() || '';
+            const response = await fetch(`${apiBase}/api/profile/avatar/upload`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    imageData,
+                    fileName: file.name || 'avatar',
+                    caption,
+                    preserveMetadata,
+                    removeMetadataFields,
+                    metadata
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result?.success) {
+                throw new Error(result?.error || 'Avatar upload failed');
+            }
+
+            const avatarUrl = result.fullUrl || `${window.location.origin}${result.url}`;
+            const avatarInput = document.getElementById('setting-avatar');
+            if (avatarInput) {
+                avatarInput.value = avatarUrl;
+            }
+            this.userSettingsManager.setGlobalSetting('avatar', avatarUrl);
+            this.showNotification('Avatar uploaded successfully', 'success');
+        } catch (error) {
+            this.showNotification(error.message || 'Avatar upload failed', 'error');
+        }
+    }
+
+    async buildAvatarImagePayload(dataUrl, preserveMetadata) {
+        if (preserveMetadata) return dataUrl;
+
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth || img.width;
+                canvas.height = img.naturalHeight || img.height;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(img, 0, 0);
+                    const cleanData = canvas.toDataURL('image/png');
+                    resolve(cleanData);
+                    return;
+                }
+                resolve(dataUrl);
+            };
+            img.onerror = () => resolve(dataUrl);
+            img.src = dataUrl;
+        });
+    }
+
+    async collectAvatarMetadata(file, dataUrl) {
+        const metadata = {
+            fileName: file.name || null,
+            size: file.size || 0,
+            mimeType: file.type || null,
+            lastModified: file.lastModified || null
+        };
+
+        await new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                metadata.width = img.naturalWidth || img.width || null;
+                metadata.height = img.naturalHeight || img.height || null;
+                resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = dataUrl;
+        });
+
+        return metadata;
+    }
+
     loadCurrentSettings() {
         // Load all settings into the form
         const settingInputs = this.container.querySelectorAll('[id^="setting-"]');
@@ -667,6 +901,9 @@ class UserSettingsInterface {
         // Update signature preview
         const currentSignature = this.userSettingsManager.getSetting('signature');
         this.updateSignaturePreview(currentSignature);
+
+        // Update status-message preview
+        this.updateStatusMessagePreview();
     }
 
     saveSettings() {

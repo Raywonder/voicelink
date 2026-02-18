@@ -747,6 +747,13 @@ class VoiceLinkLocalServer {
             titlePrefix: 'VoiceLink',
             minDeferredSeconds: 15,
             maxDeferredSeconds: 120,
+            triggerEvents: {
+                roomCreated: false,
+                roomJoined: false,
+                roomAnnouncement: true,
+                incomingWebhook: true,
+                adminNotice: true
+            },
             pendingActivationUntil: null,
             updatedAt: null
         };
@@ -794,6 +801,13 @@ class VoiceLinkLocalServer {
             titlePrefix: config.titlePrefix || 'VoiceLink',
             minDeferredSeconds: Number(config.minDeferredSeconds || 15),
             maxDeferredSeconds: Number(config.maxDeferredSeconds || 120),
+            triggerEvents: {
+                roomCreated: Boolean(config?.triggerEvents?.roomCreated),
+                roomJoined: Boolean(config?.triggerEvents?.roomJoined),
+                roomAnnouncement: config?.triggerEvents?.roomAnnouncement !== false,
+                incomingWebhook: config?.triggerEvents?.incomingWebhook !== false,
+                adminNotice: config?.triggerEvents?.adminNotice !== false
+            },
             pendingActivationUntil: config.pendingActivationUntil || null,
             updatedAt: config.updatedAt || null
         };
@@ -855,6 +869,30 @@ class VoiceLinkLocalServer {
         } catch (error) {
             return { success: false, skipped: false, error: error.message };
         }
+    }
+
+    shouldSendPushoverFor(eventType = '') {
+        const cfg = this.pushoverConfig || {};
+        const events = cfg.triggerEvents || {};
+        const key = String(eventType || '').trim();
+        if (!key) return false;
+        if (events[key] === undefined) {
+            return false;
+        }
+        return Boolean(events[key]);
+    }
+
+    async triggerPushoverEvent(eventType = '', payload = {}) {
+        if (!this.shouldSendPushoverFor(eventType)) {
+            return { success: false, skipped: true, reason: `Event ${eventType} disabled` };
+        }
+        const cfg = this.pushoverConfig || {};
+        const title = String(payload.title || `${cfg.titlePrefix || 'VoiceLink'} ${eventType}`).trim();
+        const message = String(payload.message || '').trim();
+        const url = String(payload.url || '').trim();
+        const urlTitle = String(payload.urlTitle || '').trim();
+        if (!message) return { success: false, skipped: true, reason: 'Empty message' };
+        return this.sendPushoverNotification({ title, message, url, urlTitle });
     }
 
     normalizeTokenPermissions(input = []) {
@@ -2541,6 +2579,16 @@ class VoiceLinkLocalServer {
             if (body.enabled !== undefined) config.enabled = Boolean(body.enabled);
             if (body.minDeferredSeconds !== undefined) config.minDeferredSeconds = Math.max(1, Number(body.minDeferredSeconds || 15));
             if (body.maxDeferredSeconds !== undefined) config.maxDeferredSeconds = Math.max(config.minDeferredSeconds || 15, Number(body.maxDeferredSeconds || 120));
+            if (body.triggerEvents && typeof body.triggerEvents === 'object') {
+                const previous = config.triggerEvents || {};
+                config.triggerEvents = {
+                    roomCreated: body.triggerEvents.roomCreated !== undefined ? Boolean(body.triggerEvents.roomCreated) : Boolean(previous.roomCreated),
+                    roomJoined: body.triggerEvents.roomJoined !== undefined ? Boolean(body.triggerEvents.roomJoined) : Boolean(previous.roomJoined),
+                    roomAnnouncement: body.triggerEvents.roomAnnouncement !== undefined ? Boolean(body.triggerEvents.roomAnnouncement) : (previous.roomAnnouncement !== false),
+                    incomingWebhook: body.triggerEvents.incomingWebhook !== undefined ? Boolean(body.triggerEvents.incomingWebhook) : (previous.incomingWebhook !== false),
+                    adminNotice: body.triggerEvents.adminNotice !== undefined ? Boolean(body.triggerEvents.adminNotice) : (previous.adminNotice !== false)
+                };
+            }
             config.updatedAt = new Date().toISOString();
             this.pushoverConfig = config;
 
@@ -2584,6 +2632,23 @@ class VoiceLinkLocalServer {
             return res.status(result.success ? 200 : 400).json({ success: result.success, ...result });
         });
 
+        this.app.post('/api/notifications/pushover/trigger', async (req, res) => {
+            if (!hasAdminAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const eventType = String(req.body?.eventType || '').trim();
+            if (!eventType) {
+                return res.status(400).json({ success: false, error: 'eventType is required' });
+            }
+            const result = await this.triggerPushoverEvent(eventType, {
+                title: req.body?.title,
+                message: req.body?.message,
+                url: req.body?.url,
+                urlTitle: req.body?.urlTitle
+            });
+            return res.status(result.success ? 200 : 400).json({ success: result.success, ...result });
+        });
+
         // Incoming/webhook notifications support (receive path).
         this.app.post('/api/notifications/incoming', (req, res) => {
             const webhookSecret = String(process.env.VOICELINK_NOTIFICATION_WEBHOOK_SECRET || '').trim();
@@ -2604,6 +2669,10 @@ class VoiceLinkLocalServer {
             this.notificationInbox.unshift(event);
             this.notificationInbox = this.notificationInbox.slice(0, 500);
             this.io.emit('notification-received', event);
+            this.triggerPushoverEvent('incomingWebhook', {
+                title: `${this.pushoverConfig?.titlePrefix || 'VoiceLink'} Incoming`,
+                message: `${event.title}: ${event.message}`.slice(0, 1024)
+            }).catch(() => {});
             return res.json({ success: true, eventId: event.id });
         });
 
@@ -2613,6 +2682,54 @@ class VoiceLinkLocalServer {
             }
             const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
             return res.json({ success: true, notifications: this.notificationInbox.slice(0, limit) });
+        });
+
+        this.app.put('/api/notifications/incoming/:id', (req, res) => {
+            if (!hasAdminAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const id = String(req.params.id || '').trim();
+            if (!id) {
+                return res.status(400).json({ success: false, error: 'Notification id is required' });
+            }
+
+            const index = this.notificationInbox.findIndex((item) => item.id === id);
+            if (index < 0) {
+                return res.status(404).json({ success: false, error: 'Notification not found' });
+            }
+
+            const current = this.notificationInbox[index] || {};
+            const body = req.body || {};
+            const updated = {
+                ...current,
+                title: body.title !== undefined ? String(body.title || '').trim() : current.title,
+                message: body.message !== undefined ? String(body.message || '').trim() : current.message,
+                level: body.level !== undefined ? String(body.level || 'info').trim() : current.level,
+                payload: body.payload && typeof body.payload === 'object'
+                    ? { ...(current.payload || {}), ...body.payload }
+                    : (current.payload || {}),
+                updatedAt: new Date().toISOString()
+            };
+            this.notificationInbox[index] = updated;
+            this.io.emit('notification-updated', { id, notification: updated });
+            return res.json({ success: true, notification: updated });
+        });
+
+        this.app.delete('/api/notifications/incoming/:id', (req, res) => {
+            if (!hasAdminAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const id = String(req.params.id || '').trim();
+            if (!id) {
+                return res.status(400).json({ success: false, error: 'Notification id is required' });
+            }
+            const before = this.notificationInbox.length;
+            this.notificationInbox = this.notificationInbox.filter((item) => item.id !== id);
+            if (this.notificationInbox.length === before) {
+                return res.status(404).json({ success: false, error: 'Notification not found' });
+            }
+            this.io.emit('notification-removed', { id });
+            return res.json({ success: true, removedId: id });
         });
 
         // Generate API key for external application
@@ -3347,6 +3464,10 @@ class VoiceLinkLocalServer {
                     by: actorName,
                     timestamp: new Date().toISOString()
                 });
+                this.triggerPushoverEvent('roomAnnouncement', {
+                    title: `${this.pushoverConfig?.titlePrefix || 'VoiceLink'} Room Announcement`,
+                    message: `[${roomId}] ${actorName}: ${announcement}`.slice(0, 1024)
+                }).catch(() => {});
                 return res.json({ success: true, roomId, message: announcement });
             }
 
@@ -7946,6 +8067,10 @@ class VoiceLinkLocalServer {
                 this.rooms.set(roomId, room);
                 socket.emit('room-created', { roomId, room });
                 broadcastRoomList();
+                this.triggerPushoverEvent('roomCreated', {
+                    title: `${this.pushoverConfig?.titlePrefix || 'VoiceLink'} Room Created`,
+                    message: `${room.name} (${roomId}) created by ${socket.id}`
+                }).catch(() => {});
 
                 if (duration) {
                     setTimeout(() => {
@@ -8038,6 +8163,10 @@ class VoiceLinkLocalServer {
                 socket.join(roomId);
                 socket.emit('joined-room', { room, user });
                 socket.to(roomId).emit('user-joined', user);
+                this.triggerPushoverEvent('roomJoined', {
+                    title: `${this.pushoverConfig?.titlePrefix || 'VoiceLink'} Room Join`,
+                    message: `${user.name} joined ${room.name}`
+                }).catch(() => {});
 
                 console.log(`User ${user.name} joined room ${room.name}`);
             });

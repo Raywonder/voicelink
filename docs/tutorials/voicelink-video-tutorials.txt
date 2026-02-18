@@ -2,7 +2,7 @@ VOICELINK VIDEO TUTORIAL SCRIPTS
 ================================
 Generated for Google LLM Video Creation (NotebookLM Compatible)
 Version: 1.0.2
-Last Updated: January 2025
+Last Updated: January 2026
 
 ================================================================================
 VISUAL RESOURCES FOR VIDEO GENERATION

@@ -63,16 +63,10 @@
                                 📦 Get the Desktop App (Click to expand)
                             </summary>
                             <div style="margin-top: 10px;">
-                                <p class="download-subtitle" style="margin-bottom: 10px; opacity: 0.8;">Native apps with full features and auto-updates</p>
+                                <p class="download-subtitle" style="margin-bottom: 10px; opacity: 0.8;">macOS app with full features and auto-updates</p>
                                 <div class="download-buttons">
-                                    <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip" class="download-btn mac-btn" download>
+                                    <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip" class="download-btn mac-btn" download>
                                         <span class="platform-icon">🍎</span> macOS v1.0.0
-                                    </a>
-                                    <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe" class="download-btn win-btn" download>
-                                        <span class="platform-icon">🪟</span> Windows v1.0.3
-                                    </a>
-                                    <a href="https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe" class="download-btn win-btn" download style="font-size: 0.9em;">
-                                        <span class="platform-icon">💼</span> Windows Portable
                                     </a>
                                 </div>
                             </div>
@@ -87,6 +81,7 @@
                         <span id="mastodon-user-handle" class="user-handle"></span>
                         <span id="mastodon-user-role" class="user-role"></span>
                     </div>
+                    <a id="mastodon-manage-apps-btn" class="auth-btn" href="#" target="_blank" rel="noopener noreferrer">Apps</a>
                     <button id="mastodon-logout-btn" class="auth-btn logout-btn">Logout</button>
                 </div>
             </div>
@@ -162,6 +157,12 @@
                                    placeholder="mastodon.social"
                                    class="instance-input">
                             <button id="mastodon-connect-btn" class="primary-btn">Connect</button>
+                        </div>
+                        <div class="auth-options" style="margin-top: 10px;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="mastodon-request-elevated-scope">
+                                Request full Mastodon access (read write) for advanced features
+                            </label>
                         </div>
 
                         <div class="suggested-instances">
@@ -642,9 +643,6 @@
                                 Copy Localhost
                             </button>
                         </div>
-                        <button id="refresh-network-btn" class="settings-btn desktop-only" aria-label="Refresh network information">
-                            Refresh Network
-                        </button>
                     </div>
 
                     <!-- Network Binding Status (desktop app only) -->

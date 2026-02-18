@@ -1,5 +1,6 @@
 import Foundation
 import SocketIO
+import AVFoundation
 
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
@@ -15,48 +16,97 @@ class ServerManager: ObservableObject {
     @Published var connectedServer: String = ""
 
     // Server options
-    static let mainServer = "https://voicelink.devinecreations.net"
-    static let localServer = "http://localhost:4004"
+    static let mainServer = APIEndpointResolver.canonicalMainBase
+    static let localServer = APIEndpointResolver.localBase
 
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
+    private var domainRecoveryTimer: Timer?
+
+    // Public accessor for the current server URL
+    var baseURL: String? {
+        currentServerURL.isEmpty ? nil : currentServerURL
+    }
 
     init() {
         // Default to main server
         self.currentServerURL = ServerManager.mainServer
+        setupMessageNotifications()
+    }
+
+    private func setupMessageNotifications() {
+        // Listen for outgoing messages from MessagingManager
+        NotificationCenter.default.addObserver(
+            forName: .sendMessageToServer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo else { return }
+            let content = data["content"] as? String ?? ""
+            let isDirect = data["isDirect"] as? Bool ?? false
+            let recipientId = data["recipientId"] as? String
+            let replyToId = data["replyToId"] as? String
+
+            if isDirect, let recipient = recipientId {
+                // Direct message
+                var msgData: [String: Any] = [
+                    "targetUserId": recipient,
+                    "message": content
+                ]
+                if let reply = replyToId {
+                    msgData["replyTo"] = reply
+                }
+                self?.socket?.emit("direct-message", msgData)
+            } else {
+                // Room message
+                var msgData: [String: Any] = ["message": content]
+                if let reply = replyToId {
+                    msgData["replyTo"] = reply
+                }
+                self?.socket?.emit("chat-message", msgData)
+            }
+        }
+
+        // Typing indicator
+        NotificationCenter.default.addObserver(
+            forName: .sendTypingIndicator,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo,
+                  let typing = data["typing"] as? Bool else { return }
+            self?.socket?.emit("typing", ["typing": typing])
+        }
+
+        // Message reactions
+        NotificationCenter.default.addObserver(
+            forName: .sendReactionToServer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let data = notification.userInfo,
+                  let messageId = data["messageId"] as? String,
+                  let emoji = data["emoji"] as? String else { return }
+            self?.socket?.emit("message-reaction", [
+                "messageId": messageId,
+                "reaction": emoji
+            ])
+        }
     }
 
     func connect(toMain: Bool = true) {
         // Disconnect existing connection
         socket?.disconnect()
 
-        // Choose server
-        currentServerURL = toMain ? ServerManager.mainServer : ServerManager.localServer
-        useMainServer = toMain
-
-        guard let url = URL(string: currentServerURL) else {
-            DispatchQueue.main.async {
-                self.errorMessage = "Invalid server URL"
+        if toMain {
+            Task { @MainActor in
+                let resolvedMain = await self.resolveBestMainServer()
+                self.connectSocket(to: resolvedMain, asMain: true)
             }
             return
         }
 
-        print("Connecting to server: \(currentServerURL)")
-
-        manager = SocketManager(socketURL: url, config: [
-            .log(true),
-            .compress,
-            .forceWebsockets(true),
-            .reconnects(true),
-            .reconnectWait(3),
-            .reconnectAttempts(5),
-            .secure(currentServerURL.hasPrefix("https"))
-        ])
-
-        socket = manager?.defaultSocket
-
-        setupEventHandlers()
-        socket?.connect()
+        connectSocket(to: ServerManager.localServer, asMain: false)
     }
 
     func connectToMainServer() {
@@ -89,6 +139,7 @@ class ServerManager: ObservableObject {
 
     func disconnect() {
         socket?.disconnect()
+        stopDomainRecoveryTimer()
         DispatchQueue.main.async {
             self.isConnected = false
             self.serverStatus = "Disconnected"
@@ -139,8 +190,97 @@ class ServerManager: ObservableObject {
         }
     }
 
+    private func connectSocket(to serverURL: String, asMain: Bool) {
+        currentServerURL = serverURL
+        useMainServer = asMain
+
+        guard let url = URL(string: serverURL) else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Invalid server URL"
+            }
+            return
+        }
+
+        print("Connecting to server: \(serverURL)")
+
+        manager = SocketManager(socketURL: url, config: [
+            .log(true),
+            .compress,
+            .forceWebsockets(true),
+            .reconnects(true),
+            .reconnectWait(3),
+            .reconnectAttempts(5),
+            .secure(serverURL.hasPrefix("https"))
+        ])
+
+        socket = manager?.defaultSocket
+
+        setupEventHandlers()
+        socket?.connect()
+    }
+
+    private func resolveBestMainServer() async -> String {
+        for candidate in APIEndpointResolver.mainBaseCandidates(preferred: currentServerURL) {
+            if await isReachableServer(candidate) {
+                return candidate
+            }
+        }
+        return ServerManager.mainServer
+    }
+
+    private func isReachableServer(_ base: String) async -> Bool {
+        guard let healthURL = APIEndpointResolver.url(base: base, path: "/api/health") else {
+            return false
+        }
+
+        var request = URLRequest(url: healthURL)
+        request.timeoutInterval = 3
+        request.httpMethod = "GET"
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            return (200...499).contains(httpResponse.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    private func scheduleDomainRecoveryIfNeeded() {
+        stopDomainRecoveryTimer()
+        guard useMainServer else { return }
+        guard APIEndpointResolver.normalize(currentServerURL) != APIEndpointResolver.canonicalMainBase else { return }
+
+        domainRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard self.isConnected, self.useMainServer else {
+                self.stopDomainRecoveryTimer()
+                return
+            }
+
+            Task { @MainActor in
+                let canonical = APIEndpointResolver.canonicalMainBase
+                if APIEndpointResolver.normalize(self.currentServerURL) != canonical,
+                   await self.isReachableServer(canonical) {
+                    print("Domain reachable again, restoring connection to canonical domain")
+                    self.connectSocket(to: canonical, asMain: true)
+                }
+            }
+        }
+    }
+
+    private func stopDomainRecoveryTimer() {
+        domainRecoveryTimer?.invalidate()
+        domainRecoveryTimer = nil
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
+
+        // Remove all existing handlers to prevent duplicates
+        socket.removeAllHandlers()
 
         socket.on(clientEvent: .connect) { [weak self] data, ack in
             guard let self = self else { return }
@@ -152,12 +292,14 @@ class ServerManager: ObservableObject {
                 self.errorMessage = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
+            self.scheduleDomainRecoveryIfNeeded()
             // Request room list after connecting
             self.getRooms()
         }
 
         socket.on(clientEvent: .disconnect) { [weak self] data, ack in
             print("Disconnected from server")
+            self?.stopDomainRecoveryTimer()
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
@@ -197,11 +339,18 @@ class ServerManager: ObservableObject {
             self?.getRooms()
         }
 
-        // Room joined response
-        socket.on("room-joined") { [weak self] data, ack in
+        // Room joined response (server sends "joined-room")
+        socket.on("joined-room") { [weak self] data, ack in
             print("Joined room: \(data)")
-            if let roomData = data[0] as? [String: Any] {
-                // Handle room join success
+            if let responseData = data[0] as? [String: Any],
+               let roomData = responseData["room"] as? [String: Any] {
+                // Extract users from room data
+                if let usersData = roomData["users"] as? [[String: Any]] {
+                    let users = usersData.compactMap { RoomUser(from: $0) }
+                    DispatchQueue.main.async {
+                        self?.currentRoomUsers = users
+                    }
+                }
                 NotificationCenter.default.post(name: .roomJoined, object: roomData)
             }
         }
@@ -214,6 +363,10 @@ class ServerManager: ObservableObject {
                 DispatchQueue.main.async {
                     if !self!.currentRoomUsers.contains(where: { $0.id == user.id }) {
                         self?.currentRoomUsers.append(user)
+                        // Play user join sound
+                        AppSoundManager.shared.playSound(.userJoin)
+                        // Announce user joined
+                        AccessibilityManager.shared.announceUserJoined(user.username)
                     }
                 }
             }
@@ -223,9 +376,17 @@ class ServerManager: ObservableObject {
         socket.on("user-left") { [weak self] data, ack in
             print("User left: \(data)")
             if let userData = data[0] as? [String: Any],
-               let odId = userData["odId"] as? String {
+               let userId = userData["userId"] as? String {
                 DispatchQueue.main.async {
-                    self?.currentRoomUsers.removeAll { $0.odId == odId }
+                    // Get username before removing for announcement
+                    let userName = self?.currentRoomUsers.first(where: { $0.id == userId })?.username
+                    self?.currentRoomUsers.removeAll { $0.id == userId }
+                    // Play user leave sound
+                    AppSoundManager.shared.playSound(.userLeave)
+                    // Announce user left
+                    if let name = userName {
+                        AccessibilityManager.shared.announceUserLeft(name)
+                    }
                 }
             }
         }
@@ -233,7 +394,20 @@ class ServerManager: ObservableObject {
         // Room users list
         socket.on("room-users") { [weak self] data, ack in
             print("Room users: \(data)")
-            if let usersData = data[0] as? [[String: Any]] {
+            if let responseData = data[0] as? [String: Any],
+               let usersData = responseData["users"] as? [[String: Any]] {
+                let users = usersData.compactMap { RoomUser(from: $0) }
+                DispatchQueue.main.async {
+                    self?.currentRoomUsers = users
+                }
+            }
+        }
+
+        // Room user count update (broadcast when users join/leave)
+        socket.on("room-user-count") { [weak self] data, ack in
+            print("Room user count update: \(data)")
+            if let responseData = data[0] as? [String: Any],
+               let usersData = responseData["users"] as? [[String: Any]] {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self?.currentRoomUsers = users
@@ -354,6 +528,134 @@ class ServerManager: ObservableObject {
                 )
             }
         }
+
+        // Chat message received
+        socket.on("chat-message") { data, ack in
+            print("Chat message received: \(data)")
+            if let msgData = data[0] as? [String: Any] {
+                let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
+                let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
+                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+                let messageType = msgData["type"] as? String ?? "text"
+
+                NotificationCenter.default.post(
+                    name: .incomingChatMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": senderId,
+                        "senderName": senderName,
+                        "content": content,
+                        "type": messageType
+                    ]
+                )
+            }
+        }
+
+        // Direct message received
+        socket.on("direct-message") { data, ack in
+            print("Direct message received: \(data)")
+            if let msgData = data[0] as? [String: Any] {
+                let senderId = msgData["senderId"] as? String ?? ""
+                let senderName = msgData["senderName"] as? String ?? "Unknown"
+                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+
+                NotificationCenter.default.post(
+                    name: .incomingDirectMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": senderId,
+                        "senderName": senderName,
+                        "content": content
+                    ]
+                )
+            }
+        }
+
+        // Typing indicator
+        socket.on("user-typing") { data, ack in
+            if let typingData = data[0] as? [String: Any] {
+                let userId = typingData["userId"] as? String ?? ""
+                let typing = typingData["typing"] as? Bool ?? false
+
+                NotificationCenter.default.post(
+                    name: .userTypingIndicator,
+                    object: nil,
+                    userInfo: ["userId": userId, "typing": typing]
+                )
+            }
+        }
+
+        // MARK: - Audio Relay Handlers
+
+        // Receive relayed audio from server (when P2P fails)
+        socket.on("relayed-audio") { data, ack in
+            if let audioInfo = data[0] as? [String: Any],
+               let userId = audioInfo["userId"] as? String,
+               let timestamp = audioInfo["timestamp"] as? Double,
+               let sampleRate = audioInfo["sampleRate"] as? Double {
+
+                // Handle audio data - could be base64 string or raw data
+                var audioData: Data?
+                if let base64String = audioInfo["audioData"] as? String {
+                    audioData = Data(base64Encoded: base64String)
+                } else if let rawData = audioInfo["audioData"] as? Data {
+                    audioData = rawData
+                }
+
+                if let audioBuffer = audioData {
+                    DispatchQueue.main.async {
+                        SpatialAudioEngine.shared.receiveAudioData(
+                            from: userId,
+                            data: audioBuffer,
+                            timestamp: timestamp,
+                            sampleRate: sampleRate
+                        )
+                    }
+                }
+            }
+        }
+
+        // Also listen for audio-data event (alternative name)
+        socket.on("audio-data") { data, ack in
+            if let audioInfo = data[0] as? [String: Any],
+               let userId = audioInfo["userId"] as? String,
+               let timestamp = audioInfo["timestamp"] as? Double,
+               let sampleRate = audioInfo["sampleRate"] as? Double {
+
+                var audioData: Data?
+                if let base64String = audioInfo["audioData"] as? String {
+                    audioData = Data(base64Encoded: base64String)
+                } else if let rawData = audioInfo["audioData"] as? Data {
+                    audioData = rawData
+                }
+
+                if let audioBuffer = audioData {
+                    DispatchQueue.main.async {
+                        SpatialAudioEngine.shared.receiveAudioData(
+                            from: userId,
+                            data: audioBuffer,
+                            timestamp: timestamp,
+                            sampleRate: sampleRate
+                        )
+                    }
+                }
+            }
+        }
+
+        // Relay status updates
+        socket.on("relay-status") { data, ack in
+            print("[Audio] Relay status update: \(data)")
+        }
+
+        // P2P fallback notification
+        socket.on("p2p-fallback-needed") { [weak self] data, ack in
+            print("[Audio] P2P fallback needed, switching to relay mode")
+            // Enable relay mode - emit audio data through server
+            self?.socket?.emit("enable-audio-relay", [
+                "sampleRate": 48000,
+                "channels": 2
+            ])
+        }
     }
 
     // MARK: - API Methods
@@ -383,10 +685,14 @@ class ServerManager: ObservableObject {
             joinData["password"] = password
         }
         socket?.emit("join-room", joinData)
+
+        // Start audio transmission when joining room
+        startAudioTransmission()
     }
 
     func leaveRoom() {
         socket?.emit("leave-room")
+        stopAudioTransmission()
         DispatchQueue.main.async {
             self.currentRoomUsers = []
         }
@@ -397,6 +703,69 @@ class ServerManager: ObservableObject {
             "muted": isMuted,
             "deafened": isDeafened
         ])
+
+        // Start/stop audio transmission based on mute state
+        if isMuted {
+            stopAudioTransmission()
+        } else {
+            startAudioTransmission()
+        }
+    }
+
+    // MARK: - Audio Transmission
+
+    private var audioTransmitEngine: AVAudioEngine?
+    private var isTransmitting = false
+
+    func startAudioTransmission() {
+        guard !isTransmitting else { return }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+
+        // Request relay mode from server
+        socket?.emit("enable-audio-relay", [
+            "sampleRate": format.sampleRate,
+            "channels": format.channelCount
+        ])
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+            guard let self = self, self.isTransmitting else { return }
+
+            // Convert PCM buffer to Data
+            guard let channelData = buffer.floatChannelData else { return }
+            let frameLength = Int(buffer.frameLength)
+            let data = Data(bytes: channelData[0], count: frameLength * MemoryLayout<Float>.size)
+
+            // Encode as base64 for Socket.IO transmission
+            let base64Audio = data.base64EncodedString()
+
+            // Send audio data to server for relay
+            self.socket?.emit("audio-data", [
+                "audioData": base64Audio,
+                "timestamp": Date().timeIntervalSince1970,
+                "sampleRate": format.sampleRate
+            ])
+        }
+
+        do {
+            try engine.start()
+            audioTransmitEngine = engine
+            isTransmitting = true
+            print("[Audio] Microphone capture started, transmitting to server")
+        } catch {
+            print("[Audio] Failed to start audio engine: \(error)")
+        }
+    }
+
+    func stopAudioTransmission() {
+        guard isTransmitting else { return }
+        audioTransmitEngine?.inputNode.removeTap(onBus: 0)
+        audioTransmitEngine?.stop()
+        audioTransmitEngine = nil
+        isTransmitting = false
+        print("[Audio] Microphone capture stopped")
     }
 
     // MARK: - Access Revocation
@@ -475,6 +844,7 @@ struct RoomUser: Identifiable {
     let id: String
     let odId: String
     let username: String
+    let serverName: String
     let isMuted: Bool
     let isDeafened: Bool
     let isSpeaking: Bool
@@ -487,6 +857,17 @@ struct RoomUser: Identifiable {
         self.id = odId
         self.odId = odId
         self.username = username
+        let explicitServer = (dict["serverName"] as? String ?? dict["server"] as? String ?? dict["host"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicitServer.isEmpty {
+            self.serverName = explicitServer
+        } else {
+            let connected = ServerManager.shared.connectedServer
+            if let host = URL(string: connected)?.host, !host.isEmpty {
+                self.serverName = host
+            } else {
+                self.serverName = connected.isEmpty ? "Main" : connected
+            }
+        }
         self.isMuted = dict["muted"] as? Bool ?? dict["isMuted"] as? Bool ?? false
         self.isDeafened = dict["deafened"] as? Bool ?? dict["isDeafened"] as? Bool ?? false
         self.isSpeaking = dict["speaking"] as? Bool ?? dict["isSpeaking"] as? Bool ?? false

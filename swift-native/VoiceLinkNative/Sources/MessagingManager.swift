@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 
 /// Messaging Manager for VoiceLink
 /// Handles text messages between users in rooms and direct messages
@@ -10,10 +11,13 @@ class MessagingManager: ObservableObject {
     // MARK: - State
 
     @Published var messages: [ChatMessage] = []
+    @Published var activeRoomId: String?
     @Published var directMessages: [String: [ChatMessage]] = [:]  // odId -> messages
     @Published var unreadCounts: [String: Int] = [:]              // odId -> unread count
     @Published var totalUnreadCount: Int = 0
     @Published var isTyping: [String: Bool] = [:]                 // odId -> isTyping
+    @Published var typingNames: [String: String] = [:]            // odId -> display name
+    private var roomMessages: [String: [ChatMessage]] = [:]
 
     // MARK: - Types
 
@@ -70,6 +74,7 @@ class MessagingManager: ObservableObject {
     func sendRoomMessage(_ content: String) {
         guard !content.isEmpty else { return }
         guard content.count <= MessagingManager.maxMessageLength else { return }
+        guard activeRoomId != nil else { return }
 
         let userId = getCurrentUserId()
         let username = getCurrentUsername()
@@ -80,9 +85,6 @@ class MessagingManager: ObservableObject {
             content: content,
             type: .text
         )
-
-        // Add to local messages
-        addMessage(message)
 
         // Play sound
         AppSoundManager.shared.playSound(.buttonClick)
@@ -99,7 +101,7 @@ class MessagingManager: ObservableObject {
             content: content,
             type: .system
         )
-        addMessage(message)
+        addMessage(message, roomId: activeRoomId)
     }
 
     // MARK: - Direct Messages
@@ -118,9 +120,6 @@ class MessagingManager: ObservableObject {
             content: content,
             type: .text
         )
-
-        // Add to DM thread
-        addDirectMessage(message, with: userId)
 
         // Play sound
         AppSoundManager.shared.playSound(.buttonClick)
@@ -163,7 +162,6 @@ class MessagingManager: ObservableObject {
         )
         message.replyToId = messageId
 
-        addMessage(message)
         sendToServer(message, isDirect: false, recipientId: nil)
     }
 
@@ -225,13 +223,23 @@ class MessagingManager: ObservableObject {
 
     // MARK: - Private Methods
 
-    private func addMessage(_ message: ChatMessage) {
+    private func addMessage(_ message: ChatMessage, roomId: String?) {
+        let resolvedRoomId = roomId ?? activeRoomId ?? ""
+        guard !resolvedRoomId.isEmpty else { return }
+
         DispatchQueue.main.async {
-            self.messages.append(message)
+            var roomBuffer = self.roomMessages[resolvedRoomId] ?? []
+            roomBuffer.append(message)
 
             // Trim if too many messages
-            if self.messages.count > MessagingManager.maxMessagesInMemory {
-                self.messages.removeFirst(100)
+            if roomBuffer.count > MessagingManager.maxMessagesInMemory {
+                roomBuffer.removeFirst(100)
+            }
+
+            self.roomMessages[resolvedRoomId] = roomBuffer
+
+            if self.activeRoomId == resolvedRoomId {
+                self.messages = roomBuffer
             }
         }
     }
@@ -297,6 +305,14 @@ class MessagingManager: ObservableObject {
             name: .userTypingIndicator,
             object: nil
         )
+
+        // Active room switched (join/leave/change room)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleActiveRoomChanged),
+            name: .activeRoomChanged,
+            object: nil
+        )
     }
 
     @objc private func handleIncomingMessage(_ notification: Notification) {
@@ -315,7 +331,9 @@ class MessagingManager: ObservableObject {
             type: type
         )
 
-        addMessage(message)
+        typingNames[senderId] = senderName
+        let roomId = data["roomId"] as? String
+        addMessage(message, roomId: roomId)
 
         // Play incoming sound
         AppSoundManager.shared.playSound(.messageIncoming)
@@ -334,6 +352,7 @@ class MessagingManager: ObservableObject {
             type: .text
         )
 
+        typingNames[senderId] = senderName
         addDirectMessage(message, with: senderId)
 
         // Update unread count
@@ -351,6 +370,22 @@ class MessagingManager: ObservableObject {
 
         DispatchQueue.main.async {
             self.isTyping[userId] = typing
+            if let senderName = data["senderName"] as? String, !senderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.typingNames[userId] = senderName
+            }
+        }
+    }
+
+    @objc private func handleActiveRoomChanged(_ notification: Notification) {
+        let roomId = notification.userInfo?["roomId"] as? String
+
+        DispatchQueue.main.async {
+            self.activeRoomId = roomId
+            if let roomId = roomId, !roomId.isEmpty {
+                self.messages = self.roomMessages[roomId] ?? []
+            } else {
+                self.messages = []
+            }
         }
     }
 
@@ -385,6 +420,9 @@ class MessagingManager: ObservableObject {
     // MARK: - Cleanup
 
     func clearMessages() {
+        if let activeRoomId = activeRoomId {
+            roomMessages[activeRoomId] = []
+        }
         messages.removeAll()
     }
 
@@ -392,6 +430,17 @@ class MessagingManager: ObservableObject {
         directMessages[userId]?.removeAll()
         unreadCounts[userId] = 0
         updateTotalUnread()
+    }
+
+    func activeTypingUsers(excluding userId: String? = nil) -> [String] {
+        return isTyping
+            .filter { id, typing in
+                typing && (userId == nil || id != userId)
+            }
+            .map { id, _ in
+                typingNames[id] ?? "Someone"
+            }
+            .sorted()
     }
 }
 
@@ -405,6 +454,7 @@ extension Notification.Name {
     static let userTypingIndicator = Notification.Name("userTypingIndicator")
     static let sendReactionToServer = Notification.Name("sendReactionToServer")
     static let removeReactionFromServer = Notification.Name("removeReactionFromServer")
+    static let activeRoomChanged = Notification.Name("activeRoomChanged")
 }
 
 // MARK: - SwiftUI Views
@@ -440,12 +490,16 @@ struct ChatBubble: View {
                 }
 
                 // Message content
-                Text(message.content)
+                Text(attributedMessageContent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(bubbleBackground)
                     .foregroundColor(bubbleTextColor)
                     .cornerRadius(16)
+                    .environment(\.openURL, OpenURLAction { url in
+                        confirmOpen(url)
+                        return .handled
+                    })
 
                 // Reactions
                 if !message.reactions.isEmpty {
@@ -481,6 +535,11 @@ struct ChatBubble: View {
                 Button(action: { copyToClipboard(message.content) }) {
                     Label("Copy", systemImage: "doc.on.doc")
                 }
+                if let firstLink = detectedLinks.first {
+                    Button(action: { confirmOpen(firstLink) }) {
+                        Label("Open Link", systemImage: "link")
+                    }
+                }
             }
 
             if !isOwnMessage { Spacer() }
@@ -512,6 +571,50 @@ struct ChatBubble: View {
     private func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private var detectedLinks: [URL] {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let nsRange = NSRange(message.content.startIndex..<message.content.endIndex, in: message.content)
+        let matches = detector?.matches(in: message.content, options: [], range: nsRange) ?? []
+        return matches.compactMap { $0.url }
+    }
+
+    private var attributedMessageContent: AttributedString {
+        var attributed = AttributedString(message.content)
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let nsRange = NSRange(message.content.startIndex..<message.content.endIndex, in: message.content)
+        let matches = detector?.matches(in: message.content, options: [], range: nsRange) ?? []
+
+        for match in matches.reversed() {
+            guard let url = match.url,
+                  let sourceRange = Range(match.range, in: message.content),
+                  let attributedRange = Range(sourceRange, in: attributed) else {
+                continue
+            }
+            attributed[attributedRange].link = url
+            attributed[attributedRange].underlineStyle = .single
+        }
+
+        return attributed
+    }
+
+    private func confirmOpen(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Open External Link?"
+        alert.informativeText = "This link was shared in chat:\n\(url.absoluteString)\n\nOpen it in your browser?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Copy Link")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(url)
+        } else if response == .alertThirdButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        }
     }
 }
 
@@ -628,9 +731,10 @@ struct ChatView: View {
             }
 
             // Typing indicator
-            if let typing = messagingManager.isTyping.first(where: { $0.value == true }) {
+            if messagingManager.isTyping.first(where: { $0.value == true }) != nil {
+                let typingUsers = messagingManager.activeTypingUsers(excluding: getCurrentUserId())
                 HStack {
-                    Text("Someone is typing...")
+                    Text(typingUsers.first.map { "\($0) is typing..." } ?? "Someone is typing...")
                         .font(.caption)
                         .foregroundColor(.gray)
                         .italic()

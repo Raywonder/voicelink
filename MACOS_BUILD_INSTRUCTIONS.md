@@ -127,6 +127,26 @@ macos: {
 - [ ] Auto-updater can check for macOS updates
 - [ ] Migration from Electron works correctly
 
+### Release Guard (Required Before Upload)
+Run the guard to prevent stale links/checksum mismatches:
+
+```bash
+cd ~/DEV/APPS/VOICELINK-LOCAL
+npm run release:guard
+```
+
+If you already uploaded `latest-mac.yml` and want server-side verification:
+
+```bash
+node scripts/release-guard.js --manifest-url https://voicelink.devinecreations.net/downloads/latest-mac.yml
+```
+
+Offline/local-only verification (no network):
+
+```bash
+node scripts/release-guard.js --skip-manifest
+```
+
 ---
 
 ## 🔄 Known Issues & Solutions

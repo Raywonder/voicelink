@@ -45,6 +45,7 @@ class URLHandler: ObservableObject {
         case openSettings
         case openLicense
         case openWeb(url: URL)
+        case oauthCallback(code: String)
     }
 
     struct ParsedURL {
@@ -138,6 +139,14 @@ class URLHandler: ObservableObject {
         case "license":
             action = .openLicense
 
+        case "oauth":
+            // voicelink://oauth/callback?code=xxx
+            // Handle OAuth callbacks (Mastodon, etc.)
+            if pathComponents.first == "callback",
+               let code = queryItems.first(where: { $0.name == "code" })?.value {
+                action = .oauthCallback(code: code)
+            }
+
         default:
             // Try treating host as room ID for short URLs
             // voicelink://roomId
@@ -207,6 +216,9 @@ class URLHandler: ObservableObject {
         case .openLicense:
             webURL = URL(string: "https://voicelink.devinecreations.net/license")
 
+        case .oauthCallback(_):
+            return // OAuth callbacks are handled natively, not in browser
+
         case .openWeb(let url):
             webURL = url
         }
@@ -257,6 +269,13 @@ class URLHandler: ObservableObject {
 
         case .openWeb(let url):
             NSWorkspace.shared.open(url)
+
+        case .oauthCallback(let code):
+            print("[URLHandler] OAuth callback received with code")
+            NotificationCenter.default.post(
+                name: .oauthCallback,
+                object: ["code": code]
+            )
         }
     }
 
@@ -314,6 +333,7 @@ extension Notification.Name {
     static let urlUseInvite = Notification.Name("urlUseInvite")
     static let urlOpenSettings = Notification.Name("urlOpenSettings")
     static let urlOpenLicense = Notification.Name("urlOpenLicense")
+    static let oauthCallback = Notification.Name("oauthCallback")
 }
 
 // MARK: - URL Settings View

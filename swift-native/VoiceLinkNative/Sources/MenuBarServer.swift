@@ -177,8 +177,15 @@ struct MenuBarView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
+                let lastRoomName = UserDefaults.standard.string(forKey: "lastJoinedRoomName") ?? ""
+                if !lastRoomName.isEmpty {
+                    Text("Room: \(lastRoomName)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 if !serverManager.currentRoomUsers.isEmpty {
-                    Text("\(serverManager.currentRoomUsers.count) user(s) in room")
+                    Text("\(serverManager.currentRoomUsers.count + 1) user(s) in room")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -260,6 +267,10 @@ struct MenuBarView: View {
                 }
             }
             .keyboardShortcut("o", modifiers: [.command])
+
+            Button("Check for Updates...") {
+                AutoUpdater.shared.checkForUpdates()
+            }
 
             Divider()
 

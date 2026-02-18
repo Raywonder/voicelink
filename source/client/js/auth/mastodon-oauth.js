@@ -10,6 +10,7 @@ class MastodonOAuthManager {
         this.instanceUrl = null;
         this.clientId = null;
         this.clientSecret = null;
+        this.activeScopes = null;
 
         // Suggested instances
         this.suggestedInstances = [
@@ -17,8 +18,9 @@ class MastodonOAuthManager {
             { url: 'https://mastodon.devinecreations.net', name: 'DevineCreations' }
         ];
 
-        // OAuth scopes needed
-        this.scopes = 'read:accounts read:statuses';
+        // OAuth scope policy defaults. Server policy may elevate this for admins.
+        this.scopes = 'read:accounts';
+        this.adminScopes = 'read write';
 
         // Load saved session
         this.loadSession();
@@ -39,6 +41,7 @@ class MastodonOAuthManager {
                 this.currentUser = session.user;
                 this.clientId = session.clientId;
                 this.clientSecret = session.clientSecret;
+                this.activeScopes = session.activeScopes || null;
 
                 // Verify token is still valid
                 this.verifyToken();
@@ -58,7 +61,8 @@ class MastodonOAuthManager {
                 instanceUrl: this.instanceUrl,
                 user: this.currentUser,
                 clientId: this.clientId,
-                clientSecret: this.clientSecret
+                clientSecret: this.clientSecret,
+                activeScopes: this.activeScopes
             };
             localStorage.setItem('voicelink_mastodon_session', JSON.stringify(session));
         } catch (err) {
@@ -75,25 +79,59 @@ class MastodonOAuthManager {
         this.currentUser = null;
         this.clientId = null;
         this.clientSecret = null;
+        this.activeScopes = null;
         localStorage.removeItem('voicelink_mastodon_session');
+    }
+
+    async resolveScopePolicy(instanceUrl, options = {}) {
+        const requestedElevated = options.requestElevated === true;
+        const apiBase = options.apiBase || '';
+        if (!apiBase) {
+            return this.scopes;
+        }
+
+        try {
+            const instanceHost = new URL(instanceUrl).hostname;
+            const params = new URLSearchParams({
+                instance: instanceHost,
+                requestElevated: requestedElevated ? 'true' : 'false'
+            });
+            if (options.username) params.set('username', options.username);
+            if (options.email) params.set('email', options.email);
+
+            const response = await fetch(`${apiBase}/api/auth/mastodon/scope-policy?${params.toString()}`);
+            if (!response.ok) {
+                return this.scopes;
+            }
+            const data = await response.json();
+            if (typeof data?.effectiveScope === 'string' && data.effectiveScope.trim()) {
+                return data.effectiveScope.trim();
+            }
+        } catch (err) {
+            console.warn('Failed to resolve Mastodon scope policy, using default scope:', err);
+        }
+
+        return this.scopes;
     }
 
     /**
      * Register VoiceLink as an OAuth app on the instance
      */
-    async registerApp(instanceUrl) {
+    async registerApp(instanceUrl, scopeOptions = {}) {
         // Normalize instance URL
         instanceUrl = instanceUrl.replace(/\/$/, '');
         if (!instanceUrl.startsWith('http')) {
             instanceUrl = 'https://' + instanceUrl;
         }
+        const requestedScopes = await this.resolveScopePolicy(instanceUrl, scopeOptions);
 
         // Check if we already have credentials for this instance
         const savedApps = JSON.parse(localStorage.getItem('voicelink_mastodon_apps') || '{}');
-        if (savedApps[instanceUrl]) {
+        if (savedApps[instanceUrl] && savedApps[instanceUrl].scopes === requestedScopes) {
             this.clientId = savedApps[instanceUrl].clientId;
             this.clientSecret = savedApps[instanceUrl].clientSecret;
             this.instanceUrl = instanceUrl;
+            this.activeScopes = requestedScopes;
             return { clientId: this.clientId, clientSecret: this.clientSecret };
         }
 
@@ -112,7 +150,7 @@ class MastodonOAuthManager {
                 body: JSON.stringify({
                     client_name: 'VoiceLink Local',
                     redirect_uris: redirectUri,
-                    scopes: this.scopes,
+                    scopes: requestedScopes,
                     website: 'https://voicelink.devinecreations.net'
                 })
             });
@@ -126,13 +164,15 @@ class MastodonOAuthManager {
             // Save app credentials
             savedApps[instanceUrl] = {
                 clientId: app.client_id,
-                clientSecret: app.client_secret
+                clientSecret: app.client_secret,
+                scopes: requestedScopes
             };
             localStorage.setItem('voicelink_mastodon_apps', JSON.stringify(savedApps));
 
             this.clientId = app.client_id;
             this.clientSecret = app.client_secret;
             this.instanceUrl = instanceUrl;
+            this.activeScopes = requestedScopes;
 
             return { clientId: app.client_id, clientSecret: app.client_secret };
         } catch (err) {
@@ -144,8 +184,8 @@ class MastodonOAuthManager {
     /**
      * Start OAuth flow - returns authorization URL
      */
-    async startAuth(instanceUrl) {
-        await this.registerApp(instanceUrl);
+    async startAuth(instanceUrl, scopeOptions = {}) {
+        await this.registerApp(instanceUrl, scopeOptions);
 
         const isElectron = typeof process !== 'undefined' && process.versions?.electron;
         const redirectUri = isElectron
@@ -161,7 +201,7 @@ class MastodonOAuthManager {
             client_id: this.clientId,
             redirect_uri: redirectUri,
             response_type: 'code',
-            scope: this.scopes,
+            scope: this.activeScopes || this.scopes,
             state: state
         });
 
@@ -210,7 +250,7 @@ class MastodonOAuthManager {
                 redirect_uri: redirectUri,
                 grant_type: 'authorization_code',
                 code: code,
-                scope: this.scopes
+                scope: this.activeScopes || this.scopes
             })
         });
 
@@ -430,6 +470,11 @@ class MastodonOAuthManager {
      */
     getSuggestedInstances() {
         return this.suggestedInstances;
+    }
+
+    getApplicationsSettingsUrl() {
+        if (!this.instanceUrl) return null;
+        return `${this.instanceUrl.replace(/\/$/, '')}/settings/applications`;
     }
 }
 

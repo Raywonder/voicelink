@@ -1,0 +1,103 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0\fswiss Helvetica;}{\f1\fmodern Courier;}}
+\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440
+\fs24
+\b VoiceLink Data Export + Migration Guide\b0\line
+\line
+\b Purpose\b0\line
+This guide explains how users and admins use the new export and migration features, and how to verify they are working.\line
+\line
+\b 1) User Feature: Export My Data (macOS app)\b0\line
+\line
+Where:\line
+Settings -> Privacy -> Data -> Export My Data\line
+\line
+What it does:\line
+- Requests a server-side user export archive (.zip)\line
+- Includes your user data, room membership data, and message data (when available)\line
+- Attempts CopyParty upload (if configured)\line
+- Opens the download URL automatically when ready\line
+\line
+Expected success result:\line
+- Status text in settings: Data export ready. Opened download link.\line
+- Desktop notification from VoiceLink\line
+- Browser opens download URL\line
+\line
+\b 2) Admin Feature: Migrate Users/Rooms to Another Server\b0\line
+\line
+Primary endpoint:\line
+\f1 POST /api/admin/migration/export\f0\line
+\line
+Supports:\line
+- Export full migration snapshot as .zip\line
+- Optional CopyParty upload\line
+- Optional API push to target server import endpoint\line
+- Optional rsync push\line
+- Optional room transfer trigger using Escort Me flow\line
+\line
+Escort migration hook endpoint:\line
+\f1 POST /api/admin/migration/room-transfer\f0\line
+\line
+This creates an escort session with \f1 migrationMode=true\f0 and sends \f1 escort-started\f0 to users in the source room so they can move together.\line
+\line
+\b 3) User-to-User File Sharing\b0\line
+\line
+Mounted API base:\line
+\f1 /api/file-transfer\f0\line
+\line
+Key routes:\line
+- \f1 POST /api/file-transfer/receive\f0\line
+- \f1 GET /api/file-transfer/received\f0\line
+- \f1 GET /api/file-transfer/download/:sender/:filename\f0\line
+- \f1 DELETE /api/file-transfer/delete/:sender/:filename\f0\line
+\line
+\b 4) Fast Verification Checklist\b0\line
+\line
+\b User Export\b0\line
+1. Open VoiceLink app.\line
+2. Go to Settings -> Privacy.\line
+3. Press Export My Data.\line
+4. Confirm a .zip download URL opens.\line
+5. Confirm the archive exists at server route \f1 /exports/*.zip\f0.\line
+\line
+\b File Sharing\b0\line
+1. Upload a test file through the app flow (or API).\line
+2. Confirm file appears in \f1 GET /api/file-transfer/received\f0.\line
+3. Download it via \f1 /download/:sender/:filename\f0 and verify contents.\line
+4. Delete it via \f1 /delete/:sender/:filename\f0.\line
+5. Confirm list is empty/updated.\line
+\line
+\b Migration + Escort\b0\line
+1. Pick source + target room IDs.\line
+2. Call \f1 POST /api/admin/migration/room-transfer\f0 with admin auth.\line
+3. Confirm response returns \f1 success=true\f0 and session object.\line
+4. Confirm users in source room receive Escort Me prompt/event.\line
+\line
+\b 5) Troubleshooting\b0\line
+\line
+If export button says failed:\line
+- Check server is online and reachable.\line
+- Check \f1 POST /api/export/my-data\f0 directly.\line
+- Check PM2 logs for route errors.\line
+\line
+If CopyParty upload is false or fails:\line
+- Verify CopyParty service reachable.\line
+- Verify env vars:\line
+\f1 VOICELINK_COPYPARTY_URL\f0\line
+\f1 VOICELINK_COPYPARTY_EXPORT_PATH\f0\line
+\f1 VOICELINK_COPYPARTY_USERNAME\f0 (optional)\line
+\f1 VOICELINK_COPYPARTY_PASSWORD\f0 (optional)\line
+\line
+If file transfer list is empty after upload:\line
+- Verify route mount exists: \f1 this.app.use('/api/file-transfer', fileTransferRoutes)\f0\line
+- Verify process restarted after deployment.\line
+- Verify transfer storage path exists and is writable.\line
+\line
+\b 6) Verified Working (Current Session)\b0\line
+\line
+- Export endpoint returns a valid zip archive response.\line
+- File sharing passed upload/list/download/delete on live VM.\line
+- Admin migration Escort Me hook returned success and created active session.\line
+\line
+\b End of Guide\b0\line
+}

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceLink Admin Guide</title>
+  <link rel="stylesheet" href="../styles/docs.css" />
+</head>
+<body>
+  <main class="docs-container">
+    <h1>VoiceLink Admin Guide</h1>
+    <p>Admin features are role-based. Only authorized roles can edit server settings.</p>
+
+    <section>
+      <h2>Desktop Admin Access</h2>
+      <ul>
+        <li>Desktop app refreshes admin role on login and server reconnect.</li>
+        <li>Server Administration menu appears only when admin role is active.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Moderation Controls</h2>
+      <ul>
+        <li>User moderation: kick, ban, mute policy, room access enforcement.</li>
+        <li>Room moderation: lock, privacy behavior, and preview restrictions.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Audio and Policy</h2>
+      <ul>
+        <li>Publish baseline settings for noise suppression, echo cancellation, and gain control.</li>
+        <li>Require room-only sounds for join/leave and avoid autoplay UI noise on page load.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Update Operations</h2>
+      <ul>
+        <li>Keep macOS package filename stable as <code>VoiceLinkMacOS.zip</code>.</li>
+        <li>Refresh checksum on every new build, even when version remains <code>1.0</code>.</li>
+        <li>Fallback to IP endpoints if domain fails, then auto-return to domain when healthy.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Log Collection</h2>
+      <ul>
+        <li>Enable Send Logs in Advanced settings for support diagnostics.</li>
+        <li>Collect app version, endpoint used, and room join/audio errors.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Admin Training Video Clips</h2>
+      <ul>
+        <li><strong>Admin Login and Role Detection:</strong> verify admin menu visibility.</li>
+        <li><strong>Room Privacy Enforcement:</strong> preview denial and moderation behavior.</li>
+        <li><strong>User Moderation Workflow:</strong> kick/ban action flow.</li>
+        <li><strong>Audio Policy Baseline:</strong> recommended processing defaults.</li>
+        <li><strong>Desktop Update Publish:</strong> package, checksum, and manifest update.</li>
+        <li><strong>Endpoint Fallback Validation:</strong> simulate domain outage and recovery.</li>
+        <li><strong>Log Collection and Triage:</strong> gather and review diagnostics.</li>
+        <li><strong>Docs Sync to Server:</strong> publish docs to all web paths.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,6 +1,7 @@
-<Window x:Class="VoiceLinkNative.MainWindow"
+<Window x:Class="VoiceLinkNative.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="VoiceLink Native v1.0.0" Height="300" Width="600"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VoiceLink Native v1.0.0" Height="700" Width="1000"
         WindowStartupLocation="CenterScreen"
         Background="#1a1a2e" Foreground="#ffffff">
     

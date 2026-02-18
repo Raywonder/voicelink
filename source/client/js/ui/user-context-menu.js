@@ -547,6 +547,7 @@ class UserContextMenu {
                 id: userId,
                 name: userElement.dataset.userName || 'Unknown User',
                 status: userElement.dataset.userStatus || 'online',
+                statusMessage: userElement.dataset.userStatusMessage || '',
                 avatar: userElement.dataset.userAvatar || '👤',
                 isMuted: userElement.dataset.isMuted === 'true'
             };
@@ -588,8 +589,95 @@ class UserContextMenu {
 
     // Placeholder modal methods (to be implemented based on existing UI patterns)
     showUserProfileModal(userData) {
-        // Implementation would integrate with existing modal system
-        console.log('Show user profile modal for:', userData.name);
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.65);
+            z-index: 11000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            width: min(560px, 100%);
+            background: #1a1a1a;
+            color: #fff;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            padding: 16px;
+        `;
+
+        const title = document.createElement('h3');
+        title.textContent = `${userData.avatar || '👤'} ${userData.name || 'User'}`;
+        title.style.margin = '0 0 8px 0';
+        modal.appendChild(title);
+
+        const status = document.createElement('div');
+        status.style.cssText = 'opacity:0.9; margin-bottom:10px;';
+        status.textContent = `Status: ${userData.status || 'online'}`;
+        modal.appendChild(status);
+
+        const statusMessage = userData.statusMessage || userData.customStatus || '';
+        if (statusMessage) {
+            const messageLabel = document.createElement('div');
+            messageLabel.style.cssText = 'font-weight:600; margin-bottom:6px;';
+            messageLabel.textContent = 'Status message';
+            modal.appendChild(messageLabel);
+
+            const messageBody = document.createElement('div');
+            messageBody.style.cssText = 'line-height:1.45; margin-bottom:12px; overflow-wrap:anywhere;';
+            this.appendTextWithSafeLinks(messageBody, statusMessage);
+            modal.appendChild(messageBody);
+        }
+
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', () => overlay.remove());
+        modal.appendChild(closeBtn);
+
+        overlay.appendChild(modal);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) overlay.remove();
+        });
+        document.body.appendChild(overlay);
+    }
+
+    appendTextWithSafeLinks(container, text) {
+        const content = String(text || '');
+        const linkRegex = /(https?:\/\/[^\s<>"')]+|voicelink:\/\/[^\s<>"')]+)/gi;
+        let cursor = 0;
+        let match;
+
+        while ((match = linkRegex.exec(content)) !== null) {
+            const url = match[0];
+            const start = match.index;
+            if (start > cursor) {
+                container.appendChild(document.createTextNode(content.slice(cursor, start)));
+            }
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = url;
+            link.style.color = '#7bd4ff';
+            link.style.textDecoration = 'underline';
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (window.app?.openLinkWithSafetyOptions) {
+                    window.app.openLinkWithSafetyOptions(url);
+                } else {
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                }
+            });
+            container.appendChild(link);
+            cursor = start + url.length;
+        }
+
+        if (cursor < content.length) {
+            container.appendChild(document.createTextNode(content.slice(cursor)));
+        }
     }
 
     openDirectMessageInterface(userId) {

@@ -2,11 +2,12 @@ import Foundation
 import SwiftUI
 import AuthenticationServices
 import Security
+import AppKit
 
 // MARK: - Authentication Manager
 class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = AuthenticationManager()
-    private let mastodonScopes = "read:accounts"
+    private let mastodonScopes = "read write follow push"
     private let mastodonAppName = "VoiceLink"
     private let mastodonWebsite = "https://voicelink.devinecreations.net"
     private var resolvedMastodonScope = "read:accounts"
@@ -17,10 +18,11 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
     // Mastodon OAuth state
     @Published var mastodonInstance: String = ""
-    @Published var mastodonRequestElevatedScope: Bool = UserDefaults.standard.bool(forKey: "mastodonRequestElevatedScope")
+    @Published var mastodonRequestElevatedScope: Bool = UserDefaults.standard.object(forKey: "mastodonRequestElevatedScope") as? Bool ?? true
     private var mastodonClientId: String?
     private var mastodonClientSecret: String?
     private var authSession: ASWebAuthenticationSession?
+    private var mastodonExternalFallbackInProgress = false
 
     // Email verification state
     @Published var pendingEmailVerification: String?
@@ -74,19 +76,76 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             return
         }
         UserDefaults.standard.set(mastodonRequestElevatedScope, forKey: "mastodonRequestElevatedScope")
+        resolveWorkingMastodonInstance { [weak self] ok, resolvedOrError in
+            guard let self else { return }
+            guard ok else {
+                self.authState = .error
+                self.authError = resolvedOrError
+                completion(false, resolvedOrError)
+                return
+            }
+            if let resolved = resolvedOrError, !resolved.isEmpty {
+                self.mastodonInstance = resolved
+            }
 
-        // Step 1: Register OAuth app with the instance
-        registerMastodonApp { [weak self] success, error in
-            guard success else {
-                self?.authState = .error
-                self?.authError = error
-                completion(false, error)
+            // Step 1: Register OAuth app with the instance
+            self.registerMastodonApp { [weak self] success, error in
+                guard success else {
+                    self?.authState = .error
+                    self?.authError = error
+                    completion(false, error)
+                    return
+                }
+
+                // Step 2: Open OAuth authorization URL
+                self?.openMastodonAuth(completion: completion)
+            }
+        }
+    }
+
+    private func resolveWorkingMastodonInstance(completion: @escaping (Bool, String?) -> Void) {
+        let requested = mastodonInstance
+        var candidates: [String] = [requested]
+        if requested == "md.tappedin.fm" {
+            candidates.append("mastodon.devinecreations.net")
+        }
+        candidates = Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
+
+        func probe(_ index: Int) {
+            if index >= candidates.count {
+                completion(false, "Mastodon instance is not reachable right now (gateway/proxy error).")
                 return
             }
 
-            // Step 2: Open OAuth authorization URL
-            self?.openMastodonAuth(completion: completion)
+            let host = candidates[index]
+            guard let url = URL(string: "https://\(host)/api/v2/instance") else {
+                probe(index + 1)
+                return
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 8
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if (200...299).contains(status),
+                   let data,
+                   let body = String(data: data, encoding: .utf8),
+                   !body.lowercased().contains("bad gateway"),
+                   !body.lowercased().contains("<html") {
+                    DispatchQueue.main.async {
+                        completion(true, host)
+                    }
+                    return
+                }
+                DispatchQueue.main.async {
+                    probe(index + 1)
+                }
+            }.resume()
         }
+
+        probe(0)
     }
 
     private func registerMastodonApp(completion: @escaping (Bool, String?) -> Void) {
@@ -216,11 +275,9 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                         self?.authState = .unauthenticated
                         self?.pendingMastodonCompletion?(false, "Authentication cancelled")
                         self?.pendingMastodonCompletion = nil
+                        self?.mastodonExternalFallbackInProgress = false
                     } else {
-                        self?.authState = .error
-                        self?.authError = error.localizedDescription
-                        self?.pendingMastodonCompletion?(false, error.localizedDescription)
-                        self?.pendingMastodonCompletion = nil
+                        self?.openMastodonAuthInExternalBrowser(url, reason: error.localizedDescription)
                     }
                     return
                 }
@@ -236,6 +293,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 }
 
                 // Handle the OAuth callback with the code
+                self?.mastodonExternalFallbackInProgress = false
                 self?.handleMastodonCallback(code: code)
             }
         }
@@ -243,12 +301,16 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         // Set the presentation context and start the session
         authSession?.presentationContextProvider = self
         authSession?.prefersEphemeralWebBrowserSession = false // Allow persisting cookies for "remember me"
-        authSession?.start()
+        let started = authSession?.start() ?? false
+        if !started {
+            openMastodonAuthInExternalBrowser(url, reason: "In-app authentication session could not start.")
+        }
     }
 
     private var pendingMastodonCompletion: ((Bool, String?) -> Void)?
 
     func handleMastodonCallback(code: String) {
+        mastodonExternalFallbackInProgress = false
         guard let clientId = mastodonClientId,
               let clientSecret = mastodonClientSecret else {
             pendingMastodonCompletion?(false, "Missing OAuth credentials")
@@ -538,6 +600,24 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         return newId
     }
 
+    private func openMastodonAuthInExternalBrowser(_ url: URL, reason: String) {
+        guard !mastodonExternalFallbackInProgress else { return }
+        mastodonExternalFallbackInProgress = true
+        authSession = nil
+
+        let opened = NSWorkspace.shared.open(url)
+        if opened {
+            authState = .authenticating
+            authError = "Using browser fallback. Complete Mastodon sign in, then return to VoiceLink."
+        } else {
+            authState = .error
+            authError = "Failed to open browser fallback: \(reason)"
+            pendingMastodonCompletion?(false, authError)
+            pendingMastodonCompletion = nil
+            mastodonExternalFallbackInProgress = false
+        }
+    }
+
     private func normalizeMastodonInstance(_ input: String) -> String {
         var value = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if value.hasPrefix("https://") {
@@ -570,6 +650,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         if let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
+            let lowered = text.lowercased()
+            if lowered.contains("bad gateway") || lowered.contains("<html") || lowered.contains("</html>") {
+                return "Mastodon instance returned a gateway/proxy error. Try again in a moment."
+            }
             return text
         }
         return nil
@@ -976,7 +1060,7 @@ struct MastodonAuthView: View {
                 .disabled(instanceInput.isEmpty || isAuthenticating)
             }
 
-            Text("This will open your browser to authorize VoiceLink")
+            Text("VoiceLink signs in using a secure in-app window. Browser opens only as fallback.")
                 .font(.caption)
                 .foregroundColor(.gray)
 

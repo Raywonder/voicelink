@@ -225,6 +225,59 @@ class SpatialAudioEngine: ObservableObject {
         userPositions.removeValue(forKey: userId)
     }
 
+    // MARK: - Audio Data Reception
+
+    /// Receive and play audio data from a remote user via server relay
+    func receiveAudioData(from userId: String, data: Data, timestamp: Double, sampleRate: Double) {
+        guard let engine = audioEngine, isEnabled else { return }
+
+        // Ensure player node exists for this user
+        if playerNodes[userId] == nil {
+            let playerNode = AVAudioPlayerNode()
+            let mixerNode = AVAudioMixerNode()
+
+            engine.attach(playerNode)
+            engine.attach(mixerNode)
+
+            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+            if let fmt = format {
+                engine.connect(playerNode, to: mixerNode, format: fmt)
+                engine.connect(mixerNode, to: environmentNode ?? engine.mainMixerNode, format: fmt)
+            }
+
+            playerNodes[userId] = playerNode
+            spatialMixers[userId] = mixerNode
+
+            // Set default position if none set
+            if userPositions[userId] == nil {
+                userPositions[userId] = SIMD3<Float>(0, 0, -2)
+                updateUserPosition(userId: userId)
+            }
+
+            playerNode.play()
+            print("[SpatialAudio] Created player node for user: \(userId)")
+        }
+
+        // Convert Data to AVAudioPCMBuffer
+        let frameCount = UInt32(data.count) / 4 // 4 bytes per Float32 sample
+        guard frameCount > 0 else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
+
+        // Copy audio data into buffer
+        data.withUnsafeBytes { ptr in
+            if let baseAddress = ptr.baseAddress, let channelData = buffer.floatChannelData {
+                memcpy(channelData[0], baseAddress, min(data.count, Int(frameCount) * 4))
+                buffer.frameLength = AVAudioFrameCount(frameCount)
+            }
+        }
+
+        // Schedule buffer for playback
+        if let playerNode = playerNodes[userId] {
+            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        }
+    }
+
     // MARK: - Position Management
 
     /// Update a user's position in 3D space

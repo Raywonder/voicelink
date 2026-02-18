@@ -1,0 +1,1287 @@
+Bug reports for VoiceLink,
+
+0
+Bugfixe error
+macOS bug with app.
+-------------------------------------
+Translated Report (Full Report Below)
+-------------------------------------
+
+Process:               VoiceLink [27831]
+Path:                  /Applications/VoiceLink.app/Contents/MacOS/VoiceLink
+Identifier:            com.devinecreations.voicelink
+Version:               1.0.5 (5)
+Code Type:             X86-64 (Translated)
+Parent Process:        launchd [1]
+User ID:               501
+
+Date/Time:             2026-02-15 20:32:03.8217 -0500
+OS Version:            macOS 14.8.3 (23J220)
+Report Version:        12
+Anonymous UUID:        6EE8FBB4-FEBA-8DC4-39BB-8338742EC2C9
+
+
+Time Awake Since Boot: 1000000 seconds
+
+System Integrity Protection: enabled
+
+Notes:
+PC register does not match crashing frame (0x0 vs 0x7FF8147D5F9F)
+
+Crashed Thread:        0  Dispatch queue: com.apple.main-thread
+
+Exception Type:        EXC_BAD_INSTRUCTION (SIGILL)
+Exception Codes:       0x0000000000000001, 0x0000000000000000
+
+Termination Reason:    Namespace SIGNAL, Code 4 Illegal instruction: 4
+Terminating Process:   exc handler [27831]
+
+Error Formulating Crash Report:
+PC register does not match crashing frame (0x0 vs 0x7FF8147D5F9F)
+
+Thread 0 Crashed::  Dispatch queue: com.apple.main-thread
+0   libswiftCore.dylib                    0x7ff8147d5f9f _assertionFailure(_:_:file:line:flags:) + 351
+1   VoiceLink                                0x104e1459a closure #1 in variable initialization expression of static NSBundle.module + 1242
+2   VoiceLink                                0x104e140a9 one-time initialization function for module + 9
+3   libdispatch.dylib                     0x7ff803796dbc _dispatch_client_callout + 8
+4   libdispatch.dylib                     0x7ff80379804e _dispatch_once_callout + 20
+5   VoiceLink                                0x104e145d1 NSBundle.module.unsafeMutableAddressor + 49
+6   VoiceLink                                0x1045efd78 closure #1 in variable initialization expression of AppSoundManager.candidateBundles + 56
+7   VoiceLink                                0x1045f002b AppSoundManager.init() + 379
+8   VoiceLink                                0x1045ed4b2 AppSoundManager.__allocating_init() + 34
+9   VoiceLink                                0x1045ed428 one-time initialization function for shared + 24
+10  libdispatch.dylib                     0x7ff803796dbc _dispatch_client_callout + 8
+11  libdispatch.dylib                     0x7ff80379804e _dispatch_once_callout + 20
+12  VoiceLink                                0x1045ed4f1 AppSoundManager.shared.unsafeMutableAddressor + 49
+13  VoiceLink                                0x104cb9226 VoiceChatView.sendMessage() + 3478
+14  VoiceLink                                0x104cb847b closure #1 in closure #3 in closure #2 in closure #1 in VoiceChatView.body.getter + 27
+15  SwiftUI                               0x7ff911b1e5fe 0x7ff910fb1000 + 11982334
+16  SwiftUI                               0x7ff9114a6c7f 0x7ff910fb1000 + 5201023
+17  SwiftUI                               0x7ff9114abcb7 0x7ff910fb1000 + 5221559
+18  SwiftUI                               0x7ff9114a6c53 0x7ff910fb1000 + 5200979
+19  SwiftUI                               0x7ff91149cde2 0x7ff910fb1000 + 5160418
+20  SwiftUI                               0x7ff9124fa284 0x7ff910fb1000 + 22319748
+21  SwiftUI                               0x7ff9124fa353 0x7ff910fb1000 + 22319955
+22  AppKit                                0x7ff8071d685d -[NSApplication(NSResponder) sendAction:to:from:] + 337
+23  AppKit                                0x7ff8071d66d3 -[NSControl sendAction:to:] + 86
+24  AppKit                                0x7ff80728c07e -[NSTextField textDidEndEditing:] + 777
+25  CoreFoundation                        0x7ff803a0bc66 __CFNOTIFICATIONCENTER_IS_CALLING_OUT_TO_AN_OBSERVER__ + 137
+26  CoreFoundation                        0x7ff803a9b8dc ___CFXRegistrationPost_block_invoke + 86
+27  CoreFoundation                        0x7ff803a9b82d _CFXRegistrationPost + 530
+28  CoreFoundation                        0x7ff8039db5b9 _CFXNotificationPost + 826
+29  Foundation                            0x7ff8048d763e -[NSNotificationCenter postNotificationName:object:userInfo:] + 82
+30  AppKit                                0x7ff80733fead -[NSTextView(NSPrivate) _giveUpFirstResponder:] + 360
+31  AppKit                                0x7ff8072a9f24 -[NSTextView doCommandBySelector:] + 212
+32  SwiftUI                               0x7ff9124fc28d 0x7ff910fb1000 + 22327949
+33  SwiftUI                               0x7ff9124fc2af 0x7ff910fb1000 + 22327983
+34  AppKit                                0x7ff8072a9de1 -[NSTextInputContext(NSInputContext_WithCompletion) doCommandBySelector:completionHandler:] + 220
+35  AppKit                                0x7ff8071ddc97 -[NSKeyBindingManager(NSKeyBindingManager_MultiClients) interpretEventAsCommand:forClient:] + 2115
+36  AppKit                                0x7ff8071e6816 __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_5 + 496
+37  AppKit                                0x7ff807d820e1 __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.922 + 74
+38  AppKit                                0x7ff8071e6606 -[NSTextInputContext tryHandleEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:] + 86
+39  AppKit                                0x7ff807d82068 __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke.919 + 246
+40  HIToolbox                             0x7ff80ea9e292 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_6 + 68
+41  HIToolbox                             0x7ff80e95669d invocation function for block in DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*) + 110
+42  AppKit                                0x7ff807d7d2a0 __55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke.321 + 563
+43  AppKit                                0x7ff8071df978 __55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke_2 + 74
+44  AppKit                                0x7ff8071df8ff -[NSTextInputContext tryHandleTSMEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:] + 86
+45  AppKit                                0x7ff8071def86 -[NSTextInputContext handleTSMEvent:completionHandler:] + 1850
+46  AppKit                                0x7ff8071de7dd _NSTSMEventHandler + 299
+47  HIToolbox                             0x7ff80e8e9573 DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*) + 1364
+48  HIToolbox                             0x7ff80e8e89bf SendEventToEventTargetInternal(OpaqueEventRef*, OpaqueEventTargetRef*, HandlerCallRec*) + 336
+49  HIToolbox                             0x7ff80e8e885e SendEventToEventTargetWithOptions + 45
+50  HIToolbox                             0x7ff80e941de1 SendTSMEvent_WithCompletionHandler + 388
+51  HIToolbox                             0x7ff80e942295 __SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler_block_invoke + 390
+52  HIToolbox                             0x7ff80e9420ea __SendFilterTextEvent_WithCompletionHandler_block_invoke + 182
+53  HIToolbox                             0x7ff80e941e31 SendTSMEvent_WithCompletionHandler + 468
+54  HIToolbox                             0x7ff80e941c30 SendFilterTextEvent_WithCompletionHandler + 230
+55  HIToolbox                             0x7ff80e9418f1 SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler + 274
+56  HIToolbox                             0x7ff80e9416a3 __utDeliverTSMEvent_WithCompletionHandler_block_invoke_2 + 277
+57  HIToolbox                             0x7ff80e941506 __utDeliverTSMEvent_WithCompletionHandler_block_invoke + 362
+58  HIToolbox                             0x7ff80e941355 TSMKeyEvent_WithCompletionHandler + 590
+59  HIToolbox                             0x7ff80e945a10 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_5 + 251
+60  HIToolbox                             0x7ff80e9410fc __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_4 + 311
+61  HIToolbox                             0x7ff80e940f33 __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_3 + 262
+62  HIToolbox                             0x7ff80e940cea __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_2 + 283
+63  HIToolbox                             0x7ff80e940a8c __TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke + 275
+64  HIToolbox                             0x7ff80e92f84b TSMProcessRawKeyEventWithOptionsAndCompletionHandler + 2345
+65  AppKit                                0x7ff807d81f5f __84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.917 + 111
+66  AppKit                                0x7ff807d81cbe __204-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]_block_invoke.881 + 120
+67  AppKit                                0x7ff8071dd2fa -[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:] + 246
+68  AppKit                                0x7ff8071dcd18 -[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:] + 1396
+69  AppKit                                0x7ff8071dc76a -[NSTextInputContext _handleEvent:allowingSyntheticEvent:] + 105
+70  AppKit                                0x7ff8071dc5e3 -[NSView interpretKeyEvents:] + 208
+71  AppKit                                0x7ff8071dc42f -[NSTextView keyDown:] + 722
+72  SwiftUI                               0x7ff911c59dda 0x7ff910fb1000 + 13274586
+73  SwiftUI                               0x7ff911c59f7c 0x7ff910fb1000 + 13275004
+74  AppKit                                0x7ff80714993b -[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:] + 429
+75  AppKit                                0x7ff807149573 -[NSWindow(NSEventRouting) sendEvent:] + 345
+76  AppKit                                0x7ff8078fc280 -[NSApplication(NSEventRouting) sendEvent:] + 1456
+77  AppKit                                0x7ff8074b6d8e -[NSApplication _handleEvent:] + 65
+78  AppKit                                0x7ff806fda5fa -[NSApplication run] + 640
+79  AppKit                                0x7ff806fae553 NSApplicationMain + 816
+80  SwiftUI                               0x7ff9110a0527 0x7ff910fb1000 + 980263
+81  SwiftUI                               0x7ff91179be54 0x7ff910fb1000 + 8302164
+82  SwiftUI                               0x7ff911b6240f 0x7ff910fb1000 + 12260367
+83  VoiceLink                                0x104c43613 static VoiceLinkApp.$main() + 35
+84  VoiceLink                                0x104d25849 VoiceLinkNative_main + 9
+85  dyld                                     0x206072345 start + 1909
+
+Thread 1:: com.apple.rosetta.exceptionserver
+0   runtime                               0x7ff7fff73414 0x7ff7fff6f000 + 17428
+
+Thread 2:: caulk.messenger.shared:17
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f7fea semaphore_wait_trap + 10
+2   caulk                                 0x7ff80e62aba8 caulk::semaphore::timed_wait(double) + 150
+3   caulk                                 0x7ff80e62aac4 caulk::concurrent::details::worker_thread::run() + 30
+4   caulk                                 0x7ff80e62a7e8 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 41
+5   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+6   libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 3:: caulk.messenger.shared:high
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f7fea semaphore_wait_trap + 10
+2   caulk                                 0x7ff80e62aba8 caulk::semaphore::timed_wait(double) + 150
+3   caulk                                 0x7ff80e62aac4 caulk::concurrent::details::worker_thread::run() + 30
+4   caulk                                 0x7ff80e62a7e8 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 41
+5   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+6   libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 4:: com.apple.NSEventThread
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f806e mach_msg2_trap + 10
+2   libsystem_kernel.dylib                0x7ff803906858 mach_msg2_internal + 84
+3   libsystem_kernel.dylib                0x7ff8038ff158 mach_msg_overwrite + 653
+4   libsystem_kernel.dylib                0x7ff8038f835d mach_msg + 19
+5   CoreFoundation                        0x7ff803a16779 __CFRunLoopServiceMachPort + 143
+6   CoreFoundation                        0x7ff803a151ec __CFRunLoopRun + 1371
+7   CoreFoundation                        0x7ff803a146c9 CFRunLoopRunSpecific + 557
+8   AppKit                                0x7ff80714730c _NSEventThread + 122
+9   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+10  libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 5:: AXSpeech
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f806e mach_msg2_trap + 10
+2   libsystem_kernel.dylib                0x7ff803906858 mach_msg2_internal + 84
+3   libsystem_kernel.dylib                0x7ff8038ff158 mach_msg_overwrite + 653
+4   libsystem_kernel.dylib                0x7ff8038f835d mach_msg + 19
+5   CoreFoundation                        0x7ff803a16779 __CFRunLoopServiceMachPort + 143
+6   CoreFoundation                        0x7ff803a151ec __CFRunLoopRun + 1371
+7   CoreFoundation                        0x7ff803a146c9 CFRunLoopRunSpecific + 557
+8   Foundation                            0x7ff80492b441 -[NSRunLoop(NSRunLoop) runMode:beforeDate:] + 216
+9   TextToSpeech                          0x7ff91803006f 0x7ff918009000 + 159855
+10  Foundation                            0x7ff8049246cc __NSThread__start__ + 1013
+11  libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+12  libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 6:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 7:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 8:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 9:: ausm_messenger_for_buffer_disposal
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f7fea semaphore_wait_trap + 10
+2   caulk                                 0x7ff80e62aba8 caulk::semaphore::timed_wait(double) + 150
+3   caulk                                 0x7ff80e62aac4 caulk::concurrent::details::worker_thread::run() + 30
+4   caulk                                 0x7ff80e62a7e8 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 41
+5   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+6   libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 10:: caulk::deferred_logger
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f7fea semaphore_wait_trap + 10
+2   caulk                                 0x7ff80e62aba8 caulk::semaphore::timed_wait(double) + 150
+3   caulk                                 0x7ff80e62aac4 caulk::concurrent::details::worker_thread::run() + 30
+4   caulk                                 0x7ff80e62a7e8 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 41
+5   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+6   libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 11:: com.apple.audio.toolbox.AUScheduledParameterRefresher
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f7fea semaphore_wait_trap + 10
+2   caulk                                 0x7ff80e62aba8 caulk::semaphore::timed_wait(double) + 150
+3   caulk                                 0x7ff80e62aac4 caulk::concurrent::details::worker_thread::run() + 30
+4   caulk                                 0x7ff80e62a7e8 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 41
+5   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+6   libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 12:: com.apple.audio.IOThread.client
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f806e mach_msg2_trap + 10
+2   libsystem_kernel.dylib                0x7ff803906858 mach_msg2_internal + 84
+3   libsystem_kernel.dylib                0x7ff8038ff158 mach_msg_overwrite + 653
+4   libsystem_kernel.dylib                0x7ff8038f835d mach_msg + 19
+5   CoreAudio                             0x7ff80609f79f HALB_MachPort::SendSimpleMessageWithSimpleReply(unsigned int, unsigned int, int, int&, bool, unsigned int) + 103
+6   CoreAudio                             0x7ff805f6d2a6 HALC_ProxyIOContext::IOWorkLoop() + 4562
+7   CoreAudio                             0x7ff805f6b9e1 invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int) + 73
+8   CoreAudio                             0x7ff8060fea74 HALC_IOThread::Entry(void*) + 72
+9   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+10  libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 13:: com.apple.audio.IOThread.client
+0   ???                                   0x7ff893bf2a78 ???
+1   libsystem_kernel.dylib                0x7ff8038f806e mach_msg2_trap + 10
+2   libsystem_kernel.dylib                0x7ff803906858 mach_msg2_internal + 84
+3   libsystem_kernel.dylib                0x7ff8038ff158 mach_msg_overwrite + 653
+4   libsystem_kernel.dylib                0x7ff8038f835d mach_msg + 19
+5   CoreAudio                             0x7ff80609f79f HALB_MachPort::SendSimpleMessageWithSimpleReply(unsigned int, unsigned int, int, int&, bool, unsigned int) + 103
+6   CoreAudio                             0x7ff805f6d2a6 HALC_ProxyIOContext::IOWorkLoop() + 4562
+7   CoreAudio                             0x7ff805f6b9e1 invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int) + 73
+8   CoreAudio                             0x7ff8060fea74 HALC_IOThread::Entry(void*) + 72
+9   libsystem_pthread.dylib               0x7ff80393811f _pthread_start + 99
+10  libsystem_pthread.dylib               0x7ff803933ac3 thread_start + 15
+
+Thread 14:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 15:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 16:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+Thread 17:
+0   runtime                               0x7ff7fff9194c 0x7ff7fff6f000 + 141644
+
+
+Thread 0 crashed with X86 Thread State (64-bit):
+  rax: 0x0000000200000003  rbx: 0x0000000104eb9f78  rcx: 0xfffffffe00000000  rdx: 0x0000000000000003
+  rdi: 0x00007fb03cf65298  rsi: 0x5000000000000000  rbp: 0x000000030e5ab690  rsp: 0x000000030e5ab5f0
+   r8: 0x0000000000000000   r9: 0x00007fb03d900000  r10: 0x00000000000031b0  r11: 0x0000000000000000
+  r12: 0x0000000104ed1a70  r13: 0x00000000000000ff  r14: 0x00007fb03cf65290  r15: 0x000000000000000b
+  rip: <unavailable>       rfl: 0x0000000000000246
+ tmp0: 0x00007ff8147d5f9f tmp1: 0x0000000000000216 tmp2: 0x00007ff8aa75b4c4
+
+
+Binary Images:
+       0x20606c000 -        0x2060fcfff dyld (*) <43926ebe-f6c6-30d6-aa12-c0945b2bf6d3> /usr/lib/dyld
+       0x125381000 -        0x1254c2fff com.apple.audio.units.Components (1.14) <42ae4443-959f-3623-bbd4-fb439d097bc4> /System/Library/Components/CoreAudio.component/Contents/MacOS/CoreAudio
+       0x126640000 -        0x127088fff com.apple.audio.AudioDSPComponents (1.0) <7e8ab616-9237-3428-b5c4-d42b2b435be6> /System/Library/Components/AudioDSP.component/Contents/MacOS/AudioDSP
+       0x122b36000 -        0x122b37fff com.apple.TextInputUIMac.axbundle (1.0) <20010db8-435e-3d20-85f2-f68926c52c9b> /System/Library/Accessibility/BundlesBase/com.apple.TextInputUIMac.axbundle/Versions/A/com.apple.TextInputUIMac
+       0x1226d7000 -        0x1226d9fff com.apple.PlacesKit.axbundle (1.0) <a498eb39-1ff1-3c3d-ae70-333e5e74d51e> /System/Library/Accessibility/BundlesBase/com.apple.PlacesKit.axbundle/Versions/A/com.apple.PlacesKit
+       0x12262a000 -        0x12262bfff com.apple.SocialLayer.axbundle (1.0) <9b8d2b7b-153a-3cbd-a019-a15115918b48> /System/Library/Accessibility/BundlesBase/com.apple.SocialLayer.axbundle/Versions/A/com.apple.SocialLayer
+       0x1226ff000 -        0x122708fff com.apple.PhotosUICore.axbundle (1.0) <a6cbb6ba-40d9-3bed-b9c5-465f4d4dc064> /System/Library/Accessibility/BundlesBase/com.apple.PhotosUICore.axbundle/Versions/A/com.apple.PhotosUICore
+       0x122651000 -        0x122652fff com.apple.frameworks.preferencepanessupport.axbundle (1.0) <4661eec3-bbd0-3b4b-b7d4-496946df3fb5> /System/Library/Accessibility/BundlesBase/com.apple.frameworks.preferencepanessupport.axbundle/Versions/A/com.apple.frameworks.preferencepanessupport
+       0x122573000 -        0x122577fff com.apple.AppKit.axbundle (1.0) <361e7178-2bee-39c0-9e03-3844d097cabb> /System/Library/Accessibility/BundlesBase/com.apple.AppKit.axbundle/Versions/A/com.apple.AppKit
+       0x122676000 -        0x12267ffff com.apple.VisionKitCore.axbundle (1.0) <9d80886d-e8a0-37ea-bf37-b136af3c04d5> /System/Library/Accessibility/BundlesBase/com.apple.VisionKitCore.axbundle/Versions/A/com.apple.VisionKitCore
+       0x1225ad000 -        0x1225aefff com.apple.ToneKit.axbundle (1.0) <7987f650-45b5-3ba6-9fcf-8cc6323d9b68> /System/Library/Accessibility/BundlesBase/com.apple.ToneKit.axbundle/Versions/A/com.apple.ToneKit
+       0x12259a000 -        0x12259bfff com.apple.LinkPresentation.axbundle (1.0) <585e98da-8e3f-3c5e-a709-0ddee26fc7ab> /System/Library/Accessibility/BundlesBase/com.apple.LinkPresentation.axbundle/Versions/A/com.apple.LinkPresentation
+       0x1225fb000 -        0x122601fff com.apple.AddressBook.framework.axbundle (1.0) <96782911-9bdd-3257-9335-669ff8005ba4> /System/Library/Accessibility/BundlesBase/com.apple.AddressBook.framework.axbundle/Versions/A/com.apple.AddressBook.framework
+       0x1225c6000 -        0x1225cdfff com.apple.Photos.axbundle (1.0) <4a0768b6-1c28-3195-bab5-b7a6889d51da> /System/Library/Accessibility/BundlesBase/com.apple.Photos.axbundle/Versions/A/com.apple.Photos
+       0x12249c000 -        0x12249efff com.apple.securityinterface.axbundle (1.0) <389d5075-1f04-3794-9600-df9291173501> /System/Library/Accessibility/BundlesBase/com.apple.securityinterface.axbundle/Versions/A/com.apple.securityinterface
+       0x1224c3000 -        0x1224c4fff com.apple.imageKit.axbundle (1.0) <f2451093-9aac-33ed-bb8f-221bb4f4e653> /System/Library/Accessibility/BundlesBase/com.apple.imageKit.axbundle/Versions/A/com.apple.imageKit
+       0x12245f000 -        0x122460fff com.apple.AOSUI.axbundle (1.0) <8fc23b56-483b-301c-9db2-90c24f613576> /System/Library/Accessibility/BundlesBase/com.apple.AOSUI.axbundle/Versions/A/com.apple.AOSUI
+       0x122389000 -        0x12238afff com.apple.AnnotationKit.axbundle (1.0) <3b00fd0c-1e52-3d55-ba90-d993a94a9a9c> /System/Library/Accessibility/BundlesBase/com.apple.AnnotationKit.axbundle/Versions/A/com.apple.AnnotationKit
+       0x12236f000 -        0x122370fff com.apple.PIP.axbundle (1.0) <0dba57f2-60a4-30d2-9d24-923f9111bf27> /System/Library/Accessibility/BundlesBase/com.apple.PIP.axbundle/Versions/A/com.apple.PIP
+       0x122559000 -        0x12255bfff com.apple.ContactsUI.axbundle (1.0) <8edebf2c-446b-3a16-bbba-254a56448b08> /System/Library/Accessibility/BundlesBase/com.apple.ContactsUI.axbundle/Versions/A/com.apple.ContactsUI
+       0x122535000 -        0x122539fff com.apple.MapKit.axbundle (1.0) <838979c2-9a42-324f-a00e-13a16fe37200> /System/Library/Accessibility/BundlesBase/com.apple.MapKit.axbundle/Versions/A/com.apple.MapKit
+       0x122355000 -        0x122356fff com.apple.CharacterPicker.axbundle (1.0) <f70630bd-de9f-32da-8772-a4da4b835129> /System/Library/Accessibility/BundlesBase/com.apple.CharacterPicker.axbundle/Versions/A/com.apple.CharacterPicker
+       0x1222b0000 -        0x1222b1fff com.apple.OnBoardingKit.axbundle (1.0) <16968a57-31ec-35c0-8e8b-5068c989dc95> /System/Library/Accessibility/BundlesBase/com.apple.OnBoardingKit.axbundle/Versions/A/com.apple.OnBoardingKit
+       0x122290000 -        0x122291fff com.apple.AVKit.axbundle (1.0) <81e2a48f-802c-3ff8-a5c2-6524ffdfebad> /System/Library/Accessibility/BundlesBase/com.apple.AVKit.axbundle/Versions/A/com.apple.AVKit
+       0x122518000 -        0x12251afff com.apple.AuthKitUI.axbundle (1.0) <03815bb9-7a1a-389e-96df-58304007b2c2> /System/Library/Accessibility/BundlesBase/com.apple.AuthKitUI.axbundle/Versions/A/com.apple.AuthKitUI
+       0x11adbc000 -        0x11adc8fff libobjc-trampolines.dylib (*) <1f3ce7c6-e76a-3866-9794-0196ccfe82ae> /usr/lib/libobjc-trampolines.dylib
+    0x7ff7fff6f000 -     0x7ff7fff9efff runtime (*) <d8e2b2d5-fcd4-3b50-94c4-5911a6260ad2> /usr/libexec/rosetta/runtime
+       0x10fdb4000 -        0x10fe07fff libRosettaRuntime (*) <3e6996b2-eddb-3269-b841-bb2b3c546f07> /Library/Apple/*/libRosettaRuntime
+       0x10445c000 -        0x104f09fff com.devinecreations.voicelink (1.0.5) <b8c11833-97ff-32e5-912b-d0f9cd9697a2> /Applications/VoiceLink.app/Contents/MacOS/VoiceLink
+    0x7ff8147a7000 -     0x7ff814c58ff7 libswiftCore.dylib (*) <a56031bd-88ca-3097-872d-45dc36392550> /usr/lib/swift/libswiftCore.dylib
+    0x7ff803794000 -     0x7ff8037daff1 libdispatch.dylib (*) <1b5bc7ce-4058-3461-839d-24e12c03a809> /usr/lib/system/libdispatch.dylib
+    0x7ff910fb1000 -     0x7ff912afbff0 com.apple.SwiftUI (5.6.2) <d6409238-e9cf-3be0-a000-05375ccfb1e4> /System/Library/Frameworks/SwiftUI.framework/Versions/A/SwiftUI
+    0x7ff806faa000 -     0x7ff8083dafff com.apple.AppKit (6.9) <b47bc3d3-0bd0-38c4-836d-78b4f74f4e7a> /System/Library/Frameworks/AppKit.framework/Versions/C/AppKit
+    0x7ff80399a000 -     0x7ff803e33ffc com.apple.CoreFoundation (6.9) <bd64f124-5c12-3a35-b19d-cce0b3e3fd1a> /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+    0x7ff8048ce000 -     0x7ff805505ffb com.apple.Foundation (6.9) <c14ad813-8ea1-31fd-8197-5fd3ebe56186> /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+    0x7ff80e8e1000 -     0x7ff80eb7bff3 com.apple.HIToolbox (2.1.1) <bdce8ff2-939f-3c40-b5ef-0d7387ea7801> /System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/Versions/A/HIToolbox
+               0x0 - 0xffffffffffffffff ??? (*) <00000000-0000-0000-0000-000000000000> ???
+    0x7ff8038f7000 -     0x7ff803931ff7 libsystem_kernel.dylib (*) <c14e014c-3042-3d58-9021-a9d513db9f17> /usr/lib/system/libsystem_kernel.dylib
+    0x7ff80e629000 -     0x7ff80e64eff7 com.apple.audio.caulk (1.0) <43aa3e4c-f5e6-3061-ae89-fe46e27b8b06> /System/Library/PrivateFrameworks/caulk.framework/Versions/A/caulk
+    0x7ff803932000 -     0x7ff80393dfff libsystem_pthread.dylib (*) <94607857-3850-3632-af50-37163dd339f7> /usr/lib/system/libsystem_pthread.dylib
+    0x7ff918009000 -     0x7ff918149ff3 com.apple.texttospeech (1.0.0) <8135b720-6762-3311-a6d8-7faa62535f7e> /System/Library/PrivateFrameworks/TextToSpeech.framework/Versions/A/TextToSpeech
+    0x7ff805d81000 -     0x7ff8064acff3 com.apple.audio.CoreAudio (5.0) <1b9411be-df6e-3450-a08a-38c57b986d61> /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
+
+External Modification Summary:
+  Calls made by other processes targeting this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by all processes on this machine:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+
+VM Region Summary:
+ReadOnly portion of Libraries: Total=1.1G resident=0K(0%) swapped_out_or_unallocated=1.1G(100%)
+Writable regions: Total=2.6G written=0K(0%) resident=0K(0%) swapped_out=0K(0%) unallocated=2.6G(100%)
+
+                                VIRTUAL   REGION 
+REGION TYPE                        SIZE    COUNT (non-coalesced) 
+===========                     =======  ======= 
+Accelerate framework               256K        2 
+Activity Tracing                   256K        1 
+AttributeGraph Data               1024K        1 
+CG image                           208K       18 
+CG raster data                      24K        2 
+ColorSync                          252K       31 
+CoreAnimation                     1268K      110 
+CoreGraphics                        12K        2 
+CoreUI image data                 3972K       31 
+Foundation                          44K        2 
+Kernel Alloc Once                    8K        1 
+MALLOC                             2.4G      123 
+MALLOC guard page                  384K       24 
+Rosetta Arena                     4096K        2 
+Rosetta Generic                   1428K      354 
+Rosetta IndirectBranch            2048K        1 
+Rosetta JIT                      128.0M        1 
+Rosetta Return Stack               320K       32 
+Rosetta Thread Context             320K       32 
+SQLite page cache                  384K        3 
+STACK GUARD                         28K        7 
+Stack                             16.2M       17 
+Stack Guard                       56.1M       10 
+VM_ALLOCATE                       3992K       55 
+VM_ALLOCATE (reserved)            1196K        3         reserved VM address space (unallocated)
+__CTF                               824        1 
+__DATA                            46.4M      894 
+__DATA_CONST                      65.1M      599 
+__DATA_DIRTY                      2542K      329 
+__FONT_DATA                        2352        1 
+__INFO_FILTER                         8        1 
+__LINKEDIT                       164.4M       33 
+__OBJC_RO                         71.8M        1 
+__OBJC_RW                         2199K        2 
+__TEXT                           957.0M      911 
+libnetwork                        1664K       24 
+mapped file                      283.5M      140 
+shared memory                     4568K       20 
+===========                     =======  ======= 
+TOTAL                              4.2G     3821 
+TOTAL, minus reserved VM space     4.2G     3821 
+
+
+
+-----------
+Full Report
+-----------
+
+{"app_name":"VoiceLink","timestamp":"2026-02-15 20:32:05.00 -0500","app_version":"1.0.5","slice_uuid":"b8c11833-97ff-32e5-912b-d0f9cd9697a2","build_version":"5","platform":1,"bundleID":"com.devinecreations.voicelink","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"macOS 14.8.3 (23J220)","roots_installed":0,"name":"VoiceLink","incident_id":"38E823F7-7CD0-4DE3-BCA3-3711FE65FD4E"}
+{
+  "uptime" : 1000000,
+  "procRole" : "Foreground",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "Mac13,2",
+  "coalitionID" : 71728,
+  "osVersion" : {
+    "train" : "macOS 14.8.3",
+    "build" : "23J220",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-02-15 20:32:03.8217 -0500",
+  "codeSigningMonitor" : 1,
+  "incident" : "38E823F7-7CD0-4DE3-BCA3-3711FE65FD4E",
+  "pid" : 27831,
+  "translated" : true,
+  "cpuType" : "X86-64",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "procLaunch" : "2026-02-15 20:25:39.6300 -0500",
+  "procStartAbsTime" : 25065011548828,
+  "procExitAbsTime" : 25074232132553,
+  "procName" : "VoiceLink",
+  "procPath" : "\/Applications\/VoiceLink.app\/Contents\/MacOS\/VoiceLink",
+  "bundleInfo" : {"CFBundleShortVersionString":"1.0.5","CFBundleVersion":"5","CFBundleIdentifier":"com.devinecreations.voicelink"},
+  "storeInfo" : {"deviceIdentifierForVendor":"2448F618-3354-52D3-8B77-1E736EE652AD","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.devinecreations.voicelink",
+  "crashReporterKey" : "6EE8FBB4-FEBA-8DC4-39BB-8338742EC2C9",
+  "codeSigningID" : "com.devinecreations.voicelink",
+  "codeSigningTeamID" : "",
+  "codeSigningFlags" : 570425345,
+  "codeSigningValidationCategory" : 10,
+  "codeSigningTrustLevel" : 4294967295,
+  "sip" : "enabled",
+  "exception" : {"codes":"0x0000000000000001, 0x0000000000000000","rawCodes":[1,0],"type":"EXC_BAD_INSTRUCTION","signal":"SIGILL"},
+  "termination" : {"flags":0,"code":4,"namespace":"SIGNAL","indicator":"Illegal instruction: 4","byProc":"exc handler","byPid":27831},
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":9844033,"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":13125727888},"r12":{"value":4377614960},"rosetta":{"tmp2":{"value":140705988457668},"tmp1":{"value":534},"tmp0":{"value":140703472377759}},"rbx":{"value":4377517944},"r8":{"value":0},"r15":{"value":11},"r10":{"value":12720},"rdx":{"value":3},"rdi":{"value":140394913747608},"r9":{"value":140394923819008},"r13":{"value":255},"rflags":{"value":582},"rax":{"value":8589934595},"rsp":{"value":13125727728},"r11":{"value":0},"rcx":{"value":18446744065119617024},"r14":{"value":140394913747600},"rsi":{"value":5764607523034234880}},"queue":"com.apple.main-thread","frames":[{"imageOffset":192415,"symbol":"_assertionFailure(_:_:file:line:flags:)","symbolLocation":351,"imageIndex":29},{"imageOffset":10192282,"symbol":"closure #1 in variable initialization expression of static NSBundle.module","symbolLocation":1242,"imageIndex":28},{"imageOffset":10191017,"symbol":"one-time initialization function for module","symbolLocation":9,"imageIndex":28},{"imageOffset":11708,"symbol":"_dispatch_client_callout","symbolLocation":8,"imageIndex":30},{"imageOffset":16462,"symbol":"_dispatch_once_callout","symbolLocation":20,"imageIndex":30},{"imageOffset":10192337,"symbol":"NSBundle.module.unsafeMutableAddressor","symbolLocation":49,"imageIndex":28},{"imageOffset":1654136,"symbol":"closure #1 in variable initialization expression of AppSoundManager.candidateBundles","symbolLocation":56,"imageIndex":28},{"imageOffset":1654827,"symbol":"AppSoundManager.init()","symbolLocation":379,"imageIndex":28},{"imageOffset":1643698,"symbol":"AppSoundManager.__allocating_init()","symbolLocation":34,"imageIndex":28},{"imageOffset":1643560,"symbol":"one-time initialization function for shared","symbolLocation":24,"imageIndex":28},{"imageOffset":11708,"symbol":"_dispatch_client_callout","symbolLocation":8,"imageIndex":30},{"imageOffset":16462,"symbol":"_dispatch_once_callout","symbolLocation":20,"imageIndex":30},{"imageOffset":1643761,"symbol":"AppSoundManager.shared.unsafeMutableAddressor","symbolLocation":49,"imageIndex":28},{"imageOffset":8770086,"symbol":"VoiceChatView.sendMessage()","symbolLocation":3478,"imageIndex":28},{"imageOffset":8766587,"symbol":"closure #1 in closure #3 in closure #2 in closure #1 in VoiceChatView.body.getter","symbolLocation":27,"imageIndex":28},{"imageOffset":11982334,"imageIndex":31},{"imageOffset":5201023,"imageIndex":31},{"imageOffset":5221559,"imageIndex":31},{"imageOffset":5200979,"imageIndex":31},{"imageOffset":5160418,"imageIndex":31},{"imageOffset":22319748,"imageIndex":31},{"imageOffset":22319955,"imageIndex":31},{"imageOffset":2279517,"symbol":"-[NSApplication(NSResponder) sendAction:to:from:]","symbolLocation":337,"imageIndex":32},{"imageOffset":2279123,"symbol":"-[NSControl sendAction:to:]","symbolLocation":86,"imageIndex":32},{"imageOffset":3022974,"symbol":"-[NSTextField textDidEndEditing:]","symbolLocation":777,"imageIndex":32},{"imageOffset":466022,"symbol":"__CFNOTIFICATIONCENTER_IS_CALLING_OUT_TO_AN_OBSERVER__","symbolLocation":137,"imageIndex":33},{"imageOffset":1054940,"symbol":"___CFXRegistrationPost_block_invoke","symbolLocation":86,"imageIndex":33},{"imageOffset":1054765,"symbol":"_CFXRegistrationPost","symbolLocation":530,"imageIndex":33},{"imageOffset":267705,"symbol":"_CFXNotificationPost","symbolLocation":826,"imageIndex":33},{"imageOffset":38462,"symbol":"-[NSNotificationCenter postNotificationName:object:userInfo:]","symbolLocation":82,"imageIndex":34},{"imageOffset":3759789,"symbol":"-[NSTextView(NSPrivate) _giveUpFirstResponder:]","symbolLocation":360,"imageIndex":32},{"imageOffset":3145508,"symbol":"-[NSTextView doCommandBySelector:]","symbolLocation":212,"imageIndex":32},{"imageOffset":22327949,"imageIndex":31},{"imageOffset":22327983,"imageIndex":31},{"imageOffset":3145185,"symbol":"-[NSTextInputContext(NSInputContext_WithCompletion) doCommandBySelector:completionHandler:]","symbolLocation":220,"imageIndex":32},{"imageOffset":2309271,"symbol":"-[NSKeyBindingManager(NSKeyBindingManager_MultiClients) interpretEventAsCommand:forClient:]","symbolLocation":2115,"imageIndex":32},{"imageOffset":2344982,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_5","symbolLocation":496,"imageIndex":32},{"imageOffset":14516449,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.922","symbolLocation":74,"imageIndex":32},{"imageOffset":2344454,"symbol":"-[NSTextInputContext tryHandleEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:]","symbolLocation":86,"imageIndex":32},{"imageOffset":14516328,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke.919","symbolLocation":246,"imageIndex":32},{"imageOffset":1823378,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_6","symbolLocation":68,"imageIndex":35},{"imageOffset":480925,"symbol":"invocation function for block in DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*)","symbolLocation":110,"imageIndex":35},{"imageOffset":14496416,"symbol":"__55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke.321","symbolLocation":563,"imageIndex":32},{"imageOffset":2316664,"symbol":"__55-[NSTextInputContext handleTSMEvent:completionHandler:]_block_invoke_2","symbolLocation":74,"imageIndex":32},{"imageOffset":2316543,"symbol":"-[NSTextInputContext tryHandleTSMEvent_HasMarkedText_withDispatchCondition:dispatchWork:continuation:]","symbolLocation":86,"imageIndex":32},{"imageOffset":2314118,"symbol":"-[NSTextInputContext handleTSMEvent:completionHandler:]","symbolLocation":1850,"imageIndex":32},{"imageOffset":2312157,"symbol":"_NSTSMEventHandler","symbolLocation":299,"imageIndex":32},{"imageOffset":34163,"symbol":"DispatchEventToHandlers(EventTargetRec*, OpaqueEventRef*, HandlerCallRec*)","symbolLocation":1364,"imageIndex":35},{"imageOffset":31167,"symbol":"SendEventToEventTargetInternal(OpaqueEventRef*, OpaqueEventTargetRef*, HandlerCallRec*)","symbolLocation":336,"imageIndex":35},{"imageOffset":30814,"symbol":"SendEventToEventTargetWithOptions","symbolLocation":45,"imageIndex":35},{"imageOffset":396769,"symbol":"SendTSMEvent_WithCompletionHandler","symbolLocation":388,"imageIndex":35},{"imageOffset":397973,"symbol":"__SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler_block_invoke","symbolLocation":390,"imageIndex":35},{"imageOffset":397546,"symbol":"__SendFilterTextEvent_WithCompletionHandler_block_invoke","symbolLocation":182,"imageIndex":35},{"imageOffset":396849,"symbol":"SendTSMEvent_WithCompletionHandler","symbolLocation":468,"imageIndex":35},{"imageOffset":396336,"symbol":"SendFilterTextEvent_WithCompletionHandler","symbolLocation":230,"imageIndex":35},{"imageOffset":395505,"symbol":"SendUnicodeTextAEToUnicodeDoc_WithCompletionHandler","symbolLocation":274,"imageIndex":35},{"imageOffset":394915,"symbol":"__utDeliverTSMEvent_WithCompletionHandler_block_invoke_2","symbolLocation":277,"imageIndex":35},{"imageOffset":394502,"symbol":"__utDeliverTSMEvent_WithCompletionHandler_block_invoke","symbolLocation":362,"imageIndex":35},{"imageOffset":394069,"symbol":"TSMKeyEvent_WithCompletionHandler","symbolLocation":590,"imageIndex":35},{"imageOffset":412176,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_5","symbolLocation":251,"imageIndex":35},{"imageOffset":393468,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_4","symbolLocation":311,"imageIndex":35},{"imageOffset":393011,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_3","symbolLocation":262,"imageIndex":35},{"imageOffset":392426,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke_2","symbolLocation":283,"imageIndex":35},{"imageOffset":391820,"symbol":"__TSMProcessRawKeyEventWithOptionsAndCompletionHandler_block_invoke","symbolLocation":275,"imageIndex":35},{"imageOffset":321611,"symbol":"TSMProcessRawKeyEventWithOptionsAndCompletionHandler","symbolLocation":2345,"imageIndex":35},{"imageOffset":14516063,"symbol":"__84-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]_block_invoke_3.917","symbolLocation":111,"imageIndex":32},{"imageOffset":14515390,"symbol":"__204-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]_block_invoke.881","symbolLocation":120,"imageIndex":32},{"imageOffset":2306810,"symbol":"-[NSTextInputContext tryTSMProcessRawKeyEvent_orSubstitution:dispatchCondition:setupForDispatch:furtherCondition:doubleSpaceSubstitutionCondition:doubleSpaceSubstitutionWork:dispatchTSMWork:continuation:]","symbolLocation":246,"imageIndex":32},{"imageOffset":2305304,"symbol":"-[NSTextInputContext _handleEvent:options:allowingSyntheticEvent:completionHandler:]","symbolLocation":1396,"imageIndex":32},{"imageOffset":2303850,"symbol":"-[NSTextInputContext _handleEvent:allowingSyntheticEvent:]","symbolLocation":105,"imageIndex":32},{"imageOffset":2303459,"symbol":"-[NSView interpretKeyEvents:]","symbolLocation":208,"imageIndex":32},{"imageOffset":2303023,"symbol":"-[NSTextView keyDown:]","symbolLocation":722,"imageIndex":32},{"imageOffset":13274586,"imageIndex":31},{"imageOffset":13275004,"imageIndex":31},{"imageOffset":1702203,"symbol":"-[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:]","symbolLocation":429,"imageIndex":32},{"imageOffset":1701235,"symbol":"-[NSWindow(NSEventRouting) sendEvent:]","symbolLocation":345,"imageIndex":32},{"imageOffset":9773696,"symbol":"-[NSApplication(NSEventRouting) sendEvent:]","symbolLocation":1456,"imageIndex":32},{"imageOffset":5295502,"symbol":"-[NSApplication _handleEvent:]","symbolLocation":65,"imageIndex":32},{"imageOffset":198138,"symbol":"-[NSApplication run]","symbolLocation":640,"imageIndex":32},{"imageOffset":17747,"symbol":"NSApplicationMain","symbolLocation":816,"imageIndex":32},{"imageOffset":980263,"imageIndex":31},{"imageOffset":8302164,"imageIndex":31},{"imageOffset":12260367,"imageIndex":31},{"imageOffset":8287763,"symbol":"static VoiceLinkApp.$main()","symbolLocation":35,"imageIndex":28},{"imageOffset":9214025,"symbol":"VoiceLinkNative_main","symbolLocation":9,"imageIndex":28},{"imageOffset":25413,"symbol":"start","symbolLocation":1909,"imageIndex":0}]},{"id":9844041,"name":"com.apple.rosetta.exceptionserver","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":34097745362944},"r12":{"value":140705988457668},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":4462471277487},"tmp0":{"value":10337986281472}},"rbx":{"value":4462471277487},"r8":{"value":7939},"r15":{"value":5972692992},"r10":{"value":15586436317184},"rdx":{"value":0},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":4561410928},"rflags":{"value":582},"rax":{"value":268451845},"rsp":{"value":10337986281472},"r11":{"value":0},"rcx":{"value":17314086914},"r14":{"value":140705988457680},"rsi":{"value":2616}},"frames":[{"imageOffset":17428,"imageIndex":26}]},{"id":9844060,"name":"caulk.messenger.shared:17","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":25},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188362860},"tmp1":{"value":140705607395912},"tmp0":{"value":18446744073709551615}},"rbx":{"value":13127381098},"r8":{"value":105553148332272},"r15":{"value":0},"r10":{"value":13127381098},"rdx":{"value":0},"rdi":{"value":0},"r9":{"value":25},"r13":{"value":0},"rflags":{"value":663},"rax":{"value":14},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":105553155609402},"r14":{"value":105553148332304},"rsi":{"value":105553117906336}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4074,"symbol":"semaphore_wait_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":7080,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":150,"imageIndex":38},{"imageOffset":6852,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":30,"imageIndex":38},{"imageOffset":6120,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":41,"imageIndex":38},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9844061,"name":"caulk.messenger.shared:high","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":5},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188362860},"tmp1":{"value":140705607395912},"tmp0":{"value":18446744073709551615}},"rbx":{"value":1},"r8":{"value":105553148330816},"r15":{"value":0},"r10":{"value":1},"rdx":{"value":15619},"rdi":{"value":105553148330848},"r9":{"value":5},"r13":{"value":0},"rflags":{"value":663},"rax":{"value":14},"rsp":{"value":140703369970612,"symbolLocation":56,"symbol":"bool std::__1::__cxx_atomic_compare_exchange_weak[abi:ue170006]<caulk::concurrent::stack<caulk::alloc::free_block, caulk::concurrent::intrusive_single_link_node<caulk::alloc::free_block>>::qhead>(std::__1::__cxx_atomic_base_impl<caulk::concurrent::stack<caulk::alloc::free_block, caulk::concurrent::intrusive_single_link_node<caulk::alloc::free_block>>::qhead>*, caulk::concurrent::stack<caulk::alloc::free_block, caulk::concurrent::intrusive_single_link_node<caulk::alloc::free_block>>::qhead*, caulk::concurrent::stack<caulk::alloc::free_block, caulk::concurrent::intrusive_single_link_node<caulk::alloc::free_block>>::qhead, std::__1::memory_order, std::__1::memory_order)"},"r11":{"value":0},"rcx":{"value":15619},"r14":{"value":105553148330848},"rsi":{"value":105553148330816}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4074,"symbol":"semaphore_wait_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":7080,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":150,"imageIndex":38},{"imageOffset":6852,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":30,"imageIndex":38},{"imageOffset":6120,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":41,"imageIndex":38},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9844126,"name":"com.apple.NSEventThread","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":671814489473024},"r12":{"value":4294967295},"rosetta":{"tmp2":{"value":140703188412504},"tmp1":{"value":140705607396200},"tmp0":{"value":18446744073709551615}},"rbx":{"value":671814489473024},"r8":{"value":0},"r15":{"value":671814489473024},"r10":{"value":671814489473024},"rdx":{"value":8589934592},"rdi":{"value":4294967295},"r9":{"value":671814489473024},"r13":{"value":21592279046},"rflags":{"value":643},"rax":{"value":268451845},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":21592279046},"r14":{"value":2},"rsi":{"value":2}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4206,"symbol":"mach_msg2_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":63576,"symbol":"mach_msg2_internal","symbolLocation":84,"imageIndex":37},{"imageOffset":33112,"symbol":"mach_msg_overwrite","symbolLocation":653,"imageIndex":37},{"imageOffset":4957,"symbol":"mach_msg","symbolLocation":19,"imageIndex":37},{"imageOffset":509817,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":143,"imageIndex":33},{"imageOffset":504300,"symbol":"__CFRunLoopRun","symbolLocation":1371,"imageIndex":33},{"imageOffset":501449,"symbol":"CFRunLoopRunSpecific","symbolLocation":557,"imageIndex":33},{"imageOffset":1692428,"symbol":"_NSEventThread","symbolLocation":122,"imageIndex":32},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9844203,"name":"AXSpeech","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":774069070856192},"r12":{"value":4294967295},"rosetta":{"tmp2":{"value":140703188412504},"tmp1":{"value":140705607396200},"tmp0":{"value":18446744073709551615}},"rbx":{"value":774069070856192},"r8":{"value":0},"r15":{"value":774069070856192},"r10":{"value":774069070856192},"rdx":{"value":8589934592},"rdi":{"value":4294967295},"r9":{"value":774069070856192},"r13":{"value":21592279046},"rflags":{"value":643},"rax":{"value":268451845},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":21592279046},"r14":{"value":2},"rsi":{"value":2}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4206,"symbol":"mach_msg2_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":63576,"symbol":"mach_msg2_internal","symbolLocation":84,"imageIndex":37},{"imageOffset":33112,"symbol":"mach_msg_overwrite","symbolLocation":653,"imageIndex":37},{"imageOffset":4957,"symbol":"mach_msg","symbolLocation":19,"imageIndex":37},{"imageOffset":509817,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":143,"imageIndex":33},{"imageOffset":504300,"symbol":"__CFRunLoopRun","symbolLocation":1371,"imageIndex":33},{"imageOffset":501449,"symbol":"CFRunLoopRunSpecific","symbolLocation":557,"imageIndex":33},{"imageOffset":382017,"symbol":"-[NSRunLoop(NSRunLoop) runMode:beforeDate:]","symbolLocation":216,"imageIndex":34},{"imageOffset":159855,"imageIndex":40},{"imageOffset":353996,"symbol":"__NSThread__start__","symbolLocation":1013,"imageIndex":34},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850013,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13128486912},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13129023488},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":184075},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850323,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13126291456},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13126828032},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":121219},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850337,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13129043968},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13129580544},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":128387},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850384,"name":"ausm_messenger_for_buffer_disposal","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":34},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188362860},"tmp1":{"value":140705607395912},"tmp0":{"value":18446744073709551615}},"rbx":{"value":13130653811},"r8":{"value":105553146640408},"r15":{"value":0},"r10":{"value":13130653811},"rdx":{"value":0},"rdi":{"value":0},"r9":{"value":34},"r13":{"value":0},"rflags":{"value":663},"rax":{"value":14},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":105553160288403},"r14":{"value":105553146640440},"rsi":{"value":105553117760800}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4074,"symbol":"semaphore_wait_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":7080,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":150,"imageIndex":38},{"imageOffset":6852,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":30,"imageIndex":38},{"imageOffset":6120,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":41,"imageIndex":38},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850530,"name":"caulk::deferred_logger","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":22},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188362860},"tmp1":{"value":140705607395912},"tmp0":{"value":18446744073709551615}},"rbx":{"value":13128454247},"r8":{"value":105553146674744},"r15":{"value":0},"r10":{"value":13128454247},"rdx":{"value":0},"rdi":{"value":0},"r9":{"value":22},"r13":{"value":0},"rflags":{"value":663},"rax":{"value":14},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":105553117833272},"r14":{"value":105553146674776},"rsi":{"value":105553117833248}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4074,"symbol":"semaphore_wait_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":7080,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":150,"imageIndex":38},{"imageOffset":6852,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":30,"imageIndex":38},{"imageOffset":6120,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":41,"imageIndex":38},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850599,"name":"com.apple.audio.toolbox.AUScheduledParameterRefresher","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":53},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188362860},"tmp1":{"value":140705607395912},"tmp0":{"value":18446744073709551615}},"rbx":{"value":13131190406},"r8":{"value":105553146523032},"r15":{"value":0},"r10":{"value":13131190406},"rdx":{"value":0},"rdi":{"value":0},"r9":{"value":53},"r13":{"value":0},"rflags":{"value":663},"rax":{"value":14},"rsp":{"value":0},"r11":{"value":0},"rcx":{"value":105553182426422},"r14":{"value":105553146523064},"rsi":{"value":105553116836224}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4074,"symbol":"semaphore_wait_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":7080,"symbol":"caulk::semaphore::timed_wait(double)","symbolLocation":150,"imageIndex":38},{"imageOffset":6852,"symbol":"caulk::concurrent::details::worker_thread::run()","symbolLocation":30,"imageIndex":38},{"imageOffset":6120,"symbol":"void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*)","symbolLocation":41,"imageIndex":38},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850600,"name":"com.apple.audio.IOThread.client","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":875224140611584},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188412504},"tmp1":{"value":140705607396200},"tmp0":{"value":18446744073709551615}},"rbx":{"value":231683},"r8":{"value":2229088026624},"r15":{"value":875224140611584},"r10":{"value":231683},"rdx":{"value":103079215123},"rdi":{"value":0},"r9":{"value":875224140611584},"r13":{"value":17179869187},"rflags":{"value":643},"rax":{"value":268451845},"rsp":{"value":2229088026624},"r11":{"value":32},"rcx":{"value":17179869187},"r14":{"value":32},"rsi":{"value":32}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4206,"symbol":"mach_msg2_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":63576,"symbol":"mach_msg2_internal","symbolLocation":84,"imageIndex":37},{"imageOffset":33112,"symbol":"mach_msg_overwrite","symbolLocation":653,"imageIndex":37},{"imageOffset":4957,"symbol":"mach_msg","symbolLocation":19,"imageIndex":37},{"imageOffset":3270559,"symbol":"HALB_MachPort::SendSimpleMessageWithSimpleReply(unsigned int, unsigned int, int, int&, bool, unsigned int)","symbolLocation":103,"imageIndex":41},{"imageOffset":2015910,"symbol":"HALC_ProxyIOContext::IOWorkLoop()","symbolLocation":4562,"imageIndex":41},{"imageOffset":2009569,"symbol":"invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int)","symbolLocation":73,"imageIndex":41},{"imageOffset":3660404,"symbol":"HALC_IOThread::Entry(void*)","symbolLocation":72,"imageIndex":41},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850620,"name":"com.apple.audio.IOThread.client","threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":981876768505856},"r12":{"value":0},"rosetta":{"tmp2":{"value":140703188412504},"tmp1":{"value":140705607396200},"tmp0":{"value":18446744073709551615}},"rbx":{"value":228099},"r8":{"value":2199023255552},"r15":{"value":981876768505856},"r10":{"value":228099},"rdx":{"value":103079215123},"rdi":{"value":0},"r9":{"value":981876768505856},"r13":{"value":17179869187},"rflags":{"value":643},"rax":{"value":268451845},"rsp":{"value":2199023255552},"r11":{"value":32},"rcx":{"value":17179869187},"r14":{"value":32},"rsi":{"value":32}},"frames":[{"imageOffset":140705607395960,"imageIndex":36},{"imageOffset":4206,"symbol":"mach_msg2_trap","symbolLocation":10,"imageIndex":37},{"imageOffset":63576,"symbol":"mach_msg2_internal","symbolLocation":84,"imageIndex":37},{"imageOffset":33112,"symbol":"mach_msg_overwrite","symbolLocation":653,"imageIndex":37},{"imageOffset":4957,"symbol":"mach_msg","symbolLocation":19,"imageIndex":37},{"imageOffset":3270559,"symbol":"HALB_MachPort::SendSimpleMessageWithSimpleReply(unsigned int, unsigned int, int, int&, bool, unsigned int)","symbolLocation":103,"imageIndex":41},{"imageOffset":2015910,"symbol":"HALC_ProxyIOContext::IOWorkLoop()","symbolLocation":4562,"imageIndex":41},{"imageOffset":2009569,"symbol":"invocation function for block in HALC_ProxyIOContext::HALC_ProxyIOContext(unsigned int, unsigned int)","symbolLocation":73,"imageIndex":41},{"imageOffset":3660404,"symbol":"HALC_IOThread::Entry(void*)","symbolLocation":72,"imageIndex":41},{"imageOffset":24863,"symbol":"_pthread_start","symbolLocation":99,"imageIndex":39},{"imageOffset":6851,"symbol":"thread_start","symbolLocation":15,"imageIndex":39}]},{"id":9850633,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13132288000},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13132824576},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":226823},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850635,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13132845056},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13133381632},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":259379},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850636,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13133402112},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":531},"rax":{"value":13133938688},"rsp":{"value":409604},"r11":{"value":0},"rcx":{"value":176427},"r14":{"value":0},"rsi":{"value":0}}},{"id":9850637,"frames":[{"imageOffset":141644,"imageIndex":26}],"threadState":{"flavor":"x86_THREAD_STATE","rbp":{"value":18446744073709551615},"r12":{"value":0},"rosetta":{"tmp2":{"value":0},"tmp1":{"value":0},"tmp0":{"value":0}},"rbx":{"value":0},"r8":{"value":0},"r15":{"value":0},"r10":{"value":0},"rdx":{"value":13133959168},"rdi":{"value":0},"r9":{"value":0},"r13":{"value":0},"rflags":{"value":515},"rax":{"value":13134495744},"rsp":{"value":278532},"r11":{"value":0},"rcx":{"value":0},"r14":{"value":0},"rsi":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 8691040256,
+    "size" : 593920,
+    "uuid" : "43926ebe-f6c6-30d6-aa12-c0945b2bf6d3",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4919398400,
+    "CFBundleShortVersionString" : "1.14",
+    "CFBundleIdentifier" : "com.apple.audio.units.Components",
+    "size" : 1318912,
+    "uuid" : "42ae4443-959f-3623-bbd4-fb439d097bc4",
+    "path" : "\/System\/Library\/Components\/CoreAudio.component\/Contents\/MacOS\/CoreAudio",
+    "name" : "CoreAudio",
+    "CFBundleVersion" : "1.14"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4939055104,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.audio.AudioDSPComponents",
+    "size" : 10784768,
+    "uuid" : "7e8ab616-9237-3428-b5c4-d42b2b435be6",
+    "path" : "\/System\/Library\/Components\/AudioDSP.component\/Contents\/MacOS\/AudioDSP",
+    "name" : "AudioDSP",
+    "CFBundleVersion" : "1"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4877148160,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.TextInputUIMac.axbundle",
+    "size" : 8192,
+    "uuid" : "20010db8-435e-3d20-85f2-f68926c52c9b",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.TextInputUIMac.axbundle\/Versions\/A\/com.apple.TextInputUIMac",
+    "name" : "com.apple.TextInputUIMac",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4872564736,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.PlacesKit.axbundle",
+    "size" : 12288,
+    "uuid" : "a498eb39-1ff1-3c3d-ae70-333e5e74d51e",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.PlacesKit.axbundle\/Versions\/A\/com.apple.PlacesKit",
+    "name" : "com.apple.PlacesKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871856128,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.SocialLayer.axbundle",
+    "size" : 8192,
+    "uuid" : "9b8d2b7b-153a-3cbd-a019-a15115918b48",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.SocialLayer.axbundle\/Versions\/A\/com.apple.SocialLayer",
+    "name" : "com.apple.SocialLayer",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4872728576,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.PhotosUICore.axbundle",
+    "size" : 40960,
+    "uuid" : "a6cbb6ba-40d9-3bed-b9c5-465f4d4dc064",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.PhotosUICore.axbundle\/Versions\/A\/com.apple.PhotosUICore",
+    "name" : "com.apple.PhotosUICore",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4872015872,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.frameworks.preferencepanessupport.axbundle",
+    "size" : 8192,
+    "uuid" : "4661eec3-bbd0-3b4b-b7d4-496946df3fb5",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.frameworks.preferencepanessupport.axbundle\/Versions\/A\/com.apple.frameworks.preferencepanessupport",
+    "name" : "com.apple.frameworks.preferencepanessupport",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871106560,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AppKit.axbundle",
+    "size" : 20480,
+    "uuid" : "361e7178-2bee-39c0-9e03-3844d097cabb",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AppKit.axbundle\/Versions\/A\/com.apple.AppKit",
+    "name" : "com.apple.AppKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4872167424,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.VisionKitCore.axbundle",
+    "size" : 40960,
+    "uuid" : "9d80886d-e8a0-37ea-bf37-b136af3c04d5",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.VisionKitCore.axbundle\/Versions\/A\/com.apple.VisionKitCore",
+    "name" : "com.apple.VisionKitCore",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871344128,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.ToneKit.axbundle",
+    "size" : 8192,
+    "uuid" : "7987f650-45b5-3ba6-9fcf-8cc6323d9b68",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.ToneKit.axbundle\/Versions\/A\/com.apple.ToneKit",
+    "name" : "com.apple.ToneKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871266304,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.LinkPresentation.axbundle",
+    "size" : 8192,
+    "uuid" : "585e98da-8e3f-3c5e-a709-0ddee26fc7ab",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.LinkPresentation.axbundle\/Versions\/A\/com.apple.LinkPresentation",
+    "name" : "com.apple.LinkPresentation",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871663616,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AddressBook.framework.axbundle",
+    "size" : 28672,
+    "uuid" : "96782911-9bdd-3257-9335-669ff8005ba4",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AddressBook.framework.axbundle\/Versions\/A\/com.apple.AddressBook.framework",
+    "name" : "com.apple.AddressBook.framework",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871446528,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.Photos.axbundle",
+    "size" : 32768,
+    "uuid" : "4a0768b6-1c28-3195-bab5-b7a6889d51da",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.Photos.axbundle\/Versions\/A\/com.apple.Photos",
+    "name" : "com.apple.Photos",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4870225920,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.securityinterface.axbundle",
+    "size" : 12288,
+    "uuid" : "389d5075-1f04-3794-9600-df9291173501",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.securityinterface.axbundle\/Versions\/A\/com.apple.securityinterface",
+    "name" : "com.apple.securityinterface",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4870385664,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.imageKit.axbundle",
+    "size" : 8192,
+    "uuid" : "f2451093-9aac-33ed-bb8f-221bb4f4e653",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.imageKit.axbundle\/Versions\/A\/com.apple.imageKit",
+    "name" : "com.apple.imageKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4869976064,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AOSUI.axbundle",
+    "size" : 8192,
+    "uuid" : "8fc23b56-483b-301c-9db2-90c24f613576",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AOSUI.axbundle\/Versions\/A\/com.apple.AOSUI",
+    "name" : "com.apple.AOSUI",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4869099520,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AnnotationKit.axbundle",
+    "size" : 8192,
+    "uuid" : "3b00fd0c-1e52-3d55-ba90-d993a94a9a9c",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AnnotationKit.axbundle\/Versions\/A\/com.apple.AnnotationKit",
+    "name" : "com.apple.AnnotationKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4868993024,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.PIP.axbundle",
+    "size" : 8192,
+    "uuid" : "0dba57f2-60a4-30d2-9d24-923f9111bf27",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.PIP.axbundle\/Versions\/A\/com.apple.PIP",
+    "name" : "com.apple.PIP",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4871000064,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.ContactsUI.axbundle",
+    "size" : 12288,
+    "uuid" : "8edebf2c-446b-3a16-bbba-254a56448b08",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.ContactsUI.axbundle\/Versions\/A\/com.apple.ContactsUI",
+    "name" : "com.apple.ContactsUI",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4870852608,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.MapKit.axbundle",
+    "size" : 20480,
+    "uuid" : "838979c2-9a42-324f-a00e-13a16fe37200",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.MapKit.axbundle\/Versions\/A\/com.apple.MapKit",
+    "name" : "com.apple.MapKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4868886528,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.CharacterPicker.axbundle",
+    "size" : 8192,
+    "uuid" : "f70630bd-de9f-32da-8772-a4da4b835129",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.CharacterPicker.axbundle\/Versions\/A\/com.apple.CharacterPicker",
+    "name" : "com.apple.CharacterPicker",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4868210688,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.OnBoardingKit.axbundle",
+    "size" : 8192,
+    "uuid" : "16968a57-31ec-35c0-8e8b-5068c989dc95",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.OnBoardingKit.axbundle\/Versions\/A\/com.apple.OnBoardingKit",
+    "name" : "com.apple.OnBoardingKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4868079616,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AVKit.axbundle",
+    "size" : 8192,
+    "uuid" : "81e2a48f-802c-3ff8-a5c2-6524ffdfebad",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AVKit.axbundle\/Versions\/A\/com.apple.AVKit",
+    "name" : "com.apple.AVKit",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4870733824,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.AuthKitUI.axbundle",
+    "size" : 12288,
+    "uuid" : "03815bb9-7a1a-389e-96df-58304007b2c2",
+    "path" : "\/System\/Library\/Accessibility\/BundlesBase\/com.apple.AuthKitUI.axbundle\/Versions\/A\/com.apple.AuthKitUI",
+    "name" : "com.apple.AuthKitUI",
+    "CFBundleVersion" : "258.12"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4745576448,
+    "size" : 53248,
+    "uuid" : "1f3ce7c6-e76a-3866-9794-0196ccfe82ae",
+    "path" : "\/usr\/lib\/libobjc-trampolines.dylib",
+    "name" : "libobjc-trampolines.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 140703128023040,
+    "size" : 196608,
+    "uuid" : "d8e2b2d5-fcd4-3b50-94c4-5911a6260ad2",
+    "path" : "\/usr\/libexec\/rosetta\/runtime",
+    "name" : "runtime"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4560994304,
+    "size" : 344064,
+    "uuid" : "3e6996b2-eddb-3269-b841-bb2b3c546f07",
+    "path" : "\/Library\/Apple\/*\/libRosettaRuntime",
+    "name" : "libRosettaRuntime"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 4366647296,
+    "CFBundleShortVersionString" : "1.0.5",
+    "CFBundleIdentifier" : "com.devinecreations.voicelink",
+    "size" : 11198464,
+    "uuid" : "b8c11833-97ff-32e5-912b-d0f9cd9697a2",
+    "path" : "\/Applications\/VoiceLink.app\/Contents\/MacOS\/VoiceLink",
+    "name" : "VoiceLink",
+    "CFBundleVersion" : "5"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703472185344,
+    "size" : 4923384,
+    "uuid" : "a56031bd-88ca-3097-872d-45dc36392550",
+    "path" : "\/usr\/lib\/swift\/libswiftCore.dylib",
+    "name" : "libswiftCore.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703186894848,
+    "size" : 290802,
+    "uuid" : "1b5bc7ce-4058-3461-839d-24e12c03a809",
+    "path" : "\/usr\/lib\/system\/libdispatch.dylib",
+    "name" : "libdispatch.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140707708473344,
+    "CFBundleShortVersionString" : "5.6.2",
+    "CFBundleIdentifier" : "com.apple.SwiftUI",
+    "size" : 28618737,
+    "uuid" : "d6409238-e9cf-3be0-a000-05375ccfb1e4",
+    "path" : "\/System\/Library\/Frameworks\/SwiftUI.framework\/Versions\/A\/SwiftUI",
+    "name" : "SwiftUI",
+    "CFBundleVersion" : "5.6.2"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703245705216,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.AppKit",
+    "size" : 21172224,
+    "uuid" : "b47bc3d3-0bd0-38c4-836d-78b4f74f4e7a",
+    "path" : "\/System\/Library\/Frameworks\/AppKit.framework\/Versions\/C\/AppKit",
+    "name" : "AppKit",
+    "CFBundleVersion" : "2487.70.107"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703189016576,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.CoreFoundation",
+    "size" : 4825085,
+    "uuid" : "bd64f124-5c12-3a35-b19d-cce0b3e3fd1a",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/Versions\/A\/CoreFoundation",
+    "name" : "CoreFoundation",
+    "CFBundleVersion" : "2602.0.902.1.403"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703204958208,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.Foundation",
+    "size" : 12812284,
+    "uuid" : "c14ad813-8ea1-31fd-8197-5fd3ebe56186",
+    "path" : "\/System\/Library\/Frameworks\/Foundation.framework\/Versions\/C\/Foundation",
+    "name" : "Foundation",
+    "CFBundleVersion" : "2602.0.902.1.403"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703372808192,
+    "CFBundleShortVersionString" : "2.1.1",
+    "CFBundleIdentifier" : "com.apple.HIToolbox",
+    "size" : 2732020,
+    "uuid" : "bdce8ff2-939f-3c40-b5ef-0d7387ea7801",
+    "path" : "\/System\/Library\/Frameworks\/Carbon.framework\/Versions\/A\/Frameworks\/HIToolbox.framework\/Versions\/A\/HIToolbox",
+    "name" : "HIToolbox"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703188348928,
+    "size" : 241656,
+    "uuid" : "c14e014c-3042-3d58-9021-a9d513db9f17",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703369957376,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.audio.caulk",
+    "size" : 155640,
+    "uuid" : "43aa3e4c-f5e6-3061-ae89-fe46e27b8b06",
+    "path" : "\/System\/Library\/PrivateFrameworks\/caulk.framework\/Versions\/A\/caulk",
+    "name" : "caulk"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703188590592,
+    "size" : 49152,
+    "uuid" : "94607857-3850-3632-af50-37163dd339f7",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140707826274304,
+    "CFBundleShortVersionString" : "1.0.0",
+    "CFBundleIdentifier" : "com.apple.texttospeech",
+    "size" : 1314804,
+    "uuid" : "8135b720-6762-3311-a6d8-7faa62535f7e",
+    "path" : "\/System\/Library\/PrivateFrameworks\/TextToSpeech.framework\/Versions\/A\/TextToSpeech",
+    "name" : "TextToSpeech",
+    "CFBundleVersion" : "1.0"
+  },
+  {
+    "source" : "P",
+    "arch" : "x86_64",
+    "base" : 140703226662912,
+    "CFBundleShortVersionString" : "5.0",
+    "CFBundleIdentifier" : "com.apple.audio.CoreAudio",
+    "size" : 7520244,
+    "uuid" : "1b9411be-df6e-3450-a08a-38c57b986d61",
+    "path" : "\/System\/Library\/Frameworks\/CoreAudio.framework\/Versions\/A\/CoreAudio",
+    "name" : "CoreAudio",
+    "CFBundleVersion" : "5.0"
+  }
+],
+  "sharedCache" : {
+  "base" : 140703184175104,
+  "size" : 25769803776,
+  "uuid" : "88f516ae-553f-38a8-9847-5f18c94865c2"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=1.1G resident=0K(0%) swapped_out_or_unallocated=1.1G(100%)\nWritable regions: Total=2.6G written=0K(0%) resident=0K(0%) swapped_out=0K(0%) unallocated=2.6G(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nAccelerate framework               256K        2 \nActivity Tracing                   256K        1 \nAttributeGraph Data               1024K        1 \nCG image                           208K       18 \nCG raster data                      24K        2 \nColorSync                          252K       31 \nCoreAnimation                     1268K      110 \nCoreGraphics                        12K        2 \nCoreUI image data                 3972K       31 \nFoundation                          44K        2 \nKernel Alloc Once                    8K        1 \nMALLOC                             2.4G      123 \nMALLOC guard page                  384K       24 \nRosetta Arena                     4096K        2 \nRosetta Generic                   1428K      354 \nRosetta IndirectBranch            2048K        1 \nRosetta JIT                      128.0M        1 \nRosetta Return Stack               320K       32 \nRosetta Thread Context             320K       32 \nSQLite page cache                  384K        3 \nSTACK GUARD                         28K        7 \nStack                             16.2M       17 \nStack Guard                       56.1M       10 \nVM_ALLOCATE                       3992K       55 \nVM_ALLOCATE (reserved)            1196K        3         reserved VM address space (unallocated)\n__CTF                               824        1 \n__DATA                            46.4M      894 \n__DATA_CONST                      65.1M      599 \n__DATA_DIRTY                      2542K      329 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       164.4M       33 \n__OBJC_RO                         71.8M        1 \n__OBJC_RW                         2199K        2 \n__TEXT                           957.0M      911 \nlibnetwork                        1664K       24 \nmapped file                      283.5M      140 \nshared memory                     4568K       20 \n===========                     =======  ======= \nTOTAL                              4.2G     3821 \nTOTAL, minus reserved VM space     4.2G     3821 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "fa38f21a82e6c3b75b0bf6be1f5daa28f526f251",
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "60f8ddccefea4203d95cbeef",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000025
+    },
+    {
+      "rolloutId" : "645eb1d0417dab722a215927",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000005
+    }
+  ],
+  "experiments" : [
+
+  ]
+},
+  "reportNotes" : [
+  "PC register does not match crashing frame (0x0 vs 0x7FF8147D5F9F)"
+]
+}
+
+Model: Mac13,2, BootROM 13822.61.10, proc 20:16:4 processors, 128 GB, SMC 
+Graphics: Apple M1 Ultra, Apple M1 Ultra, Built-In
+Display: Studio Display, 5120 x 2880 Retina, Main, MirrorOff, Online
+Memory Module: LPDDR5, Hynix
+AirPort: spairport_wireless_card_type_wifi (0x14E4, 0x4387), wl0: May 13 2024 23:58:48 version 20.103.15.0.8.7.175 FWID 01-e122acac
+AirPort: 
+Bluetooth: Version (null), 0 services, 0 devices, 0 incoming serial ports
+Network Service: Ethernet, Ethernet, en0
+Network Service: Wi-Fi, AirPort, en1
+PCI Card: pci8086,15f0, USB eXtensible Host Controller, Thunderbolt@3,0,0
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: Shure MV7
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: StudioLive 64S
+USB Device: 4-Port USB 2.0 Hub
+USB Device: 4-Port USB 2.0 Hub
+USB Device: Maschine MK3
+USB Device: PSSD T7
+USB Device: 4-Port USB 2.0 Hub
+USB Device: iConnectMIDI1
+USB Device: iLok
+USB Device: eLicenser
+USB Device: 4-Port USB 2.0 Hub
+USB Device: 4-Port USB 2.0 Hub
+USB Device: 4-Port USB 2.0 Hub
+USB Device: 4-Port USB 3.0 Hub
+USB Device: 4-Port USB 3.0 Hub
+USB Device: 4-Port USB 3.0 Hub
+USB Device: 4-Port USB 3.0 Hub
+USB Device: 4-Port USB 3.0 Hub
+USB Device: Extreme Pro 55AF
+USB Device: 4-Port USB 3.0 Hub
+USB Device: PSSD T7 Shield
+USB Device: CT2000X6SSD9
+USB Device: USB31Bus
+USB Device: USB3 Gen2 Hub
+USB Device: USB2 Hub
+USB Device: Studio Display
+Thunderbolt Bus: Mac Studio, Apple Inc.
+Thunderbolt Bus: Mac Studio, Apple Inc.
+Thunderbolt Bus: Mac Studio, Apple Inc.
+Thunderbolt Device: Studio Display, Apple Inc., 1, 67.1
+Thunderbolt Bus: Mac Studio, Apple Inc.
+Thunderbolt Bus: Mac Studio, Apple Inc.
+Thunderbolt Bus: Mac Studio, Apple Inc.2-05-26
+Platform
+Macos
+Using Voiceover Screen Reader
+Making sure to keep all rules from systemrules.md in root of dev/ and other files mentioned in document in tact, this is what needs to be done.
+Also add to the bug tracker on voicelink.devinecreations.net/bugtracker
+Build a native windows installer as well if possible and fix and upload to pages and replace older windows versions with proper 1.0 build. Make sure to use latest versions of all Swift and other apis and coding langwages.
+1, When joining rooms, user that joins ends up in room more then once, also messages are duplicated.
+2, Only message send sound is playing, not joining and leaving sounds. Also click sounds are not playing when mute or unmute and Defin buttons are pressed, needs more proper descriptions of what the buttons do next to labels. Also proper announcements of states of mute and unmute for input and output. Renaming to Microphone or input mute and output mute button label is best.
+2.1, Creating rooms in app does not work in desktopp app, doe snot connect to api and create room and should show and use all room times available if authenticated properly and for guest user not logged in.
+Also Guests should be able to set a name, and logged-in users should display their Mastodon display name by default if configured in profile of mastodon. First name, last name, nickname or display name.
+3, Actions that are set for when focused on rooms, and users when in rooms are not accessible in UI that are used for performing tasks. On rooms or users when in rooms, such as sharing a room, or types of actions on user when in rooms and focused, like whisper, direct message, send file. etc. All features from the web app should be in the desktop app for both Windows and Mac builds.
+4., When whisper feature is enabled, holding down enter key and feature is enabled, whisper is used, and when key is no longer being held down, it deactivates. For iOS, would be double tap and hold and release when done. Proper FX should play.
+5, Messages are not clearing in desktop client when changing rooms.
+ Messages should only stay in rooms they are sent and received in.
+6, If accessing settings tab in app, user is kicked out of room. Some times happens when switching to another app then returning causing user to re join and become a duplicate user.
+7. Frontend web app client should be fixed so it’s accessible via Chrome and Safari browsers and not just desktop app.
+8, All fixes should be pushed to current 1.0 installed app that is connected to api, giving also time for testing auto-update patch features.
+Otherwise if not working, rebuild and with all features include working version with updater using the download checksums generated.
+9, Update checker should be in first menu where settings option is for app, not in help menu, and only should be one help menu not two.
+10, Including the sound test option in the audio settings tab after user changes out put devices should play the ‘your-sound-test.wav’ file in the assets/sounds folder. Button titled, Sound Test, or test my sound. If pressed once, plays, if pressed again, stops. Do not overlap playback and do not loop.
+11, Completing the copy party backend and client desktop app connection if possible should be done as well, seamless in client for use and pasting files in chat box if not using file transfer option for user or channel in menu is used should also work. Files are stored on mastodon instances if loge din and storing is possible, respects how mastodon hosts files. Fallback is storage paths on server and final is direct to each user via client p2p. Feature is not used in web app, hidden from web app users. Chatting is allowed but rate limited in web app to prevent spam, unless logedin and authenticated.
+---
+FIXES APPLIED (2026-02-06)
+- Added WHMCS auth endpoints (login/session/logout/SSO) and Ecripto login endpoints in server routes.
+- Updated WHMCS API URL default to https://devine-creations.com/includes/api.php and Ecripto API URL to https://api.ecripto.app.
+- Web client login UI: tabs (Client Portal, Mastodon default, Wallet), added 2FA + mastodon handle fields, removed local register, added portal login button.
+- Removed Electron references from web client JS (moved to nativeAPI/openExternal).
+- Added bug tracker page under /bugtracker.
+- Swift native: added WHMCS auth flow + login UI with 2FA and portal login button.
+- Swift native: added Community Server support + menu quick connect; Sync filter includes Main Server / Community Server.
+- Updated Connection Health to include Community Server checks.
+- Added Connection Settings dropdown in Settings (preferred connection) and auto-connect/reconnect toggles.
+- Moved nickname input out of main UI (now in Settings → Profile); added Room menu item “Set Nickname…” to open Profile tab.
+- Updated downloads links to https://voicelink.devinecreations.net/downloads/VoiceLink-macOS.zip.
+- Built new macOS zip, uploaded to /home/devinecr/downloads/voicelink/ and updated latest-mac.yml checksum/size.
+- Synced client + source to main server and VPS, restarted pm2 on both.
+- Fixed module registry loading to prevent undefined modules config (two-factor-auth error).
+- Restarted TeamTalk services; WaltersPlace failed due to port 10333 already in use (needs port change or stop conflict).
+
+NOTES / PENDING
+- GitHub push failing from this machine due to DNS (github.com not resolving).
+- App launch on this Mac shows kLSNoExecutableErr (environment limitation suspected) despite VoiceLink binary present.
+- WaltersPlace TeamTalk instance needs port conflict resolved (10333 in use by DevineCreations).
+- Keychain password update must be done locally by user (cannot accept/store passwords in chat).
+
+CLAUDE TASKS (PENDING)
+- Investigate macOS launch error: kLSNoExecutableErr even when VoiceLink binary exists; suggest root cause and fix.
+- Review auto-update flow; propose best method to force update prompt without bumping version.
+- Review UI placement for nickname (menu-only) and suggest any UX improvements.
+- Validate WHMCS + Mastodon auth flows for native macOS app; suggest edge cases.
+- Review TeamTalk WaltersPlace port conflict (10333) and propose safe port reassignment.
+
+CLAUDE TASKS (ADD)
+- Investigate Headscale/Tailscale network blocking external access; verify ACLs, exit nodes, subnet routes, and UFW/iptables interactions. Confirm services reachable from outside network.
+If complete, make sure audio is working in both web app and Desktop app workflow seamlessly, currently no audio works on either for microphone input and audio output of users. Duplicate users still show when joining a room and button labeling next to users in room list should be titled Audiocontrols for username... hide or show. Moving to action menu under each user can save space as well. 
+2026-02-06
+Claude task, Verify that the following is true.
+- Added multi-device session tracking on server (register-session, multi-device-login, multi-device-command) in both source and server routes.
+- Swift app now registers sessions on connect and handles multi-device actions; added Connections settings tab with multi-device behavior selector.
+- pm2: fixed ecripto-api EADDRINUSE by killing rogue node and restarting pm2; ecripto-api now online.
+- Web client: added Connections settings tab and multi-device session handling (auto-quit, reconnect/exit actions).
+- WHMCS login now emits entitlements (device tier/max devices/multi-device allowances) when config options/custom fields are present.
+- Web client hides Connections tab unless entitlements allow multi-device settings.
+- Free tier rooms: max 5 users, public only, non-persistent (duration clamped to 30 minutes).
+
+[2026-02-06] WHMCS: fixed flexpbx admin widget class reference (Widget -> Module\Widget); created missing tblusers/tblusers_clients mapping for client id 9 to resolve isEmailVerificationEnabled() null; removed self-require in mastodon-frontend.php causing getInstanceDir redeclare.
+
+[2026-02-06] macOS app: window close now hides to menubar and can re-open; resources bundled via SwiftPM so UI sounds should play; app bundle and updater zip rebuilt.
+
+[2026-02-06] macOS app: added Updates tab inside Settings (uses UpdateSettingsView) so update options live in Settings.
+
+[2026-02-06] macOS app: added per-user volume/mute controls in room list, User Audio Controls panel, and Solo toggle; wired user volume/mute/solo to SpatialAudioEngine mixer volumes.
+
+---
+[2026-02-06 PM] - Claude Session Completed
+
+FEATURES IMPLEMENTED:
+1. Profile Settings Tab
+   - Added new Profile tab to Settings with nickname input field
+   - Nickname stored in UserDefaults and persisted across sessions
+   - Added "Set Nickname..." menu item in Account menu (Cmd+I)
+   - Notification-based system to open Settings -> Profile tab
+   - File: VoiceLinkApp.swift lines 1500-1641, 1723-1869
+
+2. UI Settings
+   - Added "Show Audio Controls on Startup" toggle in Audio settings
+   - Setting persisted in UserDefaults
+   - File: VoiceLinkApp.swift lines 1557, 1619, 1925-1930
+
+3. Sound Test Feature
+   - Added sound test button in Audio Settings -> Output Device section
+   - Plays/stops yoursoundtest.wav file
+   - Button toggles between "Test My Sound" and "Stop Test"
+   - File: AppSoundManager.swift (added soundTest case, stopSound and isSoundPlaying methods)
+   - File: VoiceLinkApp.swift lines 1912-1922
+
+4. Check for Updates Relocation
+   - Moved "Check for Updates..." from Help menu to menu bar status menu
+   - Now appears after "Open VoiceLink" button
+   - File: MenuBarServer.swift lines 264-267
+   - File: VoiceLinkApp.swift (removed from Help menu)
+
+BUILD & DEPLOYMENT:
+- Built release version: swift build -c release (80.40s)
+- Created VoiceLink-macOS.zip (153,494,297 bytes)
+- SHA512: 1efa7a6a4dfb3b8f07866d1932fb9f346e88d9010ef46b0d11cd16b280c29942a25255255a101a97ee167213809dad57f2a397103c2e5d14b2aff81f3c66270f
+- Base64: Hvp6ak37O48Hhm0ZMvufNG6I2QEO9GsNEc0WsoDCmUKiUlUlWhAal+4WchOAna1X8qOXEDwuXRSyr/gfPGYnDw==
+- Uploaded to both servers:
+  - Main: 64.20.46.178:/home/devinecr/downloads/voicelink/
+  - VPS: 208.73.204.162:/home/devinecr/downloads/voicelink/
+- Updated latest-mac.yml with new checksum, size, and release notes
+
+FILES MODIFIED:
+- /Users/admin/DEV/APPS/VOICELINK-LOCAL/swift-native/VoiceLinkNative/Sources/VoiceLinkApp.swift
+  - Added Profile settings tab and view
+  - Added nickname property to SettingsManager
+  - Added showAudioControlsOnStartup property
+  - Added sound test button
+  - Added notification receiver for opening profile settings
+  - Removed "Check for Updates" from Help menu
+- /Users/admin/DEV/APPS/VOICELINK-LOCAL/swift-native/VoiceLinkNative/Sources/MenuBarServer.swift
+  - Added "Check for Updates..." button to menu bar
+- /Users/admin/DEV/APPS/VOICELINK-LOCAL/swift-native/VoiceLinkNative/Sources/AppSoundManager.swift
+  - Added soundTest enum case (yoursoundtest.wav)
+  - Added stopSound() method
+  - Added isSoundPlaying() method
+
+TESTING NOTES:
+- Sound test button requires yoursoundtest.wav in Resources/sounds/
+- Profile nickname field saves on change
+- Cmd+I keyboard shortcut opens Settings -> Profile tab
+- Check for Updates accessible from menu bar
+
+---
+[2026-02-06 PM Build 2] - Critical Fixes Applied
+
+ISSUES RESOLVED:
+1. Per-User Audio Controls Restored
+   - Added expandable audio controls to UserRow
+   - Volume slider (0-100%), Mute toggle, Solo toggle for each user
+   - Chevron button to expand/collapse controls
+   - File: VoiceLinkApp.swift UserRow struct
+
+2. Sound Test Fixed
+   - Copied your-sound-test.wav to Resources/sounds/
+   - Fixed filename in AppSoundManager.swift (was yoursoundtest, now your-sound-test)
+   - Added @State variable for button label updates
+   - File: AppSoundManager.swift, VoiceLinkApp.swift audioSettings
+
+3. Mastodon Display Enhanced
+   - Changed from two lines ("Logged in as: displayName" + "Instance: domain")
+   - To single line: "You are logged in as username@instance"
+   - File: VoiceLinkApp.swift CommandMenu("Account") line 77-81
+
+4. Sound Organization
+   - Synced organized sound folders from source to Resources
+   - Structure: sounds/ui-sounds/, sounds/actions/, sounds/ambience/
+   - Updated AppSoundManager to check ui-sounds subfolder first
+   - File: AppSoundManager.swift loadSound() method
+
+BUILD INFO (Build 2):
+- Size: 156,144,694 bytes (156 MB)
+- SHA512: KTNK8gJZNrpd3EOV729xuYHcNmHO7wHn9Pn9CEaKgKGx6aPN1LroRoHc7pySmjfHaaqTbjm9qfR7kEmyNhNMLg==
+- Build time: 87.87s
+- Uploaded to both servers with updated latest-mac.yml
+
+PENDING INVESTIGATION:
+- Message sending functionality (reported not working - needs runtime testing)
+- Action menus not working (needs runtime testing)
+- These may require server connection or additional configuration
+
+---
+[2026-02-06 Build 4] - Audio Routing Fix (CRITICAL)
+
+ROOT CAUSE IDENTIFIED:
+- Server had NO socket handlers for audio relay (enable-audio-relay, audio-data, p2p-connection-failed)
+- When P2P connections fail (common due to NAT/firewalls), there was no fallback
+- Desktop app had no microphone capture/transmission code
+- Desktop app had no handlers for receiving relayed audio
+
+SERVER FIXES (local-server.js):
+1. Added 'enable-audio-relay' handler - enables relay mode for user
+2. Added 'audio-data' handler - relays audio to all users in same room
+3. Added 'p2p-connection-failed' handler - notifies target to switch to relay
+- File: source/server/routes/local-server.js (after line 693)
+- Deployed to both Main Server and VPS, pm2 restarted
+
+DESKTOP APP FIXES (Swift):
+1. ServerManager.swift:
+   - Added import AVFoundation
+   - Added 'relayed-audio' socket handler - receives audio from server
+   - Added 'audio-data' socket handler - alternative event name
+   - Added 'relay-status' handler - tracks relay mode
+   - Added 'p2p-fallback-needed' handler - auto-enables relay mode
+   - Added startAudioTransmission() - captures mic via AVAudioEngine
+   - Added stopAudioTransmission() - stops mic capture
+   - Audio transmission starts on joinRoom(), stops on leaveRoom()
+   - Mute/unmute controls start/stop transmission
+
+2. SpatialAudioEngine.swift:
+   - Added receiveAudioData(from:data:timestamp:sampleRate:) method
+   - Creates AVAudioPlayerNode per remote user on demand
+   - Converts base64 audio data to AVAudioPCMBuffer
+   - Routes through spatial audio processing (3D positioning)
+   - Schedules buffers for playback
+
+3. VoiceLinkApp.swift (Build 3 changes also included):
+   - Added context menus on UserRow (Whisper, DM, Send File, View Profile)
+   - Added connection checks for message sending
+   - TextField disabled when offline
+   - Debug logging for message operations
+
+AUDIO PIPELINE (NOW COMPLETE):
+  Sender: Mic → AVAudioEngine → inputNode tap → base64 encode → socket.emit('audio-data')
+  Server: socket.on('audio-data') → socket.to(roomId).emit('relayed-audio')
+  Receiver: socket.on('relayed-audio') → base64 decode → SpatialAudioEngine.receiveAudioData()
+           → AVAudioPlayerNode → AVAudioEnvironmentNode → speakers
+
+WEB APP: Same server fix enables audio for web clients too since the
+  webrtc-manager.js already had client-side relay code, it just needed
+  the server handlers to relay the packets.
+
+BUILD INFO (Build 4):
+- Size: 362,666,533 bytes (346 MB)
+- SHA512 (base64): 3CApqqS9Efn+jmajEfEVVkPI5pgpCXwiz6qojpu0r2lXDeFL+qRggQRXXSeMHZC/gQn99j5sV59LzXLqErkSnw==
+- Build time: 99.82s
+- Deployed to both servers
+
+---
+Claude TODO / Pending Tasks
+- Test audio between two users in a room (desktop and web)
+- Test P2P vs relay mode switching
+- Test mute/unmute correctly starts/stops transmission
+- Verify Settings -> Updates tab exists
+- Confirm window close hides to menubar
+- Resolve WHMCS SMTP credentials if needed
+
+---
+[2026-02-09] Codex Session - Duplicate Join / Message Scope Fixes
+
+COMPLETED:
+1. Server duplicate-room-user mitigation (both route trees)
+   - Updated `join-room` handlers to accept both `username` and `userName`.
+   - Added stale-membership cleanup when rejoining/switching rooms.
+   - Prevented duplicate same-socket user rows in room user arrays.
+   - Added explicit `leave-room` socket handler to remove users cleanly without requiring disconnect.
+   - Added `roomId` on emitted room chat messages for client-side room scoping.
+   - Files:
+     - source/server/routes/local-server.js
+     - server/routes/local-server.js
+
+2. Native app room-scoped messaging (Swift)
+   - Added active room tracking and per-room message buffers.
+   - Chat panel now switches message list by active room and clears on leave.
+   - Removed optimistic local echo for room/DM sends to avoid duplicate own-message rendering when server echo arrives.
+   - Files:
+     - swift-native/VoiceLinkNative/Sources/MessagingManager.swift
+     - swift-native/VoiceLinkNative/Sources/VoiceLinkApp.swift
+     - swift-native/VoiceLinkNative/Sources/ServerManager.swift
+
+3. Join payload compatibility for guest names
+   - Native client now sends both `username` and `userName` keys for compatibility with server variants.
+
+PENDING VALIDATION:
+- Runtime confirmation that duplicate users no longer appear after settings/app focus changes and room rejoin flows.
+- End-to-end verification that room messages no longer bleed between rooms in macOS desktop app.
+---
+
+[2026-02-09] Codex Session - Multi-Server + Update UX Enhancements
+
+COMPLETED:
+1. In-app use of both Main + Community/Local servers
+   - Added merged room catalog in native app by discovering rooms from known servers.
+   - Rooms now carry server metadata (server name + server URL) and display source in UI.
+   - Joining a room from a different server auto-switches connection and joins target room.
+   - Files:
+     - swift-native/VoiceLinkNative/Sources/ServerManager.swift
+     - swift-native/VoiceLinkNative/Sources/VoiceLinkApp.swift
+
+2. Socket API support for native desktop room create/list flows
+   - Added socket handlers for `get-rooms` and `create-room` in both server route trees.
+   - Added room-list broadcasts after create/leave/disconnect to keep clients synced.
+   - Enforced guest room limits in socket create path (public only, 5 users max, 10-30 min duration).
+   - Files:
+     - source/server/routes/local-server.js
+     - server/routes/local-server.js
+
+3. Updater choices + required-update messaging
+   - Added explicit update actions:
+     - Update Now (auto-install path)
+     - Download Installer for Later
+     - Remind Me Later
+   - Added required-update policy parsing and user messaging:
+     - `required`
+     - `minimumSupportedVersion`
+     - `requiredReason`
+     - `enforcedAfter`
+   - Files:
+     - swift-native/VoiceLinkNative/Sources/AutoUpdater.swift
+     - src/update-checker.js
+     - source/src/update-checker.js
+
+4. Rebuilt macOS package for testing
+   - File: `swift-native/VoiceLinkNative/VoiceLink-macOS.zip`
+   - Size: `362,719,052` bytes
+   - SHA512: `7e959852a4fce4c8dfe3834d12b2757084294577a0503418cb1a91ad30de40a246c9e322df939f1881f4da9e7824feea5b49365214722b27fe67778209790b6f`
