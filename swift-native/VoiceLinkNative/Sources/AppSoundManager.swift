@@ -59,6 +59,7 @@ class AppSoundManager: ObservableObject {
         // Message sounds
         case messageIncoming = "message-incoming-ding"
         case messageReceived = "message-receve"
+        case messageSent = "message-sent"
         case doorbell = "Doorbell-Ding-Dong-Type-Single"
 
         // File transfer
@@ -111,6 +112,7 @@ class AppSoundManager: ObservableObject {
             case .pttStop: return "Push-to-talk ended"
             case .messageIncoming: return "Incoming message"
             case .messageReceived: return "Message received"
+            case .messageSent: return "Message sent"
             case .doorbell: return "Doorbell"
             case .fileTransferComplete: return "File transfer complete"
             case .menuOpen: return "Menu opened"
@@ -345,6 +347,7 @@ class AppSoundManager: ObservableObject {
         case .pttStop: return ["ptt-stop", "transmit-stop", "key-up", "beep-low"]
         case .messageIncoming: return ["message-incoming", "incoming", "new-message"]
         case .messageReceived: return ["message-received", "received", "chat-receive"]
+        case .messageSent: return ["message-sent", "sent", "chat-send"]
         case .doorbell: return ["doorbell", "ding-dong", "ring"]
         case .fileTransferComplete: return ["file-transfer-complete", "transfer-done", "upload-complete", "download-complete"]
         case .menuOpen: return ["menu-open", "open-menu", "whoosh-open"]
@@ -386,8 +389,8 @@ class AppSoundManager: ObservableObject {
 
     // MARK: - Play Sounds
 
-    func playSound(_ soundType: SoundType) {
-        guard soundsEnabled else { return }
+    func playSound(_ soundType: SoundType, force: Bool = false) {
+        guard soundsEnabled || force else { return }
 
         if let player = audioPlayers[soundType] {
             player.volume = volume
@@ -419,6 +422,14 @@ class AppSoundManager: ObservableObject {
 
     func isSoundPlaying(_ soundType: SoundType) -> Bool {
         return audioPlayers[soundType]?.isPlaying ?? false
+    }
+
+    func soundDuration(_ soundType: SoundType) -> Double {
+        if let player = audioPlayers[soundType] {
+            return player.duration
+        }
+        loadSound(soundType)
+        return audioPlayers[soundType]?.duration ?? 0.6
     }
 
     private func playSystemSound(for soundType: SoundType) {
