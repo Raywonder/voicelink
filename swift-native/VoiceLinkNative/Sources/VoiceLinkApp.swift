@@ -2480,6 +2480,7 @@ struct UserRow: View {
     @ObservedObject private var settings = SettingsManager.shared
     @ObservedObject private var audioControl = UserAudioControlManager.shared
     @ObservedObject private var monitor = LocalMonitorManager.shared
+    @State private var shareInProgress = false
 
     private var resolvedVolume: Double {
         if isCurrentUser {
@@ -2547,18 +2548,33 @@ struct UserRow: View {
                 }
 
                 Button(action: {
-                    // TODO: Implement direct message
-                    print("Send DM to \(username)")
+                    MessagingManager.shared.sendDirectMessage(
+                        to: username,
+                        username: username,
+                        content: "Hi \(username)"
+                    )
                 }) {
                     Label("Send Direct Message", systemImage: "message")
                 }
 
                 Button(action: {
-                    // TODO: Implement file send
-                    print("Send file to \(username)")
+                    sendFileToUser()
                 }) {
                     Label("Send File", systemImage: "doc")
                 }
+
+                Button(action: {
+                    shareProtectedLinkToUser(keepForever: false)
+                }) {
+                    Label("Share Protected Link (Expires)", systemImage: "link.badge.plus")
+                }
+
+                Button(action: {
+                    shareProtectedLinkToUser(keepForever: true)
+                }) {
+                    Label("Share Protected Link (Keep Forever)", systemImage: "link.circle")
+                }
+                .disabled(shareInProgress)
 
                 Divider()
 
@@ -2657,6 +2673,53 @@ struct UserRow: View {
             }
         }
         .cornerRadius(8)
+    }
+
+    private func sendFileToUser() {
+        FileTransferManager.shared.showFilePicker { url in
+            guard let url else { return }
+            FileTransferManager.shared.sendFileToDirect(
+                url: url,
+                recipientId: username,
+                recipientName: username
+            )
+        }
+    }
+
+    private func shareProtectedLinkToUser(keepForever: Bool) {
+        FileTransferManager.shared.showFilePicker { url in
+            guard let url else { return }
+            shareInProgress = true
+            Task {
+                defer {
+                    DispatchQueue.main.async { shareInProgress = false }
+                }
+                do {
+                    let link = try await CopyPartyManager.shared.uploadFileAndCreateProtectedLink(
+                        from: url,
+                        to: "/uploads/\(username)",
+                        keepForever: keepForever,
+                        expiryHours: keepForever ? nil : CopyPartyManager.shared.config.defaultExternalLinkExpiryHours
+                    )
+                    DispatchQueue.main.async {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(link.url, forType: .string)
+                        let expiryText = link.expiresAt.map { " Expires \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
+                        let body = "Protected link copied to clipboard for \(self.username).\(expiryText)"
+                        MessagingManager.shared.sendSystemMessage(body)
+                        MessagingManager.shared.sendDirectMessage(
+                            to: self.username,
+                            username: self.username,
+                            content: "Secure file link: \(link.url)"
+                        )
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        MessagingManager.shared.sendSystemMessage("Protected link share failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
     }
 }
 
