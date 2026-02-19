@@ -364,6 +364,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             AppSoundManager.shared.playRandomStartupIntro()
         }
+        // Retry once in case resources or audio are still initializing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            AppSoundManager.shared.playRandomStartupIntro()
+        }
 
         // Ensure updater-triggered quit fully terminates the app.
         NotificationCenter.default.addObserver(

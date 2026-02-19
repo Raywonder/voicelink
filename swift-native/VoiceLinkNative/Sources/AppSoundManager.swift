@@ -511,8 +511,14 @@ class AppSoundManager: ObservableObject {
     }
 
     func playRandomStartupIntro() {
-        guard soundsEnabled, startupIntroEnabled, !startupIntroPlayed else { return }
-        guard let introURL = pickRandomStartupIntroURL() else { return }
+        guard startupIntroEnabled, !startupIntroPlayed else { return }
+        if !isInitialized {
+            preloadSounds()
+        }
+        guard let introURL = pickRandomStartupIntroURL() else {
+            print("AppSoundManager: No startup intro candidate found")
+            return
+        }
         do {
             let player = try AVAudioPlayer(contentsOf: introURL)
             player.volume = volume
@@ -528,34 +534,31 @@ class AppSoundManager: ObservableObject {
     }
 
     private func pickRandomStartupIntroURL() -> URL? {
-        guard let resourcesRoot = Bundle.main.resourceURL else { return nil }
-        let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
+        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
+        let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff"]
+        let knownNames = Set(SoundType.allCases.map { $0.rawValue.lowercased() })
+        var explicit: [URL] = []
+        var fallback: [URL] = []
+
+        if let enumerator = FileManager.default.enumerator(
             at: soundsRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-
-        let knownNames = Set(SoundType.allCases.map { $0.rawValue.lowercased() })
-        let explicitIntroFiles = entries.filter { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base.contains("intro") || base.contains("welcome") || base.contains("startup")
-        }
-
-        let candidates: [URL]
-        if explicitIntroFiles.isEmpty {
-            candidates = entries.filter { url in
-                guard url.pathExtension.lowercased() == "wav" else { return false }
+        ) {
+            for case let url as URL in enumerator {
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { continue }
+                let ext = url.pathExtension.lowercased()
+                guard exts.contains(ext) else { continue }
                 let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                return !knownNames.contains(base)
+                if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
+                    explicit.append(url)
+                } else if !knownNames.contains(base) {
+                    fallback.append(url)
+                }
             }
-        } else {
-            candidates = explicitIntroFiles
         }
 
-        return candidates.randomElement()
+        return (explicit.isEmpty ? fallback : explicit).randomElement()
     }
 }
