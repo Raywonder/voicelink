@@ -6,6 +6,19 @@ import AppKit
 /// Uses actual sound files from Resources/sounds directory
 class AppSoundManager: ObservableObject {
     static let shared = AppSoundManager()
+    private let remoteSoundBaseURLDefaults = [
+        "https://im.tappedin.fm/sounds",
+        "https://im.tappedin.fm/assets/sounds",
+        "https://im.tappedin.fm/copyparty/sounds",
+        "https://im.tappedin.fm/cp/sounds",
+        "https://voicelink.devinecreations.net/sounds",
+        "https://voicelink.devinecreations.net/assets/sounds",
+        "https://voicelink.devinecreations.net/downloads/sounds",
+        "https://voicelink.devinecreations.net/voicelink/sounds",
+        "https://dl.voicelink.devinecreations.net/sounds",
+        "https://dl.voicelink.devinecreations.net/copyparty/sounds",
+        "https://dl.voicelink.devinecreations.net/cp/sounds"
+    ]
     
     private struct IndexedSound {
         let url: URL
@@ -126,6 +139,10 @@ class AppSoundManager: ObservableObject {
     private var soundsRootURL: URL?
     private var isInitialized = false
     private var startupIntroPlayed = false
+    private var inFlightDownloads: Set<String> = []
+    private var downloadFailures: Set<String> = []
+    private var pendingPlayAfterDownload: Set<SoundType> = []
+    private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
 
     init() {
         loadSettings()
@@ -201,6 +218,7 @@ class AppSoundManager: ObservableObject {
         }
 
         print("AppSoundManager: Sound file not found for \(soundType.rawValue)")
+        queueBackgroundDownload(for: soundType, playWhenReady: false)
     }
     
     private func buildSoundLibraryIndex() {
@@ -208,28 +226,31 @@ class AppSoundManager: ObservableObject {
         let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
         soundsRootURL = soundsRoot
         var index: [IndexedSound] = []
-        
-        if let enumerator = FileManager.default.enumerator(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for case let fileURL as URL in enumerator {
-                guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else { continue }
-                let ext = fileURL.pathExtension.lowercased()
-                guard ["wav", "flac", "mp3", "m4a", "aiff", "ogg"].contains(ext) else { continue }
-                let relative = fileURL.path.replacingOccurrences(of: soundsRoot.path + "/", with: "")
-                let fileName = fileURL.lastPathComponent.lowercased()
-                let base = fileURL.deletingPathExtension().lastPathComponent.lowercased()
-                index.append(
-                    IndexedSound(
-                        url: fileURL,
-                        fileNameLower: fileName,
-                        baseNameLower: base,
-                        relativePathLower: relative.lowercased()
+        let roots = [soundsRoot, downloadedSoundsRoot()]
+        for root in roots {
+            guard let root else { continue }
+            if let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let fileURL as URL in enumerator {
+                    guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true else { continue }
+                    let ext = fileURL.pathExtension.lowercased()
+                    guard ["wav", "flac", "mp3", "m4a", "aiff", "ogg"].contains(ext) else { continue }
+                    let relative = fileURL.path.replacingOccurrences(of: root.path + "/", with: "")
+                    let fileName = fileURL.lastPathComponent.lowercased()
+                    let base = fileURL.deletingPathExtension().lastPathComponent.lowercased()
+                    index.append(
+                        IndexedSound(
+                            url: fileURL,
+                            fileNameLower: fileName,
+                            baseNameLower: base,
+                            relativePathLower: relative.lowercased()
+                        )
                     )
-                )
+                }
             }
         }
         
@@ -381,6 +402,7 @@ class AppSoundManager: ObservableObject {
                 player.currentTime = 0
                 player.play()
             } else {
+                queueBackgroundDownload(for: soundType, playWhenReady: true)
                 // Fallback to system sound
                 playSystemSound(for: soundType)
             }
@@ -560,5 +582,208 @@ class AppSoundManager: ObservableObject {
         }
 
         return (explicit.isEmpty ? fallback : explicit).randomElement()
+    }
+
+    // MARK: - Background Sound Download
+
+    private func downloadedSoundsRoot() -> URL? {
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = appSupport
+            .appendingPathComponent("VoiceLink", isDirectory: true)
+            .appendingPathComponent("sounds", isDirectory: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        } catch {
+            print("AppSoundManager: Could not create downloaded sounds dir: \(error)")
+            return nil
+        }
+    }
+
+    private func remoteSoundBaseURLs() -> [URL] {
+        let overrideRaw = (UserDefaults.standard.string(forKey: "voicelinkSoundBaseURLs") ?? "")
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let single = (UserDefaults.standard.string(forKey: "voicelinkSoundBaseURL") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawList =
+            overrideRaw +
+            (single.isEmpty ? [] : [single]) +
+            serverDerivedSoundBaseURLStrings() +
+            remoteSoundBaseURLDefaults
+        var out: [URL] = []
+        var seen = Set<String>()
+        for raw in rawList {
+            let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !trimmed.isEmpty, !seen.contains(trimmed), let url = URL(string: trimmed) else { continue }
+            seen.insert(trimmed)
+            out.append(url)
+        }
+        return out
+    }
+
+    private func serverDerivedSoundBaseURLStrings() -> [String] {
+        let cpBaseRaw = [
+            UserDefaults.standard.string(forKey: "voicelinkCopypartyBaseURL") ?? "",
+            UserDefaults.standard.string(forKey: "copyPartyBaseURL") ?? ""
+        ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let serverBases = APIEndpointResolver.mainBaseCandidates(preferred: ServerManager.shared.baseURL)
+        let copypartyBases = cpBaseRaw + serverBases
+        let pathSuffixes = [
+            "/sounds",
+            "/assets/sounds",
+            "/downloads/sounds",
+            "/voicelink/sounds",
+            "/apps/voicelink/sounds",
+            "/apps/voicelink/assets/sounds",
+            "/media/voicelink/sounds",
+            "/copyparty/sounds",
+            "/copyparty/voicelink/sounds",
+            "/cp/sounds",
+            "/cp/voicelink/sounds",
+            "/files/sounds"
+        ]
+        var out: [String] = []
+        var seen = Set<String>()
+        for base in copypartyBases {
+            let normalizedBase = APIEndpointResolver.normalize(base)
+            for suffix in pathSuffixes {
+                let full = "\(normalizedBase)\(suffix)"
+                if seen.insert(full).inserted {
+                    out.append(full)
+                }
+            }
+        }
+        return out
+    }
+
+    private func normalizedNameCandidates(for soundType: SoundType) -> [String] {
+        let raw = soundType.rawValue.lowercased()
+        var names = Set<String>()
+        names.insert(raw)
+        names.insert(raw.replacingOccurrences(of: " ", with: "-"))
+        names.insert(raw.replacingOccurrences(of: " ", with: "_"))
+        names.formUnion(smartKeywords(for: soundType))
+        return Array(names).filter { !$0.isEmpty }
+    }
+
+    private func extensionCandidates(for soundType: SoundType) -> [String] {
+        let list = [soundType.fileExtension.lowercased(), "wav", "mp3", "flac", "m4a", "aiff"]
+        var dedup: [String] = []
+        for ext in list where !dedup.contains(ext) { dedup.append(ext) }
+        return dedup
+    }
+
+    private func queueBackgroundDownload(for soundType: SoundType, playWhenReady: Bool) {
+        guard soundType != .soundTest else { return }
+        let key = soundType.rawValue.lowercased()
+        if playWhenReady {
+            pendingPlayAfterDownload.insert(soundType)
+        }
+        if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
+            return
+        }
+        inFlightDownloads.insert(key)
+        ioQueue.async { [weak self] in
+            self?.downloadMissingSound(soundType)
+        }
+    }
+
+    private func downloadMissingSound(_ soundType: SoundType) {
+        let key = soundType.rawValue.lowercased()
+        defer { inFlightDownloads.remove(key) }
+        let baseURLs = remoteSoundBaseURLs()
+        guard !baseURLs.isEmpty, let localRoot = downloadedSoundsRoot() else { return }
+
+        let dirCandidates = [
+            "",
+            "sounds",
+            "ui-sounds",
+            "sounds/ui-sounds",
+            "assets/sounds",
+            "assets/sounds/ui-sounds",
+            "voicelink/sounds",
+            "voicelink/assets/sounds",
+            "apps/voicelink/sounds",
+            "apps/voicelink/assets/sounds",
+            "media/voicelink/sounds",
+            "default",
+            "packs/default",
+            "voice",
+            "sfx",
+            "effects",
+            "voiceover",
+            "notifications"
+        ]
+        let nameCandidates = normalizedNameCandidates(for: soundType)
+        let extCandidates = extensionCandidates(for: soundType)
+        let fm = FileManager.default
+
+        for baseURL in baseURLs {
+            for dir in dirCandidates {
+                for name in nameCandidates {
+                    for ext in extCandidates {
+                        var relative = ""
+                        if !dir.isEmpty { relative += "\(dir)/" }
+                        relative += "\(name).\(ext)"
+                        guard let remoteURL = URL(string: relative, relativeTo: baseURL) else { continue }
+                        var req = URLRequest(url: remoteURL)
+                        req.timeoutInterval = 8
+                        req.setValue("VoiceLinkNative/1.0", forHTTPHeaderField: "User-Agent")
+                        do {
+                            let (data, response) = try URLSession.shared.syncData(for: req)
+                            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else {
+                                continue
+                            }
+                            let targetDir = localRoot.appendingPathComponent(dir, isDirectory: true)
+                            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+                            let targetFile = targetDir.appendingPathComponent("\(name).\(ext)")
+                            try data.write(to: targetFile, options: .atomic)
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self else { return }
+                                self.buildSoundLibraryIndex()
+                                self.loadSound(soundType)
+                                if self.pendingPlayAfterDownload.contains(soundType) {
+                                    self.pendingPlayAfterDownload.remove(soundType)
+                                    self.playSound(soundType)
+                                }
+                            }
+                            return
+                        } catch {
+                            continue
+                        }
+                    }
+                }
+            }
+        }
+        downloadFailures.insert(key)
+    }
+}
+
+private extension URLSession {
+    func syncData(for request: URLRequest) throws -> (Data, URLResponse) {
+        let semaphore = DispatchSemaphore(value: 0)
+        var outputData: Data?
+        var outputResponse: URLResponse?
+        var outputError: Error?
+        let task = dataTask(with: request) { data, response, error in
+            outputData = data
+            outputResponse = response
+            outputError = error
+            semaphore.signal()
+        }
+        task.resume()
+        semaphore.wait()
+        if let error = outputError { throw error }
+        guard let data = outputData, let response = outputResponse else {
+            throw URLError(.badServerResponse)
+        }
+        return (data, response)
     }
 }
