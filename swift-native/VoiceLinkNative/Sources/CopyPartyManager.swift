@@ -18,6 +18,7 @@ class CopyPartyManager: ObservableObject {
     @Published var downloadQueue: [DownloadTask] = []
     @Published var syncStatus: SyncStatus = .idle
     @Published var headscalePeers: [HeadscalePeer] = []
+    @Published var recentProtectedLinks: [ProtectedShareLink] = []
     @Published var config: CopyPartyConfig
 
     // MARK: - Configuration
@@ -39,6 +40,10 @@ class CopyPartyManager: ObservableObject {
         var concurrentUploads: Int = 3
         var useHeadscaleP2P: Bool = true
         var backgroundSyncEnabled: Bool = true
+        var requireProtectedExternalLinks: Bool = true
+        var allowRawExternalLinksFallback: Bool = false
+        var defaultExternalLinkExpiryHours: Int = 72
+        var externalShareBaseURL: String = "https://voicelink.devinecreations.net"
     }
 
     // MARK: - Types
@@ -89,6 +94,32 @@ class CopyPartyManager: ObservableObject {
 
         var formattedSize: String {
             ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        }
+    }
+
+    struct ProtectedShareLink: Identifiable, Codable {
+        let id: String
+        let filePath: String
+        let url: String
+        let token: String?
+        let expiresAt: Date?
+        let keepForever: Bool
+        let createdAt: Date
+    }
+
+    enum ShareLinkError: LocalizedError {
+        case notConnected
+        case invalidPath
+        case serverRejected
+        case noProtectedEndpoint
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected: return "CopyParty is not connected."
+            case .invalidPath: return "The file path is invalid."
+            case .serverRejected: return "Server rejected protected link generation."
+            case .noProtectedEndpoint: return "No protected-link endpoint is available."
+            }
         }
     }
 
@@ -328,6 +359,45 @@ class CopyPartyManager: ObservableObject {
         )
         uploadQueue.append(task)
         processUploadQueue()
+    }
+
+    func uploadFileAndCreateProtectedLink(
+        from localURL: URL,
+        to remoteDirectory: String = "/uploads",
+        keepForever: Bool = false,
+        expiryHours: Int? = nil
+    ) async throws -> ProtectedShareLink {
+        let safeName = localURL.lastPathComponent.replacingOccurrences(of: "/", with: "_")
+        let normalizedDirectory = normalizedRemotePath(remoteDirectory)
+        let remoteFilePath = "\(normalizedDirectory)/\(safeName)"
+        try await uploadFileNow(from: localURL, to: remoteFilePath)
+        return try await createProtectedExternalLink(
+            filePath: remoteFilePath,
+            keepForever: keepForever,
+            expiryHours: expiryHours
+        )
+    }
+
+    private func uploadFileNow(from localURL: URL, to remoteFilePath: String) async throws {
+        guard let fileData = try? Data(contentsOf: localURL) else {
+            throw NSError(domain: "CopyParty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read file"])
+        }
+        let serverURL = APIEndpointResolver.normalize(config.primaryServer)
+        let encodedPath = remoteFilePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? remoteFilePath
+        guard let url = URL(string: "\(serverURL)\(encodedPath)") else {
+            throw NSError(domain: "CopyParty", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid upload URL"])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        addAuthHeader(to: &request)
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.httpBody = fileData
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw NSError(domain: "CopyParty", code: 3, userInfo: [NSLocalizedDescriptionKey: "Upload failed"])
+        }
     }
 
     private func processUploadQueue() {
@@ -611,6 +681,151 @@ class CopyPartyManager: ObservableObject {
 
     private func getCurrentUserId() -> String {
         return currentUser?.id ?? UserDefaults.standard.string(forKey: "userId") ?? "unknown"
+    }
+
+    // MARK: - Protected External Share Links
+
+    func createProtectedExternalLink(
+        filePath: String,
+        keepForever: Bool = false,
+        expiryHours: Int? = nil
+    ) async throws -> ProtectedShareLink {
+        guard isConnected else { throw ShareLinkError.notConnected }
+        let normalizedPath = normalizedRemotePath(filePath)
+        guard !normalizedPath.isEmpty else { throw ShareLinkError.invalidPath }
+
+        if let protected = try await requestProtectedShareLink(
+            filePath: normalizedPath,
+            keepForever: keepForever,
+            expiryHours: expiryHours
+        ) {
+            await MainActor.run {
+                self.recentProtectedLinks.insert(protected, at: 0)
+                self.recentProtectedLinks = Array(self.recentProtectedLinks.prefix(100))
+            }
+            return protected
+        }
+
+        if config.allowRawExternalLinksFallback && !config.requireProtectedExternalLinks {
+            let fallback = ProtectedShareLink(
+                id: UUID().uuidString,
+                filePath: normalizedPath,
+                url: rawExternalFileURL(path: normalizedPath),
+                token: nil,
+                expiresAt: nil,
+                keepForever: keepForever,
+                createdAt: Date()
+            )
+            await MainActor.run {
+                self.recentProtectedLinks.insert(fallback, at: 0)
+                self.recentProtectedLinks = Array(self.recentProtectedLinks.prefix(100))
+            }
+            return fallback
+        }
+
+        if config.requireProtectedExternalLinks {
+            throw ShareLinkError.noProtectedEndpoint
+        }
+        throw ShareLinkError.serverRejected
+    }
+
+    private func requestProtectedShareLink(
+        filePath: String,
+        keepForever: Bool,
+        expiryHours: Int?
+    ) async throws -> ProtectedShareLink? {
+        let expiry = keepForever ? nil : max(1, expiryHours ?? config.defaultExternalLinkExpiryHours)
+        let expiresAtISO = expiry.map { Date().addingTimeInterval(TimeInterval($0 * 3600)).iso8601String }
+        let apiPaths = [
+            "/api/files/share-link",
+            "/api/copyparty/share-link",
+            "/api/share-link",
+            "/api/share/create"
+        ]
+        let baseCandidates = [
+            APIEndpointResolver.normalize(ServerManager.shared.baseURL ?? ""),
+            APIEndpointResolver.normalize(config.externalShareBaseURL),
+            APIEndpointResolver.normalize(config.primaryServer)
+        ].filter { !$0.isEmpty }
+
+        for base in baseCandidates {
+            for apiPath in apiPaths {
+                guard let url = APIEndpointResolver.url(base: base, path: apiPath) else { continue }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                addAuthHeader(to: &request)
+
+                var payload: [String: Any] = [
+                    "path": filePath,
+                    "requireToken": true,
+                    "allowExternal": true,
+                    "keepForever": keepForever
+                ]
+                if let expiresAtISO {
+                    payload["expiresAt"] = expiresAtISO
+                }
+                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+                do {
+                    let (data, response) = try await urlSession.data(for: request)
+                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                        continue
+                    }
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        continue
+                    }
+                    let finalURL =
+                        (json["url"] as? String) ??
+                        (json["link"] as? String) ??
+                        (json["downloadUrl"] as? String) ??
+                        (json["download_url"] as? String)
+                    guard let finalURL, !finalURL.isEmpty else { continue }
+                    let token = json["token"] as? String
+                    let parsedExpiry = parseExpiry(from: json) ?? expiry.map { Date().addingTimeInterval(TimeInterval($0 * 3600)) }
+
+                    return ProtectedShareLink(
+                        id: UUID().uuidString,
+                        filePath: filePath,
+                        url: finalURL,
+                        token: token,
+                        expiresAt: parsedExpiry,
+                        keepForever: keepForever,
+                        createdAt: Date()
+                    )
+                } catch {
+                    continue
+                }
+            }
+        }
+        return nil
+    }
+
+    private func normalizedRemotePath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+    }
+
+    private func rawExternalFileURL(path: String) -> String {
+        let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+        return "\(APIEndpointResolver.normalize(config.primaryServer))\(encodedPath)"
+    }
+
+    private func parseExpiry(from payload: [String: Any]) -> Date? {
+        if let raw = payload["expiresAt"] as? String ?? payload["expires_at"] as? String {
+            return ISO8601DateFormatter().date(from: raw)
+        }
+        if let unix = payload["expiresAtUnix"] as? Double ?? payload["expires_at_unix"] as? Double {
+            return Date(timeIntervalSince1970: unix)
+        }
+        return nil
+    }
+}
+
+private extension Date {
+    var iso8601String: String {
+        ISO8601DateFormatter().string(from: self)
     }
 }
 
