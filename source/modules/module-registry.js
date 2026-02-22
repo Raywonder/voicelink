@@ -293,6 +293,61 @@ const AVAILABLE_MODULES = {
         }
     },
 
+    'jellyfin': {
+        id: 'jellyfin',
+        name: 'Jellyfin Media Streaming',
+        description: 'Enable Jellyfin integration for shared media libraries, streaming, queueing, and room playback controls',
+        version: '1.0.0',
+        category: CATEGORIES.MEDIA,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Remote Jellyfin server registration',
+            'Room streaming and playback queue',
+            'Library sync and discovery',
+            'Per-room bot controls',
+            'Backup and restore helpers',
+            'Multi-node media federation support'
+        ],
+        defaultConfig: {
+            enabled: false,
+            allowRemoteServers: true,
+            allowLocalBundled: true,
+            defaultRooms: [],
+            requireAdminForServerChanges: true
+        }
+    },
+
+    'ecripto': {
+        id: 'ecripto',
+        name: 'eCrypto Wallet Integration',
+        description: 'Enable eCrypto wallet account linking, wallet-auth, and wallet actions from VoiceLink accounts',
+        version: '1.0.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Wallet link and unlink per account',
+            'Wallet-based sign-in helpers',
+            'User wallet metadata sync',
+            'Admin policy control for wallet features',
+            'Cross-instance wallet identity support'
+        ],
+        defaultConfig: {
+            enabled: false,
+            allowWalletLink: true,
+            allowWalletAuth: true,
+            requireVerifiedAccount: false,
+            allowedProviders: ['ecripto']
+        }
+    },
+
     'whmcs-integration': {
         id: 'whmcs-integration',
         name: 'WHMCS Integration',

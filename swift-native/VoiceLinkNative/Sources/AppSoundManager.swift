@@ -240,7 +240,7 @@ class AppSoundManager: ObservableObject {
                     guard let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
                           values.isRegularFile == true else { continue }
                     let ext = fileURL.pathExtension.lowercased()
-                    guard ["wav", "flac", "mp3", "m4a", "aiff", "ogg"].contains(ext) else { continue }
+                    guard ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf", "ogg", "pcm"].contains(ext) else { continue }
                     let relative = fileURL.path.replacingOccurrences(of: root.path + "/", with: "")
                     let fileName = fileURL.lastPathComponent.lowercased()
                     let base = fileURL.deletingPathExtension().lastPathComponent.lowercased()
@@ -390,6 +390,12 @@ class AppSoundManager: ObservableObject {
     // MARK: - Play Sounds
 
     func playSound(_ soundType: SoundType, force: Bool = false) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.playSound(soundType, force: force)
+            }
+            return
+        }
         guard soundsEnabled || force else { return }
 
         if let player = audioPlayers[soundType] {
@@ -441,7 +447,6 @@ class AppSoundManager: ObservableObject {
             case .notification: return "Ping"
             case .connected: return "Pop"
             case .disconnected: return "Blow"
-            case .buttonClick: return "Tink"
             default: return nil
             }
         }()
@@ -568,7 +573,7 @@ class AppSoundManager: ObservableObject {
 
     private func pickRandomStartupIntroURL() -> URL? {
         guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
-        let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff"]
+        let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
         let knownNames = Set(SoundType.allCases.map { $0.rawValue.lowercased() })
         var explicit: [URL] = []
         var fallback: [URL] = []
@@ -685,7 +690,7 @@ class AppSoundManager: ObservableObject {
     }
 
     private func extensionCandidates(for soundType: SoundType) -> [String] {
-        let list = [soundType.fileExtension.lowercased(), "wav", "mp3", "flac", "m4a", "aiff"]
+        let list = [soundType.fileExtension.lowercased(), "wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
         var dedup: [String] = []
         for ext in list where !dedup.contains(ext) { dedup.append(ext) }
         return dedup

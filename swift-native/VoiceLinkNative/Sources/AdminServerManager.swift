@@ -12,6 +12,10 @@ class AdminServerManager: ObservableObject {
     @Published var connectedUsers: [AdminUserInfo] = []
     @Published var serverRooms: [AdminRoomInfo] = []
     @Published var serverStats: ServerStats?
+    @Published var availableModules: [AdminModuleInfo] = []
+    @Published var moduleCategories: [String: String] = [:]
+    @Published var modulesLoading: Bool = false
+    @Published var moduleActionMessage: String?
     @Published var isLoading: Bool = false
     @Published var error: String?
 
@@ -477,6 +481,232 @@ class AdminServerManager: ObservableObject {
 
     // MARK: - Helper
 
+    func refreshModulesCenter() async {
+        await fetchInstalledModules()
+        await fetchAvailableModules()
+    }
+
+    func fetchAvailableModules(sortBy: String = "recommended", category: String? = nil) async {
+        modulesLoading = true
+        defer { modulesLoading = false }
+
+        var components = URLComponents(string: "\(effectiveServerURL)/api/modules")
+        components?.queryItems = [
+            URLQueryItem(name: "sortBy", value: sortBy)
+        ]
+        if let category, !category.isEmpty {
+            components?.queryItems?.append(URLQueryItem(name: "category", value: category))
+        }
+
+        guard let url = components?.url else {
+            error = "Invalid server URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                error = "Failed to fetch module catalog"
+                return
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                error = "Invalid module catalog response"
+                return
+            }
+
+            if let categories = json["categories"] as? [String: String] {
+                moduleCategories = categories
+            } else if let categories = json["categories"] as? [String: Any] {
+                moduleCategories = categories.compactMapValues { "\($0)" }
+            }
+
+            let modulesArray = (json["modules"] as? [[String: Any]]) ?? []
+            availableModules = modulesArray.compactMap { Self.parseModuleInfo(from: $0) }
+        } catch {
+            self.error = "Failed to fetch module catalog: \(error.localizedDescription)"
+        }
+    }
+
+    func fetchInstalledModules() async {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/installed") else {
+            error = "Invalid server URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return
+            }
+
+            let modulesArray = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+            let installedById = Dictionary(uniqueKeysWithValues: modulesArray.compactMap { dict -> (String, AdminModuleInfo)? in
+                guard let parsed = Self.parseModuleInfo(from: dict) else { return nil }
+                return (parsed.id, parsed)
+            })
+
+            if availableModules.isEmpty {
+                availableModules = Array(installedById.values).sorted { $0.name < $1.name }
+            } else {
+                availableModules = availableModules.map { module in
+                    guard let installed = installedById[module.id] else {
+                        var copy = module
+                        copy.installed = false
+                        return copy
+                    }
+                    return installed
+                }
+            }
+        } catch {
+            self.error = "Failed to fetch installed modules: \(error.localizedDescription)"
+        }
+    }
+
+    func installModule(_ moduleId: String) async -> Bool {
+        let ok = await postModuleAction(moduleId: moduleId, endpoint: "install", body: [:])
+        if ok {
+            moduleActionMessage = "Installed module: \(moduleId)"
+            await refreshModulesCenter()
+        }
+        return ok
+    }
+
+    func uninstallModule(_ moduleId: String) async -> Bool {
+        let ok = await postModuleAction(moduleId: moduleId, endpoint: "uninstall", body: [:])
+        if ok {
+            moduleActionMessage = "Uninstalled module: \(moduleId)"
+            await refreshModulesCenter()
+        }
+        return ok
+    }
+
+    func setModuleEnabled(_ moduleId: String, enabled: Bool) async -> Bool {
+        let ok = await postModuleAction(moduleId: moduleId, endpoint: "toggle", body: ["enabled": enabled])
+        if ok {
+            moduleActionMessage = enabled ? "Enabled module: \(moduleId)" : "Disabled module: \(moduleId)"
+            await refreshModulesCenter()
+        }
+        return ok
+    }
+
+    // Uses config endpoint as update/reapply operation from the desktop UI.
+    func updateModule(_ moduleId: String, enabled: Bool) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/\(moduleId)/config") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["enabled": enabled], options: [])
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            let ok = (200...299).contains(httpResponse.statusCode)
+            if ok {
+                moduleActionMessage = "Updated module: \(moduleId)"
+                await refreshModulesCenter()
+            } else {
+                error = "Failed to update module \(moduleId)"
+            }
+            return ok
+        } catch {
+            self.error = "Failed to update module \(moduleId): \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func postModuleAction(moduleId: String, endpoint: String, body: [String: Any]) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/\(moduleId)/\(endpoint)") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                error = "Module action failed (\(httpResponse.statusCode))"
+                return false
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let success = json["success"] as? Bool, success == false {
+                let message = (json["error"] as? String) ?? "Unknown module action error"
+                error = message
+                return false
+            }
+            return true
+        } catch {
+            self.error = "Module action failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private var effectiveServerURL: String {
+        if !currentServerURL.isEmpty {
+            return currentServerURL
+        }
+        if let connected = ServerManager.shared.baseURL, !connected.isEmpty {
+            return connected
+        }
+        return APIEndpointResolver.canonicalMainBase
+    }
+
+    private static func parseModuleInfo(from dict: [String: Any]) -> AdminModuleInfo? {
+        guard let id = dict["id"] as? String else { return nil }
+        let config = dict["config"] as? [String: Any]
+        let enabledFromConfig = config?["enabled"] as? Bool
+
+        return AdminModuleInfo(
+            id: id,
+            name: (dict["name"] as? String) ?? id,
+            description: (dict["description"] as? String) ?? "",
+            version: (dict["version"] as? String) ?? "unknown",
+            category: (dict["category"] as? String) ?? "general",
+            installed: (dict["installed"] as? Bool) ?? false,
+            enabled: enabledFromConfig ?? false,
+            recommended: (dict["recommended"] as? Bool) ?? false,
+            popular: (dict["popular"] as? Bool) ?? false,
+            dependencies: (dict["dependencies"] as? [String]) ?? [],
+            features: (dict["features"] as? [String]) ?? []
+        )
+    }
+
     private func getClientId() -> String {
         if let clientId = UserDefaults.standard.string(forKey: "clientId") {
             return clientId
@@ -581,4 +811,18 @@ struct FederationSettings: Codable {
     var blockedServers: [String]
     var autoAcceptTrusted: Bool
     var requireApproval: Bool
+}
+
+struct AdminModuleInfo: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let version: String
+    let category: String
+    var installed: Bool
+    var enabled: Bool
+    let recommended: Bool
+    let popular: Bool
+    let dependencies: [String]
+    let features: [String]
 }

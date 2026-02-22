@@ -762,53 +762,76 @@ class ServerManager: ObservableObject {
 
     private func normalizedRooms(from rawRooms: [[String: Any]]) -> [ServerRoom] {
         let parsed = rawRooms.compactMap { ServerRoom(from: $0) }
-        var seen = Set<String>()
-        var normalized: [ServerRoom] = []
+        return deduplicateRooms(parsed)
+    }
 
-        for room in parsed {
-            var candidateId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            if candidateId.isEmpty {
-                candidateId = room.name.lowercased().replacingOccurrences(of: " ", with: "-")
-            }
-            if candidateId.isEmpty {
-                candidateId = UUID().uuidString
-            }
+    func deduplicateRooms(_ rooms: [ServerRoom]) -> [ServerRoom] {
+        var deduped: [ServerRoom] = []
+        var indexById: [String: Int] = [:]
+        var indexByName: [String: Int] = [:]
 
-            if !seen.contains(candidateId) {
-                seen.insert(candidateId)
-                normalized.append(room)
+        for room in rooms {
+            let idKey = room.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let nameKey = room.name
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
+            if let idx = indexById[idKey], !idKey.isEmpty {
+                deduped[idx] = mergeRoomEntries(primary: deduped[idx], incoming: room)
                 continue
             }
 
-            // Duplicate IDs break SwiftUI ForEach rendering; synthesize a stable unique ID.
-            var suffix = 2
-            var dedupedId = "\(candidateId)-\(suffix)"
-            while seen.contains(dedupedId) {
-                suffix += 1
-                dedupedId = "\(candidateId)-\(suffix)"
+            if let idx = indexByName[nameKey], !nameKey.isEmpty {
+                deduped[idx] = mergeRoomEntries(primary: deduped[idx], incoming: room)
+                if !idKey.isEmpty { indexById[idKey] = idx }
+                continue
             }
-            seen.insert(dedupedId)
 
-            normalized.append(
-                ServerRoom(
-                    id: dedupedId,
-                    name: room.name,
-                    description: room.description,
-                    userCount: room.userCount,
-                    isPrivate: room.isPrivate,
-                    maxUsers: room.maxUsers,
-                    createdBy: room.createdBy,
-                    createdByRole: room.createdByRole,
-                    roomType: room.roomType,
-                    createdAt: room.createdAt,
-                    uptimeSeconds: room.uptimeSeconds,
-                    lastActiveUsername: room.lastActiveUsername,
-                    lastActivityAt: room.lastActivityAt
-                )
-            )
+            let nextIndex = deduped.count
+            deduped.append(room)
+            if !idKey.isEmpty { indexById[idKey] = nextIndex }
+            if !nameKey.isEmpty { indexByName[nameKey] = nextIndex }
         }
 
-        return normalized
+        return deduped
+    }
+
+    private func mergeRoomEntries(primary: ServerRoom, incoming: ServerRoom) -> ServerRoom {
+        let primaryDate = primary.lastActivityAt ?? primary.createdAt ?? .distantPast
+        let incomingDate = incoming.lastActivityAt ?? incoming.createdAt ?? .distantPast
+        let preferIncoming = incomingDate > primaryDate
+
+        let mergedDescription: String = {
+            let left = primary.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = incoming.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            if right.count > left.count { return right }
+            return left
+        }()
+
+        let mergedCreatedBy = (primary.createdBy?.isEmpty == false ? primary.createdBy : incoming.createdBy)
+        let mergedCreatedByRole = (primary.createdByRole?.isEmpty == false ? primary.createdByRole : incoming.createdByRole)
+        let mergedRoomType = (primary.roomType?.isEmpty == false ? primary.roomType : incoming.roomType)
+        let mergedHostServerName = (primary.hostServerName?.isEmpty == false ? primary.hostServerName : incoming.hostServerName)
+        let mergedHostServerOwner = (primary.hostServerOwner?.isEmpty == false ? primary.hostServerOwner : incoming.hostServerOwner)
+
+        return ServerRoom(
+            id: primary.id,
+            name: primary.name.isEmpty ? incoming.name : primary.name,
+            description: mergedDescription,
+            userCount: max(primary.userCount, incoming.userCount),
+            isPrivate: primary.isPrivate || incoming.isPrivate,
+            maxUsers: max(primary.maxUsers, incoming.maxUsers),
+            createdBy: mergedCreatedBy,
+            createdByRole: mergedCreatedByRole,
+            roomType: mergedRoomType,
+            createdAt: primary.createdAt ?? incoming.createdAt,
+            uptimeSeconds: max(primary.uptimeSeconds ?? 0, incoming.uptimeSeconds ?? 0),
+            lastActiveUsername: preferIncoming ? (incoming.lastActiveUsername ?? primary.lastActiveUsername) : (primary.lastActiveUsername ?? incoming.lastActiveUsername),
+            lastActivityAt: max(primaryDate, incomingDate) == .distantPast ? nil : max(primaryDate, incomingDate),
+            hostServerName: mergedHostServerName,
+            hostServerOwner: mergedHostServerOwner
+        )
     }
 
     func leaveRoom() {
@@ -992,6 +1015,8 @@ struct ServerRoom: Identifiable {
     let uptimeSeconds: Int?
     let lastActiveUsername: String?
     let lastActivityAt: Date?
+    let hostServerName: String?
+    let hostServerOwner: String?
 
     init(
         id: String,
@@ -1006,7 +1031,9 @@ struct ServerRoom: Identifiable {
         createdAt: Date?,
         uptimeSeconds: Int?,
         lastActiveUsername: String?,
-        lastActivityAt: Date?
+        lastActivityAt: Date?,
+        hostServerName: String?,
+        hostServerOwner: String?
     ) {
         self.id = id
         self.name = name
@@ -1021,6 +1048,8 @@ struct ServerRoom: Identifiable {
         self.uptimeSeconds = uptimeSeconds
         self.lastActiveUsername = lastActiveUsername
         self.lastActivityAt = lastActivityAt
+        self.hostServerName = hostServerName
+        self.hostServerOwner = hostServerOwner
     }
 
     init?(from dict: [String: Any]) {
@@ -1103,6 +1132,15 @@ struct ServerRoom: Identifiable {
             ?? stringValue(dict["lastUser"])
             ?? stringValue(dict["lastSpeaker"])
         self.lastActivityAt = parseDate(dict["lastActivityAt"] ?? dict["lastActiveAt"] ?? dict["updatedAt"])
+        self.hostServerName = stringValue(dict["hostServerName"])
+            ?? stringValue(dict["serverDisplayName"])
+            ?? stringValue(dict["serverName"])
+            ?? stringValue(dict["instanceName"])
+            ?? stringValue(dict["nodeName"])
+        self.hostServerOwner = stringValue(dict["hostServerOwner"])
+            ?? stringValue(dict["serverOwner"])
+            ?? stringValue(dict["ownerUsername"])
+            ?? stringValue(dict["createdBy"])
     }
 }
 

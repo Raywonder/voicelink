@@ -388,6 +388,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.hideMainWindow()
             }
         }
+
+        // Play one random startup intro clip (welcome 1-4, etc.) when enabled.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            AppSoundManager.shared.playRandomStartupIntro()
+        }
     }
 
     func autoConnectOnLaunch() {
@@ -773,8 +778,31 @@ class AppState: ObservableObject {
         // Observe rooms from server
         serverManager.$rooms
             .receive(on: DispatchQueue.main)
-            .map { serverRooms in
-                serverRooms.map { Room(from: $0) }
+            .map { [weak self] serverRooms in
+                let fallbackHost = self?.serverManager.connectedServer.trimmingCharacters(in: .whitespacesAndNewlines)
+                return serverRooms.map { room in
+                    let mapped = Room(from: room)
+                    if mapped.hostServerName == nil || mapped.hostServerName?.isEmpty == true {
+                        return Room(
+                            id: mapped.id,
+                            name: mapped.name,
+                            description: mapped.description,
+                            userCount: mapped.userCount,
+                            isPrivate: mapped.isPrivate,
+                            maxUsers: mapped.maxUsers,
+                            createdBy: mapped.createdBy,
+                            createdByRole: mapped.createdByRole,
+                            roomType: mapped.roomType,
+                            createdAt: mapped.createdAt,
+                            uptimeSeconds: mapped.uptimeSeconds,
+                            lastActiveUsername: mapped.lastActiveUsername,
+                            lastActivityAt: mapped.lastActivityAt,
+                            hostServerName: (fallbackHost?.isEmpty == false ? fallbackHost : nil),
+                            hostServerOwner: mapped.hostServerOwner
+                        )
+                    }
+                    return mapped
+                }
             }
             .assign(to: &$rooms)
 
@@ -915,9 +943,10 @@ class AppState: ObservableObject {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
             guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
 
-            let parsed = array.compactMap { ServerRoom(from: $0) }.map(Room.init(from:))
-            if !parsed.isEmpty {
-                rooms = parsed
+            let parsed = array.compactMap { ServerRoom(from: $0) }
+            let deduped = serverManager.deduplicateRooms(parsed).map(Room.init(from:))
+            if !deduped.isEmpty {
+                rooms = deduped
             }
         } catch {
             // Keep socket path as primary; fallback is best-effort.
@@ -1148,6 +1177,8 @@ struct Room: Identifiable {
     let uptimeSeconds: Int?
     let lastActiveUsername: String?
     let lastActivityAt: Date?
+    let hostServerName: String?
+    let hostServerOwner: String?
 
     init(
         id: String,
@@ -1162,7 +1193,9 @@ struct Room: Identifiable {
         createdAt: Date? = nil,
         uptimeSeconds: Int? = nil,
         lastActiveUsername: String? = nil,
-        lastActivityAt: Date? = nil
+        lastActivityAt: Date? = nil,
+        hostServerName: String? = nil,
+        hostServerOwner: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -1177,6 +1210,8 @@ struct Room: Identifiable {
         self.uptimeSeconds = uptimeSeconds
         self.lastActiveUsername = lastActiveUsername
         self.lastActivityAt = lastActivityAt
+        self.hostServerName = hostServerName
+        self.hostServerOwner = hostServerOwner
     }
 
     init(from serverRoom: ServerRoom) {
@@ -1193,6 +1228,25 @@ struct Room: Identifiable {
         self.uptimeSeconds = serverRoom.uptimeSeconds
         self.lastActiveUsername = serverRoom.lastActiveUsername
         self.lastActivityAt = serverRoom.lastActivityAt
+        self.hostServerName = serverRoom.hostServerName
+        self.hostServerOwner = serverRoom.hostServerOwner
+    }
+
+    var hostedFromLine: String? {
+        let host = hostServerName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let owner = hostServerOwner?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? createdBy?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let host, !host.isEmpty, let owner, !owner.isEmpty {
+            return "Hosted from: \(host) • Owner: \(owner)"
+        }
+        if let host, !host.isEmpty {
+            return "Hosted from: \(host)"
+        }
+        if let owner, !owner.isEmpty {
+            return "Owner: \(owner)"
+        }
+        return nil
     }
 }
 
@@ -1749,6 +1803,13 @@ struct RoomCard: View {
                         .foregroundColor(.gray)
                         .lineLimit(2)
                 }
+
+                if let hostedFrom = room.hostedFromLine {
+                    Text(hostedFrom)
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.85))
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -1799,6 +1860,14 @@ struct RoomActionSplitButton: View {
     let roomHasUsers: Bool
     let isAdmin: Bool
 
+    private func previewOrExplain() {
+        if roomHasUsers {
+            onPreview()
+            return
+        }
+        AccessibilityManager.shared.announceStatus("Preview is unavailable. No users are active in this room.")
+    }
+
     var body: some View {
             Menu {
                 Button("Room Details") { onOpenDetails() }
@@ -1806,7 +1875,8 @@ struct RoomActionSplitButton: View {
                 Button("Open Jukebox") {
                     NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
                 }
-                Button("Preview Room Audio") { onPreview() }.disabled(!roomHasUsers)
+                Button("Preview Room Audio") { previewOrExplain() }
+                    .accessibilityHint(roomHasUsers ? "Preview live room audio." : "Unavailable because no users are currently in this room.")
                 Button("Share Room Link") { onShare() }
             Button("Copy Room ID") {
                 NSPasteboard.general.clearContents()
@@ -1883,6 +1953,12 @@ struct RoomColumnRow: View {
                     .font(.caption2)
                     .foregroundColor(.gray)
                     .lineLimit(1)
+                if let hostedFrom = room.hostedFromLine {
+                    Text(hostedFrom)
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.85))
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1941,6 +2017,12 @@ struct RoomDetailsSheet: View {
             }
             .font(.caption)
             .foregroundColor(.secondary)
+
+            if let hostedFrom = room.hostedFromLine {
+                Text(hostedFrom)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
 
             HStack(spacing: 10) {
                 Button(isActiveRoom ? "Return to Room" : "Join Room") { onJoin(); dismiss() }
@@ -2211,8 +2293,7 @@ struct VoiceChatView: View {
                                       isActive: !isMuted) {
                         isMuted.toggle()
                         appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
-                        // Play button click sound
-                        AppSoundManager.shared.playSound(.buttonClick)
+                        AppSoundManager.shared.playSound(isMuted ? .toggleOff : .toggleOn)
                         // Announce state change
                         AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
                     }
@@ -2224,8 +2305,7 @@ struct VoiceChatView: View {
                                       isActive: !isDeafened) {
                         isDeafened.toggle()
                         appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
-                        // Play button click sound
-                        AppSoundManager.shared.playSound(.buttonClick)
+                        AppSoundManager.shared.playSound(isDeafened ? .toggleOff : .toggleOn)
                         // Announce state change
                         AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
                     }
@@ -2333,16 +2413,14 @@ struct VoiceChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .toggleMute)) { _ in
             isMuted.toggle()
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
-            // Play button click sound
-            AppSoundManager.shared.playSound(.buttonClick)
+            AppSoundManager.shared.playSound(isMuted ? .toggleOff : .toggleOn)
             // Announce state change
             AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleDeafen)) { _ in
             isDeafened.toggle()
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
-            // Play button click sound
-            AppSoundManager.shared.playSound(.buttonClick)
+            AppSoundManager.shared.playSound(isDeafened ? .toggleOff : .toggleOn)
             // Announce state change
             AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
         }

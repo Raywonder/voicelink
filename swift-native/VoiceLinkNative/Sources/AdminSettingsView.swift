@@ -11,6 +11,7 @@ struct AdminSettingsView: View {
         case overview = "Overview"
         case users = "Users"
         case rooms = "Rooms"
+        case modules = "Modules"
         case config = "Server Config"
         case streams = "Background Streams"
         case apiSync = "API Sync"
@@ -78,6 +79,8 @@ struct AdminSettingsView: View {
                         AdminUsersSection()
                     case .rooms:
                         AdminRoomsSection()
+                    case .modules:
+                        AdminModulesSection()
                     case .config:
                         AdminConfigSection()
                     case .streams:
@@ -115,6 +118,7 @@ struct AdminSettingsView: View {
         .task {
             await adminManager.fetchServerStats()
             await adminManager.fetchServerConfig()
+            await adminManager.refreshModulesCenter()
         }
     }
 
@@ -144,6 +148,8 @@ struct AdminSettingsView: View {
             return adminManager.adminRole.canManageUsers
         case .rooms:
             return adminManager.adminRole.canManageRooms
+        case .modules:
+            return adminManager.adminRole.canManageConfig
         case .config, .streams, .apiSync, .federation:
             return adminManager.adminRole.canManageConfig
         }
@@ -1060,6 +1066,189 @@ struct AdminFederationSection: View {
         Task {
             await adminManager.updateFederationSettings(config)
             isSaving = false
+        }
+    }
+}
+
+// MARK: - Modules Section
+struct AdminModulesSection: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var filterMode: ModuleFilter = .all
+    @State private var query = ""
+    @State private var actionInFlight: String?
+
+    enum ModuleFilter: String, CaseIterable {
+        case all = "All"
+        case installed = "Installed"
+        case available = "Available"
+    }
+
+    private var filteredModules: [AdminModuleInfo] {
+        adminManager.availableModules
+            .filter { module in
+                switch filterMode {
+                case .all:
+                    return true
+                case .installed:
+                    return module.installed
+                case .available:
+                    return !module.installed
+                }
+            }
+            .filter { module in
+                let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard !q.isEmpty else { return true }
+                return module.name.lowercased().contains(q)
+                    || module.id.lowercased().contains(q)
+                    || module.category.lowercased().contains(q)
+            }
+            .sorted { a, b in
+                if a.installed != b.installed {
+                    return a.installed && !b.installed
+                }
+                if a.recommended != b.recommended {
+                    return a.recommended && !b.recommended
+                }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Modules Center")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                Button(action: {
+                    Task { await adminManager.refreshModulesCenter() }
+                }) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 12) {
+                Picker("Filter", selection: $filterMode) {
+                    ForEach(ModuleFilter.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+
+                TextField("Search modules", text: $query)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if adminManager.modulesLoading {
+                ProgressView("Loading modules...")
+                    .foregroundColor(.white)
+            } else if filteredModules.isEmpty {
+                Text("No modules match your filter.")
+                    .foregroundColor(.gray)
+                    .padding(.vertical, 12)
+            } else {
+                ForEach(filteredModules) { module in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Text(module.name)
+                                        .foregroundColor(.white)
+                                        .font(.headline)
+                                    if module.installed {
+                                        Text(module.enabled ? "Enabled" : "Disabled")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background((module.enabled ? Color.green : Color.gray).opacity(0.22))
+                                            .foregroundColor(module.enabled ? .green : .gray)
+                                            .cornerRadius(8)
+                                    } else {
+                                        Text("Not installed")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.orange.opacity(0.2))
+                                            .foregroundColor(.orange)
+                                            .cornerRadius(8)
+                                    }
+                                }
+                                Text(module.id)
+                                    .font(.caption.monospaced())
+                                    .foregroundColor(.gray)
+                                Text(module.description)
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .font(.caption)
+                                HStack(spacing: 8) {
+                                    Text("v\(module.version)")
+                                    Text(module.category.capitalized)
+                                    if module.recommended { Text("Recommended") }
+                                }
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                            }
+                            Spacer()
+                        }
+
+                        HStack(spacing: 10) {
+                            if module.installed {
+                                Button(module.enabled ? "Disable" : "Enable") {
+                                    runAction("toggle-\(module.id)") {
+                                        await adminManager.setModuleEnabled(module.id, enabled: !module.enabled)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Update") {
+                                    runAction("update-\(module.id)") {
+                                        await adminManager.updateModule(module.id, enabled: module.enabled)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Uninstall", role: .destructive) {
+                                    runAction("uninstall-\(module.id)") {
+                                        await adminManager.uninstallModule(module.id)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            } else {
+                                Button("Install") {
+                                    runAction("install-\(module.id)") {
+                                        await adminManager.installModule(module.id)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            Spacer()
+                        }
+                        .disabled(actionInFlight != nil)
+                    }
+                    .padding()
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                }
+            }
+
+            if let message = adminManager.moduleActionMessage, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.green)
+                    .padding(.top, 4)
+            }
+        }
+        .task {
+            await adminManager.refreshModulesCenter()
+        }
+    }
+
+    private func runAction(_ key: String, operation: @escaping () async -> Bool) {
+        actionInFlight = key
+        Task {
+            _ = await operation()
+            actionInFlight = nil
         }
     }
 }
