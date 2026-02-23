@@ -2471,21 +2471,27 @@ class VoiceLinkApp {
 
         const isCurrentRoom = !!this.currentRoom && (this.currentRoom.id === roomData.id || this.currentRoom.roomId === roomData.id);
         const canManageGlobalMedia = this.isCurrentUserAdmin();
+        const mediaStatusText = this.getRoomMediaStatusText(room, roomData);
+        const primaryActionLabel = isCurrentRoom ? 'Show Room' : 'Join Room';
+        const primaryActionHint = isCurrentRoom
+            ? `Open ${roomData.name} in the join panel`
+            : `Join ${roomData.name}`;
 
         // Action menu (accessible for keyboard/screen reader users)
         const previewAvailability = this.getRoomPreviewAvailability(roomData);
         const actionMenu = `
             <details class="room-actions-menu" onclick="event.stopPropagation();">
-                <summary class="room-actions-summary" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
+                <summary class="room-actions-summary" title="Open room actions menu" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
                 <div class="room-actions-list" role="menu" onclick="event.stopPropagation();">
                     <button class="room-action-btn"
                             onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
+                            title="Open join panel for this room"
                             aria-label="Join ${roomData.name}">
                         🎧 Join
                     </button>
                     <button class="room-action-btn"
                             ${previewAvailability.enabled
-                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}', '${roomData.name}')"`
+                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}')"`
                                 : 'disabled'}
                             title="${previewAvailability.reason || 'Preview room audio'}"
                             aria-label="Preview room audio for ${roomData.name}">
@@ -2493,6 +2499,7 @@ class VoiceLinkApp {
                     </button>
                     <button class="room-action-btn"
                             onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
+                            title="Copy room share link"
                             aria-label="Share ${roomData.name}">
                         🔗 Share
                     </button>
@@ -2517,12 +2524,11 @@ class VoiceLinkApp {
         return `
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
                  data-room-id="${roomData.id}"
-                 onclick="app.quickJoinRoom('${roomData.id}')"
                  oncontextmenu="app.openFocusedRoomContextMenu(event, '${roomData.id}')"
-                 onkeydown="app.handleFocusedRoomContextKey(event, '${roomData.id}')"
+                 onkeydown="app.handleRoomListItemKey(event, '${roomData.id}')"
                  role="button"
                  tabindex="0"
-                 aria-label="${roomData.name}, ${descriptionText}, ${userCountText} of ${roomData.maxUsers} max">
+                 aria-label="${roomData.name}. ${descriptionText}. ${userCountText} of ${roomData.maxUsers} max. Media: ${mediaStatusText}.">
                 <div class="room-header">
                     <div class="room-info">
                         <h5 class="room-name">${roomData.name}</h5>
@@ -2538,11 +2544,52 @@ class VoiceLinkApp {
                         ${roomData.hasPassword ? '<span class="password-protected">[Password Protected]</span>' : ''}
                         ${this.getRoomDurationDisplay(room)}
                     </div>
+                    <div class="room-metadata">
+                        <span class="room-meta-item room-meta-description">Description: ${descriptionText}</span>
+                        <span class="room-meta-item">Users: ${roomData.users}/${roomData.maxUsers}</span>
+                        <span class="room-meta-item">Media: ${mediaStatusText}</span>
+                    </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
-                    ${actionMenu}
+                    <div class="room-actions-row">
+                        <button class="room-primary-action-btn"
+                                onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
+                                title="${primaryActionHint}"
+                                aria-label="${primaryActionLabel} ${roomData.name}">
+                            ${isCurrentRoom ? '▶️' : '🎧'} ${primaryActionLabel}
+                        </button>
+                        ${actionMenu}
+                    </div>
                 </div>
             </div>
         `;
+    }
+
+    isRoomMediaPlaying(room, roomData) {
+        const flags = [
+            room?.mediaPlaying,
+            room?.isPlaying,
+            room?.hasActiveMedia,
+            room?.jukeboxActive,
+            room?.activeMedia,
+            roomData?.mediaPlaying,
+            roomData?.hasActiveMedia
+        ];
+
+        if (flags.some(value => value === true)) {
+            return true;
+        }
+
+        const textSignals = [
+            room?.nowPlaying,
+            room?.currentMedia,
+            room?.mediaTitle,
+            room?.jukeboxTrack
+        ];
+        return textSignals.some(value => typeof value === 'string' && value.trim().length > 0);
+    }
+
+    getRoomMediaStatusText(room, roomData) {
+        return this.isRoomMediaPlaying(room, roomData) ? 'Playing' : 'None';
     }
 
     getRoomPreviewAvailability(roomData) {
@@ -2684,6 +2731,15 @@ class VoiceLinkApp {
         const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
         if (!isContextKey) return;
         this.openFocusedRoomContextMenu(event, roomId);
+    }
+
+    handleRoomListItemKey(event, roomId) {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            this.quickJoinRoom(roomId);
+            return;
+        }
+        this.handleFocusedRoomContextKey(event, roomId);
     }
 
     openFocusedRoomContextMenu(event, roomId) {

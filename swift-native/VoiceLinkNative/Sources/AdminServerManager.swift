@@ -21,6 +21,9 @@ class AdminServerManager: ObservableObject {
 
     private var currentServerURL: String = ""
     private var authToken: String?
+    private var canManageUsersEffective: Bool { isAdmin || adminRole.canManageUsers }
+    private var canManageRoomsEffective: Bool { isAdmin || adminRole.canManageRooms }
+    private var canManageConfigEffective: Bool { isAdmin || adminRole.canManageConfig }
 
     enum AdminRole: String, Codable {
         case none = "none"
@@ -87,7 +90,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - Fetch Server Config
 
     func fetchServerConfig() async {
-        guard adminRole.canManageConfig else { return }
+        guard canManageConfigEffective else { return }
         isLoading = true
         error = nil
 
@@ -124,7 +127,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - Update Server Config
 
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
-        guard adminRole.canManageConfig else { return false }
+        guard canManageConfigEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/config") else {
             error = "Invalid server URL"
@@ -161,7 +164,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - User Management
 
     func fetchConnectedUsers() async {
-        guard adminRole.canManageUsers else { return }
+        guard canManageUsersEffective else { return }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/users") else {
             return
@@ -188,7 +191,7 @@ class AdminServerManager: ObservableObject {
     }
 
     func kickUser(_ userId: String, reason: String? = nil) async -> Bool {
-        guard adminRole.canManageUsers else { return false }
+        guard canManageUsersEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/users/\(userId)/kick") else {
             return false
@@ -200,6 +203,7 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
         let body: [String: Any] = ["reason": reason ?? "Kicked by admin"]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -213,7 +217,7 @@ class AdminServerManager: ObservableObject {
     }
 
     func banUser(_ userId: String, reason: String?, duration: Int?) async -> Bool {
-        guard adminRole.canManageUsers else { return false }
+        guard canManageUsersEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/users/\(userId)/ban") else {
             return false
@@ -225,6 +229,7 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
         var body: [String: Any] = ["reason": reason ?? "Banned by admin"]
         if let duration = duration {
@@ -243,9 +248,9 @@ class AdminServerManager: ObservableObject {
     // MARK: - Room Management
 
     func fetchRooms() async {
-        guard adminRole.canManageRooms else { return }
+        guard canManageRoomsEffective else { return }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/rooms") else {
+        guard let url = URL(string: "\(currentServerURL)/api/rooms?source=app") else {
             return
         }
 
@@ -262,17 +267,19 @@ class AdminServerManager: ObservableObject {
                 return
             }
 
-            let decoder = JSONDecoder()
-            serverRooms = try decoder.decode([AdminRoomInfo].self, from: data)
+            guard let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return
+            }
+            serverRooms = rawRooms.map { Self.adminRoom(from: $0) }
         } catch {
             print("Failed to fetch rooms: \(error)")
         }
     }
 
     func deleteRoom(_ roomId: String) async -> Bool {
-        guard adminRole.canManageRooms else { return false }
+        guard canManageRoomsEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/rooms/\(roomId)") else {
+        guard let url = URL(string: "\(currentServerURL)/api/rooms/\(roomId)") else {
             return false
         }
 
@@ -281,23 +288,28 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             if (response as? HTTPURLResponse)?.statusCode == 200 {
                 serverRooms.removeAll { $0.id == roomId }
                 return true
             }
+            if let http = response as? HTTPURLResponse {
+                error = "Delete room failed (\(http.statusCode)): \(String(data: data, encoding: .utf8) ?? "Unknown error")"
+            }
             return false
         } catch {
+            self.error = error.localizedDescription
             return false
         }
     }
 
     func updateRoom(_ room: AdminRoomInfo) async -> Bool {
-        guard adminRole.canManageRooms else { return false }
+        guard canManageRoomsEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/rooms/\(room.id)") else {
+        guard let url = URL(string: "\(currentServerURL)/api/rooms/\(room.id)") else {
             return false
         }
 
@@ -307,14 +319,32 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
-        let encoder = JSONEncoder()
-        request.httpBody = try? encoder.encode(room)
+        let payload: [String: Any] = [
+            "name": room.name,
+            "description": room.description,
+            "maxUsers": room.maxUsers,
+            "visibility": room.visibility ?? (room.isPrivate ? "private" : "public"),
+            "enabled": room.enabled ?? true,
+            "locked": room.locked ?? false
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if (response as? HTTPURLResponse)?.statusCode == 200 {
+                if let idx = serverRooms.firstIndex(where: { $0.id == room.id }) {
+                    serverRooms[idx] = room
+                }
+                return true
+            }
+            if let http = response as? HTTPURLResponse {
+                error = "Update room failed (\(http.statusCode)): \(String(data: data, encoding: .utf8) ?? "Unknown error")"
+            }
+            return false
         } catch {
+            self.error = error.localizedDescription
             return false
         }
     }
@@ -349,7 +379,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - Background Streams
 
     func updateBackgroundStreams(_ streams: [BackgroundStreamConfig]) async -> Bool {
-        guard adminRole.canManageConfig else { return false }
+        guard canManageConfigEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/background-streams") else {
             return false
@@ -376,7 +406,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - API Sync Settings
 
     func fetchAPISyncSettings() async -> APISyncSettings? {
-        guard adminRole.canManageConfig else { return nil }
+        guard canManageConfigEffective else { return nil }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/api-sync") else {
             return nil
@@ -402,7 +432,7 @@ class AdminServerManager: ObservableObject {
     }
 
     func updateAPISyncSettings(_ settings: APISyncSettings) async -> Bool {
-        guard adminRole.canManageConfig else { return false }
+        guard canManageConfigEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/api-sync") else {
             return false
@@ -429,7 +459,7 @@ class AdminServerManager: ObservableObject {
     // MARK: - Federation Settings
 
     func fetchFederationSettings() async -> FederationSettings? {
-        guard adminRole.canManageConfig else { return nil }
+        guard canManageConfigEffective else { return nil }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/federation") else {
             return nil
@@ -455,7 +485,7 @@ class AdminServerManager: ObservableObject {
     }
 
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
-        guard adminRole.canManageConfig else { return false }
+        guard canManageConfigEffective else { return false }
 
         guard let url = URL(string: "\(currentServerURL)/api/admin/federation") else {
             return false
@@ -687,6 +717,34 @@ class AdminServerManager: ObservableObject {
         return APIEndpointResolver.canonicalMainBase
     }
 
+    private static func adminRoom(from dict: [String: Any]) -> AdminRoomInfo {
+        let usersValue: Int = {
+            if let count = dict["users"] as? Int { return count }
+            if let count = dict["userCount"] as? Int { return count }
+            if let users = dict["users"] as? [[String: Any]] { return users.count }
+            return 0
+        }()
+
+        return AdminRoomInfo(
+            id: (dict["id"] as? String) ?? UUID().uuidString,
+            name: (dict["name"] as? String) ?? "Untitled Room",
+            description: (dict["description"] as? String) ?? "",
+            isPrivate: (dict["isPrivate"] as? Bool) ?? false,
+            maxUsers: (dict["maxUsers"] as? Int) ?? 50,
+            userCount: usersValue,
+            createdBy: dict["createdBy"] as? String,
+            createdAt: nil,
+            isPermanent: (dict["isDefault"] as? Bool) ?? false,
+            backgroundStream: nil,
+            visibility: dict["visibility"] as? String,
+            accessType: dict["accessType"] as? String,
+            hidden: dict["hidden"] as? Bool,
+            locked: dict["locked"] as? Bool,
+            enabled: dict["enabled"] as? Bool,
+            isDefault: dict["isDefault"] as? Bool
+        )
+    }
+
     private static func parseModuleInfo(from dict: [String: Any]) -> AdminModuleInfo? {
         guard let id = dict["id"] as? String else { return nil }
         let config = dict["config"] as? [String: Any]
@@ -730,6 +788,7 @@ struct ServerConfig: Codable {
     var registrationEnabled: Bool
     var requireAuth: Bool
     var backgroundStreams: BackgroundStreamsConfig?
+    var pushover: PushoverConfig?
 }
 
 struct BackgroundStreamsConfig: Codable {
@@ -776,6 +835,115 @@ struct AdminRoomInfo: Codable, Identifiable {
     var createdAt: Date?
     var isPermanent: Bool
     var backgroundStream: String?
+    var visibility: String?
+    var accessType: String?
+    var hidden: Bool?
+    var locked: Bool?
+    var enabled: Bool?
+    var isDefault: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case description
+        case isPrivate
+        case maxUsers
+        case userCount
+        case createdBy
+        case createdAt
+        case isPermanent
+        case backgroundStream
+        case visibility
+        case accessType
+        case hidden
+        case locked
+        case enabled
+        case isDefault
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled Room"
+        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+        maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 50
+        userCount = try container.decodeIfPresent(Int.self, forKey: .userCount) ?? 0
+        createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        isPermanent = try container.decodeIfPresent(Bool.self, forKey: .isPermanent) ?? false
+        backgroundStream = try container.decodeIfPresent(String.self, forKey: .backgroundStream)
+        visibility = try container.decodeIfPresent(String.self, forKey: .visibility)
+        accessType = try container.decodeIfPresent(String.self, forKey: .accessType)
+        hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden)
+        locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault)
+    }
+
+    init(
+        id: String,
+        name: String,
+        description: String,
+        isPrivate: Bool,
+        maxUsers: Int,
+        userCount: Int,
+        createdBy: String?,
+        createdAt: Date?,
+        isPermanent: Bool,
+        backgroundStream: String?,
+        visibility: String? = nil,
+        accessType: String? = nil,
+        hidden: Bool? = nil,
+        locked: Bool? = nil,
+        enabled: Bool? = nil,
+        isDefault: Bool? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.isPrivate = isPrivate
+        self.maxUsers = maxUsers
+        self.userCount = userCount
+        self.createdBy = createdBy
+        self.createdAt = createdAt
+        self.isPermanent = isPermanent
+        self.backgroundStream = backgroundStream
+        self.visibility = visibility
+        self.accessType = accessType
+        self.hidden = hidden
+        self.locked = locked
+        self.enabled = enabled
+        self.isDefault = isDefault
+    }
+}
+
+struct PushoverConfig: Codable, Equatable {
+    var enabled: Bool
+    var appToken: String?
+    var userKey: String?
+    var priority: Int
+    var sound: String?
+    var notifyOnRoomEvents: Bool
+    var notifyOnUserEvents: Bool
+
+    init(
+        enabled: Bool = false,
+        appToken: String? = nil,
+        userKey: String? = nil,
+        priority: Int = 0,
+        sound: String? = nil,
+        notifyOnRoomEvents: Bool = true,
+        notifyOnUserEvents: Bool = true
+    ) {
+        self.enabled = enabled
+        self.appToken = appToken
+        self.userKey = userKey
+        self.priority = priority
+        self.sound = sound
+        self.notifyOnRoomEvents = notifyOnRoomEvents
+        self.notifyOnUserEvents = notifyOnUserEvents
+    }
 }
 
 struct ServerStats: Codable {

@@ -52,7 +52,7 @@ class ConnectionHealthMonitor: ObservableObject {
         }
     }
 
-    struct ConnectionDetails {
+    struct ConnectionDetails: Equatable {
         var localServerReachable: Bool = false
         var mainServerReachable: Bool = false
         var apiResponsive: Bool = false
@@ -61,8 +61,8 @@ class ConnectionHealthMonitor: ObservableObject {
         var lastChecked: Date = Date()
     }
 
-    struct DetectedNode: Identifiable {
-        let id = UUID()
+    struct DetectedNode: Identifiable, Equatable {
+        var id: String { "\(type.rawValue)-\(url)" }
         let name: String
         let url: String
         let type: NodeType
@@ -149,10 +149,26 @@ class ConnectionHealthMonitor: ObservableObject {
         details.websocketConnected = ServerManager.shared.isConnected
 
         group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
             details.lastChecked = Date()
-            self?.connectionDetails = details
-            self?.detectedNodes = nodes
-            self?.calculateOverallHealth(details: details)
+            let previousDetails = self.connectionDetails
+            let previousNodes = self.detectedNodes
+
+            // Avoid unnecessary published churn for VoiceOver and UI.
+            if previousDetails.localServerReachable != details.localServerReachable
+                || previousDetails.mainServerReachable != details.mainServerReachable
+                || previousDetails.apiResponsive != details.apiResponsive
+                || previousDetails.websocketConnected != details.websocketConnected
+                || previousDetails.latencyMs != details.latencyMs {
+                self.connectionDetails = details
+            } else {
+                self.connectionDetails.lastChecked = details.lastChecked
+            }
+
+            if previousNodes != nodes {
+                self.detectedNodes = nodes
+            }
+            self.calculateOverallHealth(details: details)
         }
     }
 

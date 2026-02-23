@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Bundle
+    Name="VoiceLink Setup"
+    Version="$(var.Version).0"
+    Manufacturer="Devine Creations"
+    UpgradeCode="9D8AFA5D-B9B0-4E72-A7E4-0080A2EC0A5D"
+    Compressed="yes">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+        xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+        Theme="standard"
+        LicenseUrl=""
+        SuppressOptionsUI="no" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage
+        Id="VoiceLinkMsi"
+        SourceFile="../dist/VoiceLinkNative-$(var.Version)-win-x64.msi"
+        DisplayInternalUI="no"
+        Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

@@ -237,11 +237,15 @@ struct AdminOverviewSection: View {
                 }
 
                 AdminQuickAction(title: "Broadcast Message", icon: "megaphone") {
-                    // TODO: Show broadcast sheet
+                    let pa = PATransmissionManager.shared
+                    if !pa.isPAEnabled {
+                        pa.isPAEnabled = true
+                    }
+                    pa.toggleTransmission(target: .allRooms)
                 }
 
                 AdminQuickAction(title: "Server Logs", icon: "doc.text") {
-                    // TODO: Show logs sheet
+                    adminManager.moduleActionMessage = "Server logs view is available in the Server Logs panel on web admin. Desktop log panel wiring is next."
                 }
             }
         }
@@ -484,6 +488,7 @@ struct UserAdminRow: View {
 struct AdminRoomsSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var showCreateRoom = false
+    @State private var roomBeingEdited: AdminRoomInfo?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -511,12 +516,23 @@ struct AdminRoomsSection: View {
                 RoomAdminRow(room: room) { action in
                     switch action {
                     case .delete:
-                        Task { await adminManager.deleteRoom(room.id) }
+                        Task {
+                            _ = await adminManager.deleteRoom(room.id)
+                            await adminManager.fetchRooms()
+                        }
                     case .edit:
-                        // TODO: Show edit sheet
-                        break
+                        roomBeingEdited = room
                     }
                 }
+            }
+        }
+        .sheet(item: $roomBeingEdited) { room in
+            AdminRoomEditSheet(room: room) { updatedRoom in
+                Task {
+                    _ = await adminManager.updateRoom(updatedRoom)
+                    await adminManager.fetchRooms()
+                }
+                roomBeingEdited = nil
             }
         }
         .task {
@@ -550,10 +566,27 @@ struct RoomAdminRow: View {
                             .foregroundColor(.green)
                             .font(.caption)
                     }
+                    if room.locked == true {
+                        Image(systemName: "lock.shield.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                    }
                 }
                 Text(room.description)
                     .font(.caption)
                     .foregroundColor(.gray)
+                HStack(spacing: 8) {
+                    Text("Visibility: \(room.visibility ?? (room.isPrivate ? "private" : "public"))")
+                    Text("Access: \(room.accessType ?? "hybrid")")
+                    if room.hidden == true {
+                        Text("Hidden")
+                    }
+                    if room.enabled == false {
+                        Text("Disabled")
+                    }
+                }
+                .font(.caption2)
+                .foregroundColor(.blue)
             }
 
             Spacer()
@@ -581,6 +614,112 @@ struct RoomAdminRow: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(10)
+    }
+}
+
+struct AdminRoomEditSheet: View {
+    @State private var draft: AdminRoomInfo
+    let onSave: (AdminRoomInfo) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    init(room: AdminRoomInfo, onSave: @escaping (AdminRoomInfo) -> Void) {
+        _draft = State(initialValue: room)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Edit Room")
+                .font(.headline)
+
+            ConfigTextField(label: "Name", text: Binding(
+                get: { draft.name },
+                set: { draft.name = $0 }
+            ))
+
+            ConfigTextField(label: "Description", text: Binding(
+                get: { draft.description },
+                set: { draft.description = $0 }
+            ))
+
+            HStack(spacing: 16) {
+                ConfigNumberField(label: "Max Users", value: Binding(
+                    get: { draft.maxUsers },
+                    set: { draft.maxUsers = max(1, $0) }
+                ))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Visibility")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Picker("Visibility", selection: Binding(
+                        get: { draft.visibility ?? (draft.isPrivate ? "private" : "public") },
+                        set: {
+                            draft.visibility = $0
+                            draft.isPrivate = ($0 == "private")
+                        }
+                    )) {
+                        Text("Public").tag("public")
+                        Text("Unlisted").tag("unlisted")
+                        Text("Private").tag("private")
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Room Type")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Picker("Room Type", selection: Binding(
+                    get: { draft.accessType ?? "hybrid" },
+                    set: { draft.accessType = $0 }
+                )) {
+                    Text("Hybrid").tag("hybrid")
+                    Text("App Only").tag("app-only")
+                    Text("Web Only").tag("web-only")
+                    Text("Hidden").tag("hidden")
+                }
+                .pickerStyle(.segmented)
+            }
+
+            ConfigToggle(label: "Private", isOn: Binding(
+                get: { draft.isPrivate },
+                set: {
+                    draft.isPrivate = $0
+                    draft.visibility = $0 ? "private" : (draft.visibility == "private" ? "public" : draft.visibility)
+                }
+            ))
+            ConfigToggle(label: "Hidden", isOn: Binding(
+                get: { draft.hidden ?? false },
+                set: { draft.hidden = $0 }
+            ))
+            ConfigToggle(label: "Locked", isOn: Binding(
+                get: { draft.locked ?? false },
+                set: { draft.locked = $0 }
+            ))
+            ConfigToggle(label: "Enabled", isOn: Binding(
+                get: { draft.enabled ?? true },
+                set: { draft.enabled = $0 }
+            ))
+            ConfigToggle(label: "Default Room", isOn: Binding(
+                get: { draft.isDefault ?? false },
+                set: { draft.isDefault = $0 }
+            ))
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.bordered)
+                Button("Save") {
+                    onSave(draft)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.top, 4)
+        }
+        .padding(20)
+        .frame(minWidth: 560, minHeight: 420)
     }
 }
 
@@ -647,6 +786,84 @@ struct AdminConfigSection: View {
                             get: { editedConfig?.requireAuth ?? config.requireAuth },
                             set: { editedConfig = (editedConfig ?? config).with(requireAuth: $0) }
                         ))
+                    }
+
+                    // Pushover
+                    SectionHeader(title: "Pushover Notifications")
+                    ConfigToggle(label: "Enable Pushover", isOn: Binding(
+                        get: { editedConfig?.pushover?.enabled ?? config.pushover?.enabled ?? false },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.enabled = value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+
+                    if editedConfig?.pushover?.enabled == true || (editedConfig == nil && config.pushover?.enabled == true) {
+                        VStack(spacing: 12) {
+                            ConfigSecureField(label: "App Token", text: Binding(
+                                get: { editedConfig?.pushover?.appToken ?? config.pushover?.appToken ?? "" },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.appToken = value.isEmpty ? nil : value
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                            ConfigSecureField(label: "User Key", text: Binding(
+                                get: { editedConfig?.pushover?.userKey ?? config.pushover?.userKey ?? "" },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.userKey = value.isEmpty ? nil : value
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                            ConfigTextField(label: "Sound", text: Binding(
+                                get: { editedConfig?.pushover?.sound ?? config.pushover?.sound ?? "pushover" },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.sound = value.isEmpty ? nil : value
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                            ConfigNumberField(label: "Priority (-2 to 2)", value: Binding(
+                                get: { editedConfig?.pushover?.priority ?? config.pushover?.priority ?? 0 },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.priority = min(max(value, -2), 2)
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                            ConfigToggle(label: "Notify on Room Events", isOn: Binding(
+                                get: { editedConfig?.pushover?.notifyOnRoomEvents ?? config.pushover?.notifyOnRoomEvents ?? true },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.notifyOnRoomEvents = value
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                            ConfigToggle(label: "Notify on User Events", isOn: Binding(
+                                get: { editedConfig?.pushover?.notifyOnUserEvents ?? config.pushover?.notifyOnUserEvents ?? true },
+                                set: { value in
+                                    var next = editedConfig ?? config
+                                    var push = next.pushover ?? PushoverConfig()
+                                    push.notifyOnUserEvents = value
+                                    next.pushover = push
+                                    editedConfig = next
+                                }
+                            ))
+                        }
                     }
                 }
 
@@ -1515,7 +1732,8 @@ struct ConfigToggle: View {
 extension ServerConfig {
     func with(serverName: String? = nil, serverDescription: String? = nil, maxUsers: Int? = nil,
               maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, welcomeMessage: String?? = nil,
-              registrationEnabled: Bool? = nil, requireAuth: Bool? = nil) -> ServerConfig {
+              registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
+              pushover: PushoverConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
             serverDescription: serverDescription ?? self.serverDescription,
@@ -1526,7 +1744,8 @@ extension ServerConfig {
             motd: self.motd,
             registrationEnabled: registrationEnabled ?? self.registrationEnabled,
             requireAuth: requireAuth ?? self.requireAuth,
-            backgroundStreams: self.backgroundStreams
+            backgroundStreams: self.backgroundStreams,
+            pushover: pushover ?? self.pushover
         )
     }
 }

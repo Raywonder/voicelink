@@ -967,6 +967,7 @@ struct GuestRoomInfoView: View {
                             .padding(.vertical, 4)
                             .background(Color.orange.opacity(0.2))
                             .cornerRadius(8)
+                            .accessibilityHidden(true)
                     }
 
                     HStack {
@@ -993,10 +994,13 @@ struct GuestRoomInfoView: View {
                         }
                     }
                     .frame(height: 6)
+                    .accessibilityHidden(true)
                 }
                 .padding()
                 .background(Color.green.opacity(0.1))
                 .cornerRadius(10)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Guest room \(guestRoom.name). \(guestRoom.capacityDisplay). Time remaining \(timeRemaining).")
                 .onAppear {
                     startTimer()
                 }
@@ -1008,8 +1012,10 @@ struct GuestRoomInfoView: View {
     }
 
     private func startTimer() {
+        timer?.invalidate()
         updateTimeRemaining()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        let interval: TimeInterval = AccessibilityManager.shared.isVoiceOverRunning ? 5 : 1
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             updateTimeRemaining()
         }
     }

@@ -87,6 +87,8 @@ class AccessibilityManager: ObservableObject {
     // Announcement queue
     private var announcementQueue: [(String, AnnouncementPriority)] = []
     private var isProcessingQueue: Bool = false
+    private var lastAnnouncementMessage: String?
+    private var lastAnnouncementAt: Date = .distantPast
 
     // Sound manager reference
     private var soundManager: UISoundManager?
@@ -136,7 +138,10 @@ class AccessibilityManager: ObservableObject {
     }
 
     private func checkVoiceOverStatus() {
-        isVoiceOverRunning = NSWorkspace.shared.isVoiceOverEnabled
+        let newValue = NSWorkspace.shared.isVoiceOverEnabled
+        if isVoiceOverRunning != newValue {
+            isVoiceOverRunning = newValue
+        }
     }
 
     // MARK: - Sound Manager
@@ -154,6 +159,21 @@ class AccessibilityManager: ObservableObject {
         if let cat = category, settings.categorySettings[cat.rawValue] == false {
             return
         }
+
+        // Avoid flooding VoiceOver with repeated announcements in a short window.
+        let now = Date()
+        let normalizedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timeSinceLast = now.timeIntervalSince(lastAnnouncementAt)
+        let duplicateWindow: TimeInterval = priority == .assertive ? 0.8 : 2.0
+        if normalizedMessage == lastAnnouncementMessage, timeSinceLast < duplicateWindow {
+            return
+        }
+        // Add a small pacing gap for non-urgent announcements while VoiceOver is active.
+        if isVoiceOverRunning, priority != .assertive, timeSinceLast < 0.35 {
+            return
+        }
+        lastAnnouncementMessage = normalizedMessage
+        lastAnnouncementAt = now
 
         print("[Accessibility] (\(priority.rawValue)) \(message)")
 

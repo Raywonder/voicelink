@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="VoiceLink"
+    Manufacturer="Devine Creations"
+    Version="$(var.Version)"
+    UpgradeCode="4E4212C5-5BA5-4A9D-9703-0455C5634D43"
+    Language="1033">
+    <SummaryInformation Description="VoiceLink native desktop client for Windows 10/11." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of VoiceLink is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="MainFeature" Title="VoiceLink" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentRef Id="ProgramMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="ProgramFiles64Folder">
+      <Files Include="../../publish/win-x64/**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="ProgramMenuShortcut" Guid="A0C1B4D2-2D57-4AC0-9D57-2D8BB67E2A9A">
+        <Shortcut
+          Id="ProgramMenuVoiceLinkShortcut"
+          Name="VoiceLink"
+          Description="Launch VoiceLink"
+          Target="[ProgramFiles64Folder]VoiceLinkNative.exe"
+          WorkingDirectory="ProgramFiles64Folder" />
+        <RegistryValue Root="HKCU" Key="Software\DevineCreations\VoiceLink" Name="ProgramMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="1FA5607E-36CC-4E2E-8668-E9A56BA4A2E4">
+        <Shortcut
+          Id="DesktopVoiceLinkShortcut"
+          Name="VoiceLink"
+          Description="Launch VoiceLink"
+          Target="[ProgramFiles64Folder]VoiceLinkNative.exe"
+          WorkingDirectory="ProgramFiles64Folder" />
+        <RegistryValue Root="HKCU" Key="Software\DevineCreations\VoiceLink" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

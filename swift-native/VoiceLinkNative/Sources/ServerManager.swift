@@ -19,6 +19,7 @@ class ServerManager: ObservableObject {
     @Published var audioTransmissionStatus: String = "Idle"
     @Published var inputMuted: Bool = false
     @Published var outputMuted: Bool = false
+    @Published var activeRoomId: String?
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -27,6 +28,9 @@ class ServerManager: ObservableObject {
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
     private var domainRecoveryTimer: Timer?
+    private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
+    private var roomStreamPlayer: AVPlayer?
+    private var currentRoomStreamURL: URL?
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -209,7 +213,7 @@ class ServerManager: ObservableObject {
         print("Connecting to server: \(serverURL)")
 
         manager = SocketManager(socketURL: url, config: [
-            .log(true),
+            .log(false),
             .compress,
             .forceWebsockets(true),
             .reconnects(true),
@@ -333,7 +337,10 @@ class ServerManager: ObservableObject {
             if let roomsData = data[0] as? [[String: Any]] {
                 let rooms = self?.normalizedRooms(from: roomsData) ?? []
                 DispatchQueue.main.async {
-                    self?.rooms = rooms
+                    guard let self else { return }
+                    if self.roomListSignature(self.rooms) != self.roomListSignature(rooms) {
+                        self.rooms = rooms
+                    }
                 }
             }
         }
@@ -355,6 +362,12 @@ class ServerManager: ObservableObject {
                     DispatchQueue.main.async {
                         self?.currentRoomUsers = users
                     }
+                }
+                if let roomId = roomData["id"] as? String ?? roomData["roomId"] as? String {
+                    DispatchQueue.main.async {
+                        self?.activeRoomId = roomId
+                    }
+                    self?.fetchActiveRoomStream(for: roomId)
                 }
                 NotificationCenter.default.post(name: .roomJoined, object: roomData)
             }
@@ -628,6 +641,10 @@ class ServerManager: ObservableObject {
                 ?? (payload["itemName"] as? String)
                 ?? (payload["itemId"] as? String)
                 ?? "Media"
+            let streamUrl = payload["streamUrl"] as? String
+            if let streamUrl {
+                self.startRoomStreamPlayback(from: streamUrl)
+            }
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) started.")
                 NotificationCenter.default.post(
@@ -644,6 +661,7 @@ class ServerManager: ObservableObject {
                 ?? (payload["itemName"] as? String)
                 ?? (payload["itemId"] as? String)
                 ?? "Media"
+            self.stopRoomStreamPlayback()
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) stopped.")
                 NotificationCenter.default.post(
@@ -657,58 +675,15 @@ class ServerManager: ObservableObject {
         // MARK: - Audio Relay Handlers
 
         // Receive relayed audio from server (when P2P fails)
-        socket.on("relayed-audio") { data, ack in
-            if let audioInfo = data[0] as? [String: Any],
-               let userId = audioInfo["userId"] as? String,
-               let timestamp = audioInfo["timestamp"] as? Double,
-               let sampleRate = audioInfo["sampleRate"] as? Double {
-
-                // Handle audio data - could be base64 string or raw data
-                var audioData: Data?
-                if let base64String = audioInfo["audioData"] as? String {
-                    audioData = Data(base64Encoded: base64String)
-                } else if let rawData = audioInfo["audioData"] as? Data {
-                    audioData = rawData
-                }
-
-                if let audioBuffer = audioData {
-                    DispatchQueue.main.async {
-                        SpatialAudioEngine.shared.receiveAudioData(
-                            from: userId,
-                            data: audioBuffer,
-                            timestamp: timestamp,
-                            sampleRate: sampleRate
-                        )
-                    }
-                }
-            }
+        socket.on("relayed-audio") { [weak self] data, ack in
+            guard let audioInfo = data.first as? [String: Any] else { return }
+            self?.processIncomingAudioPacket(audioInfo)
         }
 
         // Also listen for audio-data event (alternative name)
-        socket.on("audio-data") { data, ack in
-            if let audioInfo = data[0] as? [String: Any],
-               let userId = audioInfo["userId"] as? String,
-               let timestamp = audioInfo["timestamp"] as? Double,
-               let sampleRate = audioInfo["sampleRate"] as? Double {
-
-                var audioData: Data?
-                if let base64String = audioInfo["audioData"] as? String {
-                    audioData = Data(base64Encoded: base64String)
-                } else if let rawData = audioInfo["audioData"] as? Data {
-                    audioData = rawData
-                }
-
-                if let audioBuffer = audioData {
-                    DispatchQueue.main.async {
-                        SpatialAudioEngine.shared.receiveAudioData(
-                            from: userId,
-                            data: audioBuffer,
-                            timestamp: timestamp,
-                            sampleRate: sampleRate
-                        )
-                    }
-                }
-            }
+        socket.on("audio-data") { [weak self] data, ack in
+            guard let audioInfo = data.first as? [String: Any] else { return }
+            self?.processIncomingAudioPacket(audioInfo)
         }
 
         // Relay status updates
@@ -731,6 +706,33 @@ class ServerManager: ObservableObject {
 
     func getRooms() {
         socket?.emit("get-rooms")
+    }
+
+    private func processIncomingAudioPacket(_ audioInfo: [String: Any]) {
+        guard let userId = audioInfo["userId"] as? String,
+              let timestamp = audioInfo["timestamp"] as? Double,
+              let sampleRate = audioInfo["sampleRate"] as? Double else {
+            return
+        }
+
+        incomingAudioQueue.async {
+            let audioData: Data?
+            if let base64String = audioInfo["audioData"] as? String {
+                audioData = Data(base64Encoded: base64String)
+            } else if let rawData = audioInfo["audioData"] as? Data {
+                audioData = rawData
+            } else {
+                audioData = nil
+            }
+
+            guard let audioBuffer = audioData else { return }
+            SpatialAudioEngine.shared.receiveAudioData(
+                from: userId,
+                data: audioBuffer,
+                timestamp: timestamp,
+                sampleRate: sampleRate
+            )
+        }
     }
 
     func createRoom(name: String, description: String, isPrivate: Bool, password: String? = nil) {
@@ -763,6 +765,27 @@ class ServerManager: ObservableObject {
     private func normalizedRooms(from rawRooms: [[String: Any]]) -> [ServerRoom] {
         let parsed = rawRooms.compactMap { ServerRoom(from: $0) }
         return deduplicateRooms(parsed)
+    }
+
+    private func roomListSignature(_ rooms: [ServerRoom]) -> String {
+        rooms
+            .map { room in
+                [
+                    room.id,
+                    room.name,
+                    room.description,
+                    String(room.userCount),
+                    room.isPrivate ? "1" : "0",
+                    String(room.maxUsers),
+                    room.createdBy ?? "",
+                    room.createdByRole ?? "",
+                    room.roomType ?? "",
+                    room.hostServerName ?? "",
+                    room.hostServerOwner ?? ""
+                ].joined(separator: "|")
+            }
+            .sorted()
+            .joined(separator: "||")
     }
 
     func deduplicateRooms(_ rooms: [ServerRoom]) -> [ServerRoom] {
@@ -837,8 +860,57 @@ class ServerManager: ObservableObject {
     func leaveRoom() {
         socket?.emit("leave-room")
         stopAudioTransmission()
+        stopRoomStreamPlayback()
         DispatchQueue.main.async {
             self.currentRoomUsers = []
+            self.activeRoomId = nil
+        }
+    }
+
+    private func fetchActiveRoomStream(for roomId: String) {
+        guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data else { return }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let isActive = json["active"] as? Bool ?? false
+            guard isActive, let streamUrl = json["streamUrl"] as? String else {
+                self.stopRoomStreamPlayback()
+                return
+            }
+            self.startRoomStreamPlayback(from: streamUrl)
+        }.resume()
+    }
+
+    private func startRoomStreamPlayback(from rawURL: String) {
+        guard let url = URL(string: rawURL) else { return }
+        if currentRoomStreamURL == url, roomStreamPlayer != nil {
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.currentRoomStreamURL = url
+            let item = AVPlayerItem(url: url)
+            if let player = self.roomStreamPlayer {
+                player.replaceCurrentItem(with: item)
+                player.play()
+            } else {
+                let player = AVPlayer(playerItem: item)
+                player.volume = 0.75
+                self.roomStreamPlayer = player
+                player.play()
+            }
+        }
+    }
+
+    private func stopRoomStreamPlayback() {
+        DispatchQueue.main.async {
+            self.roomStreamPlayer?.pause()
+            self.roomStreamPlayer?.replaceCurrentItem(with: nil)
+            self.currentRoomStreamURL = nil
         }
     }
 

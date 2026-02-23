@@ -1,18 +1,18 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0
-build: 20
+build: 22
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: RoXtxMDQKPqWFnsDTHTvdAIbXpI+W3Cc2XK1tTYei468Hsf5dXx5hsEQAZnfxuSJcj1se5WsUUUV145WkN9OQA==
-    size: 160586507
+    sha512: 8zk3H0ckOMUS1ZKLdhgRlt74MVZCn2iXgaXLw2johat22gHPf71JiENoSRbp8UnEnj7nAHWNol7kPTYx8Q2Xog==
+    size: 161052253
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: RoXtxMDQKPqWFnsDTHTvdAIbXpI+W3Cc2XK1tTYei468Hsf5dXx5hsEQAZnfxuSJcj1se5WsUUUV145WkN9OQA==
-releaseDate: '2026-02-23T07:23:20.000Z'
+sha512: 8zk3H0ckOMUS1ZKLdhgRlt74MVZCn2iXgaXLw2johat22gHPf71JiENoSRbp8UnEnj7nAHWNol7kPTYx8Q2Xog==
+releaseDate: '2026-02-23T12:30:29.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Internal Build 20)
-  - Startup now avoids default system fallback sound and shows non-blocking background audio-download alerts.
-  - Added built-in self-test scheduler with admin UI controls for checks/history.
-  - Restored admin access fallback for datboydommo@layor8.space on login.
-  - Replaced release package and checksum manifests.
+  VoiceLink macOS Update (Internal Build 22)
+  - Room actions now expose clearer VoiceOver labels/hints and default-action behavior.
+  - Room metadata text is surfaced consistently (description, users, media status).
+  - Improved room custom actions for keyboard/VoiceOver workflows.
+  - Updated macOS release package and checksum manifests.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip

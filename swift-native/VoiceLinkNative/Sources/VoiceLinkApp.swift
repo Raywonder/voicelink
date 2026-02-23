@@ -64,10 +64,15 @@ struct VoiceLinkApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
-                Button("Join by Code") {
-                    appState.currentScreen = .joinRoom
+                Button("Join or Search Rooms...") {
+                    appState.openJoinRoomPanel()
                 }
                 .keyboardShortcut("j", modifiers: .command)
+
+                Button(appState.quickJoinCommandTitle) {
+                    appState.handleCommandShiftJ()
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
 
                 Divider()
 
@@ -86,8 +91,13 @@ struct VoiceLinkApp: App {
                 Button("Leave Room") {
                     appState.leaveCurrentRoom()
                 }
-                .keyboardShortcut("w", modifiers: .command)
+                .keyboardShortcut("l", modifiers: [.command, .option])
                 .disabled(!appState.hasActiveRoom)
+
+                Button("File Transfer Details") {
+                    NotificationCenter.default.post(name: .openFileTransfers, object: nil)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option, .shift])
             }
             CommandMenu("Audio") {
                 let settings = SettingsManager.shared
@@ -186,6 +196,21 @@ struct VoiceLinkApp: App {
                         appState.currentScreen = .login
                     }
                     .keyboardShortcut("l", modifiers: .command)
+                    Button("Sign In with Google") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Button("Sign In with Apple") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    Button("Sign In with GitHub") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
                 }
 
                 Divider()
@@ -352,6 +377,7 @@ extension Notification.Name {
     static let roomActionLeave = Notification.Name("roomActionLeave")
     static let mainWindowCloseRequested = Notification.Name("mainWindowCloseRequested")
     static let openRoomJukebox = Notification.Name("openRoomJukebox")
+    static let openFileTransfers = Notification.Name("openFileTransfers")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -581,6 +607,9 @@ class AppState: ObservableObject {
     @Published var showAnnouncements: Bool = false
     @Published var showBugReport: Bool = false
     @Published var minimizedRoom: Room?
+    @Published var focusedRoomId: String?
+    @Published var pendingCreateRoomName: String = ""
+    @Published var roomHasActiveMusic: [String: Bool] = [:]
     private var previousScreen: Screen = .mainMenu
 
     let serverManager = ServerManager.shared
@@ -615,9 +644,18 @@ class AppState: ObservableObject {
         minimizedRoom != nil
     }
 
+    var quickJoinCommandTitle: String {
+        if currentRoom != nil {
+            return "Minimize Current Room"
+        }
+        if minimizedRoom != nil {
+            return "Show Current Room"
+        }
+        return "Join Focused Room"
+    }
+
     init() {
         detectLocalIP()
-        connectToServer()
         setupServerObservers()
         setupRoomActionObservers()
         setupWindowBehaviorObservers()
@@ -786,6 +824,7 @@ class AppState: ObservableObject {
         // Observe server connection status
         serverManager.$isConnected
             .receive(on: DispatchQueue.main)
+            .removeDuplicates()
             .assign(to: &$isConnected)
 
         // Observe server status
@@ -798,6 +837,7 @@ class AppState: ObservableObject {
                 default: return .offline
                 }
             }
+            .removeDuplicates()
             .assign(to: &$serverStatus)
 
         // Observe rooms from server
@@ -829,16 +869,23 @@ class AppState: ObservableObject {
                     return mapped
                 }
             }
-            .assign(to: &$rooms)
+            .removeDuplicates()
+            .sink { [weak self] mappedRooms in
+                self?.rooms = mappedRooms
+                self?.refreshRoomMediaStatuses(for: mappedRooms)
+            }
+            .store(in: &cancellables)
 
         // Observe errors
         serverManager.$errorMessage
             .receive(on: DispatchQueue.main)
+            .removeDuplicates()
             .assign(to: &$errorMessage)
 
         // Keep admin capabilities in sync with active server connection.
         serverManager.$isConnected
             .receive(on: DispatchQueue.main)
+            .removeDuplicates()
             .sink { [weak self] _ in
                 self?.refreshAdminCapabilities()
             }
@@ -964,25 +1011,61 @@ class AppState: ObservableObject {
 
     @MainActor
     private func fetchRoomsViaHTTPFallback() async {
-        guard let base = serverManager.baseURL, !base.isEmpty else { return }
-        guard let url = APIEndpointResolver.url(base: base, path: "/api/rooms") else { return }
+        var aggregated: [ServerRoom] = []
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 8
+        func fetchRooms(from base: String) async -> [ServerRoom] {
+            guard var components = URLComponents(string: base) else { return [] }
+            components.path = "/api/rooms"
+            components.queryItems = [URLQueryItem(name: "source", value: "app")]
+            guard let url = components.url else { return [] }
 
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
-            guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
-
-            let parsed = array.compactMap { ServerRoom(from: $0) }
-            let deduped = serverManager.deduplicateRooms(parsed).map(Room.init(from:))
-            if !deduped.isEmpty {
-                rooms = deduped
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 8
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [] }
+                guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+                return array.compactMap { ServerRoom(from: $0) }
+            } catch {
+                return []
             }
-        } catch {
-            // Keep socket path as primary; fallback is best-effort.
+        }
+
+        if let connectedBase = serverManager.baseURL, !connectedBase.isEmpty {
+            aggregated.append(contentsOf: await fetchRooms(from: connectedBase))
+        }
+        if APIEndpointResolver.normalize(serverManager.baseURL ?? "") != APIEndpointResolver.canonicalMainBase {
+            aggregated.append(contentsOf: await fetchRooms(from: APIEndpointResolver.canonicalMainBase))
+        }
+
+        let deduped = serverManager.deduplicateRooms(aggregated).map(Room.init(from:))
+        if !deduped.isEmpty {
+            rooms = deduped
+            refreshRoomMediaStatuses(for: deduped)
+        }
+    }
+
+    private func refreshRoomMediaStatuses(for roomList: [Room]) {
+        guard let base = serverManager.baseURL, !base.isEmpty else { return }
+        let ids = roomList.map(\.id)
+        Task.detached(priority: .utility) {
+            var statusMap: [String: Bool] = [:]
+            for roomId in ids {
+                guard let encoded = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                      let url = URL(string: "\(base)/api/jellyfin/room-stream/\(encoded)") else {
+                    continue
+                }
+                if let (data, response) = try? await URLSession.shared.data(from: url),
+                   let http = response as? HTTPURLResponse,
+                   (200..<300).contains(http.statusCode),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    statusMap[roomId] = (json["active"] as? Bool) == true
+                }
+            }
+            await MainActor.run {
+                self.roomHasActiveMusic = statusMap
+            }
         }
     }
 
@@ -993,6 +1076,18 @@ class AppState: ObservableObject {
             || AdminServerManager.shared.adminRole.canManageRooms
             || role.contains("admin")
             || role.contains("owner")
+    }
+
+    func displayDescription(for room: Room) -> String {
+        let trimmed = room.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? "No description provided." : trimmed
+        if roomHasActiveMusic[room.id] == true {
+            if base.localizedCaseInsensitiveContains("music playing") || base.localizedCaseInsensitiveContains("live music") {
+                return base
+            }
+            return "\(base) Live music playing."
+        }
+        return base
     }
 
     func preferredDisplayName() -> String {
@@ -1082,6 +1177,7 @@ class AppState: ObservableObject {
     }
 
     func joinOrShowRoom(_ room: Room) {
+        focusedRoomId = room.id
         if activeRoomId == room.id {
             currentRoom = room
             minimizedRoom = nil
@@ -1105,6 +1201,69 @@ class AppState: ObservableObject {
         serverManager.joinRoom(roomId: room.id, username: joinName)
         currentRoom = room
         currentScreen = .voiceChat
+    }
+
+    func setFocusedRoom(_ room: Room?) {
+        focusedRoomId = room?.id
+    }
+
+    func focusedRoomForQuickJoin() -> Room? {
+        if let focusedRoomId,
+           let focused = rooms.first(where: { $0.id == focusedRoomId }) {
+            return focused
+        }
+        if let active = rooms.first(where: { $0.userCount > 0 }) {
+            return active
+        }
+        return rooms.first
+    }
+
+    func openJoinRoomPanel() {
+        currentScreen = .joinRoom
+    }
+
+    func handleCommandShiftJ() {
+        if currentRoom != nil {
+            minimizeCurrentRoom()
+            return
+        }
+        if minimizedRoom != nil {
+            restoreMinimizedRoom()
+            return
+        }
+        if let focused = focusedRoomForQuickJoin() {
+            joinOrShowRoom(focused)
+            return
+        }
+        openJoinRoomPanel()
+    }
+
+    @discardableResult
+    func joinRoomByCodeOrName(_ rawQuery: String) -> Bool {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            errorMessage = "Enter a room ID or room name."
+            return false
+        }
+
+        let q = query.lowercased()
+        if let exact = rooms.first(where: { $0.id.lowercased() == q || $0.name.lowercased() == q }) {
+            joinOrShowRoom(exact)
+            return true
+        }
+
+        if let fuzzy = rooms.first(where: {
+            $0.id.lowercased().contains(q)
+            || $0.name.lowercased().contains(q)
+            || $0.description.lowercased().contains(q)
+            || ($0.hostedFromLine?.lowercased().contains(q) ?? false)
+        }) {
+            joinOrShowRoom(fuzzy)
+            return true
+        }
+
+        errorMessage = "No room found for \"\(query)\". You can create it now."
+        return false
     }
 
     func minimizeCurrentRoom() {
@@ -1196,7 +1355,7 @@ class AppState: ObservableObject {
 }
 
 // MARK: - Models
-struct Room: Identifiable {
+struct Room: Identifiable, Equatable {
     let id: String
     let name: String
     let description: String
@@ -1288,6 +1447,7 @@ struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject private var soundManager = AppSoundManager.shared
     @State private var showJukeboxSheet = false
+    @State private var showFileTransfersSheet = false
 
     var body: some View {
         ZStack {
@@ -1373,6 +1533,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openRoomJukebox)) { _ in
             showJukeboxSheet = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openFileTransfers)) { _ in
+            showFileTransfersSheet = true
+        }
         .sheet(isPresented: $showJukeboxSheet) {
             NavigationView {
                 JellyfinView()
@@ -1384,6 +1547,18 @@ struct ContentView: View {
                     }
             }
             .frame(minWidth: 920, minHeight: 620)
+        }
+        .sheet(isPresented: $showFileTransfersSheet) {
+            NavigationView {
+                FileTransfersPanel()
+                    .navigationTitle("File Transfers")
+                    .toolbar {
+                        ToolbarItem(placement: .automatic) {
+                            Button("Done") { showFileTransfersSheet = false }
+                        }
+                    }
+            }
+            .frame(minWidth: 760, minHeight: 520)
         }
     }
 }
@@ -1629,14 +1804,17 @@ struct MainMenuView: View {
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomCard(
                                     room: room,
+                                    descriptionText: appState.displayDescription(for: room),
+                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
                                     isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom
+                                    isAdmin: canAdminRoom,
+                                    onFocus: { appState.setFocusedRoom(room) }
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
                                     PeekManager.shared.peekIntoRoom(room)
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/client/#/room/\(room.id)"
+                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -1657,14 +1835,17 @@ struct MainMenuView: View {
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomCard(
                                     room: room,
+                                    descriptionText: appState.displayDescription(for: room),
+                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
                                     isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom
+                                    isAdmin: canAdminRoom,
+                                    onFocus: { appState.setFocusedRoom(room) }
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
                                     PeekManager.shared.peekIntoRoom(room)
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/client/#/room/\(room.id)"
+                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -1695,14 +1876,17 @@ struct MainMenuView: View {
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomColumnRow(
                                     room: room,
+                                    descriptionText: appState.displayDescription(for: room),
+                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
                                     isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom
+                                    isAdmin: canAdminRoom,
+                                    onFocus: { appState.setFocusedRoom(room) }
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
                                     PeekManager.shared.peekIntoRoom(room)
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/client/#/room/\(room.id)"
+                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -1737,7 +1921,7 @@ struct MainMenuView: View {
                         isActiveRoom: appState.activeRoomId == room.id,
                         onJoin: { appState.joinOrShowRoom(room) },
                         onShare: {
-                            let roomURL = "https://voicelink.devinecreations.net/client/#/room/\(room.id)"
+                            let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(roomURL, forType: .string)
                             AppSoundManager.shared.playSound(.success)
@@ -1790,8 +1974,33 @@ struct MainMenuView: View {
                         .cornerRadius(10)
                     }
                 } else {
-                    ActionButton(title: "Login with Mastodon", icon: "person.circle.fill", color: .purple) {
-                        appState.currentScreen = .login
+                    VStack(alignment: .leading, spacing: 8) {
+                        ActionButton(title: "Login with Mastodon", icon: "person.circle.fill", color: .purple) {
+                            appState.currentScreen = .login
+                        }
+                        HStack(spacing: 8) {
+                            Button("Google") {
+                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            Button("Apple") {
+                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            Button("GitHub") {
+                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
                 }
             }
@@ -1806,10 +2015,12 @@ struct MainMenuView: View {
                 Spacer()
 
                 // Settings tip at bottom of sidebar
-                Text("Command+Comma for Settings")
-                    .font(.caption)
-                    .foregroundColor(.gray.opacity(0.6))
-                    .padding(.bottom, 8)
+                HStack(spacing: 10) {
+                    Text("Settings: ⌘,")
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.85))
+                }
+                .padding(.bottom, 8)
             }
             .frame(width: 280)
             .padding()
@@ -1820,8 +2031,11 @@ struct MainMenuView: View {
 struct RoomCard: View {
     @ObservedObject private var settings = SettingsManager.shared
     let room: Room
+    var descriptionText: String? = nil
+    let roomHasActiveMedia: Bool
     let isActiveRoom: Bool
     let isAdmin: Bool
+    var onFocus: () -> Void = {}
     let onJoin: () -> Void
     var onPreview: () -> Void = {}
     var onShare: () -> Void = {}
@@ -1831,6 +2045,9 @@ struct RoomCard: View {
     var onOpenDetails: () -> Void = {}
 
     var displayDescription: String {
+        if let descriptionText {
+            return descriptionText
+        }
         let trimmed = room.description.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "No description provided." : trimmed
     }
@@ -1846,6 +2063,27 @@ struct RoomCard: View {
         case .share:
             return "Share"
         }
+    }
+
+    var primaryActionEffectText: String {
+        switch settings.defaultRoomPrimaryAction {
+        case .openDetails:
+            return "opens room details"
+        case .joinOrShow:
+            return isActiveRoom ? "returns to your active room" : "joins this room"
+        case .preview:
+            return room.userCount > 0 ? "starts room audio preview" : "opens room details because preview is unavailable"
+        case .share:
+            return "copies a room share link"
+        }
+    }
+
+    var mediaStatusText: String {
+        roomHasActiveMedia ? "Media is playing." : "No media is playing."
+    }
+
+    var roomAccessibilitySummary: String {
+        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
     }
 
     func runPrimaryAction() {
@@ -1904,6 +2142,7 @@ struct RoomCard: View {
                 primaryLabel: primaryActionLabel,
                 isActiveRoom: isActiveRoom,
                 isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && room.userCount <= 0,
+                primaryActionEffectText: primaryActionEffectText,
                 onPrimaryAction: { runPrimaryAction() },
                 onJoin: onJoin,
                 onPreview: onPreview,
@@ -1916,10 +2155,58 @@ struct RoomCard: View {
                 roomHasUsers: room.userCount > 0,
                 isAdmin: isAdmin
             )
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(roomHasActiveMedia ? "Media: Active" : "Media: None")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.95))
+                Text("Users: \(room.userCount)/\(room.maxUsers)")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.8))
+                Text(displayDescription)
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.75))
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 260, alignment: .trailing)
         }
         .padding()
         .background(Color.white.opacity(0.1))
         .cornerRadius(12)
+        .contentShape(Rectangle())
+        .onTapGesture { onFocus() }
+        .onHover { hovering in
+            if hovering { onFocus() }
+        }
+        .contextMenu {
+            Button("Room Details") { onOpenDetails() }
+            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
+            Button("Preview Room Audio") {
+                if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            }
+            .disabled(room.userCount <= 0)
+            Button("Share Room Link") { onShare() }
+            Button("Copy Room ID") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(room.id, forType: .string)
+            }
+            Divider()
+            Button("Open Room Administration") { onOpenAdmin() }
+            Button("Create New Room") { onCreateRoom() }
+            Button("Delete This Room", role: .destructive) { onDeleteRoom() }
+                .disabled(!isAdmin)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(roomAccessibilitySummary)
+        .accessibilityHint("Primary button runs \(primaryActionLabel). Use room actions for more options.")
+        .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
+        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
+        .accessibilityAction(named: Text("Preview Room Audio")) {
+            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+        }
+        .accessibilityAction(named: Text("Share Room Link")) { onShare() }
+        .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
     }
 }
 
@@ -1927,6 +2214,7 @@ struct RoomActionSplitButton: View {
     let primaryLabel: String
     let isActiveRoom: Bool
     let isPrimaryDisabled: Bool
+    let primaryActionEffectText: String
     let onPrimaryAction: () -> Void
     let onJoin: () -> Void
     let onPreview: () -> Void
@@ -1948,6 +2236,17 @@ struct RoomActionSplitButton: View {
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            Button(primaryLabel) {
+                onPrimaryAction()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(isActiveRoom ? .green : .blue)
+            .disabled(isPrimaryDisabled)
+            .help("Default action \(primaryLabel). When pressed, this \(primaryActionEffectText). You can change it in Settings > General.")
+            .accessibilityLabel("\(primaryLabel)")
+            .accessibilityHint("Default action button. This \(primaryActionEffectText).")
+
             Menu {
                 Button("Room Details") { onOpenDetails() }
                 Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
@@ -1968,26 +2267,31 @@ struct RoomActionSplitButton: View {
                 Button("Delete This Room", role: .destructive) { onDeleteRoom() }
                     .disabled(!isAdmin)
             }
-        } label: {
-            Text("Details")
-                .fontWeight(.semibold)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background((isActiveRoom ? Color.green : Color.blue).opacity(0.9))
-                .foregroundColor(.white)
-                .cornerRadius(8)
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .background((isActiveRoom ? Color.green : Color.blue).opacity(0.8))
+            }
+            .menuStyle(.borderlessButton)
+            .accessibilityLabel("Room actions menu")
+            .accessibilityHint("Open all actions for this room, including join, share, administration, and delete.")
+            .help("Full room actions menu. VoiceOver users can also open the actions menu with VO+Shift+M.")
         }
-        .menuStyle(.borderlessButton)
-        .accessibilityLabel("Room details and actions")
-        .accessibilityHint("Opens context menu with details, join, preview, share, and room management.")
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
 struct RoomColumnRow: View {
     @ObservedObject private var settings = SettingsManager.shared
     let room: Room
+    var descriptionText: String? = nil
+    let roomHasActiveMedia: Bool
     let isActiveRoom: Bool
     let isAdmin: Bool
+    var onFocus: () -> Void = {}
     let onJoin: () -> Void
     var onPreview: () -> Void = {}
     var onShare: () -> Void = {}
@@ -2009,6 +2313,31 @@ struct RoomColumnRow: View {
         }
     }
 
+    var primaryActionEffectText: String {
+        switch settings.defaultRoomPrimaryAction {
+        case .openDetails:
+            return "opens room details"
+        case .joinOrShow:
+            return isActiveRoom ? "returns to your active room" : "joins this room"
+        case .preview:
+            return room.userCount > 0 ? "starts room audio preview" : "opens room details because preview is unavailable"
+        case .share:
+            return "copies a room share link"
+        }
+    }
+
+    var displayDescription: String {
+        descriptionText ?? (room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
+    }
+
+    var mediaStatusText: String {
+        roomHasActiveMedia ? "Media is playing." : "No media is playing."
+    }
+
+    var roomAccessibilitySummary: String {
+        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
+    }
+
     func runPrimaryAction() {
         switch settings.defaultRoomPrimaryAction {
         case .openDetails:
@@ -2028,7 +2357,7 @@ struct RoomColumnRow: View {
                 Text(room.name)
                     .foregroundColor(.white)
                     .font(.subheadline.weight(.semibold))
-                Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
+                Text(displayDescription)
                     .font(.caption2)
                     .foregroundColor(.gray)
                     .lineLimit(1)
@@ -2051,10 +2380,16 @@ struct RoomColumnRow: View {
                 .foregroundColor(isActiveRoom ? .green : .gray)
                 .font(.caption)
 
+            Text(roomHasActiveMedia ? "Media" : "No Media")
+                .frame(width: 70, alignment: .leading)
+                .foregroundColor(roomHasActiveMedia ? .yellow : .gray)
+                .font(.caption2)
+
             RoomActionSplitButton(
                 primaryLabel: primaryLabel,
                 isActiveRoom: isActiveRoom,
                 isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && room.userCount <= 0,
+                primaryActionEffectText: primaryActionEffectText,
                 onPrimaryAction: { runPrimaryAction() },
                 onJoin: onJoin,
                 onPreview: onPreview,
@@ -2072,6 +2407,40 @@ struct RoomColumnRow: View {
         .padding(10)
         .background(Color.white.opacity(0.08))
         .cornerRadius(10)
+        .contentShape(Rectangle())
+        .onTapGesture { onFocus() }
+        .onHover { hovering in
+            if hovering { onFocus() }
+        }
+        .contextMenu {
+            Button("Room Details") { onOpenDetails() }
+            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
+            Button("Preview Room Audio") {
+                if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            }
+            .disabled(room.userCount <= 0)
+            Button("Share Room Link") { onShare() }
+            Button("Copy Room ID") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(room.id, forType: .string)
+            }
+            Divider()
+            Button("Open Room Administration") { onOpenAdmin() }
+            Button("Create New Room") { onCreateRoom() }
+            Button("Delete This Room", role: .destructive) { onDeleteRoom() }
+                .disabled(!isAdmin)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(roomAccessibilitySummary)
+        .accessibilityHint("Primary button runs \(primaryLabel). Use VoiceOver plus Shift plus M for the actions menu.")
+        .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
+        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
+        .accessibilityAction(named: Text("Preview Room Audio")) {
+            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+        }
+        .accessibilityAction(named: Text("Share Room Link")) { onShare() }
+        .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
     }
 }
 
@@ -2191,12 +2560,14 @@ struct CreateRoomView: View {
                         password: isPrivate ? password : nil
                     )
                     // Go back to main menu - room will appear in list
+                    appState.pendingCreateRoomName = ""
                     appState.currentScreen = .mainMenu
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(roomName.isEmpty || !appState.isConnected)
 
                 Button("Cancel") {
+                    appState.pendingCreateRoomName = ""
                     appState.currentScreen = .mainMenu
                 }
                 .buttonStyle(.bordered)
@@ -2208,6 +2579,12 @@ struct CreateRoomView: View {
                     .font(.caption)
             }
         }
+        .onAppear {
+            if roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !appState.pendingCreateRoomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                roomName = appState.pendingCreateRoomName
+            }
+        }
     }
 }
 
@@ -2215,26 +2592,114 @@ struct JoinRoomView: View {
     @EnvironmentObject var appState: AppState
     @State private var roomCode = ""
 
+    private var query: String {
+        roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var filteredRooms: [Room] {
+        let q = query.lowercased()
+        guard !q.isEmpty else { return appState.rooms }
+        return appState.rooms.filter {
+            $0.id.lowercased().contains(q)
+            || $0.name.lowercased().contains(q)
+            || $0.description.lowercased().contains(q)
+            || ($0.hostedFromLine?.lowercased().contains(q) ?? false)
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Join Room")
+        VStack(spacing: 16) {
+            Text("Join or Search Rooms")
                 .font(.largeTitle)
                 .foregroundColor(.white)
 
-            TextField("Room Code", text: $roomCode)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 300)
+            Text("Use room ID, room name, or keywords. Search runs against the backend room list across connected public servers.")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 620)
 
-            HStack {
-                Button("Join") {
-                    // Join room logic
+            TextField("Room ID, name, or keyword", text: $roomCode)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 520)
+                .onSubmit {
+                    _ = appState.joinRoomByCodeOrName(roomCode)
+                }
+
+            HStack(spacing: 10) {
+                Button("Join Match") {
+                    _ = appState.joinRoomByCodeOrName(roomCode)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(query.isEmpty)
+
+                Button("Search Servers") {
+                    appState.refreshRooms()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Create Room with This Name") {
+                    let name = query.isEmpty ? "New Room" : query
+                    appState.pendingCreateRoomName = name
+                    appState.currentScreen = .createRoom
+                }
+                .buttonStyle(.bordered)
 
                 Button("Back") {
                     appState.currentScreen = .mainMenu
                 }
                 .buttonStyle(.bordered)
+            }
+
+            if filteredRooms.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No rooms found.")
+                        .foregroundColor(.gray)
+                    if !query.isEmpty {
+                        Text("Create \"\(query)\" or refresh from connected servers.")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                }
+                .padding(.top, 10)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(filteredRooms.prefix(80)) { room in
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(room.name)
+                                        .foregroundColor(.white)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("\(room.id) • \(room.userCount)/\(room.maxUsers)")
+                                        .foregroundColor(.gray)
+                                        .font(.caption2)
+                                    if let hosted = room.hostedFromLine {
+                                        Text(hosted)
+                                            .foregroundColor(.gray.opacity(0.9))
+                                            .font(.caption2)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                                Button(appState.activeRoomId == room.id ? "Show" : "Join") {
+                                    appState.setFocusedRoom(room)
+                                    appState.joinOrShowRoom(room)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                            .padding(10)
+                            .background(Color.white.opacity(0.08))
+                            .cornerRadius(10)
+                        }
+                    }
+                }
+                .frame(width: 620, height: 300)
+            }
+        }
+        .onAppear {
+            if roomCode.isEmpty, let focused = appState.focusedRoomForQuickJoin() {
+                roomCode = focused.name
             }
         }
     }
@@ -3437,7 +3902,7 @@ struct SettingsView: View {
 
     enum SettingsTab: String, CaseIterable {
         case general = "General"
-        case profile = "Profile"
+        case profile = "Profile & Authentication"
         case audio = "Audio"
         case sync = "Sync & Filters"
         case fileSharing = "File Sharing"
@@ -3669,6 +4134,46 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }
+        }
+
+        SettingsSection(title: "Authentication") {
+            let authManager = AuthenticationManager.shared
+            if authManager.authState == .authenticated {
+                if let user = authManager.currentUser {
+                    Text("Signed in as \(user.displayName)")
+                        .foregroundColor(.gray)
+                }
+                Button("Manage Connected Account") {
+                    appState.currentScreen = .login
+                }
+                .buttonStyle(.bordered)
+            } else {
+                HStack(spacing: 10) {
+                    Button("Mastodon") { appState.currentScreen = .login }
+                        .buttonStyle(.borderedProminent)
+                    Button("Google") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Apple") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    Button("GitHub") {
+                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Text("Use any available sign-in provider. Provider support depends on server configuration.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
         }
 

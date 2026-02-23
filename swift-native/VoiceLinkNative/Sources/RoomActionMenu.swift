@@ -13,6 +13,7 @@ struct RoomActionMenu: View {
     @ObservedObject var whisperManager = WhisperModeManager.shared
     @ObservedObject var audioControl = UserAudioControlManager.shared
     @ObservedObject var roomLockManager = RoomLockManager.shared
+    @ObservedObject private var settings = SettingsManager.shared
     @State private var isPeeking = false
     @State private var selectedUser: RoomUser?
 
@@ -143,9 +144,10 @@ struct RoomActionMenu: View {
                             shortcut: "Cmd+3",
                             description: "Position users in 3D space",
                             isToggle: true,
-                            isToggled: true
+                            isToggled: settings.spatialAudioEnabled
                         ) {
-                            // Toggle spatial audio
+                            settings.spatialAudioEnabled.toggle()
+                            settings.saveSettings()
                         }
                     }
 
@@ -157,7 +159,11 @@ struct RoomActionMenu: View {
                             shortcut: nil,
                             description: "Apply audio effects"
                         ) {
-                            // Show voice effects panel
+                            NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                NotificationCenter.default.post(name: .openAudioSettings, object: nil)
+                            }
+                            isPresented = false
                         }
                     }
 
@@ -222,7 +228,11 @@ struct RoomActionMenu: View {
                         shortcut: "Command+Comma",
                         description: "Configure room options"
                     ) {
-                        // Show room settings
+                        NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            NotificationCenter.default.post(name: .openAudioSettings, object: nil)
+                        }
+                        isPresented = false
                     }
 
                     ActionMenuItem(
@@ -659,6 +669,9 @@ struct ActionMenuItem: View {
             .cornerRadius(6)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityHint(accessibilityHintText)
+        .accessibilityValue(accessibilityValueText)
     }
 
     var iconColor: Color {
@@ -672,6 +685,24 @@ struct ActionMenuItem: View {
         if isDestructive { return .red }
         if isPrimary { return .blue }
         return .white
+    }
+
+    var accessibilityHintText: String {
+        if let description, !description.isEmpty {
+            return description
+        }
+        if isDestructive {
+            return "Destructive action."
+        }
+        if isPrimary {
+            return "Primary action."
+        }
+        return "Opens room action."
+    }
+
+    var accessibilityValueText: String {
+        guard isToggle else { return "" }
+        return isToggled ? "On" : "Off"
     }
 }
 

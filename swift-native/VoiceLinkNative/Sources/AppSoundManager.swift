@@ -152,41 +152,68 @@ class AppSoundManager: ObservableObject {
     private var inFlightDownloads: Set<String> = []
     private var downloadFailures: Set<String> = []
     private var pendingPlayAfterDownload: Set<SoundType> = []
+    private var lastMissingAttemptAt: [SoundType: Date] = [:]
+    private let missingRetryInterval: TimeInterval = 10
+    private let verboseLogs = false
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
     private var didPublishDownloadNoticeThisLaunch = false
     private let reminderPendingKey = "voicelinkSoundDownloadReminderPending"
 
     init() {
         loadSettings()
-        preloadSounds()
+        isInitialized = true
+        scheduleDeferredWarmup()
         postLaunchReminderIfNeeded()
     }
 
     // MARK: - Preload Sounds
 
     private func preloadSounds() {
-        buildSoundLibraryIndex()
-        for soundType in SoundType.allCases {
-            loadSound(soundType)
+        // Kept for compatibility with existing call sites.
+        scheduleDeferredWarmup()
+    }
+
+    private func scheduleDeferredWarmup() {
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.buildSoundLibraryIndex()
+            let warmupTypes: [SoundType] = [
+                .connected, .disconnected, .notification, .buttonClick,
+                .userJoin, .userLeave, .toggleOn, .toggleOff
+            ]
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for (index, soundType) in warmupTypes.enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + (Double(index) * 0.05)) {
+                        self.loadSound(soundType)
+                    }
+                }
+                self.refreshDownloadReminderState()
+                if self.verboseLogs {
+                    print("AppSoundManager: Deferred warmup scheduled")
+                }
+            }
         }
-        refreshDownloadReminderState()
-        isInitialized = true
-        print("AppSoundManager: Preloaded \(audioPlayers.count) sounds")
     }
 
     private func loadSound(_ soundType: SoundType) {
+        if let last = lastMissingAttemptAt[soundType],
+           Date().timeIntervalSince(last) < missingRetryInterval,
+           audioPlayers[soundType] == nil,
+           systemSounds[soundType] == nil {
+            return
+        }
+
         if let smartURL = resolveMappedSoundURL(for: soundType) {
             if cachePlayableSound(for: soundType, url: smartURL) {
                 return
             }
-            print("AppSoundManager: Failed smart-load for \(soundType.rawValue): \(smartURL.lastPathComponent)")
         }
 
         if soundType == .soundTest, let testURL = resolveSoundTestURL() {
             if cachePlayableSound(for: soundType, url: testURL) {
                 return
             }
-            print("AppSoundManager: Failed to load sound test file")
         }
 
         // Try multiple locations for sound files
@@ -212,11 +239,9 @@ class AppSoundManager: ObservableObject {
                 if cachePlayableSound(for: soundType, url: soundURL) {
                     return
                 }
-                print("AppSoundManager: Failed to load \(soundType.rawValue): \(soundURL.lastPathComponent)")
             }
         }
-
-        print("AppSoundManager: Sound file not found for \(soundType.rawValue)")
+        lastMissingAttemptAt[soundType] = Date()
         queueBackgroundDownload(for: soundType, playWhenReady: false)
     }
 
@@ -226,12 +251,14 @@ class AppSoundManager: ObservableObject {
             player.volume = volume
             audioPlayers[soundType] = player
             systemSounds.removeValue(forKey: soundType)
+            lastMissingAttemptAt[soundType] = nil
             return true
         }
         if let nsSound = NSSound(contentsOf: url, byReference: false) {
             nsSound.volume = volume
             systemSounds[soundType] = nsSound
             audioPlayers.removeValue(forKey: soundType)
+            lastMissingAttemptAt[soundType] = nil
             return true
         }
         return false
@@ -240,7 +267,6 @@ class AppSoundManager: ObservableObject {
     private func buildSoundLibraryIndex() {
         guard let resourcesRoot = Bundle.main.resourceURL else { return }
         let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
-        soundsRootURL = soundsRoot
         var index: [IndexedSound] = []
         let roots = [soundsRoot, downloadedSoundsRoot()]
         for root in roots {
@@ -269,8 +295,16 @@ class AppSoundManager: ObservableObject {
                 }
             }
         }
-        
-        indexedSounds = index
+
+        let assign = {
+            self.soundsRootURL = soundsRoot
+            self.indexedSounds = index
+        }
+        if Thread.isMainThread {
+            assign()
+        } else {
+            DispatchQueue.main.sync(execute: assign)
+        }
     }
     
     private func resolveMappedSoundURL(for soundType: SoundType) -> URL? {
@@ -416,12 +450,10 @@ class AppSoundManager: ObservableObject {
             player.volume = volume
             player.currentTime = 0
             player.play()
-            print("AppSoundManager: Playing \(soundType.description)")
         } else if let sound = systemSounds[soundType] {
             sound.volume = volume
             sound.stop()
             sound.play()
-            print("AppSoundManager: Playing \(soundType.description) via NSSound")
         } else {
             // Try to load on demand
             loadSound(soundType)
@@ -447,7 +479,6 @@ class AppSoundManager: ObservableObject {
         if let player = audioPlayers[soundType] {
             player.stop()
             player.currentTime = 0
-            print("AppSoundManager: Stopped \(soundType.description)")
         }
         systemSounds[soundType]?.stop()
     }
@@ -482,7 +513,6 @@ class AppSoundManager: ObservableObject {
         if let name = systemSoundName, let sound = NSSound(named: NSSound.Name(name)) {
             sound.volume = volume
             sound.play()
-            print("AppSoundManager: Playing system sound \(name) as fallback")
         }
     }
 
@@ -882,8 +912,12 @@ class AppSoundManager: ObservableObject {
                             try data.write(to: targetFile, options: .atomic)
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
-                                self.buildSoundLibraryIndex()
-                                self.loadSound(soundType)
+                                // Avoid expensive full directory re-index on the main thread for each downloaded file.
+                                // We can load directly from the downloaded target and only fall back to normal resolution.
+                                _ = self.cachePlayableSound(for: soundType, url: targetFile)
+                                if self.audioPlayers[soundType] == nil && self.systemSounds[soundType] == nil {
+                                    self.loadSound(soundType)
+                                }
                                 self.refreshDownloadReminderState()
                                 if self.pendingPlayAfterDownload.contains(soundType) {
                                     self.pendingPlayAfterDownload.remove(soundType)
