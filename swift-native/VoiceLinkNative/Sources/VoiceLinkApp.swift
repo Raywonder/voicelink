@@ -1561,11 +1561,6 @@ struct ContentView: View {
             }
             .frame(minWidth: 760, minHeight: 520)
         }
-        .onChange(of: appState.rooms) { _ in
-            if !availableServerFilters.contains(selectedServerFilter) {
-                selectedServerFilter = "All Servers"
-            }
-        }
     }
 }
 
