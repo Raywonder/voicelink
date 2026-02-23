@@ -201,6 +201,11 @@ class VoiceLinkApp {
 
         } catch (error) {
             console.error('Failed to initialize VoiceLink:', error);
+            try {
+                await this.loadRooms();
+            } catch (roomError) {
+                console.warn('Room preload failed during fallback init:', roomError?.message || roomError);
+            }
             // Show main menu anyway - audio will initialize on first user interaction
             setTimeout(() => {
                 this.showScreen('main-menu');
@@ -463,13 +468,14 @@ class VoiceLinkApp {
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
             const isNativeApp = !!window.nativeAPI;
-            const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
-                pageHost.includes('voicelink.devinecreations.net') ||
-                pageHost.includes('voicelink.tappedin.fm'));
+            const isHostedWeb = !isNativeApp &&
+                pageHost !== 'localhost' &&
+                pageHost !== '127.0.0.1' &&
+                pageHost !== '::1';
 
             // For production web, connect via the same origin (nginx proxy)
-            if (isWebProduction) {
-                const url = `${pageProtocol}//${pageHost}`;
+            if (isHostedWeb) {
+                const url = window.location.origin || `${pageProtocol}//${pageHost}${pagePort ? `:${pagePort}` : ''}`;
                 console.log(`Connecting via nginx proxy at ${url}`);
                 this.socket = io(url, {
                     timeout: 10000,
@@ -497,7 +503,7 @@ class VoiceLinkApp {
                 this.socket.on('connect_error', (error) => {
                     console.error('Failed to connect to server:', error.message);
                     this.updateServerStatus('offline');
-                    reject(new Error('Server not available'));
+                    reject(new Error(`Server not available at ${url}`));
                 });
                 return;
             }
@@ -3074,9 +3080,19 @@ class VoiceLinkApp {
                 this.spatialAudio
             );
 
-            await this.webrtcManager.initializeLocalStream({
-                autoEnableMic: audioBehavior.autoEnableMic
-            });
+            let localStreamReady = false;
+            if (audioBehavior.autoEnableMic) {
+                const streamInitTimeoutMs = 8000;
+                await Promise.race([
+                    this.webrtcManager.initializeLocalStream({
+                        autoEnableMic: true
+                    }),
+                    new Promise((_, rejectTimeout) => {
+                        setTimeout(() => rejectTimeout(new Error('Local audio initialization timeout')), streamInitTimeoutMs);
+                    })
+                ]);
+                localStreamReady = true;
+            }
 
             // Setup push-to-talk
             this.webrtcManager.setupPushToTalk('Space');
@@ -3091,18 +3107,28 @@ class VoiceLinkApp {
                 password
             });
 
-            if (!audioBehavior.autoEnableMic) {
+            if (!audioBehavior.autoEnableMic || !localStreamReady) {
                 this.showNotification('Joined in listen-only mode. Enable microphone in Audio settings to talk.', 'info');
             }
 
         } catch (error) {
             console.error('Failed to join room:', error);
             const errorName = error?.name || '';
-            if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
-                this.showError('Microphone permission is blocked. You can still join in listen-only mode or allow mic access in Safari/Chrome site settings.');
-            } else {
-                this.showError('Failed to join room');
+            const micOrTimeoutError = errorName === 'NotAllowedError' ||
+                errorName === 'SecurityError' ||
+                String(error?.message || '').toLowerCase().includes('timeout');
+
+            if (micOrTimeoutError) {
+                this.showNotification('Microphone was unavailable. Joining in listen-only mode.', 'info');
+                this.socket.emit('join-room', {
+                    roomId,
+                    userName,
+                    password
+                });
+                return;
             }
+
+            this.showError('Failed to join room');
         }
     }
 
