@@ -551,7 +551,7 @@ class LicensingManager: ObservableObject {
 
         // Check every 30 seconds while pending
         statusCheckTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { [weak self] in
                 await self?.checkStatus()
             }
         }
@@ -567,7 +567,7 @@ class LicensingManager: ObservableObject {
 
         // Send heartbeat every 5 minutes
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { [weak self] in
                 await self?.sendHeartbeat()
             }
         }

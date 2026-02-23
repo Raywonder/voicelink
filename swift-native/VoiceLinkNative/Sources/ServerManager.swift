@@ -31,6 +31,8 @@ class ServerManager: ObservableObject {
     private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
     private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInitiated)
     private var pendingAudioStartWorkItem: DispatchWorkItem?
+    private var pendingJoinRoomId: String?
+    private var pendingJoinTimeoutWorkItem: DispatchWorkItem?
     private var roomStreamPlayer: AVPlayer?
     private var currentRoomStreamURL: URL?
 
@@ -316,6 +318,7 @@ class ServerManager: ObservableObject {
                 self?.serverStatus = "Disconnected"
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
+            self?.failPendingJoin(with: "Disconnected while joining room.")
         }
 
         socket.on(clientEvent: .error) { [weak self] data, ack in
@@ -356,24 +359,42 @@ class ServerManager: ObservableObject {
         // Room joined response (server sends "joined-room")
         socket.on("joined-room") { [weak self] data, ack in
             print("Joined room: \(data)")
-            if let responseData = data[0] as? [String: Any],
-               let roomData = responseData["room"] as? [String: Any] {
-                // Extract users from room data
-                if let usersData = roomData["users"] as? [[String: Any]] {
-                    let users = usersData.compactMap { RoomUser(from: $0) }
-                    DispatchQueue.main.async {
-                        self?.currentRoomUsers = users
-                    }
+            guard let self = self else { return }
+            let responseData = data.first as? [String: Any] ?? [:]
+            let roomData = (responseData["room"] as? [String: Any]) ?? responseData
+
+            if let usersData = (roomData["users"] as? [[String: Any]]) ?? (responseData["users"] as? [[String: Any]]) {
+                let users = usersData.compactMap { RoomUser(from: $0) }
+                DispatchQueue.main.async {
+                    self.currentRoomUsers = users
                 }
-                if let roomId = roomData["id"] as? String ?? roomData["roomId"] as? String {
-                    DispatchQueue.main.async {
-                        self?.activeRoomId = roomId
-                    }
-                    self?.fetchActiveRoomStream(for: roomId)
-                }
-                self?.scheduleAudioTransmissionStart()
-                NotificationCenter.default.post(name: .roomJoined, object: roomData)
             }
+
+            let roomId = roomData["id"] as? String
+                ?? roomData["roomId"] as? String
+                ?? responseData["roomId"] as? String
+                ?? responseData["id"] as? String
+
+            if let roomId {
+                completePendingJoin(for: roomId)
+                DispatchQueue.main.async {
+                    self.activeRoomId = roomId
+                    self.audioTransmissionStatus = "Joined room"
+                }
+                self.fetchActiveRoomStream(for: roomId)
+                scheduleAudioTransmissionStart(for: roomId)
+            } else {
+                cancelJoinTimeout()
+            }
+
+            var joinedPayload = roomData
+            if let roomId {
+                joinedPayload["roomId"] = roomId
+                if joinedPayload["id"] == nil {
+                    joinedPayload["id"] = roomId
+                }
+            }
+            NotificationCenter.default.post(name: .roomJoined, object: joinedPayload)
         }
 
         // User joined room
@@ -382,8 +403,9 @@ class ServerManager: ObservableObject {
             if let userData = data[0] as? [String: Any],
                let user = RoomUser(from: userData) {
                 DispatchQueue.main.async {
-                    if !self!.currentRoomUsers.contains(where: { $0.id == user.id }) {
-                        self?.currentRoomUsers.append(user)
+                    guard let self = self else { return }
+                    if !self.currentRoomUsers.contains(where: { $0.id == user.id }) {
+                        self.currentRoomUsers.append(user)
                         // Play user join sound
                         AppSoundManager.shared.playSound(.userJoin)
                         // Announce user joined
@@ -443,6 +465,28 @@ class ServerManager: ObservableObject {
                 DispatchQueue.main.async {
                     self?.errorMessage = message
                 }
+                self?.failPendingJoin(with: message)
+            } else if let payload = data.first as? [String: Any],
+                      let message = payload["error"] as? String ?? payload["message"] as? String {
+                DispatchQueue.main.async {
+                    self?.errorMessage = message
+                }
+                self?.failPendingJoin(with: message)
+            }
+        }
+
+        let roomJoinErrorEvents = ["join-room-error", "room-join-error", "room-error", "join-error"]
+        for eventName in roomJoinErrorEvents {
+            socket.on(eventName) { [weak self] data, ack in
+                let payload = data.first as? [String: Any]
+                let message = (payload?["error"] as? String)
+                    ?? (payload?["message"] as? String)
+                    ?? (data.first as? String)
+                    ?? "Unable to join room."
+                DispatchQueue.main.async {
+                    self?.errorMessage = message
+                }
+                self?.failPendingJoin(with: message)
             }
         }
 
@@ -759,7 +803,31 @@ class ServerManager: ObservableObject {
         if let password = password {
             joinData["password"] = password
         }
-        socket?.emit("join-room", joinData)
+        pendingJoinRoomId = roomId
+        scheduleJoinTimeout(for: roomId)
+        socket?.emitWithAck("join-room", joinData).timingOut(after: 8) { [weak self] ackData in
+            guard let self = self else { return }
+            if let first = ackData.first as? String, first.uppercased() == "NO ACK" {
+                return
+            }
+            if let payload = ackData.first as? [String: Any],
+               let message = payload["error"] as? String ?? payload["message"] as? String {
+                DispatchQueue.main.async {
+                    self.errorMessage = message
+                }
+                self.failPendingJoin(with: message)
+                return
+            }
+            if let message = ackData.first as? String {
+                let lowered = message.lowercased()
+                if lowered.contains("error") || lowered.contains("denied") || lowered.contains("failed") {
+                    DispatchQueue.main.async {
+                        self.errorMessage = message
+                    }
+                    self.failPendingJoin(with: message)
+                }
+            }
+        }
         DispatchQueue.main.async {
             self.audioTransmissionStatus = "Joining room..."
         }
@@ -861,6 +929,8 @@ class ServerManager: ObservableObject {
     }
 
     func leaveRoom() {
+        cancelJoinTimeout()
+        pendingJoinRoomId = nil
         pendingAudioStartWorkItem?.cancel()
         pendingAudioStartWorkItem = nil
         socket?.emit("leave-room")
@@ -949,13 +1019,50 @@ class ServerManager: ObservableObject {
     private var audioTransmitEngine: AVAudioEngine?
     private var isTransmitting = false
 
-    private func scheduleAudioTransmissionStart() {
+    private func scheduleAudioTransmissionStart(for roomId: String) {
         pendingAudioStartWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.startAudioTransmission()
+            guard let self = self else { return }
+            guard self.activeRoomId == roomId, self.isConnected else { return }
+            self.startAudioTransmission()
         }
         pendingAudioStartWorkItem = work
         audioStartQueue.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func scheduleJoinTimeout(for roomId: String) {
+        cancelJoinTimeout()
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard self.pendingJoinRoomId == roomId else { return }
+            self.failPendingJoin(with: "Room join timed out. Please try again.")
+        }
+        pendingJoinTimeoutWorkItem = timeoutWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeoutWork)
+    }
+
+    private func cancelJoinTimeout() {
+        pendingJoinTimeoutWorkItem?.cancel()
+        pendingJoinTimeoutWorkItem = nil
+    }
+
+    private func completePendingJoin(for roomId: String) {
+        if pendingJoinRoomId == roomId {
+            pendingJoinRoomId = nil
+        }
+        cancelJoinTimeout()
+    }
+
+    private func failPendingJoin(with message: String) {
+        guard pendingJoinRoomId != nil else { return }
+        cancelJoinTimeout()
+        pendingJoinRoomId = nil
+        DispatchQueue.main.async {
+            self.audioTransmissionStatus = "Join failed"
+            self.errorMessage = message
+        }
+        pendingAudioStartWorkItem?.cancel()
+        pendingAudioStartWorkItem = nil
     }
 
     func startAudioTransmission() {

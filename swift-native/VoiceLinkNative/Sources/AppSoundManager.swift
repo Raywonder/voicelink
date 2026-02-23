@@ -677,8 +677,7 @@ class AppSoundManager: ObservableObject {
         if hasPlayableVariant(for: .connected) {
             playSound(.connected, force: true, allowSystemFallback: false)
         } else {
-            queueBackgroundDownload(for: .connected, playWhenReady: true)
-            publishBackgroundDownloadNotice(isReminder: false)
+            queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
         }
         startupIntroPlayed = true
     }
@@ -842,7 +841,7 @@ class AppSoundManager: ObservableObject {
         return dedup
     }
 
-    private func queueBackgroundDownload(for soundType: SoundType, playWhenReady: Bool) {
+    private func queueBackgroundDownload(for soundType: SoundType, playWhenReady: Bool, announce: Bool = true) {
         guard soundType != .soundTest else { return }
         let key = soundType.rawValue.lowercased()
         if playWhenReady {
@@ -851,7 +850,9 @@ class AppSoundManager: ObservableObject {
         if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
             return
         }
-        publishBackgroundDownloadNotice(isReminder: false)
+        if announce && criticalSoundTypesForReminder().contains(soundType) {
+            publishBackgroundDownloadNotice(isReminder: false)
+        }
         inFlightDownloads.insert(key)
         ioQueue.async { [weak self] in
             self?.downloadMissingSound(soundType)

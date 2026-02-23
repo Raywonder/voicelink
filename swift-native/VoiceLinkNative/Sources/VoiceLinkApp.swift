@@ -1049,7 +1049,7 @@ class AppState: ObservableObject {
     private func refreshRoomMediaStatuses(for roomList: [Room]) {
         guard let base = serverManager.baseURL, !base.isEmpty else { return }
         let ids = roomList.map(\.id)
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) {
             var statusMap: [String: Bool] = [:]
             for roomId in ids {
                 guard let encoded = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
@@ -1063,8 +1063,9 @@ class AppState: ObservableObject {
                     statusMap[roomId] = (json["active"] as? Bool) == true
                 }
             }
+            let resolvedStatusMap = statusMap
             await MainActor.run {
-                self.roomHasActiveMusic = statusMap
+                self.roomHasActiveMusic = resolvedStatusMap
             }
         }
     }

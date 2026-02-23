@@ -262,19 +262,20 @@ class JellyfinManager: ObservableObject {
         // Authenticate
         let authResult = try await authenticateUser(serverUrl: serverUrl, username: username, password: password)
 
-        var server = JellyfinServer(name: name, url: serverUrl, username: username)
-        server.userId = authResult.user.id
-        server.accessToken = authResult.accessToken
-        server.lastConnected = Date()
-        server.isActive = false
+        var draftServer = JellyfinServer(name: name, url: serverUrl, username: username)
+        draftServer.userId = authResult.user.id
+        draftServer.accessToken = authResult.accessToken
+        draftServer.lastConnected = Date()
+        draftServer.isActive = false
+        let newServer = draftServer
 
         await MainActor.run {
-            servers.append(server)
+            servers.append(newServer)
             saveServerConfigurations()
         }
 
         print("Jellyfin server '\(name)' added successfully")
-        return server
+        return newServer
     }
 
     func removeServer(id: String) {
