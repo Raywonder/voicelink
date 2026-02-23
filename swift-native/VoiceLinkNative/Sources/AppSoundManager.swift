@@ -157,13 +157,11 @@ class AppSoundManager: ObservableObject {
     private let verboseLogs = false
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
     private var didPublishDownloadNoticeThisLaunch = false
-    private let reminderPendingKey = "voicelinkSoundDownloadReminderPending"
 
     init() {
         loadSettings()
         isInitialized = true
         scheduleDeferredWarmup()
-        postLaunchReminderIfNeeded()
     }
 
     // MARK: - Preload Sounds
@@ -951,13 +949,11 @@ class AppSoundManager: ObservableObject {
 
     private func refreshDownloadReminderState() {
         let missingCritical = criticalSoundTypesForReminder().contains { !hasPlayableVariant(for: $0) }
-        UserDefaults.standard.set(missingCritical, forKey: reminderPendingKey)
-    }
-
-    private func postLaunchReminderIfNeeded() {
-        guard UserDefaults.standard.bool(forKey: reminderPendingKey) else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.publishBackgroundDownloadNotice(isReminder: true)
+        let shouldShow = missingCritical && !inFlightDownloads.isEmpty
+        DispatchQueue.main.async {
+            if !shouldShow {
+                self.activeSoundDownloadNotice = nil
+            }
         }
     }
 
@@ -966,7 +962,6 @@ class AppSoundManager: ObservableObject {
         if !isReminder {
             didPublishDownloadNoticeThisLaunch = true
         }
-        UserDefaults.standard.set(true, forKey: reminderPendingKey)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let title = isReminder ? "VoiceLink sounds still syncing" : "VoiceLink sounds are downloading"

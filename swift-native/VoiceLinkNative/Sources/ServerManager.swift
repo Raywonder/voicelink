@@ -29,6 +29,8 @@ class ServerManager: ObservableObject {
     private var useMainServer: Bool = true
     private var domainRecoveryTimer: Timer?
     private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
+    private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInitiated)
+    private var pendingAudioStartWorkItem: DispatchWorkItem?
     private var roomStreamPlayer: AVPlayer?
     private var currentRoomStreamURL: URL?
 
@@ -369,6 +371,7 @@ class ServerManager: ObservableObject {
                     }
                     self?.fetchActiveRoomStream(for: roomId)
                 }
+                self?.scheduleAudioTransmissionStart()
                 NotificationCenter.default.post(name: .roomJoined, object: roomData)
             }
         }
@@ -757,9 +760,9 @@ class ServerManager: ObservableObject {
             joinData["password"] = password
         }
         socket?.emit("join-room", joinData)
-
-        // Start audio transmission when joining room
-        startAudioTransmission()
+        DispatchQueue.main.async {
+            self.audioTransmissionStatus = "Joining room..."
+        }
     }
 
     private func normalizedRooms(from rawRooms: [[String: Any]]) -> [ServerRoom] {
@@ -858,6 +861,8 @@ class ServerManager: ObservableObject {
     }
 
     func leaveRoom() {
+        pendingAudioStartWorkItem?.cancel()
+        pendingAudioStartWorkItem = nil
         socket?.emit("leave-room")
         stopAudioTransmission()
         stopRoomStreamPlayback()
@@ -943,6 +948,15 @@ class ServerManager: ObservableObject {
 
     private var audioTransmitEngine: AVAudioEngine?
     private var isTransmitting = false
+
+    private func scheduleAudioTransmissionStart() {
+        pendingAudioStartWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.startAudioTransmission()
+        }
+        pendingAudioStartWorkItem = work
+        audioStartQueue.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
 
     func startAudioTransmission() {
         if inputMuted {

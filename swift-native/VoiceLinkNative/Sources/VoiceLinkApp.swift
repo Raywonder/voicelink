@@ -1812,7 +1812,14 @@ struct MainMenuView: View {
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
-                                    PeekManager.shared.peekIntoRoom(room)
+                                    PeekManager.shared.togglePreview(
+                                        for: room,
+                                        canPreview: SettingsManager.shared.canPreviewRoom(
+                                            roomId: room.id,
+                                            userCount: room.userCount,
+                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                        )
+                                    )
                                 } onShare: {
                                     let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
@@ -1843,7 +1850,14 @@ struct MainMenuView: View {
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
-                                    PeekManager.shared.peekIntoRoom(room)
+                                    PeekManager.shared.togglePreview(
+                                        for: room,
+                                        canPreview: SettingsManager.shared.canPreviewRoom(
+                                            roomId: room.id,
+                                            userCount: room.userCount,
+                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                        )
+                                    )
                                 } onShare: {
                                     let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
@@ -1884,7 +1898,14 @@ struct MainMenuView: View {
                                 ) {
                                     appState.joinOrShowRoom(room)
                                 } onPreview: {
-                                    PeekManager.shared.peekIntoRoom(room)
+                                    PeekManager.shared.togglePreview(
+                                        for: room,
+                                        canPreview: SettingsManager.shared.canPreviewRoom(
+                                            roomId: room.id,
+                                            userCount: room.userCount,
+                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                        )
+                                    )
                                 } onShare: {
                                     let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
@@ -1926,7 +1947,16 @@ struct MainMenuView: View {
                             NSPasteboard.general.setString(roomURL, forType: .string)
                             AppSoundManager.shared.playSound(.success)
                         },
-                        onPreview: { PeekManager.shared.peekIntoRoom(room) }
+                        onPreview: {
+                            PeekManager.shared.togglePreview(
+                                for: room,
+                                canPreview: SettingsManager.shared.canPreviewRoom(
+                                    roomId: room.id,
+                                    userCount: room.userCount,
+                                    hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                )
+                            )
+                        }
                     )
                 }
             }
@@ -2072,10 +2102,14 @@ struct RoomCard: View {
         case .joinOrShow:
             return isActiveRoom ? "returns to your active room" : "joins this room"
         case .preview:
-            return room.userCount > 0 ? "starts room audio preview" : "opens room details because preview is unavailable"
+            return previewAvailable ? "starts room audio preview" : "opens room details because preview is unavailable"
         case .share:
             return "copies a room share link"
         }
+    }
+
+    var previewAvailable: Bool {
+        settings.canPreviewRoom(roomId: room.id, userCount: room.userCount, hasActiveMedia: roomHasActiveMedia)
     }
 
     var mediaStatusText: String {
@@ -2093,7 +2127,7 @@ struct RoomCard: View {
         case .joinOrShow:
             onJoin()
         case .preview:
-            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            if previewAvailable { onPreview() } else { onOpenDetails() }
         case .share:
             onShare()
         }
@@ -2141,7 +2175,7 @@ struct RoomCard: View {
             RoomActionSplitButton(
                 primaryLabel: primaryActionLabel,
                 isActiveRoom: isActiveRoom,
-                isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && room.userCount <= 0,
+                isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && !previewAvailable,
                 primaryActionEffectText: primaryActionEffectText,
                 onPrimaryAction: { runPrimaryAction() },
                 onJoin: onJoin,
@@ -2152,7 +2186,7 @@ struct RoomCard: View {
                 onCreateRoom: onCreateRoom,
                 onDeleteRoom: onDeleteRoom,
                 roomId: room.id,
-                roomHasUsers: room.userCount > 0,
+                roomCanPreview: previewAvailable,
                 isAdmin: isAdmin
             )
 
@@ -2183,9 +2217,9 @@ struct RoomCard: View {
             Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
-                if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+                if previewAvailable { onPreview() } else { onOpenDetails() }
             }
-            .disabled(room.userCount <= 0)
+            .disabled(!previewAvailable)
             Button("Share Room Link") { onShare() }
             Button("Copy Room ID") {
                 NSPasteboard.general.clearContents()
@@ -2203,7 +2237,7 @@ struct RoomCard: View {
         .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
         .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
         .accessibilityAction(named: Text("Preview Room Audio")) {
-            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            if previewAvailable { onPreview() } else { onOpenDetails() }
         }
         .accessibilityAction(named: Text("Share Room Link")) { onShare() }
         .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
@@ -2224,15 +2258,15 @@ struct RoomActionSplitButton: View {
     let onCreateRoom: () -> Void
     let onDeleteRoom: () -> Void
     let roomId: String
-    let roomHasUsers: Bool
+    let roomCanPreview: Bool
     let isAdmin: Bool
 
     private func previewOrExplain() {
-        if roomHasUsers {
+        if roomCanPreview {
             onPreview()
             return
         }
-        AccessibilityManager.shared.announceStatus("Preview is unavailable. No users are active in this room.")
+        AccessibilityManager.shared.announceStatus("Preview is unavailable. No active room audio is available or preview is disabled by policy.")
     }
 
     var body: some View {
@@ -2254,7 +2288,8 @@ struct RoomActionSplitButton: View {
                     NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
                 }
                 Button("Preview Room Audio") { previewOrExplain() }
-                    .accessibilityHint(roomHasUsers ? "Preview live room audio." : "Unavailable because no users are currently in this room.")
+                    .disabled(!roomCanPreview)
+                    .accessibilityHint(roomCanPreview ? "Preview live room audio." : "Unavailable because room audio preview is currently disabled or there is no active room audio.")
                 Button("Share Room Link") { onShare() }
             Button("Copy Room ID") {
                 NSPasteboard.general.clearContents()
@@ -2320,7 +2355,7 @@ struct RoomColumnRow: View {
         case .joinOrShow:
             return isActiveRoom ? "returns to your active room" : "joins this room"
         case .preview:
-            return room.userCount > 0 ? "starts room audio preview" : "opens room details because preview is unavailable"
+            return previewAvailable ? "starts room audio preview" : "opens room details because preview is unavailable"
         case .share:
             return "copies a room share link"
         }
@@ -2334,6 +2369,10 @@ struct RoomColumnRow: View {
         roomHasActiveMedia ? "Media is playing." : "No media is playing."
     }
 
+    var previewAvailable: Bool {
+        settings.canPreviewRoom(roomId: room.id, userCount: room.userCount, hasActiveMedia: roomHasActiveMedia)
+    }
+
     var roomAccessibilitySummary: String {
         "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
     }
@@ -2345,7 +2384,7 @@ struct RoomColumnRow: View {
         case .joinOrShow:
             onJoin()
         case .preview:
-            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            if previewAvailable { onPreview() } else { onOpenDetails() }
         case .share:
             onShare()
         }
@@ -2388,7 +2427,7 @@ struct RoomColumnRow: View {
             RoomActionSplitButton(
                 primaryLabel: primaryLabel,
                 isActiveRoom: isActiveRoom,
-                isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && room.userCount <= 0,
+                isPrimaryDisabled: settings.defaultRoomPrimaryAction == .preview && !previewAvailable,
                 primaryActionEffectText: primaryActionEffectText,
                 onPrimaryAction: { runPrimaryAction() },
                 onJoin: onJoin,
@@ -2399,7 +2438,7 @@ struct RoomColumnRow: View {
                 onCreateRoom: onCreateRoom,
                 onDeleteRoom: onDeleteRoom,
                 roomId: room.id,
-                roomHasUsers: room.userCount > 0,
+                roomCanPreview: previewAvailable,
                 isAdmin: isAdmin
             )
             .frame(width: 170, alignment: .trailing)
@@ -2417,9 +2456,9 @@ struct RoomColumnRow: View {
             Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
-                if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+                if previewAvailable { onPreview() } else { onOpenDetails() }
             }
-            .disabled(room.userCount <= 0)
+            .disabled(!previewAvailable)
             Button("Share Room Link") { onShare() }
             Button("Copy Room ID") {
                 NSPasteboard.general.clearContents()
@@ -2437,7 +2476,7 @@ struct RoomColumnRow: View {
         .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
         .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
         .accessibilityAction(named: Text("Preview Room Audio")) {
-            if room.userCount > 0 { onPreview() } else { onOpenDetails() }
+            if previewAvailable { onPreview() } else { onOpenDetails() }
         }
         .accessibilityAction(named: Text("Share Room Link")) { onShare() }
         .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
@@ -3506,6 +3545,9 @@ class SettingsManager: ObservableObject {
     @Published var confirmBeforeQuit: Bool = false
     @Published var expandServerStatusByDefault: Bool = true
     @Published var showRoomDescriptions: Bool = true
+    @Published var allowPreviewWhenMediaActive: Bool = true
+    @Published var previewSoundCuesEnabled: Bool = true
+    @Published var roomPreviewPolicyByRoom: [String: Bool] = [:]
     enum RoomPrimaryAction: String, CaseIterable {
         case openDetails = "openDetails"
         case joinOrShow = "joinOrShow"
@@ -3569,6 +3611,9 @@ class SettingsManager: ObservableObject {
         confirmBeforeQuit = UserDefaults.standard.object(forKey: "confirmBeforeQuit") as? Bool ?? false
         expandServerStatusByDefault = UserDefaults.standard.object(forKey: "expandServerStatusByDefault") as? Bool ?? true
         showRoomDescriptions = UserDefaults.standard.object(forKey: "showRoomDescriptions") as? Bool ?? true
+        allowPreviewWhenMediaActive = UserDefaults.standard.object(forKey: "allowPreviewWhenMediaActive") as? Bool ?? true
+        previewSoundCuesEnabled = UserDefaults.standard.object(forKey: "previewSoundCuesEnabled") as? Bool ?? true
+        roomPreviewPolicyByRoom = UserDefaults.standard.dictionary(forKey: "roomPreviewPolicyByRoom") as? [String: Bool] ?? [:]
         if let value = UserDefaults.standard.string(forKey: "defaultRoomPrimaryAction"),
            let parsed = RoomPrimaryAction(rawValue: value) {
             defaultRoomPrimaryAction = parsed
@@ -3622,6 +3667,8 @@ class SettingsManager: ObservableObject {
             confirmBeforeQuit = false
             expandServerStatusByDefault = true
             showRoomDescriptions = true
+            allowPreviewWhenMediaActive = true
+            previewSoundCuesEnabled = true
             defaultRoomPrimaryAction = .openDetails
             adminGodModeEnabled = false
             adminInvisibleMode = false
@@ -3650,6 +3697,9 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(confirmBeforeQuit, forKey: "confirmBeforeQuit")
         UserDefaults.standard.set(expandServerStatusByDefault, forKey: "expandServerStatusByDefault")
         UserDefaults.standard.set(showRoomDescriptions, forKey: "showRoomDescriptions")
+        UserDefaults.standard.set(allowPreviewWhenMediaActive, forKey: "allowPreviewWhenMediaActive")
+        UserDefaults.standard.set(previewSoundCuesEnabled, forKey: "previewSoundCuesEnabled")
+        UserDefaults.standard.set(roomPreviewPolicyByRoom, forKey: "roomPreviewPolicyByRoom")
         UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
         UserDefaults.standard.set(adminGodModeEnabled, forKey: "adminGodModeEnabled")
         UserDefaults.standard.set(adminInvisibleMode, forKey: "adminInvisibleMode")
@@ -3672,6 +3722,26 @@ class SettingsManager: ObservableObject {
 
         // Apply selected devices so audio routing follows settings in active sessions.
         applySelectedAudioDevices()
+    }
+
+    func roomPreviewOverride(for roomId: String) -> Bool? {
+        roomPreviewPolicyByRoom[roomId]
+    }
+
+    func setRoomPreviewOverride(roomId: String, enabled: Bool?) {
+        if let enabled {
+            roomPreviewPolicyByRoom[roomId] = enabled
+        } else {
+            roomPreviewPolicyByRoom.removeValue(forKey: roomId)
+        }
+        saveSettings()
+    }
+
+    func canPreviewRoom(roomId: String, userCount: Int, hasActiveMedia: Bool) -> Bool {
+        if roomPreviewPolicyByRoom[roomId] == false {
+            return false
+        }
+        return userCount > 0 || (allowPreviewWhenMediaActive && hasActiveMedia)
     }
 
     func mergeProfileLinks(_ incoming: [String], replaceExisting: Bool = false) {
@@ -4048,6 +4118,12 @@ struct SettingsView: View {
             Toggle("Show room descriptions in room list", isOn: $settings.showRoomDescriptions)
                 .onChange(of: settings.showRoomDescriptions) { _ in settings.saveSettings() }
                 .accessibilityHint("Shows or hides room description text in list and grid views.")
+            Toggle("Allow preview when room media is active", isOn: $settings.allowPreviewWhenMediaActive)
+                .onChange(of: settings.allowPreviewWhenMediaActive) { _ in settings.saveSettings() }
+                .accessibilityHint("Lets room preview start when media is playing, even if no users are actively speaking.")
+            Toggle("Play sound cues when preview starts and stops", isOn: $settings.previewSoundCuesEnabled)
+                .onChange(of: settings.previewSoundCuesEnabled) { _ in settings.saveSettings() }
+                .accessibilityHint("Plays the configured preview in/out sounds when toggling room preview.")
             Picker("Default room button action", selection: $settings.defaultRoomPrimaryAction) {
                 Text("Open Details").tag(SettingsManager.RoomPrimaryAction.openDetails)
                 Text("Join or Show Room").tag(SettingsManager.RoomPrimaryAction.joinOrShow)

@@ -22,7 +22,7 @@ struct RoomActionMenu: View {
         // In production, these would come from room settings
         RoomFeatures(
             whisperEnabled: true,
-            peekEnabled: room.userCount > 0,
+            peekEnabled: room.userCount > 0 || settings.allowPreviewWhenMediaActive,
             spatialAudioEnabled: true,
             recordingAllowed: false,
             voiceEffectsEnabled: true,
@@ -30,6 +30,17 @@ struct RoomActionMenu: View {
             canLockRoom: roomLockManager.canCurrentUserLock,
             isRoomLocked: roomLockManager.isRoomLocked
         )
+    }
+
+    private var roomPreviewOverride: Bool? {
+        settings.roomPreviewOverride(for: room.id)
+    }
+
+    private var roomPreviewEnabledText: String {
+        if roomPreviewOverride == false {
+            return "Enable Preview in This Room"
+        }
+        return "Disable Preview in This Room"
     }
 
     var body: some View {
@@ -233,6 +244,26 @@ struct RoomActionMenu: View {
                             NotificationCenter.default.post(name: .openAudioSettings, object: nil)
                         }
                         isPresented = false
+                    }
+
+                    if adminManager.isAdmin || roomFeatures.canLockRoom {
+                        ActionMenuItem(
+                            icon: roomPreviewOverride == false ? "eye" : "eye.slash",
+                            label: roomPreviewEnabledText,
+                            shortcut: nil,
+                            description: roomPreviewOverride == false
+                                ? "Allow room audio preview for this room"
+                                : "Block room audio preview for this room"
+                        ) {
+                            if roomPreviewOverride == false {
+                                settings.setRoomPreviewOverride(roomId: room.id, enabled: nil)
+                            } else {
+                                settings.setRoomPreviewOverride(roomId: room.id, enabled: false)
+                                if PeekManager.shared.isPeeking, PeekManager.shared.peekingRoom?.id == room.id {
+                                    PeekManager.shared.stopPeeking()
+                                }
+                            }
+                        }
                     }
 
                     ActionMenuItem(
@@ -779,8 +810,10 @@ class PeekManager: ObservableObject {
         peekingRoom = room
         peekTimeRemaining = maxPeekTime
 
-        // Play peek in sound
-        AppSoundManager.shared.playPeekInSound()
+        // Play preview start cue if enabled.
+        if SettingsManager.shared.previewSoundCuesEnabled {
+            AppSoundManager.shared.playPeekInSound()
+        }
 
         // Start countdown timer
         peekTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -804,8 +837,10 @@ class PeekManager: ObservableObject {
     func stopPeeking() {
         guard isPeeking else { return }
 
-        // Play peek out sound
-        AppSoundManager.shared.playPeekOutSound()
+        // Play preview stop cue if enabled.
+        if SettingsManager.shared.previewSoundCuesEnabled {
+            AppSoundManager.shared.playPeekOutSound()
+        }
 
         // Stop timer
         peekTimer?.invalidate()
@@ -825,6 +860,23 @@ class PeekManager: ObservableObject {
         peekTimeRemaining = 0
 
         print("PeekManager: Stopped peeking")
+    }
+
+    @discardableResult
+    func togglePreview(for room: Room, canPreview: Bool = true) -> Bool {
+        if isPeeking, peekingRoom?.id == room.id {
+            stopPeeking()
+            return false
+        }
+        guard canPreview else {
+            AccessibilityManager.shared.announceStatus("Preview is unavailable for this room right now.")
+            return false
+        }
+        if isPeeking {
+            stopPeeking()
+        }
+        peekIntoRoom(room)
+        return true
     }
 }
 
