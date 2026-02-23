@@ -1,8 +1,8 @@
 version: 1.0
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: BypiMI5TQajHgGV3MztfcAe1FS042lzq+obPu6nQckLKPZOW/DJhBST1aFV8s/B9URA1ACbLP5BUIARe8+uS5Q==
-    size: 160220943
+    sha512: CrDyXZc/5fjZnrcX48KVIsmy7bgT5a8UUHDGQlDwtLr/w92qSPdkeoCZJHUgtO8NrSfwkTbz04xobujyaZY3Dw==
+    size: 160212331
 path: VoiceLinkMacOS.zip
-sha512: BypiMI5TQajHgGV3MztfcAe1FS042lzq+obPu6nQckLKPZOW/DJhBST1aFV8s/B9URA1ACbLP5BUIARe8+uS5Q==
-releaseDate: '2026-02-22T22:35:35.000Z'
+sha512: CrDyXZc/5fjZnrcX48KVIsmy7bgT5a8UUHDGQlDwtLr/w92qSPdkeoCZJHUgtO8NrSfwkTbz04xobujyaZY3Dw==
+releaseDate: '2026-02-23T00:30:42.000Z'

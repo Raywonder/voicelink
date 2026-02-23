@@ -1,16 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0
-build: 18
+build: 19
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: a4Km/+qqhQrq1T6QCgnTvaFvu7V4EAYnIxo5mx/WWcqpE24UlgBdrMHOm6xT7fiAV9I1PT4T5QZ2iBX+h0Vw3g==
-    size: 160220943
+    sha512: CrDyXZc/5fjZnrcX48KVIsmy7bgT5a8UUHDGQlDwtLr/w92qSPdkeoCZJHUgtO8NrSfwkTbz04xobujyaZY3Dw==
+    size: 160212331
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: a4Km/+qqhQrq1T6QCgnTvaFvu7V4EAYnIxo5mx/WWcqpE24UlgBdrMHOm6xT7fiAV9I1PT4T5QZ2iBX+h0Vw3g==
-releaseDate: '2026-02-22T22:35:35.000Z'
+sha512: CrDyXZc/5fjZnrcX48KVIsmy7bgT5a8UUHDGQlDwtLr/w92qSPdkeoCZJHUgtO8NrSfwkTbz04xobujyaZY3Dw==
+releaseDate: '2026-02-23T00:30:42.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Internal Build 18)
-  - Rebuilt native audio driver and refreshed app bundle binaries.
+  VoiceLink macOS Update (Internal Build 19)
+  - Startup welcome audio reliability fixes.
+  - Added UI sound auto-download self-test path.
   - Replaced download package and updated checksum manifests.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
