@@ -1,4 +1,4 @@
-# macOS Build Instructions - VoiceLink v1.0 Native
+# macOS Build Instructions - VoiceLink Native
 
 ## Current Status: Ready for Native Build
 
@@ -11,7 +11,9 @@
 - ✅ Cross-device coordination established
 
 ### 🍎 Build Objective
-Create macOS native app: **v1.0.0-macos.zip**
+Create/update macOS native app ZIP artifacts used by updater and downloads:
+- `VoiceLinkMacOS.zip` (primary)
+- `VoiceLink-macOS.zip` (alias for compatibility)
 
 ---
 
@@ -61,8 +63,9 @@ Product → Archive
 # Navigate to exported app
 cd /path/to/exported/app/
 
-# Create distributable ZIP
-zip -r VoiceLink-1.0.0-macos.zip VoiceLink.app
+# Create distributable ZIP(s)
+zip -r VoiceLinkMacOS.zip VoiceLink.app
+cp VoiceLinkMacOS.zip VoiceLink-macOS.zip
 
 # Expected size: ~144-150 MB
 ```
@@ -72,7 +75,7 @@ zip -r VoiceLink-1.0.0-macos.zip VoiceLink.app
 ## 🧪 Build Output Requirements
 
 ### Required Output
-- **File:** VoiceLink-1.0.0-macos.zip
+- **Files:** VoiceLinkMacOS.zip, VoiceLink-macOS.zip
 - **Size:** ~144-150 MB (contains VoiceLink.app)
 - **Contents:** VoiceLink.app bundle with all dependencies
 
@@ -89,20 +92,14 @@ zip -r VoiceLink-1.0.0-macos.zip VoiceLink.app
 ```bash
 # Upload to filedump (from macOS terminal)
 scp -P 450 -i ~/.ssh/raywonder \
-  VoiceLink-1.0.0-macos.zip \
-  devinecr@64.20.46.178:/home/devinecr/devinecreations.net/uploads/filedump/voicelink/
+  VoiceLinkMacOS.zip VoiceLink-macOS.zip \
+  devinecr@64.20.46.178:/home/devinecr/downloads/voicelink/
 ```
 
 ### Auto-Updater API Update
-Edit `/home/devinecr/apps/voicelink-local/source/routes/local-server.js`:
-```javascript
-macos: {
-    version: '1.0.0',      // Updated from 1.0.1
-    buildNumber: 2,          // Updated from 1
-    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-    releaseNotes: 'v1.0.0: First native macOS release, enhanced audio playback, improved error handling'
-}
-```
+Update manifests:
+- `swift-native/VoiceLinkNative/latest-mac.yml` (`VoiceLinkMacOS.zip`)
+- `swift-native/VoiceLinkNative/latest-mac.server.yml` (`VoiceLink-macOS.zip`, copyPartyURL -> `.zip`)
 
 ---
 

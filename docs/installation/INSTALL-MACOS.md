@@ -1,37 +1,25 @@
-# VoiceLink Local - macOS Installation Guide
+# VoiceLink - macOS Installation Guide
 
 ## System Requirements
 
 - **macOS 10.14** or later
 - **Intel Mac** or **Apple Silicon** (M1/M2/M3)
 - **8GB RAM** minimum (16GB recommended)
-- **500MB** available disk space
+- **1GB** available disk space
 
 ## Download Options
 
-### Apple Silicon (M1/M2/M3) - Recommended
-- **DMG Installer**: [VoiceLink Local-1.0.0-arm64.dmg](../releases/VoiceLink%20Local-1.0.0-arm64.dmg) (349MB)
-- **ZIP Archive**: [VoiceLink Local-1.0.0-arm64-mac.zip](../releases/VoiceLink%20Local-1.0.0-arm64-mac.zip) (344MB)
-
-### Intel Mac
-- **DMG Installer**: [VoiceLink Local-1.0.0.dmg](../releases/VoiceLink%20Local-1.0.0.dmg) (354MB)
-- **ZIP Archive**: [VoiceLink Local-1.0.0-mac.zip](../releases/VoiceLink%20Local-1.0.0-mac.zip) (349MB)
+### Universal Build (Apple Silicon + Intel)
+- **Primary ZIP**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
+- **Alias ZIP**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip`
 
 ## Installation Methods
 
-### Method 1: DMG Installer (Recommended)
+### Method: ZIP Archive (Production)
 
-1. **Download** the appropriate DMG file for your Mac
-2. **Double-click** the downloaded DMG file
-3. **Drag** VoiceLink Local to the Applications folder
-4. **Eject** the DMG by clicking the eject button in Finder
-5. **Launch** VoiceLink Local from Applications folder
-
-### Method 2: ZIP Archive
-
-1. **Download** the appropriate ZIP file for your Mac
+1. **Download** `VoiceLinkMacOS.zip` (or `VoiceLink-macOS.zip`)
 2. **Extract** the ZIP file to your desired location
-3. **Move** the VoiceLink Local.app to Applications folder (optional)
+3. **Move** `VoiceLink.app` to `/Applications`
 4. **Launch** the application
 
 ## First Launch
@@ -39,7 +27,7 @@
 ### Gatekeeper Notice
 On first launch, macOS may show a security warning:
 
-1. **If you see "VoiceLink Local cannot be opened"**:
+1. **If you see "VoiceLink cannot be opened"**:
    - Go to **System Preferences** → **Security & Privacy**
    - Click **"Open Anyway"** next to the VoiceLink Local message
    - Click **"Open"** in the confirmation dialog
@@ -49,11 +37,11 @@ On first launch, macOS may show a security warning:
    - Click **"Open"** in the dialog
 
 ### Microphone Permissions
-VoiceLink Local requires microphone access:
+VoiceLink requires microphone access:
 
 1. **Grant permission** when prompted
 2. **If missed**: Go to **System Preferences** → **Security & Privacy** → **Privacy** → **Microphone**
-3. **Check the box** next to VoiceLink Local
+3. **Check the box** next to VoiceLink
 
 ## Audio Configuration
 
@@ -90,18 +78,18 @@ For best results with professional audio interfaces:
 
 ## Uninstallation
 
-1. **Quit** VoiceLink Local completely
-2. **Drag** VoiceLink Local.app to Trash
+1. **Quit** VoiceLink completely
+2. **Drag** VoiceLink.app to Trash
 3. **Remove preferences** (optional):
    ```bash
-   rm -rf ~/Library/Preferences/com.voicelink.local.*
-   rm -rf ~/Library/Application\ Support/VoiceLink\ Local/
+   rm -rf ~/Library/Preferences/com.devinecreations.voicelink.*
+   rm -rf ~/Library/Application\ Support/VoiceLink/
    ```
 
 ## Advanced Configuration
 
 ### Custom Audio Device Configuration
-VoiceLink Local supports advanced audio routing. See the main documentation for details on:
+VoiceLink supports advanced audio routing. See the main documentation for details on:
 - Multi-channel audio setup
 - VST plugin configuration
 - 3D spatial audio settings
@@ -110,7 +98,7 @@ VoiceLink Local supports advanced audio routing. See the main documentation for 
 ### Command Line Options
 Launch with custom settings:
 ```bash
-/Applications/VoiceLink\ Local.app/Contents/MacOS/VoiceLink\ Local --audio-buffer=512 --sample-rate=48000
+/Applications/VoiceLink.app/Contents/MacOS/VoiceLink --audio-buffer=512 --sample-rate=48000
 ```
 
 ## Support

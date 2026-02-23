@@ -6,6 +6,12 @@ import AppKit
 /// Uses actual sound files from Resources/sounds directory
 class AppSoundManager: ObservableObject {
     static let shared = AppSoundManager()
+    struct SoundDownloadNotice: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let isReminder: Bool
+    }
     private let remoteSoundBaseURLDefaults = [
         "https://im.tappedin.fm/sounds",
         "https://im.tappedin.fm/assets/sounds",
@@ -133,6 +139,7 @@ class AppSoundManager: ObservableObject {
     @Published var soundsEnabled: Bool = true
     @Published var volume: Float = 0.7
     @Published var startupIntroEnabled: Bool = true
+    @Published var activeSoundDownloadNotice: SoundDownloadNotice?
 
     // Audio players cache
     private var audioPlayers: [SoundType: AVAudioPlayer] = [:]
@@ -146,10 +153,13 @@ class AppSoundManager: ObservableObject {
     private var downloadFailures: Set<String> = []
     private var pendingPlayAfterDownload: Set<SoundType> = []
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
+    private var didPublishDownloadNoticeThisLaunch = false
+    private let reminderPendingKey = "voicelinkSoundDownloadReminderPending"
 
     init() {
         loadSettings()
         preloadSounds()
+        postLaunchReminderIfNeeded()
     }
 
     // MARK: - Preload Sounds
@@ -159,6 +169,7 @@ class AppSoundManager: ObservableObject {
         for soundType in SoundType.allCases {
             loadSound(soundType)
         }
+        refreshDownloadReminderState()
         isInitialized = true
         print("AppSoundManager: Preloaded \(audioPlayers.count) sounds")
     }
@@ -392,10 +403,10 @@ class AppSoundManager: ObservableObject {
 
     // MARK: - Play Sounds
 
-    func playSound(_ soundType: SoundType, force: Bool = false) {
+    func playSound(_ soundType: SoundType, force: Bool = false, allowSystemFallback: Bool = true) {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
-                self?.playSound(soundType, force: force)
+                self?.playSound(soundType, force: force, allowSystemFallback: allowSystemFallback)
             }
             return
         }
@@ -424,8 +435,10 @@ class AppSoundManager: ObservableObject {
                 sound.play()
             } else {
                 queueBackgroundDownload(for: soundType, playWhenReady: true)
-                // Fallback to system sound
-                playSystemSound(for: soundType)
+                if allowSystemFallback {
+                    // Optional fallback to system sound.
+                    playSystemSound(for: soundType)
+                }
             }
         }
     }
@@ -461,7 +474,6 @@ class AppSoundManager: ObservableObject {
             case .success: return "Glass"
             case .error: return "Basso"
             case .notification: return "Ping"
-            case .connected: return "Pop"
             case .disconnected: return "Blow"
             default: return nil
             }
@@ -632,8 +644,14 @@ class AppSoundManager: ObservableObject {
         guard startupIntroEnabled, !startupIntroPlayed else { return }
         if playRandomStartupIntro() { return }
 
-        // Ensure a deterministic audible startup cue even if intro assets are unavailable.
-        playSound(.connected, force: true)
+        // Avoid default macOS fallback tones on launch; if the sound is missing,
+        // fetch in background and notify users non-blockingly.
+        if hasPlayableVariant(for: .connected) {
+            playSound(.connected, force: true, allowSystemFallback: false)
+        } else {
+            queueBackgroundDownload(for: .connected, playWhenReady: true)
+            publishBackgroundDownloadNotice(isReminder: false)
+        }
         startupIntroPlayed = true
     }
 
@@ -805,6 +823,7 @@ class AppSoundManager: ObservableObject {
         if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
             return
         }
+        publishBackgroundDownloadNotice(isReminder: false)
         inFlightDownloads.insert(key)
         ioQueue.async { [weak self] in
             self?.downloadMissingSound(soundType)
@@ -865,9 +884,10 @@ class AppSoundManager: ObservableObject {
                                 guard let self else { return }
                                 self.buildSoundLibraryIndex()
                                 self.loadSound(soundType)
+                                self.refreshDownloadReminderState()
                                 if self.pendingPlayAfterDownload.contains(soundType) {
                                     self.pendingPlayAfterDownload.remove(soundType)
-                                    self.playSound(soundType)
+                                    self.playSound(soundType, allowSystemFallback: false)
                                 }
                             }
                             return
@@ -879,6 +899,48 @@ class AppSoundManager: ObservableObject {
             }
         }
         downloadFailures.insert(key)
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshDownloadReminderState()
+        }
+    }
+
+    private func hasPlayableVariant(for soundType: SoundType) -> Bool {
+        if audioPlayers[soundType] != nil || systemSounds[soundType] != nil { return true }
+        if resolveMappedSoundURL(for: soundType) != nil { return true }
+        if hasDownloadedVariant(for: soundType) { return true }
+        return false
+    }
+
+    private func criticalSoundTypesForReminder() -> [SoundType] {
+        [.connected, .notification, .buttonClick, .userJoin, .userLeave, .messageIncoming, .toggleOn, .toggleOff]
+    }
+
+    private func refreshDownloadReminderState() {
+        let missingCritical = criticalSoundTypesForReminder().contains { !hasPlayableVariant(for: $0) }
+        UserDefaults.standard.set(missingCritical, forKey: reminderPendingKey)
+    }
+
+    private func postLaunchReminderIfNeeded() {
+        guard UserDefaults.standard.bool(forKey: reminderPendingKey) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.publishBackgroundDownloadNotice(isReminder: true)
+        }
+    }
+
+    private func publishBackgroundDownloadNotice(isReminder: Bool) {
+        if !isReminder, didPublishDownloadNoticeThisLaunch { return }
+        if !isReminder {
+            didPublishDownloadNoticeThisLaunch = true
+        }
+        UserDefaults.standard.set(true, forKey: reminderPendingKey)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let title = isReminder ? "VoiceLink sounds still syncing" : "VoiceLink sounds are downloading"
+            let message = isReminder
+                ? "Some UI sounds are still downloading in the background. You can keep using rooms normally."
+                : "Some sounds are missing and are being downloaded in the background. You can still join rooms and use all app features."
+            self.activeSoundDownloadNotice = SoundDownloadNotice(title: title, message: message, isReminder: isReminder)
+        }
     }
 }
 

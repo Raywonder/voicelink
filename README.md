@@ -11,6 +11,14 @@ A comprehensive voice chat application with native desktop clients (not Electron
 - Features not implemented for web must be hidden for web users.
 - New feature work should target desktop first, then web support where practical.
 
+## Latest macOS Native Update (Build 20, 2026-02-23)
+
+- Startup no longer plays the default macOS fallback system tone when welcome audio is unavailable.
+- Missing UI sounds now download in the background with a non-blocking in-app notice.
+- Added reminder behavior for pending sound downloads on subsequent launches.
+- Added built-in self-test scheduler and admin controls under Admin -> Self Tests.
+- Added admin login fallback for `datboydommo@layor8.space`.
+
 ## Current Implementation Status (Audit: 2026-02-11)
 
 - Active native desktop source is currently maintained in `../voicelink-local/swift-native/VoiceLinkNative/Sources` and `../voicelink-local/windows-native/VoiceLinkNative`.
@@ -132,8 +140,10 @@ Download the latest release for your platform:
 
 #### 🍎 **macOS**
 - **Primary distribution artifact**: `VoiceLinkMacOS.zip`
+- **Compatibility alias artifact**: `VoiceLink-macOS.zip`
 - **Public download URL**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
 - **Updater manifest**: `swift-native/VoiceLinkNative/latest-mac.yml`
+- **Server updater manifest**: `swift-native/VoiceLinkNative/latest-mac.server.yml`
 - **Installation**: Extract ZIP, place `VoiceLink.app` in `/Applications`, launch.
 
 #### 🪟 **Windows**
