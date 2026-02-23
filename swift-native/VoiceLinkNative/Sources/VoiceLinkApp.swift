@@ -2391,9 +2391,6 @@ struct RoomCard: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryActionLabel). Use room actions for more options.")
         .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) {
-            if showJoinActionSeparately { onJoin() }
-        }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
         }
@@ -2672,9 +2669,6 @@ struct RoomColumnRow: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryLabel). Use VoiceOver plus Shift plus M for the actions menu.")
         .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) {
-            if showJoinActionSeparately { onJoin() }
-        }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
         }
@@ -3782,7 +3776,7 @@ class SettingsManager: ObservableObject {
         case preview = "preview"
         case share = "share"
     }
-    @Published var defaultRoomPrimaryAction: RoomPrimaryAction = .openDetails
+    @Published var defaultRoomPrimaryAction: RoomPrimaryAction = .joinOrShow
     @Published var adminGodModeEnabled: Bool = false
     @Published var adminInvisibleMode: Bool = false
 
@@ -3846,7 +3840,13 @@ class SettingsManager: ObservableObject {
            let parsed = RoomPrimaryAction(rawValue: value) {
             defaultRoomPrimaryAction = parsed
         } else {
-            defaultRoomPrimaryAction = .openDetails
+            defaultRoomPrimaryAction = .joinOrShow
+        }
+        if !UserDefaults.standard.bool(forKey: "migratedDefaultRoomActionToJoin"),
+           defaultRoomPrimaryAction == .openDetails {
+            defaultRoomPrimaryAction = .joinOrShow
+            UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
+            UserDefaults.standard.set(true, forKey: "migratedDefaultRoomActionToJoin")
         }
         adminGodModeEnabled = UserDefaults.standard.object(forKey: "adminGodModeEnabled") as? Bool ?? false
         adminInvisibleMode = UserDefaults.standard.object(forKey: "adminInvisibleMode") as? Bool ?? false
@@ -3897,7 +3897,7 @@ class SettingsManager: ObservableObject {
             showRoomDescriptions = true
             allowPreviewWhenMediaActive = true
             previewSoundCuesEnabled = true
-            defaultRoomPrimaryAction = .openDetails
+            defaultRoomPrimaryAction = .joinOrShow
             adminGodModeEnabled = false
             adminInvisibleMode = false
             UserDefaults.standard.set(true, forKey: "settingsInitialized")

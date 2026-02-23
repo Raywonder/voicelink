@@ -28,5 +28,15 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>VoiceLink needs microphone access for voice chat.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>VoiceLink needs network volume access for file transfers and shared media libraries.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>VoiceLink needs removable volume access for file transfers and media playback.</string>
 </dict>
 </plist>

@@ -817,13 +817,22 @@ class ServerManager: ObservableObject {
             if let first = ackData.first as? String, first.uppercased() == "NO ACK" {
                 return
             }
-            if let payload = ackData.first as? [String: Any],
-               let message = payload["error"] as? String ?? payload["message"] as? String {
-                DispatchQueue.main.async {
-                    self.errorMessage = message
+            if let payload = ackData.first as? [String: Any] {
+                if let message = payload["error"] as? String {
+                    DispatchQueue.main.async {
+                        self.errorMessage = message
+                    }
+                    self.failPendingJoin(with: message)
+                    return
                 }
-                self.failPendingJoin(with: message)
-                return
+                if let success = payload["success"] as? Bool, success == false {
+                    let message = (payload["message"] as? String) ?? "Failed to join room."
+                    DispatchQueue.main.async {
+                        self.errorMessage = message
+                    }
+                    self.failPendingJoin(with: message)
+                    return
+                }
             }
             if let message = ackData.first as? String {
                 let lowered = message.lowercased()
@@ -832,12 +841,50 @@ class ServerManager: ObservableObject {
                         self.errorMessage = message
                     }
                     self.failPendingJoin(with: message)
+                    return
                 }
+                if lowered.contains("ok") || lowered.contains("success") || lowered.contains("joined") {
+                    self.completeJoinFromAck(roomId: roomId, payload: ["roomId": roomId])
+                    return
+                }
+            }
+            // Some server builds ACK join-room without emitting a follow-up join event.
+            // Treat any non-error ACK payload as join success to avoid client-side stalls.
+            if let payload = ackData.first as? [String: Any] {
+                self.completeJoinFromAck(roomId: roomId, payload: payload)
+                return
+            }
+            if ackData.isEmpty {
+                self.completeJoinFromAck(roomId: roomId, payload: ["roomId": roomId])
             }
         }
         DispatchQueue.main.async {
             self.audioTransmissionStatus = "Joining room..."
         }
+    }
+
+    private func completeJoinFromAck(roomId: String, payload: [String: Any]) {
+        let roomData = (payload["room"] as? [String: Any]) ?? payload
+        let joinedRoomId = roomData["id"] as? String
+            ?? roomData["roomId"] as? String
+            ?? payload["roomId"] as? String
+            ?? payload["id"] as? String
+            ?? roomId
+
+        completePendingJoin(for: joinedRoomId)
+        DispatchQueue.main.async {
+            self.activeRoomId = joinedRoomId
+            self.audioTransmissionStatus = "Joined room"
+        }
+        fetchActiveRoomStream(for: joinedRoomId)
+        scheduleAudioTransmissionStart(for: joinedRoomId)
+
+        var joinedPayload = roomData
+        joinedPayload["roomId"] = joinedRoomId
+        if joinedPayload["id"] == nil {
+            joinedPayload["id"] = joinedRoomId
+        }
+        NotificationCenter.default.post(name: .roomJoined, object: joinedPayload)
     }
 
     private func normalizedRooms(from rawRooms: [[String: Any]]) -> [ServerRoom] {
