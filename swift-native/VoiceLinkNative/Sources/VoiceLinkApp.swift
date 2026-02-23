@@ -1257,7 +1257,6 @@ class AppState: ObservableObject {
         pendingJoinRoomId = room.id
         errorMessage = "Joining \(room.name)..."
         serverManager.joinRoom(roomId: room.id, username: joinName)
-        currentRoom = room
     }
 
     func setFocusedRoom(_ room: Room?) {
@@ -2465,24 +2464,18 @@ struct RoomActionSplitButton: View {
                 if showJoinAction {
                     Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
                 }
-                Button("Open Jukebox") {
-                    NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
-                }
                 Button("Preview Room Audio") { previewOrExplain() }
                     .disabled(!roomCanPreview)
                     .accessibilityHint(roomCanPreview ? "Preview live room audio." : "Unavailable because room audio preview is currently disabled or there is no active room audio.")
                 Button("Share Room Link") { onShare() }
-            Button("Copy Room ID") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(roomId, forType: .string)
-            }
-            Divider()
-            Menu("Manage Room") {
-                Button("Open Room Administration") { onOpenAdmin() }
-                Button("Create New Room") { onCreateRoom() }
-                Button("Delete This Room", role: .destructive) { onDeleteRoom() }
-                    .disabled(!isAdmin)
-            }
+                if isAdmin {
+                    Divider()
+                    Menu("Manage Room") {
+                        Button("Open Room Administration") { onOpenAdmin() }
+                        Button("Create New Room") { onCreateRoom() }
+                        Button("Delete This Room", role: .destructive) { onDeleteRoom() }
+                    }
+                }
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.caption.weight(.bold))
@@ -2493,7 +2486,7 @@ struct RoomActionSplitButton: View {
             }
             .menuStyle(.borderlessButton)
             .accessibilityLabel("Room actions menu")
-            .accessibilityHint("Open all actions for this room, including join, share, administration, and delete.")
+            .accessibilityHint("Open room details, join or show, preview, and share actions.")
             .help("Full room actions menu. VoiceOver users can also open the actions menu with VO+Shift+M.")
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))

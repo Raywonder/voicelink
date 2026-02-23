@@ -35,6 +35,11 @@ class ServerManager: ObservableObject {
     private var pendingJoinTimeoutWorkItem: DispatchWorkItem?
     private var roomStreamPlayer: AVPlayer?
     private var currentRoomStreamURL: URL?
+    private var roomStreamDidStopExplicitly = false
+    private var roomStreamKeepAliveTimer: Timer?
+    private var roomStreamEndObserver: NSObjectProtocol?
+    private let defaultRoomStreamURLString = "https://chrismixradio.com"
+    private let roomStreamDefaultVolume: Float = 0.12
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -697,6 +702,7 @@ class ServerManager: ObservableObject {
                 ?? "Media"
             let streamUrl = payload["streamUrl"] as? String
             if let streamUrl {
+                self.roomStreamDidStopExplicitly = false
                 self.startRoomStreamPlayback(from: streamUrl)
             }
             DispatchQueue.main.async {
@@ -715,7 +721,7 @@ class ServerManager: ObservableObject {
                 ?? (payload["itemName"] as? String)
                 ?? (payload["itemId"] as? String)
                 ?? "Media"
-            self.stopRoomStreamPlayback()
+            self.stopRoomStreamPlayback(explicit: true)
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) stopped.")
                 NotificationCenter.default.post(
@@ -989,7 +995,7 @@ class ServerManager: ObservableObject {
         pendingAudioStartWorkItem = nil
         socket?.emit("leave-room")
         stopAudioTransmission()
-        stopRoomStreamPlayback()
+        stopRoomStreamPlayback(explicit: true)
         DispatchQueue.main.async {
             self.currentRoomUsers = []
             self.activeRoomId = nil
@@ -997,8 +1003,10 @@ class ServerManager: ObservableObject {
     }
 
     private func fetchActiveRoomStream(for roomId: String) {
+        roomStreamDidStopExplicitly = false
         guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
+            startDefaultRoomStreamIfNeeded()
             return
         }
 
@@ -1007,7 +1015,7 @@ class ServerManager: ObservableObject {
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             let isActive = json["active"] as? Bool ?? false
             guard isActive, let streamUrl = json["streamUrl"] as? String else {
-                self.stopRoomStreamPlayback()
+                self.startDefaultRoomStreamIfNeeded()
                 return
             }
             self.startRoomStreamPlayback(from: streamUrl)
@@ -1016,27 +1024,77 @@ class ServerManager: ObservableObject {
 
     private func startRoomStreamPlayback(from rawURL: String) {
         guard let url = URL(string: rawURL) else { return }
-        if currentRoomStreamURL == url, roomStreamPlayer != nil {
-            return
-        }
-
         DispatchQueue.main.async {
+            if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
+                player.volume = self.roomStreamDefaultVolume
+                player.play()
+                self.ensureRoomStreamKeepAlive()
+                return
+            }
             self.currentRoomStreamURL = url
             let item = AVPlayerItem(url: url)
+            if let observer = self.roomStreamEndObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.roomStreamEndObserver = nil
+            }
+            self.roomStreamEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                guard !self.roomStreamDidStopExplicitly, let current = self.currentRoomStreamURL else { return }
+                self.startRoomStreamPlayback(from: current.absoluteString)
+            }
+
             if let player = self.roomStreamPlayer {
                 player.replaceCurrentItem(with: item)
+                player.volume = self.roomStreamDefaultVolume
                 player.play()
             } else {
                 let player = AVPlayer(playerItem: item)
-                player.volume = 0.75
+                player.volume = self.roomStreamDefaultVolume
                 self.roomStreamPlayer = player
+                player.play()
+            }
+            self.ensureRoomStreamKeepAlive()
+        }
+    }
+
+    private func startDefaultRoomStreamIfNeeded() {
+        guard !roomStreamDidStopExplicitly else { return }
+        startRoomStreamPlayback(from: defaultRoomStreamURLString)
+    }
+
+    private func ensureRoomStreamKeepAlive() {
+        roomStreamKeepAliveTimer?.invalidate()
+        roomStreamKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.activeRoomId != nil else { return }
+            guard !self.roomStreamDidStopExplicitly else { return }
+            guard let player = self.roomStreamPlayer else { return }
+            player.volume = self.roomStreamDefaultVolume
+            if player.currentItem == nil, let current = self.currentRoomStreamURL {
+                self.startRoomStreamPlayback(from: current.absoluteString)
+                return
+            }
+            if player.timeControlStatus != .playing {
                 player.play()
             }
         }
     }
 
-    private func stopRoomStreamPlayback() {
+    private func stopRoomStreamPlayback(explicit: Bool = true) {
         DispatchQueue.main.async {
+            if explicit {
+                self.roomStreamDidStopExplicitly = true
+            }
+            self.roomStreamKeepAliveTimer?.invalidate()
+            self.roomStreamKeepAliveTimer = nil
+            if let observer = self.roomStreamEndObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.roomStreamEndObserver = nil
+            }
             self.roomStreamPlayer?.pause()
             self.roomStreamPlayer?.replaceCurrentItem(with: nil)
             self.currentRoomStreamURL = nil
