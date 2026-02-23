@@ -465,13 +465,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if SettingsManager.shared.confirmBeforeQuit {
+        let settings = SettingsManager.shared
+        if settings.confirmBeforeQuit {
             let alert = NSAlert()
             alert.messageText = "Quit VoiceLink?"
             alert.informativeText = "VoiceLink will fully quit even if you are in a room."
             alert.addButton(withTitle: "Quit")
             alert.addButton(withTitle: "Cancel")
-            return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+            alert.showsSuppressionButton = true
+            if let suppressionButton = alert.suppressionButton {
+                suppressionButton.title = "Never ask again"
+                suppressionButton.setAccessibilityLabel("Never ask again")
+            }
+
+            let result = alert.runModal()
+            if result == .alertFirstButtonReturn,
+               alert.suppressionButton?.state == .on {
+                settings.confirmBeforeQuit = false
+                settings.saveSettings()
+            }
+            return result == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
         }
         return .terminateNow
     }
@@ -1290,6 +1303,7 @@ struct ContentView: View {
                 LoginView()
             }
         }
+        .animation(.none, value: appState.currentScreen)
         .onReceive(NotificationCenter.default.publisher(for: .openRoomJukebox)) { _ in
             showJukeboxSheet = true
         }
@@ -1327,8 +1341,6 @@ struct MainMenuView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
-    @ObservedObject var healthMonitor = ConnectionHealthMonitor.shared
-    @ObservedObject var adminManager = AdminServerManager.shared
     @State private var isServerStatusExpanded = SettingsManager.shared.expandServerStatusByDefault
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
@@ -1385,6 +1397,7 @@ struct MainMenuView: View {
     }
 
     var body: some View {
+        let roomsForDisplay = sortedRooms
         HStack(spacing: 0) {
             // Main Content
             VStack(spacing: 30) {
@@ -1546,7 +1559,7 @@ struct MainMenuView: View {
                 ScrollView {
                     if roomLayoutOption == .list {
                         LazyVStack(spacing: 12) {
-                            ForEach(sortedRooms) { room in
+                            ForEach(roomsForDisplay) { room in
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomCard(
                                     room: room,
@@ -1574,7 +1587,7 @@ struct MainMenuView: View {
                         }
                     } else if roomLayoutOption == .grid {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12)], spacing: 12) {
-                            ForEach(sortedRooms) { room in
+                            ForEach(roomsForDisplay) { room in
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomCard(
                                     room: room,
@@ -1612,7 +1625,7 @@ struct MainMenuView: View {
                             .foregroundColor(.gray)
                             .padding(.horizontal, 8)
 
-                            ForEach(sortedRooms) { room in
+                            ForEach(roomsForDisplay) { room in
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomColumnRow(
                                     room: room,
