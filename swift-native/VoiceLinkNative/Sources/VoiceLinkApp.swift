@@ -1561,6 +1561,11 @@ struct ContentView: View {
             }
             .frame(minWidth: 760, minHeight: 520)
         }
+        .onChange(of: appState.rooms) { _ in
+            if !availableServerFilters.contains(selectedServerFilter) {
+                selectedServerFilter = "All Servers"
+            }
+        }
     }
 }
 
@@ -1580,12 +1585,22 @@ struct MainMenuView: View {
         case column = "Column"
         var id: String { rawValue }
     }
+    enum RoomScopeFilter: String, CaseIterable, Identifiable {
+        case all = "All Rooms"
+        case publicOnly = "Public"
+        case privateOnly = "Private"
+        case activeUsers = "Active Users"
+        case mediaActive = "Media Active"
+        var id: String { rawValue }
+    }
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @State private var isServerStatusExpanded = SettingsManager.shared.expandServerStatusByDefault
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
+    @State private var roomScopeFilter: RoomScopeFilter = .all
+    @State private var selectedServerFilter: String = "All Servers"
     @State private var selectedRoomDetails: Room?
 
     var statusColor: Color {
@@ -1638,8 +1653,48 @@ struct MainMenuView: View {
         }
     }
 
+    private func serverLabel(for room: Room) -> String {
+        let hostName = room.hostServerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !hostName.isEmpty {
+            return hostName
+        }
+        let hostedFrom = room.hostedFromLine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if hostedFrom.lowercased().hasPrefix("hosted by "), hostedFrom.count > 10 {
+            return String(hostedFrom.dropFirst(10)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if !hostedFrom.isEmpty {
+            return hostedFrom
+        }
+        return "Unknown Server"
+    }
+
+    var availableServerFilters: [String] {
+        let unique = Set(appState.rooms.map { serverLabel(for: $0) })
+        return ["All Servers"] + unique.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    var filteredRooms: [Room] {
+        sortedRooms.filter { room in
+            let matchesServer = selectedServerFilter == "All Servers" || serverLabel(for: room) == selectedServerFilter
+            let matchesScope: Bool
+            switch roomScopeFilter {
+            case .all:
+                matchesScope = true
+            case .publicOnly:
+                matchesScope = !room.isPrivate
+            case .privateOnly:
+                matchesScope = room.isPrivate
+            case .activeUsers:
+                matchesScope = room.userCount > 0
+            case .mediaActive:
+                matchesScope = appState.roomHasActiveMusic[room.id] == true
+            }
+            return matchesServer && matchesScope
+        }
+    }
+
     var body: some View {
-        let roomsForDisplay = sortedRooms
+        let roomsForDisplay = filteredRooms
         HStack(spacing: 0) {
             // Main Content
             VStack(spacing: 30) {
@@ -1736,35 +1791,48 @@ struct MainMenuView: View {
                     .font(.headline)
                     .foregroundColor(.white)
 
-                HStack {
-                    Text("Sort Rooms")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Room Filters")
                         .font(.caption)
                         .foregroundColor(.gray)
-                    Spacer()
-                    Picker("Sort Rooms", selection: $roomSortOption) {
-                        ForEach(RoomSortOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .accessibilityLabel("Sort rooms")
-                    .accessibilityHint("Sort available rooms alphabetically or by activity and member count.")
-                }
 
-                HStack {
-                    Text("View")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Spacer()
-                    Picker("Room view", selection: $roomLayoutOption) {
-                        ForEach(RoomLayoutOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
+                    HStack(spacing: 12) {
+                        Picker("Server", selection: $selectedServerFilter) {
+                            ForEach(availableServerFilters, id: \.self) { server in
+                                Text(server).tag(server)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .accessibilityLabel("Server filter")
+                        .accessibilityHint("Choose which server's rooms are shown. All Servers shows every room.")
+
+                        Picker("Scope", selection: $roomScopeFilter) {
+                            ForEach(RoomScopeFilter.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityLabel("Room scope filter")
+                        .accessibilityHint("Filter rooms by visibility, active users, or active media.")
+
+                        Picker("Sort", selection: $roomSortOption) {
+                            ForEach(RoomSortOption.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityLabel("Sort rooms")
+                        .accessibilityHint("Sort available rooms alphabetically or by activity and member count.")
+
+                        Picker("View", selection: $roomLayoutOption) {
+                            ForEach(RoomLayoutOption.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityLabel("Room view layout")
+                        .accessibilityHint("Choose list, grid, or column layout for room cards.")
                     }
-                    .pickerStyle(.menu)
-                    .accessibilityLabel("Room view layout")
-                    .accessibilityHint("Choose list or grid layout for room cards.")
                 }
 
                 if let minimized = appState.minimizedRoom {
