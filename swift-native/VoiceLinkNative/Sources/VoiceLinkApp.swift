@@ -610,6 +610,7 @@ class AppState: ObservableObject {
     @Published var focusedRoomId: String?
     @Published var pendingCreateRoomName: String = ""
     @Published var roomHasActiveMusic: [String: Bool] = [:]
+    @Published var pendingJoinRoomId: String?
     private var previousScreen: Screen = .mainMenu
 
     let serverManager = ServerManager.shared
@@ -737,8 +738,9 @@ class AppState: ObservableObject {
             }
             let joinName = preferredDisplayName()
             username = joinName
+            pendingJoinRoomId = roomId
+            errorMessage = "Joining room \(roomId)..."
             serverManager.joinRoom(roomId: roomId, username: joinName)
-            currentScreen = .voiceChat
         }
     }
 
@@ -776,8 +778,9 @@ class AppState: ObservableObject {
             }
             let joinName = preferredDisplayName()
             username = joinName
+            pendingJoinRoomId = code
+            errorMessage = "Joining room \(code)..."
             serverManager.joinRoom(roomId: code, username: joinName)
-            currentScreen = .voiceChat
         }
     }
 
@@ -893,15 +896,35 @@ class AppState: ObservableObject {
 
         // Listen for room joined notification
         NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: .main) { [weak self] notification in
-            if let roomData = notification.object as? [String: Any],
-               let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String {
-                // Find the room and set it as current
-                if let room = self?.rooms.first(where: { $0.id == roomId }) {
-                    self?.currentRoom = room
-                    self?.minimizedRoom = nil
-                    self?.currentScreen = .voiceChat
+            guard let self else { return }
+            guard let roomData = notification.object as? [String: Any] else { return }
+            let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String ?? self.pendingJoinRoomId
+            guard let roomId else { return }
+
+            let joinedRoom: Room = {
+                if let existing = self.rooms.first(where: { $0.id == roomId }) {
+                    return existing
                 }
-            }
+                let fallbackName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fallbackDescription = (roomData["description"] as? String) ?? ""
+                let fallbackUsers = (roomData["userCount"] as? Int) ?? 0
+                let fallbackPrivate = (roomData["isPrivate"] as? Bool) ?? false
+                let fallbackMaxUsers = (roomData["maxUsers"] as? Int) ?? 50
+                return Room(
+                    id: roomId,
+                    name: (fallbackName?.isEmpty == false ? fallbackName! : "Room \(roomId)"),
+                    description: fallbackDescription,
+                    userCount: fallbackUsers,
+                    isPrivate: fallbackPrivate,
+                    maxUsers: fallbackMaxUsers
+                )
+            }()
+
+            self.currentRoom = joinedRoom
+            self.minimizedRoom = nil
+            self.currentScreen = .voiceChat
+            self.pendingJoinRoomId = nil
+            self.errorMessage = nil
         }
 
         // Listen for navigation back to main menu
@@ -1061,11 +1084,14 @@ class AppState: ObservableObject {
             }
         }
 
-        if let connectedBase = serverManager.baseURL, !connectedBase.isEmpty {
-            aggregated.append(contentsOf: await fetchRooms(from: connectedBase))
+        let candidates = APIEndpointResolver.mainBaseCandidates(preferred: serverManager.baseURL)
+        for base in candidates {
+            aggregated.append(contentsOf: await fetchRooms(from: base))
         }
-        if APIEndpointResolver.normalize(serverManager.baseURL ?? "") != APIEndpointResolver.canonicalMainBase {
-            aggregated.append(contentsOf: await fetchRooms(from: APIEndpointResolver.canonicalMainBase))
+        if let connectedBase = serverManager.baseURL,
+           !connectedBase.isEmpty,
+           !candidates.contains(APIEndpointResolver.normalize(connectedBase)) {
+            aggregated.append(contentsOf: await fetchRooms(from: connectedBase))
         }
 
         let deduped = serverManager.deduplicateRooms(aggregated).map(Room.init(from:))
@@ -1228,9 +1254,10 @@ class AppState: ObservableObject {
         errorMessage = nil
         let joinName = preferredDisplayName()
         username = joinName
+        pendingJoinRoomId = room.id
+        errorMessage = "Joining \(room.name)..."
         serverManager.joinRoom(roomId: room.id, username: joinName)
         currentRoom = room
-        currentScreen = .voiceChat
     }
 
     func setFocusedRoom(_ room: Room?) {
@@ -1742,6 +1769,7 @@ struct MainMenuView: View {
                     content: {
                         VStack(alignment: .leading, spacing: 10) {
                             let endpoint = appState.serverManager.baseURL ?? "Unavailable"
+                            let host = URL(string: endpoint)?.host ?? appState.serverManager.connectedServer
                             HStack(spacing: 8) {
                                 Circle()
                                     .fill(statusColor)
@@ -1753,28 +1781,18 @@ struct MainMenuView: View {
                                     .foregroundColor(.white.opacity(0.6))
                                     .font(.caption)
                             }
-                            Text("Endpoint: \(endpoint)")
-                                .foregroundColor(.white.opacity(0.75))
-                                .font(.caption)
-                                .textSelection(.enabled)
-                            HStack {
+                            Group {
+                                Text("Host: \(host)")
+                                Text("Endpoint: \(endpoint)")
+                                Text("Server Label: \(appState.serverManager.connectedServer)")
                                 Text("Sync Mode: \(SettingsManager.shared.syncMode.displayName)")
-                                    .foregroundColor(.white.opacity(0.75))
-                                    .font(.caption)
-                                Spacer()
-                                Text("Rooms: \(appState.rooms.count)")
-                                    .foregroundColor(.white.opacity(0.75))
-                                    .font(.caption)
+                                Text("Rooms Loaded: \(appState.rooms.count)")
+                                Text("Audio Status: \(appState.serverManager.audioTransmissionStatus)")
+                                Text("Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")")
                             }
-                            if let room = appState.currentRoom ?? appState.minimizedRoom {
-                                Text("Current Room: \(room.name)")
-                                    .foregroundColor(.white.opacity(0.75))
-                                    .font(.caption)
-                            } else {
-                                Text("Current Room: None")
-                                    .foregroundColor(.white.opacity(0.65))
-                                    .font(.caption)
-                            }
+                            .foregroundColor(.white.opacity(0.75))
+                            .font(.caption)
+                            .textSelection(.enabled)
                         }
                         .padding(.top, 8)
                     },
@@ -2062,6 +2080,7 @@ struct MainMenuView: View {
                 .sheet(item: $selectedRoomDetails) { room in
                     RoomDetailsSheet(
                         room: room,
+                        roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
                         isActiveRoom: appState.activeRoomId == room.id,
                         onJoin: { appState.joinOrShowRoom(room) },
                         onShare: {
@@ -2315,6 +2334,13 @@ struct RoomCard: View {
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
                 showJoinAction: showJoinActionSeparately,
+                isPrimaryPreviewAction: settings.defaultRoomPrimaryAction == .preview,
+                onPreviewHoldStart: {
+                    PeekManager.shared.startHoldPreview(for: room, canPreview: previewAvailable)
+                },
+                onPreviewHoldEnd: {
+                    PeekManager.shared.stopHoldPreview(for: room)
+                },
                 isAdmin: isAdmin
             )
 
@@ -2392,7 +2418,12 @@ struct RoomActionSplitButton: View {
     let roomId: String
     let roomCanPreview: Bool
     let showJoinAction: Bool
+    let isPrimaryPreviewAction: Bool
+    let onPreviewHoldStart: () -> Void
+    let onPreviewHoldEnd: () -> Void
     let isAdmin: Bool
+    @State private var previewHoldActive = false
+    @State private var previewHoldTriggered = false
 
     private func previewOrExplain() {
         if roomCanPreview {
@@ -2405,6 +2436,9 @@ struct RoomActionSplitButton: View {
     var body: some View {
         HStack(spacing: 0) {
             Button(primaryLabel) {
+                if isPrimaryPreviewAction && previewHoldTriggered {
+                    return
+                }
                 onPrimaryAction()
             }
             .buttonStyle(.borderedProminent)
@@ -2413,6 +2447,21 @@ struct RoomActionSplitButton: View {
             .help("Default action \(primaryLabel). When pressed, this \(primaryActionEffectText). You can change it in Settings > General.")
             .accessibilityLabel("\(primaryLabel)")
             .accessibilityHint("Default action button. This \(primaryActionEffectText).")
+            .onLongPressGesture(minimumDuration: 0.18, maximumDistance: 16, pressing: { pressing in
+                guard isPrimaryPreviewAction else { return }
+                if pressing {
+                    guard !previewHoldActive else { return }
+                    previewHoldActive = true
+                    previewHoldTriggered = true
+                    onPreviewHoldStart()
+                } else if previewHoldActive {
+                    previewHoldActive = false
+                    onPreviewHoldEnd()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        previewHoldTriggered = false
+                    }
+                }
+            }, perform: {})
 
             Menu {
                 Button("Room Details") { onOpenDetails() }
@@ -2579,6 +2628,13 @@ struct RoomColumnRow: View {
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
                 showJoinAction: showJoinActionSeparately,
+                isPrimaryPreviewAction: settings.defaultRoomPrimaryAction == .preview,
+                onPreviewHoldStart: {
+                    PeekManager.shared.startHoldPreview(for: room, canPreview: previewAvailable)
+                },
+                onPreviewHoldEnd: {
+                    PeekManager.shared.stopHoldPreview(for: room)
+                },
                 isAdmin: isAdmin
             )
             .frame(width: 170, alignment: .trailing)
@@ -2629,11 +2685,22 @@ struct RoomColumnRow: View {
 
 struct RoomDetailsSheet: View {
     let room: Room
+    let roomHasActiveMedia: Bool
     let isActiveRoom: Bool
     let onJoin: () -> Void
     let onShare: () -> Void
     let onPreview: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var holdPreviewActive = false
+    @State private var holdPreviewTriggered = false
+
+    private var canPreviewFromSheet: Bool {
+        SettingsManager.shared.canPreviewRoom(
+            roomId: room.id,
+            userCount: room.userCount,
+            hasActiveMedia: roomHasActiveMedia
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2660,9 +2727,26 @@ struct RoomDetailsSheet: View {
                     .buttonStyle(.borderedProminent)
                 Button("Share") { onShare() }
                     .buttonStyle(.bordered)
-                Button("Peek In") { onPreview() }
+                Button("Preview / Peek") {
+                    if holdPreviewTriggered { return }
+                    onPreview()
+                }
                     .buttonStyle(.bordered)
-                    .disabled(room.userCount <= 0)
+                    .disabled(!canPreviewFromSheet)
+                    .onLongPressGesture(minimumDuration: 0.18, maximumDistance: 16, pressing: { pressing in
+                        if pressing {
+                            guard !holdPreviewActive else { return }
+                            holdPreviewActive = true
+                            holdPreviewTriggered = true
+                            PeekManager.shared.startHoldPreview(for: room, canPreview: canPreviewFromSheet)
+                        } else if holdPreviewActive {
+                            holdPreviewActive = false
+                            PeekManager.shared.stopHoldPreview(for: room)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                holdPreviewTriggered = false
+                            }
+                        }
+                    }, perform: {})
             }
             Spacer()
         }

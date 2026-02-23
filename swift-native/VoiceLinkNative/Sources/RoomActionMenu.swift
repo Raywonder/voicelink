@@ -266,14 +266,16 @@ struct RoomActionMenu: View {
                         }
                     }
 
-                    ActionMenuItem(
-                        icon: "rectangle.portrait.and.arrow.right",
-                        label: "Show Room",
-                        shortcut: "Shift+Cmd+R",
-                        description: "Return to your minimized room"
-                    ) {
-                        NotificationCenter.default.post(name: .roomActionRestore, object: nil)
-                        isPresented = false
+                    if isInRoom {
+                        ActionMenuItem(
+                            icon: "rectangle.portrait.and.arrow.right",
+                            label: "Restore Minimized Room",
+                            shortcut: "Shift+Cmd+R",
+                            description: "Return to your minimized room"
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionRestore, object: nil)
+                            isPresented = false
+                        }
                     }
 
                     // Leave room (if in room)
@@ -801,14 +803,15 @@ class PeekManager: ObservableObject {
     @Published var peekTimeRemaining: Int = 0
 
     private var peekTimer: Timer?
-    private let maxPeekTime = 20 // seconds
+    private let defaultTapPeekTime = 10 // seconds
+    private let maxHoldPeekTime = 30 // seconds
 
-    func peekIntoRoom(_ room: Room) {
+    func peekIntoRoom(_ room: Room, maxDuration: Int = 10) {
         guard !isPeeking else { return }
 
         isPeeking = true
         peekingRoom = room
-        peekTimeRemaining = maxPeekTime
+        peekTimeRemaining = max(1, maxDuration)
 
         // Play preview start cue if enabled.
         if SettingsManager.shared.previewSoundCuesEnabled {
@@ -863,7 +866,7 @@ class PeekManager: ObservableObject {
     }
 
     @discardableResult
-    func togglePreview(for room: Room, canPreview: Bool = true) -> Bool {
+    func togglePreview(for room: Room, canPreview: Bool = true, maxDuration: Int? = nil) -> Bool {
         if isPeeking, peekingRoom?.id == room.id {
             stopPeeking()
             return false
@@ -875,8 +878,27 @@ class PeekManager: ObservableObject {
         if isPeeking {
             stopPeeking()
         }
-        peekIntoRoom(room)
+        peekIntoRoom(room, maxDuration: maxDuration ?? defaultTapPeekTime)
         return true
+    }
+
+    func startHoldPreview(for room: Room, canPreview: Bool = true) {
+        guard canPreview else {
+            AccessibilityManager.shared.announceStatus("Preview is unavailable for this room right now.")
+            return
+        }
+        if isPeeking, peekingRoom?.id == room.id {
+            return
+        }
+        if isPeeking {
+            stopPeeking()
+        }
+        peekIntoRoom(room, maxDuration: maxHoldPeekTime)
+    }
+
+    func stopHoldPreview(for room: Room) {
+        guard isPeeking, peekingRoom?.id == room.id else { return }
+        stopPeeking()
     }
 }
 
