@@ -1,7 +1,6 @@
 import Foundation
 import AVFoundation
 
-@MainActor
 final class LocalMonitorManager: ObservableObject {
     static let shared = LocalMonitorManager()
 
@@ -9,6 +8,8 @@ final class LocalMonitorManager: ObservableObject {
 
     private let engine = AVAudioEngine()
     private var isConfigured = false
+    private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
+    private var isTransitioning = false
 
     private init() {}
 
@@ -17,10 +18,17 @@ final class LocalMonitorManager: ObservableObject {
     }
 
     func setMonitoringEnabled(_ enabled: Bool) {
-        if enabled {
-            startMonitoring()
-        } else {
-            stopMonitoring()
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            guard !self.isTransitioning else { return }
+            self.isTransitioning = true
+            defer { self.isTransitioning = false }
+
+            if enabled {
+                self.startMonitoring()
+            } else {
+                self.stopMonitoring()
+            }
         }
     }
 
@@ -32,6 +40,15 @@ final class LocalMonitorManager: ObservableObject {
     private func startMonitoring() {
         guard !isMonitoring else { return }
         configureIfNeeded()
+
+        // Local input monitoring can deadlock with active room capture.
+        if ServerManager.shared.activeRoomId != nil || ServerManager.shared.isAudioTransmitting {
+            DispatchQueue.main.async {
+                self.isMonitoring = false
+            }
+            AccessibilityManager.shared.announceStatus("Input monitor is unavailable while room audio transmission is active.")
+            return
+        }
 
         let inputNode = engine.inputNode
         let format = inputNode.inputFormat(forBus: 0)
@@ -50,13 +67,17 @@ final class LocalMonitorManager: ObservableObject {
             if !engine.isRunning {
                 try engine.start()
             }
-            isMonitoring = true
+            DispatchQueue.main.async {
+                self.isMonitoring = true
+            }
             print("[LocalMonitor] Monitoring started")
         } catch {
             engine.stop()
             engine.reset()
             engine.disconnectNodeOutput(inputNode)
-            isMonitoring = false
+            DispatchQueue.main.async {
+                self.isMonitoring = false
+            }
             print("[LocalMonitor] Failed to start monitoring: \(error)")
         }
     }
@@ -66,7 +87,9 @@ final class LocalMonitorManager: ObservableObject {
         engine.disconnectNodeOutput(engine.inputNode)
         engine.stop()
         engine.reset()
-        isMonitoring = false
+        DispatchQueue.main.async {
+            self.isMonitoring = false
+        }
         print("[LocalMonitor] Monitoring stopped")
     }
 }

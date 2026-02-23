@@ -1117,12 +1117,16 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self.audioTransmissionStatus = "Input muted"
             }
-            stopAudioTransmission()
+            audioStartQueue.async { [weak self] in
+                self?.stopAudioTransmissionNow()
+            }
         } else {
             DispatchQueue.main.async {
                 self.audioTransmissionStatus = isDeafened ? "Transmitting (output muted)" : "Transmitting"
             }
-            startAudioTransmission()
+            audioStartQueue.async { [weak self] in
+                self?.startAudioTransmissionNow()
+            }
         }
     }
 
@@ -1178,6 +1182,12 @@ class ServerManager: ObservableObject {
     }
 
     func startAudioTransmission() {
+        audioStartQueue.async { [weak self] in
+            self?.startAudioTransmissionNow()
+        }
+    }
+
+    private func startAudioTransmissionNow() {
         if inputMuted {
             DispatchQueue.main.async {
                 self.isAudioTransmitting = false
@@ -1243,6 +1253,12 @@ class ServerManager: ObservableObject {
     }
 
     func stopAudioTransmission() {
+        audioStartQueue.async { [weak self] in
+            self?.stopAudioTransmissionNow()
+        }
+    }
+
+    private func stopAudioTransmissionNow() {
         if isTransmitting {
             audioTransmitEngine?.inputNode.removeTap(onBus: 0)
             audioTransmitEngine?.stop()

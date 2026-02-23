@@ -885,6 +885,34 @@ class AppState: ObservableObject {
             .removeDuplicates()
             .assign(to: &$errorMessage)
 
+        // Fallback join completion path: some server variants only update activeRoomId.
+        serverManager.$activeRoomId
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { [weak self] activeRoomId in
+                guard let self else { return }
+                guard let activeRoomId else { return }
+                guard self.pendingJoinRoomId == activeRoomId else { return }
+
+                if let room = self.rooms.first(where: { $0.id == activeRoomId }) {
+                    self.currentRoom = room
+                } else {
+                    self.currentRoom = Room(
+                        id: activeRoomId,
+                        name: "Room \(activeRoomId)",
+                        description: "",
+                        userCount: 1,
+                        isPrivate: false,
+                        maxUsers: 50
+                    )
+                }
+                self.minimizedRoom = nil
+                self.currentScreen = .voiceChat
+                self.pendingJoinRoomId = nil
+                self.errorMessage = "Joined \(self.currentRoom?.name ?? "room")."
+            }
+            .store(in: &cancellables)
+
         // Keep admin capabilities in sync with active server connection.
         serverManager.$isConnected
             .receive(on: DispatchQueue.main)
@@ -924,7 +952,7 @@ class AppState: ObservableObject {
             self.minimizedRoom = nil
             self.currentScreen = .voiceChat
             self.pendingJoinRoomId = nil
-            self.errorMessage = nil
+            self.errorMessage = "Joined \(joinedRoom.name)."
         }
 
         // Listen for navigation back to main menu
@@ -1652,6 +1680,8 @@ struct MainMenuView: View {
     @State private var roomScopeFilter: RoomScopeFilter = .all
     @State private var selectedServerFilter: String = "All Servers"
     @State private var selectedRoomDetails: Room?
+    @State private var selectedRoomActionRoom: Room?
+    @State private var showRoomActionMenuSheet = false
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -1973,6 +2003,9 @@ struct MainMenuView: View {
                                     appState.deleteRoomFromMenu(room)
                                 } onOpenDetails: {
                                     selectedRoomDetails = room
+                                } onOpenActionMenu: {
+                                    selectedRoomActionRoom = room
+                                    showRoomActionMenuSheet = true
                                 }
                             }
                         }
@@ -2011,6 +2044,9 @@ struct MainMenuView: View {
                                     appState.deleteRoomFromMenu(room)
                                 } onOpenDetails: {
                                     selectedRoomDetails = room
+                                } onOpenActionMenu: {
+                                    selectedRoomActionRoom = room
+                                    showRoomActionMenuSheet = true
                                 }
                             }
                         }
@@ -2059,6 +2095,9 @@ struct MainMenuView: View {
                                     appState.deleteRoomFromMenu(room)
                                 } onOpenDetails: {
                                     selectedRoomDetails = room
+                                } onOpenActionMenu: {
+                                    selectedRoomActionRoom = room
+                                    showRoomActionMenuSheet = true
                                 }
                             }
                         }
@@ -2099,6 +2138,16 @@ struct MainMenuView: View {
                             )
                         }
                     )
+                }
+                .sheet(isPresented: $showRoomActionMenuSheet) {
+                    if let room = selectedRoomActionRoom {
+                        RoomActionMenu(
+                            room: room,
+                            isInRoom: appState.activeRoomId == room.id,
+                            isPresented: $showRoomActionMenuSheet
+                        )
+                        .presentationDetents([.medium, .large])
+                    }
                 }
             }
             .padding(.horizontal, 40)
@@ -2214,6 +2263,7 @@ struct RoomCard: View {
     var onCreateRoom: () -> Void = {}
     var onDeleteRoom: () -> Void = {}
     var onOpenDetails: () -> Void = {}
+    var onOpenActionMenu: () -> Void = {}
 
     var displayDescription: String {
         if let descriptionText {
@@ -2330,6 +2380,7 @@ struct RoomCard: View {
                 onOpenAdmin: onOpenAdmin,
                 onCreateRoom: onCreateRoom,
                 onDeleteRoom: onDeleteRoom,
+                onOpenActionMenu: onOpenActionMenu,
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
                 showJoinAction: showJoinActionSeparately,
@@ -2366,6 +2417,8 @@ struct RoomCard: View {
             if hovering { onFocus() }
         }
         .contextMenu {
+            Button("Room Actions...") { onOpenActionMenu() }
+            Divider()
             Button("Room Details") { onOpenDetails() }
             if showJoinActionSeparately {
                 Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
@@ -2411,6 +2464,7 @@ struct RoomActionSplitButton: View {
     let onOpenAdmin: () -> Void
     let onCreateRoom: () -> Void
     let onDeleteRoom: () -> Void
+    let onOpenActionMenu: () -> Void
     let roomId: String
     let roomCanPreview: Bool
     let showJoinAction: Bool
@@ -2460,6 +2514,8 @@ struct RoomActionSplitButton: View {
             }, perform: {})
 
             Menu {
+                Button("Room Actions...") { onOpenActionMenu() }
+                Divider()
                 Button("Room Details") { onOpenDetails() }
                 if showJoinAction {
                     Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
@@ -2508,6 +2564,7 @@ struct RoomColumnRow: View {
     var onCreateRoom: () -> Void = {}
     var onDeleteRoom: () -> Void = {}
     var onOpenDetails: () -> Void = {}
+    var onOpenActionMenu: () -> Void = {}
 
     var primaryLabel: String {
         switch settings.defaultRoomPrimaryAction {
@@ -2615,6 +2672,7 @@ struct RoomColumnRow: View {
                 onOpenAdmin: onOpenAdmin,
                 onCreateRoom: onCreateRoom,
                 onDeleteRoom: onDeleteRoom,
+                onOpenActionMenu: onOpenActionMenu,
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
                 showJoinAction: showJoinActionSeparately,
@@ -2638,6 +2696,8 @@ struct RoomColumnRow: View {
             if hovering { onFocus() }
         }
         .contextMenu {
+            Button("Room Actions...") { onOpenActionMenu() }
+            Divider()
             Button("Room Details") { onOpenDetails() }
             if showJoinActionSeparately {
                 Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
