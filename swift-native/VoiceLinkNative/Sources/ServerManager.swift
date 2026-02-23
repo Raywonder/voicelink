@@ -356,8 +356,8 @@ class ServerManager: ObservableObject {
             self?.getRooms()
         }
 
-        // Room joined response (server sends "joined-room")
-        socket.on("joined-room") { [weak self] data, ack in
+        // Room joined response (support multiple event names used by different server versions).
+        let handleJoinedRoomEvent: ([Any]) -> Void = { [weak self] data in
             print("Joined room: \(data)")
             guard let self = self else { return }
             let responseData = data.first as? [String: Any] ?? [:]
@@ -374,17 +374,18 @@ class ServerManager: ObservableObject {
                 ?? roomData["roomId"] as? String
                 ?? responseData["roomId"] as? String
                 ?? responseData["id"] as? String
+                ?? self.pendingJoinRoomId
 
             if let roomId {
-                completePendingJoin(for: roomId)
+                self.completePendingJoin(for: roomId)
                 DispatchQueue.main.async {
                     self.activeRoomId = roomId
                     self.audioTransmissionStatus = "Joined room"
                 }
                 self.fetchActiveRoomStream(for: roomId)
-                scheduleAudioTransmissionStart(for: roomId)
+                self.scheduleAudioTransmissionStart(for: roomId)
             } else {
-                cancelJoinTimeout()
+                self.cancelJoinTimeout()
             }
 
             var joinedPayload = roomData
@@ -395,6 +396,12 @@ class ServerManager: ObservableObject {
                 }
             }
             NotificationCenter.default.post(name: .roomJoined, object: joinedPayload)
+        }
+        let joinSuccessEvents = ["joined-room", "room-joined", "join-room-success"]
+        for eventName in joinSuccessEvents {
+            socket.on(eventName) { data, ack in
+                handleJoinedRoomEvent(data)
+            }
         }
 
         // User joined room

@@ -1013,6 +1013,13 @@ class AppState: ObservableObject {
     private func fetchRoomsViaHTTPFallback() async {
         var aggregated: [ServerRoom] = []
 
+        func sourceLabel(from base: String) -> String {
+            if let host = URL(string: base)?.host, !host.isEmpty {
+                return host
+            }
+            return APIEndpointResolver.normalize(base)
+        }
+
         func fetchRooms(from base: String) async -> [ServerRoom] {
             guard var components = URLComponents(string: base) else { return [] }
             components.path = "/api/rooms"
@@ -1026,7 +1033,29 @@ class AppState: ObservableObject {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [] }
                 guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-                return array.compactMap { ServerRoom(from: $0) }
+                let source = sourceLabel(from: base)
+                return array.compactMap { ServerRoom(from: $0) }.map { room in
+                    if let host = room.hostServerName?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+                        return room
+                    }
+                    return ServerRoom(
+                        id: room.id,
+                        name: room.name,
+                        description: room.description,
+                        userCount: room.userCount,
+                        isPrivate: room.isPrivate,
+                        maxUsers: room.maxUsers,
+                        createdBy: room.createdBy,
+                        createdByRole: room.createdByRole,
+                        roomType: room.roomType,
+                        createdAt: room.createdAt,
+                        uptimeSeconds: room.uptimeSeconds,
+                        lastActiveUsername: room.lastActiveUsername,
+                        lastActivityAt: room.lastActivityAt,
+                        hostServerName: source,
+                        hostServerOwner: room.hostServerOwner
+                    )
+                }
             } catch {
                 return []
             }
@@ -1615,7 +1644,9 @@ struct MainMenuView: View {
     }
 
     var serverStatusSummary: String {
-        appState.isConnected ? "Connected (\(appState.serverManager.connectedServer))" : statusText
+        let base = appState.serverManager.baseURL ?? ""
+        let host = URL(string: base)?.host ?? appState.serverManager.connectedServer
+        return appState.isConnected ? "Connected (\(host))" : statusText
     }
 
     var sortedRooms: [Room] {
@@ -1664,7 +1695,12 @@ struct MainMenuView: View {
     }
 
     var availableServerFilters: [String] {
-        let unique = Set(appState.rooms.map { serverLabel(for: $0) })
+        var unique = Set(appState.rooms.map { serverLabel(for: $0) })
+        if let base = appState.serverManager.baseURL,
+           let host = URL(string: base)?.host,
+           !host.isEmpty {
+            unique.insert(host)
+        }
         return ["All Servers"] + unique.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
@@ -1705,6 +1741,7 @@ struct MainMenuView: View {
                     isExpanded: $isServerStatusExpanded,
                     content: {
                         VStack(alignment: .leading, spacing: 10) {
+                            let endpoint = appState.serverManager.baseURL ?? "Unavailable"
                             HStack(spacing: 8) {
                                 Circle()
                                     .fill(statusColor)
@@ -1714,6 +1751,28 @@ struct MainMenuView: View {
                                 Spacer()
                                 Text("Local IP: \(appState.localIP)")
                                     .foregroundColor(.white.opacity(0.6))
+                                    .font(.caption)
+                            }
+                            Text("Endpoint: \(endpoint)")
+                                .foregroundColor(.white.opacity(0.75))
+                                .font(.caption)
+                                .textSelection(.enabled)
+                            HStack {
+                                Text("Sync Mode: \(SettingsManager.shared.syncMode.displayName)")
+                                    .foregroundColor(.white.opacity(0.75))
+                                    .font(.caption)
+                                Spacer()
+                                Text("Rooms: \(appState.rooms.count)")
+                                    .foregroundColor(.white.opacity(0.75))
+                                    .font(.caption)
+                            }
+                            if let room = appState.currentRoom ?? appState.minimizedRoom {
+                                Text("Current Room: \(room.name)")
+                                    .foregroundColor(.white.opacity(0.75))
+                                    .font(.caption)
+                            } else {
+                                Text("Current Room: None")
+                                    .foregroundColor(.white.opacity(0.65))
                                     .font(.caption)
                             }
                         }
@@ -2184,6 +2243,10 @@ struct RoomCard: View {
         "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
     }
 
+    var showJoinActionSeparately: Bool {
+        settings.defaultRoomPrimaryAction != .joinOrShow
+    }
+
     func runPrimaryAction() {
         switch settings.defaultRoomPrimaryAction {
         case .openDetails:
@@ -2251,6 +2314,7 @@ struct RoomCard: View {
                 onDeleteRoom: onDeleteRoom,
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
+                showJoinAction: showJoinActionSeparately,
                 isAdmin: isAdmin
             )
 
@@ -2278,7 +2342,9 @@ struct RoomCard: View {
         }
         .contextMenu {
             Button("Room Details") { onOpenDetails() }
-            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            if showJoinActionSeparately {
+                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -2299,7 +2365,9 @@ struct RoomCard: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryActionLabel). Use room actions for more options.")
         .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
+        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) {
+            if showJoinActionSeparately { onJoin() }
+        }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
         }
@@ -2323,6 +2391,7 @@ struct RoomActionSplitButton: View {
     let onDeleteRoom: () -> Void
     let roomId: String
     let roomCanPreview: Bool
+    let showJoinAction: Bool
     let isAdmin: Bool
 
     private func previewOrExplain() {
@@ -2347,7 +2416,9 @@ struct RoomActionSplitButton: View {
 
             Menu {
                 Button("Room Details") { onOpenDetails() }
-                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                if showJoinAction {
+                    Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                }
                 Button("Open Jukebox") {
                     NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
                 }
@@ -2441,6 +2512,10 @@ struct RoomColumnRow: View {
         "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
     }
 
+    var showJoinActionSeparately: Bool {
+        settings.defaultRoomPrimaryAction != .joinOrShow
+    }
+
     func runPrimaryAction() {
         switch settings.defaultRoomPrimaryAction {
         case .openDetails:
@@ -2503,6 +2578,7 @@ struct RoomColumnRow: View {
                 onDeleteRoom: onDeleteRoom,
                 roomId: room.id,
                 roomCanPreview: previewAvailable,
+                showJoinAction: showJoinActionSeparately,
                 isAdmin: isAdmin
             )
             .frame(width: 170, alignment: .trailing)
@@ -2517,7 +2593,9 @@ struct RoomColumnRow: View {
         }
         .contextMenu {
             Button("Room Details") { onOpenDetails() }
-            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            if showJoinActionSeparately {
+                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+            }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -2538,7 +2616,9 @@ struct RoomColumnRow: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryLabel). Use VoiceOver plus Shift plus M for the actions menu.")
         .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) { onJoin() }
+        .accessibilityAction(named: Text(isActiveRoom ? "Show Room" : "Join Room")) {
+            if showJoinActionSeparately { onJoin() }
+        }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
         }
