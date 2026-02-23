@@ -361,6 +361,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var mainWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--self-test-sound-download") {
+            Task { @MainActor in
+                let passed = await AppSoundManager.shared.runMissingSoundDownloadSelfTest()
+                print("SOUND_DOWNLOAD_SELF_TEST: \(passed ? "PASS" : "FAIL")")
+                NSApplication.shared.terminate(nil)
+            }
+            return
+        }
+
         AppDelegate.shared = self
 
         // Initialize menubar status item
@@ -389,9 +398,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Play one random startup intro clip (welcome 1-4, etc.) when enabled.
+        // Play startup welcome cue; retry once in case launch timing delays audio readiness.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            AppSoundManager.shared.playRandomStartupIntro()
+            AppSoundManager.shared.playStartupWelcomeIfNeeded()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            AppSoundManager.shared.playStartupWelcomeIfNeeded()
         }
     }
 
