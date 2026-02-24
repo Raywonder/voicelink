@@ -339,6 +339,125 @@ class VoiceLinkLocalServer {
         };
     }
 
+    getOpenLinkShareConfig() {
+        const baseUrl = String(process.env.VOICELINK_OPENLINK_URL || 'https://openlink.tappedin.fm')
+            .trim()
+            .replace(/\/+$/, '');
+        const regeneratePath = String(process.env.VOICELINK_OPENLINK_REGENERATE_PATH || '/api/regenerate').trim();
+        return {
+            enabled: Boolean(baseUrl),
+            baseUrl,
+            regeneratePath: regeneratePath.startsWith('/') ? regeneratePath : `/${regeneratePath}`
+        };
+    }
+
+    createShareToken(seed = '') {
+        const clean = this.sanitizeExportSegment(seed || uuidv4().slice(0, 8), 'share');
+        return `${clean}-${Date.now().toString(36)}`;
+    }
+
+    withTimeoutSignal(timeoutMs = 6000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        return { signal: controller.signal, clear: () => clearTimeout(timer) };
+    }
+
+    async probeUrl(url, timeoutMs = 6000) {
+        const probeHead = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(url, {
+                method: 'HEAD',
+                signal: probeHead.signal
+            });
+            if (response.ok) {
+                return { ok: true, status: response.status };
+            }
+            if (response.status !== 405) {
+                return { ok: false, status: response.status };
+            }
+        } catch (error) {
+            // Fall back to GET probe for hosts that do not support HEAD.
+            if (error?.name !== 'AbortError') {
+                // continue
+            }
+        } finally {
+            probeHead.clear();
+        }
+
+        const probeGet = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                signal: probeGet.signal
+            });
+            return { ok: response.ok, status: response.status };
+        } catch (error) {
+            return { ok: false, error: error.message };
+        } finally {
+            probeGet.clear();
+        }
+    }
+
+    buildCopyPartyLink({ fileName = '', directUrl = '' } = {}) {
+        if (directUrl && /^https?:\/\//i.test(directUrl)) {
+            return { url: directUrl, configured: true };
+        }
+        const cfg = this.getCopyPartyExportConfig();
+        if (!cfg.enabled || !fileName) {
+            return { url: '', configured: false };
+        }
+        return {
+            url: `${cfg.baseUrl}${cfg.exportPath}/${encodeURIComponent(fileName)}`,
+            configured: true
+        };
+    }
+
+    async buildOpenLinkShareLink({ token = '', timeoutMs = 6000 } = {}) {
+        const cfg = this.getOpenLinkShareConfig();
+        if (!cfg.enabled) {
+            return { ok: false, reason: 'OpenLink not configured' };
+        }
+
+        const base = new URL(cfg.baseUrl);
+        const shareToken = this.sanitizeExportSegment(token || this.createShareToken('olink'), 'olink');
+        const regenerateUrl = `${cfg.baseUrl}${cfg.regeneratePath}/${encodeURIComponent(shareToken)}`;
+
+        const regenTimeout = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(regenerateUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+                signal: regenTimeout.signal
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                return { ok: false, reason: `OpenLink regenerate failed (${response.status}): ${text.slice(0, 120)}` };
+            }
+        } catch (error) {
+            return { ok: false, reason: `OpenLink regenerate failed: ${error.message}` };
+        } finally {
+            regenTimeout.clear();
+        }
+
+        const wildcardUrl = `${base.protocol}//${shareToken}.${base.host}`;
+        const healthProbe = await this.probeUrl(`${wildcardUrl}/health`, timeoutMs);
+        if (!healthProbe.ok) {
+            return {
+                ok: false,
+                reason: `OpenLink wildcard check failed (${healthProbe.status || 'error'})`
+            };
+        }
+
+        return {
+            ok: true,
+            provider: 'openlink',
+            token: shareToken,
+            url: wildcardUrl,
+            regenerateUrl
+        };
+    }
+
     buildUserDataExport({ userId = '', username = '', includeMessages = true, includeRooms = true } = {}) {
         const cleanUserId = String(userId || '').trim();
         const cleanUsername = String(username || '').trim();
@@ -5426,6 +5545,83 @@ class VoiceLinkLocalServer {
         // Serve release packages for installer downloads
         this.app.use('/releases', express.static(path.join(__dirname, '../../releases')));
         this.app.use('/exports', express.static(path.join(__dirname, '../../data/exports')));
+
+        // Generate a share link using OpenLink/CopyParty with automatic provider fallback.
+        this.app.post('/api/links/generate', async (req, res) => {
+            try {
+                const prefer = String(req.body?.prefer || 'auto').trim().toLowerCase();
+                const timeoutMs = Math.max(1000, Math.min(Number(req.body?.timeoutMs) || 6000, 15000));
+                const tokenSeed = String(req.body?.token || req.body?.slug || req.body?.roomId || req.body?.fileName || '').trim();
+                const directCopyPartyUrl = String(req.body?.copyPartyUrl || '').trim();
+                const fileName = String(req.body?.fileName || '').trim();
+                const skipProbe = this.parseBool(req.body?.skipProbe, false);
+
+                const providers = [];
+                const preferOpenLink = prefer === 'auto' || prefer === 'openlink';
+                const preferCopyParty = prefer === 'auto' || prefer === 'copyparty';
+
+                if (preferOpenLink) {
+                    const openLink = await this.buildOpenLinkShareLink({
+                        token: tokenSeed || this.createShareToken('openlink'),
+                        timeoutMs
+                    });
+                    providers.push(openLink);
+                    if (openLink.ok) {
+                        return res.json({
+                            success: true,
+                            provider: 'openlink',
+                            url: openLink.url,
+                            token: openLink.token,
+                            providers
+                        });
+                    }
+                }
+
+                if (preferCopyParty) {
+                    const copyParty = this.buildCopyPartyLink({
+                        fileName,
+                        directUrl: directCopyPartyUrl
+                    });
+                    if (!copyParty.configured || !copyParty.url) {
+                        providers.push({ ok: false, provider: 'copyparty', reason: 'CopyParty link input/config missing' });
+                    } else if (skipProbe) {
+                        providers.push({ ok: true, provider: 'copyparty', url: copyParty.url, skippedProbe: true });
+                        return res.json({
+                            success: true,
+                            provider: 'copyparty',
+                            url: copyParty.url,
+                            providers
+                        });
+                    } else {
+                        const check = await this.probeUrl(copyParty.url, timeoutMs);
+                        if (check.ok) {
+                            providers.push({ ok: true, provider: 'copyparty', url: copyParty.url, status: check.status });
+                            return res.json({
+                                success: true,
+                                provider: 'copyparty',
+                                url: copyParty.url,
+                                providers
+                            });
+                        }
+                        providers.push({
+                            ok: false,
+                            provider: 'copyparty',
+                            url: copyParty.url,
+                            reason: `CopyParty probe failed (${check.status || check.error || 'unknown'})`
+                        });
+                    }
+                }
+
+                return res.status(502).json({
+                    success: false,
+                    error: 'No share provider produced a working link',
+                    providers
+                });
+            } catch (error) {
+                console.error('[links] Failed to generate share link:', error.message);
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
 
         // Create a user data export archive and upload to CopyParty when enabled.
         this.app.post('/api/export/my-data', async (req, res) => {
