@@ -3,11 +3,11 @@ version: 1.0
 build: 22
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: 7genXglNYp52YyTcqGS+kFKLzmKtSO79vcvwvqta1aO/1Xkbfee85RwgFk/BOpVtVcPg1hOCeofo5BW7xbM5Pw==
-    size: 154939064
+    sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
+    size: 154968360
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: 7genXglNYp52YyTcqGS+kFKLzmKtSO79vcvwvqta1aO/1Xkbfee85RwgFk/BOpVtVcPg1hOCeofo5BW7xbM5Pw==
-releaseDate: '2026-02-23T21:04:41.000Z'
+sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
+releaseDate: '2026-02-24T01:47:06.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 22)
   - Fixed monitor freeze path by blocking local monitor while room audio is active.
