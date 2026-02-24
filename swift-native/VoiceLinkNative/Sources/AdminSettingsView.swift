@@ -512,6 +512,37 @@ struct AdminRoomsSection: View {
                 .buttonStyle(.bordered)
             }
 
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Room Management Permissions")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Global Policy")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("Server roles (admin/moderator/owner) control who can manage rooms across the server.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Individual Room Override")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text("Each room can still require owner identity match. Use the room row menu to edit room-level metadata/access.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                Text("If users report \"settings denied\", verify both global role assignment and per-room ownership identity.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(10)
+
             ForEach(adminManager.serverRooms) { room in
                 RoomAdminRow(room: room) { action in
                     switch action {

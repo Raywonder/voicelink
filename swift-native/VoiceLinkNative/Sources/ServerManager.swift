@@ -721,7 +721,10 @@ class ServerManager: ObservableObject {
                 ?? (payload["itemName"] as? String)
                 ?? (payload["itemId"] as? String)
                 ?? "Media"
-            self.stopRoomStreamPlayback(explicit: true)
+            self.stopRoomStreamPlayback(explicit: false)
+            if let activeRoomId = self.activeRoomId {
+                self.fetchActiveRoomStream(for: activeRoomId)
+            }
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) stopped.")
                 NotificationCenter.default.post(
@@ -795,7 +798,13 @@ class ServerManager: ObservableObject {
         }
     }
 
-    func createRoom(name: String, description: String, isPrivate: Bool, password: String? = nil) {
+    func createRoom(
+        name: String,
+        description: String,
+        isPrivate: Bool,
+        password: String? = nil,
+        metadata: [String: Any]? = nil
+    ) {
         var roomData: [String: Any] = [
             "name": name,
             "description": description,
@@ -803,6 +812,11 @@ class ServerManager: ObservableObject {
         ]
         if let password = password {
             roomData["password"] = password
+        }
+        if let metadata {
+            for (key, value) in metadata {
+                roomData[key] = value
+            }
         }
         socket?.emit("create-room", roomData)
     }
@@ -1011,8 +1025,15 @@ class ServerManager: ObservableObject {
         }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data else { return }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            guard let self else { return }
+            guard let data else {
+                self.startDefaultRoomStreamIfNeeded()
+                return
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                self.startDefaultRoomStreamIfNeeded()
+                return
+            }
             let isActive = json["active"] as? Bool ?? false
             guard isActive, let streamUrl = json["streamUrl"] as? String else {
                 self.startDefaultRoomStreamIfNeeded()

@@ -676,16 +676,35 @@ class AppSoundManager: ObservableObject {
         // fetch in background and notify users non-blockingly.
         if hasPlayableVariant(for: .connected) {
             playSound(.connected, force: true, allowSystemFallback: false)
+            startupIntroPlayed = true
         } else {
             queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
         }
-        startupIntroPlayed = true
     }
 
     private func pickRandomStartupIntroURL() -> URL? {
         guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
         let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
+        var rootLevelCandidates: [URL] = []
         var explicit: [URL] = []
+
+        if let entries = try? FileManager.default.contentsOfDirectory(
+            at: soundsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for url in entries {
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { continue }
+                let ext = url.pathExtension.lowercased()
+                guard exts.contains(ext) else { continue }
+                rootLevelCandidates.append(url)
+            }
+        }
+
+        if let randomRoot = rootLevelCandidates.randomElement() {
+            return randomRoot
+        }
 
         if let enumerator = FileManager.default.enumerator(
             at: soundsRoot,

@@ -375,6 +375,10 @@ extension Notification.Name {
     static let roomActionMinimize = Notification.Name("roomActionMinimize")
     static let roomActionRestore = Notification.Name("roomActionRestore")
     static let roomActionLeave = Notification.Name("roomActionLeave")
+    static let roomActionJoin = Notification.Name("roomActionJoin")
+    static let roomActionOpenSettings = Notification.Name("roomActionOpenSettings")
+    static let roomActionCreate = Notification.Name("roomActionCreate")
+    static let roomActionDelete = Notification.Name("roomActionDelete")
     static let mainWindowCloseRequested = Notification.Name("mainWindowCloseRequested")
     static let openRoomJukebox = Notification.Name("openRoomJukebox")
     static let openFileTransfers = Notification.Name("openFileTransfers")
@@ -971,6 +975,34 @@ class AppState: ObservableObject {
         NotificationCenter.default.addObserver(forName: .roomActionLeave, object: nil, queue: .main) { [weak self] _ in
             self?.leaveCurrentRoom()
         }
+        NotificationCenter.default.addObserver(forName: .roomActionJoin, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            guard let room = notification.object as? Room else { return }
+            self.setFocusedRoom(room)
+            self.joinOrShowRoom(room)
+        }
+        NotificationCenter.default.addObserver(forName: .roomActionOpenSettings, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            guard let room = notification.object as? Room else { return }
+            guard self.canManageRoom(room) else {
+                self.errorMessage = "Room settings denied for \(room.name). Your current account is not recognized as owner/admin on this server."
+                return
+            }
+            self.setFocusedRoom(room)
+            self.currentScreen = .admin
+        }
+        NotificationCenter.default.addObserver(forName: .roomActionCreate, object: nil, queue: .main) { [weak self] _ in
+            self?.currentScreen = .createRoom
+        }
+        NotificationCenter.default.addObserver(forName: .roomActionDelete, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            guard let room = notification.object as? Room else { return }
+            guard self.canManageRoom(room) else {
+                self.errorMessage = "Delete denied for \(room.name). Your current account is not recognized as owner/admin on this server."
+                return
+            }
+            self.deleteRoomFromMenu(room)
+        }
     }
 
     private func setupWindowBehaviorObservers() {
@@ -1155,11 +1187,23 @@ class AppState: ObservableObject {
 
     func canManageRoom(_ room: Room) -> Bool {
         let role = room.createdByRole?.lowercased() ?? ""
+        let createdBy = room.createdBy?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let currentUser = AuthenticationManager.shared.currentUser
+        let ownerCandidates = Set([
+            preferredDisplayName().trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            currentUser?.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "",
+            currentUser?.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "",
+            currentUser?.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        ]).filter { !$0.isEmpty }
+        let isRoomOwnerByIdentity = !createdBy.isEmpty && ownerCandidates.contains(createdBy)
+
         return SettingsManager.shared.adminGodModeEnabled
             || AdminServerManager.shared.isAdmin
             || AdminServerManager.shared.adminRole.canManageRooms
             || role.contains("admin")
             || role.contains("owner")
+            || isRoomOwnerByIdentity
     }
 
     func displayDescription(for room: Room) -> String {
@@ -1674,7 +1718,6 @@ struct MainMenuView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
-    @State private var isServerStatusExpanded = SettingsManager.shared.expandServerStatusByDefault
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -1793,57 +1836,50 @@ struct MainMenuView: View {
                 }
                 .padding(.top, 40)
 
-                DisclosureGroup(
-                    isExpanded: $isServerStatusExpanded,
-                    content: {
-                        VStack(alignment: .leading, spacing: 10) {
-                            let endpoint = appState.serverManager.baseURL ?? "Unavailable"
-                            let host = URL(string: endpoint)?.host ?? appState.serverManager.connectedServer
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(statusColor)
-                                    .frame(width: 10, height: 10)
-                                Text("Connection: \(statusText)")
-                                    .foregroundColor(.white.opacity(0.85))
-                                Spacer()
-                                Text("Local IP: \(appState.localIP)")
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .font(.caption)
-                            }
-                            Group {
-                                Text("Host: \(host)")
-                                Text("Endpoint: \(endpoint)")
-                                Text("Server Label: \(appState.serverManager.connectedServer)")
-                                Text("Sync Mode: \(SettingsManager.shared.syncMode.displayName)")
-                                Text("Rooms Loaded: \(appState.rooms.count)")
-                                Text("Audio Status: \(appState.serverManager.audioTransmissionStatus)")
-                                Text("Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")")
-                            }
-                            .foregroundColor(.white.opacity(0.75))
+                VStack(alignment: .leading, spacing: 10) {
+                    let base = appState.serverManager.baseURL ?? ""
+                    let host = URL(string: base)?.host ?? appState.serverManager.connectedServer
+                    HStack {
+                        Text("Server Details")
+                            .foregroundColor(.white)
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(serverStatusSummary)
+                            .foregroundColor(.white.opacity(0.7))
                             .font(.caption)
-                            .textSelection(.enabled)
-                        }
-                        .padding(.top, 8)
-                    },
-                    label: {
-                        HStack {
-                            Text("Server Details")
-                                .foregroundColor(.white)
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text(serverStatusSummary)
-                                .foregroundColor(.white.opacity(0.7))
-                                .font(.caption)
-                        }
                     }
-                )
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 10, height: 10)
+                        Text("Connection: \(statusText)")
+                            .foregroundColor(.white.opacity(0.85))
+                        Spacer()
+                        Text("Local IP: \(appState.localIP)")
+                            .foregroundColor(.white.opacity(0.6))
+                            .font(.caption)
+                    }
+
+                    Group {
+                        Text("Host: \(host)")
+                        Text("Server Label: \(appState.serverManager.connectedServer)")
+                        Text("Sync Mode: \(SettingsManager.shared.syncMode.displayName)")
+                        Text("Rooms Loaded: \(appState.rooms.count)")
+                        Text("Audio Status: \(appState.serverManager.audioTransmissionStatus)")
+                        Text("Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")")
+                    }
+                    .foregroundColor(.white.opacity(0.75))
+                    .font(.caption)
+                    .textSelection(.enabled)
+                }
                 .padding(.horizontal, 40)
                 .padding(.vertical, 10)
                 .background(Color.white.opacity(0.05))
                 .cornerRadius(10)
                 .padding(.horizontal, 40)
                 .accessibilityLabel("Server details")
-                .accessibilityHint("Expand for connection details and sync mode options. Collapse to save space.")
+                .accessibilityHint("Shows connection details and sync mode options.")
 
                 HStack {
                     Text("Sync Mode")
@@ -1877,6 +1913,37 @@ struct MainMenuView: View {
                     .menuStyle(.borderlessButton)
                 }
                 .padding(.horizontal, 40)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Room Details")
+                        .foregroundColor(.white)
+                        .font(.subheadline.weight(.semibold))
+                    if let room = appState.currentRoom ?? appState.minimizedRoom ?? appState.focusedRoomForQuickJoin() {
+                        Group {
+                            Text("Name: \(room.name)")
+                            Text("Description: \(appState.displayDescription(for: room))")
+                            Text("Users: \(room.userCount)/\(room.maxUsers)")
+                            Text("Media: \(appState.roomHasActiveMusic[room.id] == true ? "Playing" : "None")")
+                            if let hostedFrom = room.hostedFromLine {
+                                Text(hostedFrom)
+                            }
+                        }
+                        .foregroundColor(.white.opacity(0.75))
+                        .font(.caption)
+                        .textSelection(.enabled)
+                    } else {
+                        Text("No room selected.")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                }
+                .padding(.horizontal, 40)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(10)
+                .padding(.horizontal, 40)
+                .accessibilityLabel("Room details")
+                .accessibilityHint("Shows the currently focused room metadata and status.")
 
             // Error message
             if let error = appState.errorMessage {
@@ -2229,6 +2296,10 @@ struct MainMenuView: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity)
+            .onAppear {
+                selectedServerFilter = "All Servers"
+                roomScopeFilter = .all
+            }
 
             // Right Sidebar - Connection Health & Servers
             VStack(spacing: 16) {
@@ -2833,10 +2904,25 @@ struct ActionButton: View {
 // MARK: - Placeholder Views
 struct CreateRoomView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var adminManager = AdminServerManager.shared
     @State private var roomName = ""
     @State private var roomDescription = ""
     @State private var isPrivate = false
     @State private var password = ""
+    @State private var roomType: String = "standard"
+    @State private var maxUsers: Int = 50
+    @State private var inviteOnly: Bool = false
+    @State private var enableMediaAutoPlay: Bool = true
+    @State private var moderationNotes = ""
+
+    private var isLoggedIn: Bool {
+        authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
+    private var canCreateAdminType: Bool {
+        adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -2862,16 +2948,67 @@ struct CreateRoomView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 350)
                 }
+
+                if isLoggedIn {
+                    Picker("Room Type", selection: $roomType) {
+                        Text("Standard").tag("standard")
+                        Text("Private").tag("private")
+                        Text("Moderated").tag("moderated")
+                        if canCreateAdminType {
+                            Text("Admin").tag("admin")
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 350)
+                    .onChange(of: roomType) { newValue in
+                        if newValue == "private" || newValue == "moderated" {
+                            isPrivate = true
+                        }
+                    }
+
+                    Stepper("Max Users: \(maxUsers)", value: $maxUsers, in: 2...500, step: 1)
+                        .foregroundColor(.white)
+                        .frame(width: 350)
+
+                    Toggle("Invite Only", isOn: $inviteOnly)
+                        .foregroundColor(.white)
+                        .frame(width: 350)
+
+                    Toggle("Enable Auto-Play Room Media", isOn: $enableMediaAutoPlay)
+                        .foregroundColor(.white)
+                        .frame(width: 350)
+
+                    if roomType == "moderated" || roomType == "admin" {
+                        TextField("Moderation notes (optional)", text: $moderationNotes)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 350)
+                    }
+                }
             }
 
             HStack(spacing: 15) {
                 Button("Create") {
+                    var metadata: [String: Any] = [
+                        "maxUsers": maxUsers,
+                        "roomType": roomType,
+                        "inviteOnly": inviteOnly,
+                        "mediaAutoPlay": enableMediaAutoPlay
+                    ]
+                    if isLoggedIn, let currentUser = authManager.currentUser {
+                        metadata["createdBy"] = currentUser.username
+                        metadata["createdByRole"] = adminManager.adminRole.rawValue
+                    }
+                    if !moderationNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        metadata["moderationNotes"] = moderationNotes
+                    }
+
                     // Create room via server
                     appState.serverManager.createRoom(
                         name: roomName,
                         description: roomDescription,
                         isPrivate: isPrivate,
-                        password: isPrivate ? password : nil
+                        password: isPrivate ? password : nil,
+                        metadata: metadata
                     )
                     // Go back to main menu - room will appear in list
                     appState.pendingCreateRoomName = ""
@@ -3416,6 +3553,7 @@ struct UserRow: View {
     @ObservedObject private var settings = SettingsManager.shared
     @ObservedObject private var audioControl = UserAudioControlManager.shared
     @ObservedObject private var monitor = LocalMonitorManager.shared
+    @ObservedObject private var serverManager = ServerManager.shared
     @State private var shareInProgress = false
 
     private var resolvedVolume: Double {
@@ -3433,6 +3571,10 @@ struct UserRow: View {
     private var isSoloed: Bool {
         if isCurrentUser { return monitor.isMonitoring }
         return audioControl.isSolo(userId)
+    }
+
+    private var isRoomAudioActive: Bool {
+        serverManager.activeRoomId != nil || serverManager.isAudioTransmitting
     }
 
     var body: some View {
@@ -3579,6 +3721,10 @@ struct UserRow: View {
 
                         Button(action: {
                             if isCurrentUser {
+                                if isRoomAudioActive && !monitor.isMonitoring {
+                                    AccessibilityManager.shared.announceStatus("Input monitor is unavailable while you are in an active room.")
+                                    return
+                                }
                                 monitor.toggleMonitoring()
                             } else {
                                 audioControl.toggleSolo(for: userId)
@@ -3595,6 +3741,7 @@ struct UserRow: View {
                             .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
+                        .disabled(isCurrentUser && isRoomAudioActive && !monitor.isMonitoring)
                     }
 
                     if isCurrentUser {

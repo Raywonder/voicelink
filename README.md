@@ -152,6 +152,19 @@ Download the latest release for your platform:
 #### 🐧 **Linux**
 - Linux desktop packages are not the active production distribution path in this channel.
 
+### Permissions Troubleshooting (Room Settings / Delete)
+
+If you see:
+- `Room settings denied ... account is not recognized as owner/admin on this server`
+- `Delete denied ... account is not recognized as owner/admin on this server`
+
+VoiceLink only allows room-management actions when your current identity is recognized by the connected server as one of:
+- Room owner/creator identity for that room
+- Admin/owner role on that server instance
+- Moderator/manager permissions allowed by the server role model
+
+When using Mastodon or federated login, make sure you are signed into the same instance/account that created the room (or one granted admin/moderator rights on that server).
+
 ### Development Installation
 
 1. Clone the repository:

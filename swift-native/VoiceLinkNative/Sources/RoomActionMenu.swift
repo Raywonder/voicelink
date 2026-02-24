@@ -16,6 +16,7 @@ struct RoomActionMenu: View {
     @ObservedObject private var settings = SettingsManager.shared
     @State private var isPeeking = false
     @State private var selectedUser: RoomUser?
+    @State private var roomMediaStatusText: String = "Checking..."
 
     // Room features (from server settings)
     var roomFeatures: RoomFeatures {
@@ -34,6 +35,14 @@ struct RoomActionMenu: View {
 
     private var roomPreviewOverride: Bool? {
         settings.roomPreviewOverride(for: room.id)
+    }
+
+    private var canManageRoomActions: Bool {
+        adminManager.isAdmin || adminManager.adminRole.canManageRooms || roomFeatures.canLockRoom
+    }
+
+    private var roomJoinStatusText: String {
+        isInRoom ? "Joined" : "Not Joined"
     }
 
     private var roomPreviewEnabledText: String {
@@ -85,12 +94,19 @@ struct RoomActionMenu: View {
 
             // Room details
             VStack(alignment: .leading, spacing: 8) {
+                roomDetailRow(label: "Room ID", value: room.id)
                 roomDetailRow(label: "Room Type", value: roomTypeLabel)
                 roomDetailRow(label: "Your Access", value: viewerAccessLabel)
+                roomDetailRow(label: "Join Status", value: roomJoinStatusText)
+                roomDetailRow(label: "Media Status", value: roomMediaStatusText)
+                roomDetailRow(label: "Room Controls", value: canManageRoomActions ? "Manage Allowed" : "View Only")
                 roomDetailRow(label: "Total Users", value: "\(room.userCount)/\(room.maxUsers)")
                 roomDetailRow(label: "Uptime", value: roomUptimeLabel)
                 roomDetailRow(label: "Last User", value: room.lastActiveUsername ?? "No activity yet")
                 roomDetailRow(label: "Last Activity", value: roomLastActivityLabel)
+                if let hostedFrom = room.hostedFromLine {
+                    roomDetailRow(label: "Hosted From", value: hostedFrom)
+                }
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
@@ -236,17 +252,57 @@ struct RoomActionMenu: View {
                     ActionMenuItem(
                         icon: "gearshape",
                         label: "Room Settings",
-                        shortcut: "Command+Comma",
-                        description: "Configure room options"
+                        shortcut: "Cmd+Opt+S",
+                        description: "Configure this room only"
                     ) {
-                        NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            NotificationCenter.default.post(name: .openAudioSettings, object: nil)
-                        }
+                        NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
                         isPresented = false
                     }
 
-                    if adminManager.isAdmin || roomFeatures.canLockRoom {
+                    ActionMenuItem(
+                        icon: "gear",
+                        label: "Application Settings",
+                        shortcut: "Cmd+,",
+                        description: "Open app-wide settings"
+                    ) {
+                        NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
+                        isPresented = false
+                    }
+
+                    if canManageRoomActions {
+                        ActionMenuItem(
+                            icon: "slider.horizontal.3",
+                            label: "Open Room Administration",
+                            shortcut: nil,
+                            description: "Manage room permissions and metadata"
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
+                            isPresented = false
+                        }
+
+                        ActionMenuItem(
+                            icon: "plus.circle",
+                            label: "Create New Room",
+                            shortcut: nil,
+                            description: "Create another room"
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionCreate, object: nil)
+                            isPresented = false
+                        }
+
+                        ActionMenuItem(
+                            icon: "trash",
+                            label: "Delete This Room",
+                            shortcut: nil,
+                            description: "Remove this room from server",
+                            isDestructive: true
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionDelete, object: room)
+                            isPresented = false
+                        }
+                    }
+
+                    if canManageRoomActions {
                         ActionMenuItem(
                             icon: roomPreviewOverride == false ? "eye" : "eye.slash",
                             label: roomPreviewEnabledText,
@@ -311,7 +367,7 @@ struct RoomActionMenu: View {
                             description: nil,
                             isPrimary: true
                         ) {
-                            // Join room
+                            NotificationCenter.default.post(name: .roomActionJoin, object: room)
                             isPresented = false
                         }
                     }
@@ -323,6 +379,9 @@ struct RoomActionMenu: View {
         .background(Color(white: 0.15))
         .cornerRadius(12)
         .shadow(radius: 20)
+        .onAppear {
+            refreshRoomMediaStatus()
+        }
     }
 
     private func togglePeek() {
@@ -433,6 +492,36 @@ struct RoomActionMenu: View {
             return "\(minutes)m \(secs)s"
         }
         return "\(secs)s"
+    }
+
+    private func refreshRoomMediaStatus() {
+        roomMediaStatusText = "Checking..."
+        guard let base = serverManager.baseURL,
+              let encoded = room.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(base)/api/jellyfin/room-stream/\(encoded)") else {
+            roomMediaStatusText = "Unknown"
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            guard let data,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                DispatchQueue.main.async {
+                    self.roomMediaStatusText = "Unknown"
+                }
+                return
+            }
+
+            let active = (payload["active"] as? Bool) == true
+            let title = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async {
+                if active {
+                    self.roomMediaStatusText = title.isEmpty ? "Playing" : "Playing (\(title))"
+                } else {
+                    self.roomMediaStatusText = "Idle"
+                }
+            }
+        }.resume()
     }
 }
 
