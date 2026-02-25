@@ -5,6 +5,7 @@ const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const FederationManager = require('../utils/federation-manager');
 const MastodonBotManager = require('../utils/mastodon-bot');
@@ -19,6 +20,7 @@ const { UpdaterModule } = require('../modules/updater');
 const JellyfinServiceManager = require('../utils/jellyfin-service-manager');
 const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
+const JellyfinPluginManager = require('../utils/jellyfin-plugin-manager');
 const fileTransferRoutes = require("./file-transfer");
 
 // Stripe integration - lazy loaded if configured
@@ -86,6 +88,16 @@ class VoiceLinkLocalServer {
         // Initialize Jellyfin Auto-Manager
         this.jellyfinAutoManager = new JellyfinAutoManager(this.federatedJellyfin);
         this.jellyfinAutoManager.startAutoConnect();
+        this.jellyfinPluginManager = new JellyfinPluginManager({
+            getConnection: () => {
+                const cfg = deployConfig.get('jellyfin') || {};
+                return {
+                    serverUrl: cfg.connection?.serverUrl,
+                    apiKey: cfg.connection?.apiKey
+                };
+            },
+            logger: console
+        });
 
         // Authenticated users (Mastodon OAuth)
         this.authenticatedUsers = new Map(); // socketId -> mastodon user info
@@ -322,6 +334,136 @@ class VoiceLinkLocalServer {
             return value;
         }
         return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+    }
+
+    resolveBundledJellyfinPaths(options = {}) {
+        const bundledRoot = options.installPath
+            || process.env.VOICELINK_JELLYFIN_INSTALL_PATH
+            || path.join(__dirname, '../../data/bundled/jellyfin');
+        const dataPath = options.dataPath || process.env.VOICELINK_JELLYFIN_DATA_PATH || path.join(bundledRoot, 'data');
+        const cachePath = options.cachePath || process.env.VOICELINK_JELLYFIN_CACHE_PATH || path.join(bundledRoot, 'cache');
+        const webPath = options.webPath || process.env.VOICELINK_JELLYFIN_WEB_PATH || path.join(bundledRoot, 'web');
+        const mediaPath = options.mediaPath || process.env.VOICELINK_JELLYFIN_MEDIA_PATH || path.join(bundledRoot, 'media');
+        const backupPath = options.backupPath || process.env.VOICELINK_JELLYFIN_BACKUP_PATH || path.join(__dirname, '../../data/backups/jellyfin');
+        const binaryPath = options.binaryPath
+            || process.env.VOICELINK_JELLYFIN_BIN
+            || (process.platform === 'win32'
+                ? path.join(bundledRoot, 'jellyfin', 'jellyfin.exe')
+                : path.join(bundledRoot, 'jellyfin', 'jellyfin'));
+
+        return {
+            installPath: bundledRoot,
+            dataPath,
+            cachePath,
+            webPath,
+            mediaPath,
+            backupPath,
+            binaryPath
+        };
+    }
+
+    provisionBundledJellyfin(options = {}) {
+        const port = Number.parseInt(options.port, 10) || 8096;
+        const autoStart = this.parseBool(options.autoStart, true);
+        const paths = this.resolveBundledJellyfinPaths(options);
+        const processName = options.processName || 'jellyfin-bundled-local';
+        const serverId = options.serverId || 'jf_bundled_local';
+        const serverUrl = String(options.serverUrl || `http://127.0.0.1:${port}`).replace(/\/+$/, '');
+        const serverName = options.serverName || 'Bundled Jellyfin';
+
+        [paths.installPath, paths.dataPath, paths.cachePath, paths.webPath, paths.mediaPath, paths.backupPath].forEach((dir) => {
+            if (dir) fs.mkdirSync(dir, { recursive: true });
+        });
+        ['libraries', 'playlists', 'videos', 'music', 'imports', 'uploads'].forEach((subdir) => {
+            fs.mkdirSync(path.join(paths.mediaPath, subdir), { recursive: true });
+        });
+
+        const jellyfinConfig = deployConfig.get('jellyfin') || {};
+        const generatedApiKey = this.generateJellyfinApiKey();
+        const effectiveApiKey = options.apiKey || jellyfinConfig.connection?.apiKey || generatedApiKey;
+        const merged = {
+            ...jellyfinConfig,
+            bundled: {
+                ...(jellyfinConfig.bundled || {}),
+                enabled: true,
+                version: options.version || jellyfinConfig.bundled?.version || null,
+                installPath: paths.installPath,
+                dataPath: paths.dataPath,
+                mediaPath: paths.mediaPath,
+                port,
+                autoStart
+            },
+            connection: {
+                ...(jellyfinConfig.connection || {}),
+                serverUrl,
+                apiKey: effectiveApiKey,
+                userId: options.userId || jellyfinConfig.connection?.userId || null,
+                autoSetup: true
+            },
+            backup: {
+                ...(jellyfinConfig.backup || {}),
+                enabled: true,
+                backupPath: paths.backupPath
+            },
+            bot: {
+                ...(jellyfinConfig.bot || {}),
+                enabled: this.parseBool(options.enableBot, jellyfinConfig.bot?.enabled || false),
+                status: this.parseBool(options.enableBot, jellyfinConfig.bot?.enabled || false) ? 'enabled' : (jellyfinConfig.bot?.status || 'disabled')
+            },
+            libraries: {
+                ...(jellyfinConfig.libraries || {}),
+                upload: {
+                    ...(jellyfinConfig.libraries?.upload || {}),
+                    uploadPath: paths.mediaPath
+                },
+                remoteImport: {
+                    ...(jellyfinConfig.libraries?.remoteImport || {}),
+                    downloadPath: paths.mediaPath
+                }
+            }
+        };
+
+        deployConfig.updateSection('jellyfin', merged);
+        deployConfig.save();
+
+        const hasApiKey = Boolean(merged.connection?.apiKey);
+        if (hasApiKey) {
+            this.jellyfinServers.set(serverId, {
+                name: serverName,
+                url: serverUrl,
+                apiKey: merged.connection.apiKey,
+                addedAt: new Date(),
+                bundled: true
+            });
+        }
+
+        let processRegistered = false;
+        if (this.parseBool(options.registerService, true)) {
+            const executable = options.command || `${paths.binaryPath} --datadir ${paths.dataPath} --cachedir ${paths.cachePath} --webdir ${paths.webPath} --published-server-url ${serverUrl} --service --nowebclient=false`;
+            this.jellyfinManager.registerProcess(processName, {
+                user: options.user || process.env.USER || process.env.USERNAME || 'voicelink',
+                command: executable,
+                port,
+                workingDirectory: paths.installPath
+            });
+            processRegistered = true;
+        }
+
+        return {
+            serverId,
+            processName,
+            serverUrl,
+            apiKey: effectiveApiKey,
+            apiKeyGenerated: effectiveApiKey === generatedApiKey,
+            hasApiKey,
+            processRegistered,
+            config: merged,
+            paths
+        };
+    }
+
+    generateJellyfinApiKey() {
+        return `vljf_${crypto.randomBytes(24).toString('hex')}`;
     }
 
     sanitizeExportSegment(input, fallback = 'export') {
@@ -3017,6 +3159,17 @@ class VoiceLinkLocalServer {
         this.roomMediaStreams = new Map(); // roomId -> { serverId, itemId, type, startedAt, startedBy }
         this.mediaQueues = new Map(); // roomId -> [{ itemId, title, type, addedBy }]
 
+        const primaryJellyfin = deployConfig.get('jellyfin')?.connection;
+        if (primaryJellyfin?.serverUrl && primaryJellyfin?.apiKey) {
+            this.jellyfinServers.set('jf_primary_configured', {
+                name: 'Configured Jellyfin',
+                url: String(primaryJellyfin.serverUrl).replace(/\/+$/, ''),
+                apiKey: primaryJellyfin.apiKey,
+                addedAt: new Date(),
+                bundled: !!deployConfig.get('jellyfin')?.bundled?.enabled
+            });
+        }
+
         // Add/configure Jellyfin server
         this.app.post('/api/jellyfin/servers', (req, res) => {
             const { name, url, apiKey } = req.body;
@@ -3739,8 +3892,13 @@ class VoiceLinkLocalServer {
 
         // Setup Federated Jellyfin routes
         if (this.federatedJellyfin) {
-            this.federatedJellyfin.setupRoutes(this.app);
+            this.federatedJellyfin.setupRoutes(this.app, {
+                isAdminRequest: (req) => this.isAdminRequest(req)
+            });
             this.jellyfinAutoManager.setupRoutes(this.app);
+            this.jellyfinPluginManager.setupRoutes(this.app, {
+                isAdminRequest: (req) => this.isAdminRequest(req)
+            });
         }
 
         // ============================================
@@ -4394,6 +4552,72 @@ class VoiceLinkLocalServer {
                 storage: jellyfinConfig.libraries?.storage || {},
                 backup: { lastBackup: jellyfinConfig.backup?.lastBackup, lastBackupSize: jellyfinConfig.backup?.lastBackupSize }
             });
+        });
+
+        this.app.get('/api/jellyfin/config', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const jellyfinConfig = deployConfig.get('jellyfin') || {};
+            const paths = this.resolveBundledJellyfinPaths({
+                installPath: jellyfinConfig.bundled?.installPath,
+                dataPath: jellyfinConfig.bundled?.dataPath,
+                mediaPath: jellyfinConfig.bundled?.mediaPath,
+                backupPath: jellyfinConfig.backup?.backupPath
+            });
+            res.json({
+                success: true,
+                config: jellyfinConfig,
+                mediaStructure: ['libraries', 'playlists', 'videos', 'music', 'imports', 'uploads'].map((name) => ({
+                    name,
+                    path: path.join(paths.mediaPath, name)
+                }))
+            });
+        });
+
+        this.app.put('/api/jellyfin/config', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            try {
+                const updated = this.provisionBundledJellyfin({
+                    ...(req.body || {}),
+                    enableBot: req.body?.enableBot,
+                    registerService: req.body?.registerService
+                });
+                res.json({
+                    success: true,
+                    message: 'Jellyfin configuration updated',
+                    ...updated
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/jellyfin/api-key/rotate', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            try {
+                const nextApiKey = this.generateJellyfinApiKey();
+                const jellyfinConfig = deployConfig.get('jellyfin') || {};
+                const serverUrl = req.body?.serverUrl || jellyfinConfig.connection?.serverUrl || `http://127.0.0.1:${jellyfinConfig.bundled?.port || 8096}`;
+                const updated = this.provisionBundledJellyfin({
+                    ...req.body,
+                    serverUrl,
+                    apiKey: nextApiKey
+                });
+                res.json({
+                    success: true,
+                    message: 'Jellyfin API key rotated',
+                    apiKey: nextApiKey,
+                    serverId: updated.serverId,
+                    serverUrl: updated.serverUrl
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
         });
 
         // Enable bot
@@ -5247,6 +5471,26 @@ class VoiceLinkLocalServer {
         this.app.post('/api/modules/:moduleId/install', (req, res) => {
             const result = this.moduleRegistry.installModule(req.params.moduleId, req.body.config);
             if (result.success) {
+                if (req.params.moduleId === 'jellyfin') {
+                    try {
+                        const installConfig = req.body?.config || {};
+                        if (this.parseBool(installConfig.allowLocalBundled, true) && this.parseBool(installConfig.provisionBundled, false)) {
+                            const provisioned = this.provisionBundledJellyfin({
+                                ...installConfig,
+                                enableBot: installConfig.enableBot,
+                                registerService: installConfig.registerService
+                            });
+                            result.provisioned = {
+                                bundled: true,
+                                serverId: provisioned.serverId,
+                                serverUrl: provisioned.serverUrl,
+                                processName: provisioned.processName
+                            };
+                        }
+                    } catch (e) {
+                        result.warning = `Jellyfin module installed but bundled provisioning failed: ${e.message}`;
+                    }
+                }
                 // Reinitialize modules after install
                 this.initializeModules();
             }
@@ -7160,7 +7404,17 @@ class VoiceLinkLocalServer {
                     adminPassword,
                     enableFederation,
                     enableMedia,
-                    requireAuth
+                    requireAuth,
+                    enableBundledJellyfin,
+                    jellyfinApiKey,
+                    jellyfinUserId,
+                    jellyfinPort,
+                    jellyfinVersion,
+                    jellyfinInstallPath,
+                    jellyfinDataPath,
+                    jellyfinMediaPath,
+                    jellyfinBackupPath,
+                    jellyfinAutoStart
                 } = req.body;
 
                 // Validate required fields
@@ -7207,14 +7461,42 @@ class VoiceLinkLocalServer {
                 // Reload deploy config
                 deployConfig.reload();
 
+                let jellyfinProvisioned = null;
+                if (enableMedia || enableBundledJellyfin) {
+                    jellyfinProvisioned = this.provisionBundledJellyfin({
+                        apiKey: jellyfinApiKey,
+                        userId: jellyfinUserId,
+                        port: jellyfinPort,
+                        version: jellyfinVersion,
+                        installPath: jellyfinInstallPath,
+                        dataPath: jellyfinDataPath,
+                        mediaPath: jellyfinMediaPath,
+                        backupPath: jellyfinBackupPath,
+                        autoStart: jellyfinAutoStart,
+                        enableBot: true,
+                        registerService: true
+                    });
+
+                    if (!this.moduleRegistry.getModule('jellyfin')?.installed) {
+                        this.moduleRegistry.installModule('jellyfin', { enabled: true });
+                    }
+                    this.initializeModules();
+                }
+
                 res.json({
                     success: true,
                     message: 'Configuration saved successfully',
                     config: {
                         serverName: config.server.name,
                         publicUrl: config.server.publicUrl,
-                        federation: config.federation.enabled
-                    }
+                        federation: config.federation.enabled,
+                        jellyfin: jellyfinProvisioned ? {
+                            bundled: true,
+                            serverUrl: jellyfinProvisioned.serverUrl,
+                            serverId: jellyfinProvisioned.serverId
+                        } : null
+                    },
+                    jellyfin: jellyfinProvisioned
                 });
 
             } catch (error) {
@@ -7245,6 +7527,24 @@ class VoiceLinkLocalServer {
                 });
 
             } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/install/jellyfin/provision', (req, res) => {
+            try {
+                const provisioned = this.provisionBundledJellyfin(req.body || {});
+                if (this.parseBool(req.body?.installModule, true) && !this.moduleRegistry.getModule('jellyfin')?.installed) {
+                    this.moduleRegistry.installModule('jellyfin', { enabled: true, provisionBundled: true });
+                    this.initializeModules();
+                }
+                res.json({
+                    success: true,
+                    message: 'Bundled Jellyfin provisioned',
+                    ...provisioned
+                });
+            } catch (error) {
+                console.error('[Install] Jellyfin provisioning error:', error);
                 res.status(500).json({ success: false, error: error.message });
             }
         });
