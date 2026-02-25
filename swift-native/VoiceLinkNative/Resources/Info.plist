@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.5</string>
+	<string>1.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,11 +32,17 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>24</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
@@ -45,12 +51,6 @@
 	<string>VoiceLink needs access to your local network to connect to voice servers.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>VoiceLink needs access to your microphone for voice chat.</string>
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>VoiceLink needs network volume access for file transfers and shared media libraries.</string>
 	<key>NSRemovableVolumesUsageDescription</key>

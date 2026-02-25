@@ -56,6 +56,24 @@ class VoiceLinkLocalServer {
         this.rooms = new Map();
         this.users = new Map();
         this.audioRouting = new Map();
+        this.userHeartbeat = new Map(); // socketId -> timestamp ms
+        this.activitySchedulerIntervalMs = Math.max(
+            1000,
+            parseInt(process.env.ROOM_ACTIVITY_REPORT_INTERVAL_MS || '5000', 10) || 5000
+        );
+        this.activeUserTimeoutMs = Math.max(
+            2000,
+            parseInt(process.env.ROOM_ACTIVE_TIMEOUT_MS || '30000', 10) || 30000
+        );
+        this.defaultRoomStreamURL = process.env.DEFAULT_ROOM_STREAM_URL || 'https://chrismixradio.com';
+        this.roomActivitySnapshot = {
+            generatedAt: new Date(0).toISOString(),
+            intervalMs: this.activitySchedulerIntervalMs,
+            activeTimeoutMs: this.activeUserTimeoutMs,
+            totals: { rooms: 0, activeUsers: 0, inactiveUsers: 0 },
+            rooms: []
+        };
+        this.roomActivityInterval = null;
 
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
@@ -115,6 +133,7 @@ class VoiceLinkLocalServer {
         this.setupMiddleware();
         this.setupRoutes();
         this.setupSocketHandlers();
+        this.startRoomActivityScheduler();
         this.loadPersistedRooms();
         this.start();
     }
@@ -508,6 +527,167 @@ class VoiceLinkLocalServer {
         return rooms;
     }
 
+    resolveMediaPathCandidate(candidatePath) {
+        if (!candidatePath) return null;
+        if (fs.existsSync(candidatePath)) {
+            return candidatePath;
+        }
+        try {
+            const resolved = fs.realpathSync(candidatePath);
+            if (fs.existsSync(resolved)) {
+                return resolved;
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    discoverMediaLibraryPaths() {
+        const discovered = new Set();
+        const addIfDir = (candidatePath) => {
+            const resolved = this.resolveMediaPathCandidate(candidatePath);
+            if (!resolved) return;
+            try {
+                if (fs.statSync(resolved).isDirectory()) {
+                    discovered.add(resolved);
+                    // Also include first-level child folders to satisfy */media/* library scans.
+                    let children = [];
+                    try {
+                        children = fs.readdirSync(resolved, { withFileTypes: true });
+                    } catch (e) {}
+                    for (const child of children) {
+                        if (!child.isDirectory()) continue;
+                        const childPath = this.resolveMediaPathCandidate(path.join(resolved, child.name));
+                        if (childPath) discovered.add(childPath);
+                    }
+                }
+            } catch (e) {}
+        };
+
+        const scanBases = [
+            { root: '/home', joiner: (name) => path.join('/home', name, 'apps', 'media') },
+            { root: '/mnt', joiner: (name) => path.join('/mnt', name, 'media') },
+            { root: '/mnt', joiner: (name) => path.join('/mnt', name, 'apps', 'media') }
+        ];
+
+        for (const scan of scanBases) {
+            if (!fs.existsSync(scan.root)) continue;
+            let entries = [];
+            try {
+                entries = fs.readdirSync(scan.root, { withFileTypes: true });
+            } catch (e) {
+                continue;
+            }
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                addIfDir(scan.joiner(entry.name));
+            }
+        }
+
+        return Array.from(discovered);
+    }
+
+    touchUserActivity(socketId) {
+        if (!socketId) return;
+        this.userHeartbeat.set(socketId, Date.now());
+    }
+
+    getRoomActivitySnapshotForRoom(roomId, now = Date.now()) {
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+
+        const connectedSockets = this.getConnectedSocketSet();
+        const activeUsers = [];
+        const activeIds = new Set();
+
+        for (const [socketId, user] of this.users.entries()) {
+            if (user?.roomId !== roomId) continue;
+            if (!connectedSockets.has(socketId)) continue;
+            const lastSeen = this.userHeartbeat.get(socketId) || 0;
+            if ((now - lastSeen) > this.activeUserTimeoutMs) continue;
+            activeUsers.push({
+                id: socketId,
+                name: user.name || `User ${String(socketId).slice(0, 8)}`,
+                joinedAt: user.joinedAt || null,
+                isAuthenticated: !!user.isAuthenticated,
+                lastSeenAt: new Date(lastSeen).toISOString()
+            });
+            activeIds.add(socketId);
+        }
+
+        const roomUsers = Array.isArray(room.users) ? room.users : [];
+        const inactiveUsers = [];
+        for (const user of roomUsers) {
+            const id = user?.id;
+            if (!id || activeIds.has(id)) continue;
+            const lastSeen = this.userHeartbeat.get(id) || null;
+            inactiveUsers.push({
+                id,
+                name: user.name || `User ${String(id).slice(0, 8)}`,
+                joinedAt: user.joinedAt || null,
+                isAuthenticated: !!user.isAuthenticated,
+                lastSeenAt: lastSeen ? new Date(lastSeen).toISOString() : null
+            });
+        }
+
+        return {
+            roomId: room.id,
+            name: room.name,
+            description: room.description || '',
+            maxUsers: room.maxUsers || 50,
+            locked: !!room.locked,
+            visibility: room.visibility || 'public',
+            accessType: room.accessType || 'hybrid',
+            activeUserCount: activeUsers.length,
+            inactiveUserCount: inactiveUsers.length,
+            activeUsers,
+            inactiveUsers
+        };
+    }
+
+    buildRoomActivitySnapshot() {
+        const now = Date.now();
+        const rooms = [];
+        let activeUsers = 0;
+        let inactiveUsers = 0;
+
+        for (const room of this.rooms.values()) {
+            const roomSnapshot = this.getRoomActivitySnapshotForRoom(room.id, now);
+            if (!roomSnapshot) continue;
+            activeUsers += roomSnapshot.activeUserCount;
+            inactiveUsers += roomSnapshot.inactiveUserCount;
+            rooms.push(roomSnapshot);
+        }
+
+        return {
+            generatedAt: new Date(now).toISOString(),
+            intervalMs: this.activitySchedulerIntervalMs,
+            activeTimeoutMs: this.activeUserTimeoutMs,
+            totals: {
+                rooms: rooms.length,
+                activeUsers,
+                inactiveUsers
+            },
+            rooms
+        };
+    }
+
+    refreshRoomActivitySnapshot() {
+        this.roomActivitySnapshot = this.buildRoomActivitySnapshot();
+        if (this.io) {
+            this.io.emit('room-activity-snapshot', this.roomActivitySnapshot);
+        }
+    }
+
+    startRoomActivityScheduler() {
+        if (this.roomActivityInterval) {
+            clearInterval(this.roomActivityInterval);
+        }
+        this.refreshRoomActivitySnapshot();
+        this.roomActivityInterval = setInterval(() => {
+            this.refreshRoomActivitySnapshot();
+        }, this.activitySchedulerIntervalMs);
+    }
+
     setupRoutes() {
         // API Routes - now fetches from main server and merges with local
         const authPortalBase = process.env.AUTH_PORTAL_URL || 'https://auth.devinecreations.net';
@@ -520,6 +700,38 @@ class VoiceLinkLocalServer {
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
                 users: this.users.size
+            });
+        });
+
+        this.app.get('/api/rooms/activity', (req, res) => {
+            this.refreshRoomActivitySnapshot();
+            const roomId = req.query.roomId ? String(req.query.roomId) : null;
+            if (roomId) {
+                const room = this.roomActivitySnapshot.rooms.find(r => r.roomId === roomId);
+                if (!room) {
+                    return res.status(404).json({ error: 'Room not found' });
+                }
+                return res.json({
+                    generatedAt: this.roomActivitySnapshot.generatedAt,
+                    intervalMs: this.roomActivitySnapshot.intervalMs,
+                    activeTimeoutMs: this.roomActivitySnapshot.activeTimeoutMs,
+                    room
+                });
+            }
+            res.json(this.roomActivitySnapshot);
+        });
+
+        this.app.get('/api/rooms/:roomId/activity', (req, res) => {
+            this.refreshRoomActivitySnapshot();
+            const room = this.roomActivitySnapshot.rooms.find(r => r.roomId === req.params.roomId);
+            if (!room) {
+                return res.status(404).json({ error: 'Room not found' });
+            }
+            res.json({
+                generatedAt: this.roomActivitySnapshot.generatedAt,
+                intervalMs: this.roomActivitySnapshot.intervalMs,
+                activeTimeoutMs: this.roomActivitySnapshot.activeTimeoutMs,
+                room
             });
         });
 
@@ -553,6 +765,8 @@ class VoiceLinkLocalServer {
                 name: room.name,
                 description: room.description || '',
                 users: this.normalizeRoomUsers(room.id).length,
+                activeUsers: (this.getRoomActivitySnapshotForRoom(room.id)?.activeUserCount || 0),
+                inactiveUsers: (this.getRoomActivitySnapshotForRoom(room.id)?.inactiveUserCount || 0),
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -680,7 +894,7 @@ class VoiceLinkLocalServer {
                 lockedBy: locked ? creatorHandle : null,
                 autoLock: autoLock || null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoLockScheduled: null,  // Timeout ID for scheduled auto-lock
-                autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : false,  // Auto-play music when room is empty
+                autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : true,  // Auto-play room music unless explicitly disabled
                 autoplayPlaylist: autoplayPlaylist || null,  // Playlist ID for autoplay
                 jellyfinAccess: {
                     enabled: true,
@@ -2653,8 +2867,19 @@ class VoiceLinkLocalServer {
 
         // Get active stream for a room
         this.app.get('/api/jellyfin/room-stream/:roomId', (req, res) => {
-            const stream = this.roomMediaStreams.get(req.params.roomId);
+            const roomId = req.params.roomId;
+            const stream = this.roomMediaStreams.get(roomId);
             if (!stream) {
+                const room = this.rooms.get(roomId);
+                if (room?.autoplayMusic) {
+                    return res.json({
+                        active: true,
+                        type: 'autoplay',
+                        streamUrl: room.autoplayPlaylist || this.defaultRoomStreamURL,
+                        startedAt: room.createdAt || new Date().toISOString(),
+                        startedBy: 'Autoplay'
+                    });
+                }
                 return res.json({ active: false });
             }
 
@@ -2728,34 +2953,70 @@ class VoiceLinkLocalServer {
         // Wrapper: Browse library with serverId as query param (for JukeboxManager)
         this.app.get('/api/jellyfin/library', async (req, res) => {
             const serverId = req.query.serverId;
-            const server = this.jellyfinServers.get(serverId);
-            if (!server) {
+            const includeAll = !serverId || serverId === 'all';
+            const servers = includeAll
+                ? Array.from(this.jellyfinServers.entries()).map(([id, server]) => ({ id, ...server }))
+                : (this.jellyfinServers.has(serverId) ? [{ id: serverId, ...this.jellyfinServers.get(serverId) }] : []);
+            if (servers.length === 0) {
                 return res.json({ success: false, error: 'Jellyfin server not found', items: [] });
             }
 
             try {
                 const parentId = req.query.parentId || '';
                 const type = req.query.type || '';
+                const limit = req.query.limit || '100';
 
-                let endpoint = `${server.url}/Items`;
-                const params = new URLSearchParams({
-                    api_key: server.apiKey,
-                    Recursive: parentId ? 'false' : 'true',
-                    Fields: 'Overview,MediaStreams',
-                    SortBy: 'SortName',
-                    SortOrder: 'Ascending',
-                    Limit: req.query.limit || '100'
-                });
+                const perServerResults = await Promise.all(servers.map(async (server) => {
+                    const params = new URLSearchParams({
+                        api_key: server.apiKey,
+                        Recursive: parentId ? 'false' : 'true',
+                        Fields: 'Overview,MediaStreams',
+                        SortBy: 'SortName',
+                        SortOrder: 'Ascending',
+                        Limit: limit
+                    });
+                    if (parentId) params.append('ParentId', parentId);
+                    if (type) params.append('IncludeItemTypes', type);
 
-                if (parentId) params.append('ParentId', parentId);
-                if (type) params.append('IncludeItemTypes', type);
+                    const response = await fetch(`${server.url}/Items?${params}`);
+                    const data = await response.json();
+                    return (data.Items || []).map((item) => ({
+                        ...item,
+                        _sourceServerId: server.id,
+                        _sourceServerName: server.name
+                    }));
+                }));
 
-                const response = await fetch(`${endpoint}?${params}`);
-                const data = await response.json();
+                const mergedItems = perServerResults.flat();
+                const seenIds = new Set();
+                const dedupedItems = [];
+                for (const item of mergedItems) {
+                    const dedupeKey = `${item._sourceServerId}:${item.Id || item.ItemId || item.Name}`;
+                    if (seenIds.has(dedupeKey)) continue;
+                    seenIds.add(dedupeKey);
+                    dedupedItems.push(item);
+                }
+
+                // Include local filesystem media library roots for Jukebox fallback visibility.
+                if (includeAll && !parentId) {
+                    const localPaths = this.discoverMediaLibraryPaths();
+                    for (const p of localPaths) {
+                        dedupedItems.push({
+                            Id: `localfs:${p}`,
+                            Name: path.basename(p) || p,
+                            Path: p,
+                            Type: 'Folder',
+                            MediaType: 'Mixed',
+                            IsFolder: true,
+                            _sourceServerId: 'localfs',
+                            _sourceServerName: 'Local Media Paths'
+                        });
+                    }
+                }
 
                 res.json({
                     success: true,
-                    items: data.Items || []
+                    items: dedupedItems
                 });
             } catch (error) {
                 res.json({ success: false, error: error.message, items: [] });
@@ -2765,29 +3026,37 @@ class VoiceLinkLocalServer {
         // Wrapper: Search library with serverId as query param (for JukeboxManager)
         this.app.get('/api/jellyfin/search', async (req, res) => {
             const serverId = req.query.serverId;
-            const server = this.jellyfinServers.get(serverId);
-            if (!server) {
+            const includeAll = !serverId || serverId === 'all';
+            const servers = includeAll
+                ? Array.from(this.jellyfinServers.entries()).map(([id, server]) => ({ id, ...server }))
+                : (this.jellyfinServers.has(serverId) ? [{ id: serverId, ...this.jellyfinServers.get(serverId) }] : []);
+            if (servers.length === 0) {
                 return res.json({ success: false, error: 'Jellyfin server not found', items: [] });
             }
 
             try {
                 const query = req.query.query || req.query.q || '';
                 const type = req.query.type || 'Audio,MusicAlbum,Video,Movie,Episode';
-
-                const params = new URLSearchParams({
-                    api_key: server.apiKey,
-                    SearchTerm: query,
-                    IncludeItemTypes: type,
-                    Limit: '50',
-                    Fields: 'Overview,MediaStreams'
-                });
-
-                const response = await fetch(`${server.url}/Items?${params}`);
-                const data = await response.json();
+                const perServerResults = await Promise.all(servers.map(async (server) => {
+                    const params = new URLSearchParams({
+                        api_key: server.apiKey,
+                        SearchTerm: query,
+                        IncludeItemTypes: type,
+                        Limit: '50',
+                        Fields: 'Overview,MediaStreams'
+                    });
+                    const response = await fetch(`${server.url}/Items?${params}`);
+                    const data = await response.json();
+                    return (data.Items || []).map((item) => ({
+                        ...item,
+                        _sourceServerId: server.id,
+                        _sourceServerName: server.name
+                    }));
+                }));
 
                 res.json({
                     success: true,
-                    items: data.Items || []
+                    items: perServerResults.flat()
                 });
             } catch (error) {
                 res.json({ success: false, error: error.message, items: [] });
@@ -6111,6 +6380,11 @@ class VoiceLinkLocalServer {
     setupSocketHandlers() {
         this.io.on('connection', (socket) => {
             console.log(`User connected: ${socket.id}`);
+            this.touchUserActivity(socket.id);
+
+            socket.onAny(() => {
+                this.touchUserActivity(socket.id);
+            });
 
             // Get room list for desktop/mobile apps
             socket.on('get-rooms', () => {
@@ -6212,6 +6486,7 @@ class VoiceLinkLocalServer {
                     room.peakUsers = room.users.length;
                 }
                 this.users.set(socket.id, { ...user, roomId });
+                this.touchUserActivity(socket.id);
 
                 socket.join(roomId);
 
@@ -6240,6 +6515,16 @@ class VoiceLinkLocalServer {
                     count: this.normalizeRoomUsers(roomId).length,
                     users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
                 });
+                this.refreshRoomActivitySnapshot();
+
+                if (room.autoplayMusic && !this.roomMediaStreams.has(roomId)) {
+                    this.io.to(roomId).emit('media-stream-started', {
+                        roomId,
+                        title: room.autoplayPlaylist || 'Room Radio',
+                        streamUrl: room.autoplayPlaylist || this.defaultRoomStreamURL || 'https://chrismixradio.com',
+                        startedBy: 'Autoplay'
+                    });
+                }
 
                 console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
@@ -6585,6 +6870,7 @@ class VoiceLinkLocalServer {
 
                     this.users.delete(socket.id);
                     this.audioRouting.delete(socket.id);
+                    this.userHeartbeat.delete(socket.id);
                 }
 
                 // Clean up audio relay state
@@ -6593,6 +6879,8 @@ class VoiceLinkLocalServer {
                 }
                 this.audioRelayEnabled.delete(socket.id);
                 this.audioBuffers.delete(socket.id);
+                this.userHeartbeat.delete(socket.id);
+                this.refreshRoomActivitySnapshot();
 
                 console.log(`User disconnected: ${socket.id}`);
             });

@@ -12,6 +12,7 @@ final class SelfTestScheduler: ObservableObject {
         case updaterMetadata = "updaterMetadata"
         case coreSounds = "coreSounds"
         case roomInventory = "roomInventory"
+        case audioPipeline = "audioPipeline"
 
         var id: String { rawValue }
 
@@ -24,6 +25,7 @@ final class SelfTestScheduler: ObservableObject {
             case .updaterMetadata: return "Updater Metadata Endpoint"
             case .coreSounds: return "Core Sound Assets"
             case .roomInventory: return "Room Inventory"
+            case .audioPipeline: return "Audio Pipeline"
             }
         }
     }
@@ -272,6 +274,27 @@ final class SelfTestScheduler: ObservableObject {
             return roomCount > 0
                 ? (.pass, "Room inventory loaded (\(roomCount) rooms).")
                 : (.warn, "Connected but no rooms were returned.")
+
+        case .audioPipeline:
+            let manager = ServerManager.shared
+            if manager.isAudioTransmitting {
+                return (.pass, "Audio transmission active.")
+            }
+            manager.runStartupAudioSelfTest()
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if manager.isAudioTransmitting {
+                return (.pass, "Audio transmission recovered by self-test.")
+            }
+            if !manager.isConnected {
+                return (.warn, "Audio waiting for server connection.")
+            }
+            if manager.activeRoomId == nil {
+                return (.warn, "Audio ready, but no room joined yet.")
+            }
+            if manager.inputMuted {
+                return (.warn, "Input is muted.")
+            }
+            return (.fail, "Audio did not start after self-test recovery attempt.")
         }
     }
 

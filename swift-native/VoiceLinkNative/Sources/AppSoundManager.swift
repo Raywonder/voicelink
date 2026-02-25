@@ -2,6 +2,15 @@ import Foundation
 import AVFoundation
 import AppKit
 
+private extension NSLock {
+    @discardableResult
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}
+
 /// Centralized sound manager for VoiceLink app
 /// Uses actual sound files from Resources/sounds directory
 class AppSoundManager: ObservableObject {
@@ -153,6 +162,7 @@ class AppSoundManager: ObservableObject {
     private var downloadFailures: Set<String> = []
     private var pendingPlayAfterDownload: Set<SoundType> = []
     private var lastMissingAttemptAt: [SoundType: Date] = [:]
+    private let stateLock = NSLock()
     private let missingRetryInterval: TimeInterval = 10
     private let verboseLogs = false
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
@@ -195,7 +205,8 @@ class AppSoundManager: ObservableObject {
     }
 
     private func loadSound(_ soundType: SoundType) {
-        if let last = lastMissingAttemptAt[soundType],
+        let lastAttempt: Date? = stateLock.withLock { lastMissingAttemptAt[soundType] }
+        if let last = lastAttempt,
            Date().timeIntervalSince(last) < missingRetryInterval,
            audioPlayers[soundType] == nil,
            systemSounds[soundType] == nil {
@@ -239,7 +250,7 @@ class AppSoundManager: ObservableObject {
                 }
             }
         }
-        lastMissingAttemptAt[soundType] = Date()
+        stateLock.withLock { lastMissingAttemptAt[soundType] = Date() }
         queueBackgroundDownload(for: soundType, playWhenReady: false)
     }
 
@@ -249,14 +260,14 @@ class AppSoundManager: ObservableObject {
             player.volume = volume
             audioPlayers[soundType] = player
             systemSounds.removeValue(forKey: soundType)
-            lastMissingAttemptAt[soundType] = nil
+            stateLock.withLock { lastMissingAttemptAt[soundType] = nil }
             return true
         }
         if let nsSound = NSSound(contentsOf: url, byReference: false) {
             nsSound.volume = volume
             systemSounds[soundType] = nsSound
             audioPlayers.removeValue(forKey: soundType)
-            lastMissingAttemptAt[soundType] = nil
+            stateLock.withLock { lastMissingAttemptAt[soundType] = nil }
             return true
         }
         return false
@@ -411,7 +422,7 @@ class AppSoundManager: ObservableObject {
 
     private func resolveSoundTestURL() -> URL? {
         guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
-        guard let entries = try? FileManager.default.contentsOfDirectory(
+        guard let enumerator = FileManager.default.enumerator(
             at: soundsRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
@@ -419,18 +430,18 @@ class AppSoundManager: ObservableObject {
             return nil
         }
 
-        let preferred = entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
+        var fallback: URL?
+        for case let url as URL in enumerator {
+            guard url.pathExtension.lowercased() == "wav" else { continue }
             let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
+            if base == "sound-test" || base == "sound_test" || base == "your-sound-test" {
+                return url
+            }
+            if fallback == nil, base.contains("test") {
+                fallback = url
+            }
         }
-        if let preferred { return preferred }
-
-        return entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base.contains("test")
-        }
+        return fallback
     }
 
     // MARK: - Play Sounds
@@ -444,30 +455,32 @@ class AppSoundManager: ObservableObject {
         }
         guard soundsEnabled || force else { return }
 
+        let effectiveVolume: Float = (force && volume < 0.05) ? 0.7 : volume
+
         if let player = audioPlayers[soundType] {
-            player.volume = volume
+            player.volume = effectiveVolume
             player.currentTime = 0
             player.play()
         } else if let sound = systemSounds[soundType] {
-            sound.volume = volume
+            sound.volume = effectiveVolume
             sound.stop()
             sound.play()
         } else {
             // Try to load on demand
             loadSound(soundType)
             if let player = audioPlayers[soundType] {
-                player.volume = volume
+                player.volume = effectiveVolume
                 player.currentTime = 0
                 player.play()
             } else if let sound = systemSounds[soundType] {
-                sound.volume = volume
+                sound.volume = effectiveVolume
                 sound.stop()
                 sound.play()
             } else {
                 queueBackgroundDownload(for: soundType, playWhenReady: true)
                 if allowSystemFallback {
                     // Optional fallback to system sound.
-                    playSystemSound(for: soundType)
+                    playSystemSound(for: soundType, volume: effectiveVolume)
                 }
             }
         }
@@ -496,7 +509,7 @@ class AppSoundManager: ObservableObject {
         return audioPlayers[soundType]?.duration ?? 0.6
     }
 
-    private func playSystemSound(for soundType: SoundType) {
+    private func playSystemSound(for soundType: SoundType, volume: Float) {
         // Fallback to NSSound system sounds
         let systemSoundName: String? = {
             switch soundType {
@@ -504,6 +517,7 @@ class AppSoundManager: ObservableObject {
             case .error: return "Basso"
             case .notification: return "Ping"
             case .disconnected: return "Blow"
+            case .soundTest: return "Ping"
             default: return nil
             }
         }()
@@ -672,13 +686,14 @@ class AppSoundManager: ObservableObject {
         guard startupIntroEnabled, !startupIntroPlayed else { return }
         if playRandomStartupIntro() { return }
 
-        // Avoid default macOS fallback tones on launch; if the sound is missing,
-        // fetch in background and notify users non-blockingly.
+        // Ensure users hear a startup cue even when custom assets are missing.
         if hasPlayableVariant(for: .connected) {
-            playSound(.connected, force: true, allowSystemFallback: false)
+            playSound(.connected, force: true, allowSystemFallback: true)
             startupIntroPlayed = true
         } else {
             queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
+            playSound(.notification, force: true, allowSystemFallback: true)
+            startupIntroPlayed = true
         }
     }
 
@@ -863,16 +878,22 @@ class AppSoundManager: ObservableObject {
     private func queueBackgroundDownload(for soundType: SoundType, playWhenReady: Bool, announce: Bool = true) {
         guard soundType != .soundTest else { return }
         let key = soundType.rawValue.lowercased()
-        if playWhenReady {
-            pendingPlayAfterDownload.insert(soundType)
+        var shouldStart = false
+        stateLock.withLock {
+            if playWhenReady {
+                pendingPlayAfterDownload.insert(soundType)
+            }
+            if !inFlightDownloads.contains(key) && !downloadFailures.contains(key) {
+                inFlightDownloads.insert(key)
+                shouldStart = true
+            }
         }
-        if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
+        if !shouldStart {
             return
         }
         if announce && criticalSoundTypesForReminder().contains(soundType) {
             publishBackgroundDownloadNotice(isReminder: false)
         }
-        inFlightDownloads.insert(key)
         ioQueue.async { [weak self] in
             self?.downloadMissingSound(soundType)
         }
@@ -880,7 +901,7 @@ class AppSoundManager: ObservableObject {
 
     private func downloadMissingSound(_ soundType: SoundType) {
         let key = soundType.rawValue.lowercased()
-        defer { inFlightDownloads.remove(key) }
+        defer { stateLock.withLock { inFlightDownloads.remove(key) } }
         let baseURLs = remoteSoundBaseURLs()
         guard !baseURLs.isEmpty, let localRoot = downloadedSoundsRoot() else { return }
 
@@ -937,8 +958,10 @@ class AppSoundManager: ObservableObject {
                                     self.loadSound(soundType)
                                 }
                                 self.refreshDownloadReminderState()
-                                if self.pendingPlayAfterDownload.contains(soundType) {
-                                    self.pendingPlayAfterDownload.remove(soundType)
+                                let shouldPlay = self.stateLock.withLock {
+                                    self.pendingPlayAfterDownload.remove(soundType) != nil
+                                }
+                                if shouldPlay {
                                     self.playSound(soundType, allowSystemFallback: false)
                                 }
                             }
@@ -950,7 +973,7 @@ class AppSoundManager: ObservableObject {
                 }
             }
         }
-        downloadFailures.insert(key)
+        stateLock.withLock { downloadFailures.insert(key) }
         DispatchQueue.main.async { [weak self] in
             self?.refreshDownloadReminderState()
         }
@@ -969,7 +992,8 @@ class AppSoundManager: ObservableObject {
 
     private func refreshDownloadReminderState() {
         let missingCritical = criticalSoundTypesForReminder().contains { !hasPlayableVariant(for: $0) }
-        let shouldShow = missingCritical && !inFlightDownloads.isEmpty
+        let hasInFlight = stateLock.withLock { !inFlightDownloads.isEmpty }
+        let shouldShow = missingCritical && hasInFlight
         DispatchQueue.main.async {
             if !shouldShow {
                 self.activeSoundDownloadNotice = nil

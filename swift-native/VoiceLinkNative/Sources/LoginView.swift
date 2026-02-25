@@ -65,6 +65,32 @@ struct LoginView: View {
                 }
                 .disabled(mastodonInstance.isEmpty || isLoading)
 
+                Divider()
+
+                Text("Or sign in with")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 10) {
+                    Button("Google") {
+                        handleOAuthProvider(.google)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoading)
+
+                    Button("Apple") {
+                        handleOAuthProvider(.apple)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoading)
+
+                    Button("GitHub") {
+                        handleOAuthProvider(.github)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoading)
+                }
+
                 // Error Message
                 if let error = errorMessage ?? authManager.authError {
                     Text(error)
@@ -118,6 +144,21 @@ struct LoginView: View {
                     appState.currentScreen = .mainMenu
                 } else {
                     errorMessage = error ?? "Authentication failed. Please try again."
+                }
+            }
+        }
+    }
+
+    private func handleOAuthProvider(_ provider: OAuthProvider) {
+        isLoading = true
+        errorMessage = nil
+        authManager.authenticateWithOAuthProvider(provider) { success, error in
+            DispatchQueue.main.async {
+                isLoading = false
+                if success {
+                    appState.currentScreen = .mainMenu
+                } else {
+                    errorMessage = error ?? "\(provider.displayName) authentication failed."
                 }
             }
         }

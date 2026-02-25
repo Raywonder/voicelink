@@ -197,18 +197,30 @@ struct VoiceLinkApp: App {
                     }
                     .keyboardShortcut("l", modifiers: .command)
                     Button("Sign In with Google") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.google) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "Google sign-in failed."
+                                }
+                            }
                         }
                     }
                     Button("Sign In with Apple") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.apple) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "Apple sign-in failed."
+                                }
+                            }
                         }
                     }
                     Button("Sign In with GitHub") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.github) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "GitHub sign-in failed."
+                                }
+                            }
                         }
                     }
                 }
@@ -435,6 +447,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             AppSoundManager.shared.playStartupWelcomeIfNeeded()
         }
+
+        // Run startup audio self-test and auto-enable capture when eligible.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            ServerManager.shared.runStartupAudioSelfTest()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            ServerManager.shared.runStartupAudioSelfTest()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .roomJoined,
+            object: nil,
+            queue: .main
+        ) { _ in
+            ServerManager.shared.runStartupAudioSelfTest()
+        }
     }
 
     func autoConnectOnLaunch() {
@@ -472,6 +500,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             let serverManager = ServerManager.shared
             let settings = SettingsManager.shared
+
+            if serverManager.isConnected {
+                serverManager.runStartupAudioSelfTest()
+            }
 
             // Auto-reconnect if enabled and disconnected
             if !serverManager.isConnected && settings.reconnectOnDisconnect {
@@ -614,6 +646,7 @@ class AppState: ObservableObject {
     @Published var focusedRoomId: String?
     @Published var pendingCreateRoomName: String = ""
     @Published var roomHasActiveMusic: [String: Bool] = [:]
+    @Published var roomMediaMetadata: [String: String] = [:]
     @Published var pendingJoinRoomId: String?
     private var previousScreen: Screen = .mainMenu
 
@@ -1166,6 +1199,7 @@ class AppState: ObservableObject {
         let ids = roomList.map(\.id)
         Task(priority: .utility) {
             var statusMap: [String: Bool] = [:]
+            var metadataMap: [String: String] = [:]
             for roomId in ids {
                 guard let encoded = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
                       let url = URL(string: "\(base)/api/jellyfin/room-stream/\(encoded)") else {
@@ -1175,14 +1209,42 @@ class AppState: ObservableObject {
                    let http = response as? HTTPURLResponse,
                    (200..<300).contains(http.statusCode),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    statusMap[roomId] = (json["active"] as? Bool) == true
+                    let isActive = (json["active"] as? Bool) == true
+                    statusMap[roomId] = isActive
+                    if isActive, let metadata = self.roomMediaMetadataSummary(from: json) {
+                        metadataMap[roomId] = metadata
+                    }
                 }
             }
             let resolvedStatusMap = statusMap
+            let resolvedMetadataMap = metadataMap
             await MainActor.run {
                 self.roomHasActiveMusic = resolvedStatusMap
+                self.roomMediaMetadata = resolvedMetadataMap
             }
         }
+    }
+
+    private func roomMediaMetadataSummary(from json: [String: Any]) -> String? {
+        var parts: [String] = []
+        if let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            parts.append(title)
+        }
+        if let typeRaw = (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !typeRaw.isEmpty {
+            parts.append("Type: \(typeRaw.capitalized)")
+        }
+        if let streamURL = json["streamUrl"] as? String,
+           let host = URL(string: streamURL)?.host,
+           !host.isEmpty {
+            parts.append("Source: \(host)")
+        }
+        if let startedBy = (json["startedBy"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !startedBy.isEmpty {
+            parts.append("Started by: \(startedBy)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
     func canManageRoom(_ room: Room) -> Bool {
@@ -1718,6 +1780,7 @@ struct MainMenuView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
+    @ObservedObject private var settings = SettingsManager.shared
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -1924,6 +1987,13 @@ struct MainMenuView: View {
                             Text("Description: \(appState.displayDescription(for: room))")
                             Text("Users: \(room.userCount)/\(room.maxUsers)")
                             Text("Media: \(appState.roomHasActiveMusic[room.id] == true ? "Playing" : "None")")
+                            if appState.roomHasActiveMusic[room.id] == true {
+                                if settings.showRoomMediaMetadata {
+                                    Text("Now Playing: \(appState.roomMediaMetadata[room.id] ?? "Live stream active")")
+                                } else {
+                                    Text("Now Playing metadata is hidden.")
+                                }
+                            }
                             if let hostedFrom = room.hostedFromLine {
                                 Text(hostedFrom)
                             }
@@ -1931,6 +2001,15 @@ struct MainMenuView: View {
                         .foregroundColor(.white.opacity(0.75))
                         .font(.caption)
                         .textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Button(settings.showRoomMediaMetadata ? "Hide Media Metadata" : "Show Media Metadata") {
+                                settings.showRoomMediaMetadata.toggle()
+                                settings.saveSettings()
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel(settings.showRoomMediaMetadata ? "Hide media metadata" : "Show media metadata")
+                            .accessibilityHint("Controls whether now playing metadata is shown in room details.")
+                        }
                     } else {
                         Text("No room selected.")
                             .foregroundColor(.gray)
@@ -2036,7 +2115,7 @@ struct MainMenuView: View {
 
                 ScrollView {
                     if roomLayoutOption == .list {
-                        LazyVStack(spacing: 12) {
+                        VStack(spacing: 12) {
                             ForEach(roomsForDisplay) { room in
                                 let canAdminRoom = appState.canManageRoom(room)
                                 RoomCard(
@@ -2267,22 +2346,34 @@ struct MainMenuView: View {
                         }
                         HStack(spacing: 8) {
                             Button("Google") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                                    NSWorkspace.shared.open(url)
+                                authManager.authenticateWithOAuthProvider(.google) { success, error in
+                                    DispatchQueue.main.async {
+                                        if !success {
+                                            appState.errorMessage = error ?? "Google sign-in failed."
+                                        }
+                                    }
                                 }
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             Button("Apple") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                                    NSWorkspace.shared.open(url)
+                                authManager.authenticateWithOAuthProvider(.apple) { success, error in
+                                    DispatchQueue.main.async {
+                                        if !success {
+                                            appState.errorMessage = error ?? "Apple sign-in failed."
+                                        }
+                                    }
                                 }
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             Button("GitHub") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                                    NSWorkspace.shared.open(url)
+                                authManager.authenticateWithOAuthProvider(.github) { success, error in
+                                    DispatchQueue.main.async {
+                                        if !success {
+                                            appState.errorMessage = error ?? "GitHub sign-in failed."
+                                        }
+                                    }
                                 }
                             }
                             .buttonStyle(.bordered)
@@ -2476,6 +2567,12 @@ struct RoomCard: View {
                     .font(.caption2)
                     .foregroundColor(.gray.opacity(0.75))
                     .lineLimit(2)
+                Button("Room Actions") {
+                    onOpenActionMenu()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption2)
+                .accessibilityHint("Open room and administration actions for this room.")
             }
             .frame(maxWidth: 260, alignment: .trailing)
         }
@@ -2757,6 +2854,13 @@ struct RoomColumnRow: View {
                 isAdmin: isAdmin
             )
             .frame(width: 170, alignment: .trailing)
+
+            Button("Room Actions") {
+                onOpenActionMenu()
+            }
+            .buttonStyle(.bordered)
+            .font(.caption2)
+            .accessibilityHint("Open room and administration actions for this room.")
         }
         .padding(10)
         .background(Color.white.opacity(0.08))
@@ -3284,7 +3388,7 @@ struct VoiceChatView: View {
                 // Voice Controls
                 HStack(spacing: 30) {
                     VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                                      label: isMuted ? "Unmute Microphone" : "Mute Microphone",
+                                      label: isMuted ? "Unmute Microphone, CMD+M" : "Mute Microphone, CMD+M",
                                       isActive: !isMuted) {
                         isMuted.toggle()
                         appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
@@ -3296,7 +3400,7 @@ struct VoiceChatView: View {
                     .accessibilityHint("Toggle microphone input. Currently \(isMuted ? "muted" : "unmuted")")
 
                     VoiceControlButton(icon: isDeafened ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                                      label: isDeafened ? "Unmute Output" : "Mute Output",
+                                      label: isDeafened ? "Unmute Output, CMD+D" : "Mute Output, CMD+D",
                                       isActive: !isDeafened) {
                         isDeafened.toggle()
                         appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
@@ -3308,7 +3412,7 @@ struct VoiceChatView: View {
                     .accessibilityHint("Toggle audio output. Currently \(isDeafened ? "muted - you cannot hear others" : "unmuted - you can hear others")")
 
                     VoiceControlButton(icon: showChat ? "bubble.left.fill" : "bubble.left",
-                                      label: showChat ? "Hide Chat" : "Show Chat",
+                                      label: showChat ? "Hide Chat, ESC ESC" : "Show Chat, ESC ESC",
                                       isActive: showChat) {
                         showChat.toggle()
                     }
@@ -3379,7 +3483,7 @@ struct VoiceChatView: View {
 
                         Button(action: sendMessage) {
                             HStack(spacing: 4) {
-                                Text("Send")
+                                Text("Send, CMD+ENTER")
                                     .fontWeight(.medium)
                                 Image(systemName: "paperplane.fill")
                             }
@@ -3967,6 +4071,7 @@ class SettingsManager: ObservableObject {
     @Published var confirmBeforeQuit: Bool = false
     @Published var expandServerStatusByDefault: Bool = true
     @Published var showRoomDescriptions: Bool = true
+    @Published var showRoomMediaMetadata: Bool = true
     @Published var allowPreviewWhenMediaActive: Bool = true
     @Published var previewSoundCuesEnabled: Bool = true
     @Published var roomPreviewPolicyByRoom: [String: Bool] = [:]
@@ -4033,6 +4138,7 @@ class SettingsManager: ObservableObject {
         confirmBeforeQuit = UserDefaults.standard.object(forKey: "confirmBeforeQuit") as? Bool ?? false
         expandServerStatusByDefault = UserDefaults.standard.object(forKey: "expandServerStatusByDefault") as? Bool ?? true
         showRoomDescriptions = UserDefaults.standard.object(forKey: "showRoomDescriptions") as? Bool ?? true
+        showRoomMediaMetadata = UserDefaults.standard.object(forKey: "showRoomMediaMetadata") as? Bool ?? true
         allowPreviewWhenMediaActive = UserDefaults.standard.object(forKey: "allowPreviewWhenMediaActive") as? Bool ?? true
         previewSoundCuesEnabled = UserDefaults.standard.object(forKey: "previewSoundCuesEnabled") as? Bool ?? true
         roomPreviewPolicyByRoom = UserDefaults.standard.dictionary(forKey: "roomPreviewPolicyByRoom") as? [String: Bool] ?? [:]
@@ -4095,6 +4201,7 @@ class SettingsManager: ObservableObject {
             confirmBeforeQuit = false
             expandServerStatusByDefault = true
             showRoomDescriptions = true
+            showRoomMediaMetadata = true
             allowPreviewWhenMediaActive = true
             previewSoundCuesEnabled = true
             defaultRoomPrimaryAction = .joinOrShow
@@ -4125,6 +4232,7 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(confirmBeforeQuit, forKey: "confirmBeforeQuit")
         UserDefaults.standard.set(expandServerStatusByDefault, forKey: "expandServerStatusByDefault")
         UserDefaults.standard.set(showRoomDescriptions, forKey: "showRoomDescriptions")
+        UserDefaults.standard.set(showRoomMediaMetadata, forKey: "showRoomMediaMetadata")
         UserDefaults.standard.set(allowPreviewWhenMediaActive, forKey: "allowPreviewWhenMediaActive")
         UserDefaults.standard.set(previewSoundCuesEnabled, forKey: "previewSoundCuesEnabled")
         UserDefaults.standard.set(roomPreviewPolicyByRoom, forKey: "roomPreviewPolicyByRoom")
@@ -4546,6 +4654,9 @@ struct SettingsView: View {
             Toggle("Show room descriptions in room list", isOn: $settings.showRoomDescriptions)
                 .onChange(of: settings.showRoomDescriptions) { _ in settings.saveSettings() }
                 .accessibilityHint("Shows or hides room description text in list and grid views.")
+            Toggle("Show room media metadata in Room Details", isOn: $settings.showRoomMediaMetadata)
+                .onChange(of: settings.showRoomMediaMetadata) { _ in settings.saveSettings() }
+                .accessibilityHint("Shows now playing metadata in the Room Details LCD area when media is active.")
             Toggle("Allow preview when room media is active", isOn: $settings.allowPreviewWhenMediaActive)
                 .onChange(of: settings.allowPreviewWhenMediaActive) { _ in settings.saveSettings() }
                 .accessibilityHint("Lets room preview start when media is playing, even if no users are actively speaking.")
@@ -4657,20 +4768,32 @@ struct SettingsView: View {
                     Button("Mastodon") { appState.currentScreen = .login }
                         .buttonStyle(.borderedProminent)
                     Button("Google") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.google) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "Google sign-in failed."
+                                }
+                            }
                         }
                     }
                     .buttonStyle(.bordered)
                     Button("Apple") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.apple) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "Apple sign-in failed."
+                                }
+                            }
                         }
                     }
                     .buttonStyle(.bordered)
                     Button("GitHub") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                            NSWorkspace.shared.open(url)
+                        authManager.authenticateWithOAuthProvider(.github) { success, error in
+                            DispatchQueue.main.async {
+                                if !success {
+                                    appState.errorMessage = error ?? "GitHub sign-in failed."
+                                }
+                            }
                         }
                     }
                     .buttonStyle(.bordered)

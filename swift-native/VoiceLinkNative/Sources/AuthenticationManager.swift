@@ -21,6 +21,8 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     // Email verification state
     @Published var pendingEmailVerification: String?
     @Published var emailVerificationExpiry: Date?
+    private var pendingOAuthCompletion: ((Bool, String?) -> Void)?
+    private var pendingOAuthProvider: OAuthProvider?
 
     enum AuthState {
         case unauthenticated
@@ -46,11 +48,12 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     }
 
     @objc private func handleOAuthCallbackNotification(_ notification: Notification) {
-        guard let userInfo = notification.object as? [String: Any],
-              let code = userInfo["code"] as? String else {
-            return
+        guard let userInfo = notification.object as? [String: Any] else { return }
+        let params = userInfo.compactMapValues { value -> String? in
+            if let str = value as? String { return str }
+            return nil
         }
-        handleMastodonCallback(code: code)
+        handleOAuthCallbackParameters(params)
     }
 
     // ASWebAuthenticationPresentationContextProviding
@@ -183,6 +186,135 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     }
 
     private var pendingMastodonCompletion: ((Bool, String?) -> Void)?
+
+    // MARK: - OAuth Providers (Google / Apple / GitHub)
+
+    func authenticateWithOAuthProvider(_ provider: OAuthProvider, completion: @escaping (Bool, String?) -> Void) {
+        authState = .authenticating
+        authError = nil
+        pendingOAuthProvider = provider
+        pendingOAuthCompletion = completion
+
+        let callback = "voicelink://oauth/callback"
+        let providerPath = provider.rawValue
+        let authURLString =
+            "https://voicelink.devinecreations.net/auth/\(providerPath)" +
+            "?source=native" +
+            "&provider=\(providerPath)" +
+            "&redirect_uri=\(callback.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? callback)"
+
+        guard let authURL = URL(string: authURLString) else {
+            authState = .error
+            authError = "Invalid \(provider.displayName) auth URL"
+            completion(false, authError)
+            pendingOAuthCompletion = nil
+            pendingOAuthProvider = nil
+            return
+        }
+
+        authSession = ASWebAuthenticationSession(url: authURL, callbackURLScheme: "voicelink") { [weak self] callbackURL, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error {
+                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        self.authState = .unauthenticated
+                        self.pendingOAuthCompletion?(false, "Authentication cancelled")
+                    } else {
+                        self.authState = .error
+                        self.authError = error.localizedDescription
+                        self.pendingOAuthCompletion?(false, error.localizedDescription)
+                    }
+                    self.pendingOAuthCompletion = nil
+                    self.pendingOAuthProvider = nil
+                    return
+                }
+
+                guard let callbackURL,
+                      let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
+                    self.authState = .error
+                    self.authError = "Invalid OAuth callback"
+                    self.pendingOAuthCompletion?(false, self.authError)
+                    self.pendingOAuthCompletion = nil
+                    self.pendingOAuthProvider = nil
+                    return
+                }
+
+                var params: [String: String] = [:]
+                components.queryItems?.forEach { item in
+                    params[item.name] = item.value ?? ""
+                }
+                self.handleOAuthCallbackParameters(params)
+            }
+        }
+        authSession?.presentationContextProvider = self
+        authSession?.prefersEphemeralWebBrowserSession = false
+        authSession?.start()
+    }
+
+    private func handleOAuthCallbackParameters(_ params: [String: String]) {
+        let provider = OAuthProvider(rawValue: (params["provider"] ?? "").lowercased()) ?? pendingOAuthProvider
+        if provider == nil, let code = params["code"], !code.isEmpty {
+            handleMastodonCallback(code: code)
+            return
+        }
+        guard let provider else {
+            authState = .error
+            authError = "Missing OAuth provider in callback"
+            pendingOAuthCompletion?(false, authError)
+            pendingOAuthCompletion = nil
+            pendingOAuthProvider = nil
+            return
+        }
+        if let error = params["error"], !error.isEmpty {
+            authState = .error
+            authError = params["error_description"] ?? error
+            pendingOAuthCompletion?(false, authError)
+            pendingOAuthCompletion = nil
+            pendingOAuthProvider = nil
+            return
+        }
+        finishOAuthProviderSignIn(provider: provider, params: params)
+    }
+
+    private func finishOAuthProviderSignIn(provider: OAuthProvider, params: [String: String]) {
+        let token = params["access_token"]
+            ?? params["token"]
+            ?? params["authToken"]
+            ?? params["accessToken"]
+
+        if let token, !token.isEmpty {
+            let fallbackUsername = "\(provider.rawValue)_user"
+            let username = params["username"] ?? params["login"] ?? params["email"] ?? fallbackUsername
+            let displayName = params["displayName"] ?? params["display_name"] ?? params["name"] ?? username
+            let email = params["email"]
+            let userId = params["userId"] ?? params["id"] ?? UUID().uuidString
+            let avatar = params["avatar"] ?? params["avatar_url"] ?? params["picture"]
+
+            let user = AuthenticatedUser(
+                id: userId,
+                username: username,
+                displayName: displayName,
+                email: email,
+                authMethod: provider.authMethod,
+                mastodonInstance: nil,
+                accessToken: token,
+                avatarURL: avatar
+            )
+            currentUser = user
+            authState = .authenticated
+            saveAuth(user: user)
+            pendingOAuthCompletion?(true, nil)
+            pendingOAuthCompletion = nil
+            pendingOAuthProvider = nil
+            return
+        }
+
+        authState = .error
+        authError = "No access token returned from \(provider.displayName) login."
+        pendingOAuthCompletion?(false, authError)
+        pendingOAuthCompletion = nil
+        pendingOAuthProvider = nil
+    }
 
     func handleMastodonCallback(code: String) {
         guard let clientId = mastodonClientId,
@@ -628,12 +760,18 @@ enum AuthMethod: String, Codable {
     case pairingCode = "pairing"
     case mastodon = "mastodon"
     case email = "email"
+    case google = "google"
+    case apple = "apple"
+    case github = "github"
 
     var displayName: String {
         switch self {
         case .pairingCode: return "Pairing Code"
         case .mastodon: return "Mastodon"
         case .email: return "Email"
+        case .google: return "Google"
+        case .apple: return "Apple"
+        case .github: return "GitHub"
         }
     }
 
@@ -642,6 +780,31 @@ enum AuthMethod: String, Codable {
         case .pairingCode: return "number.circle"
         case .mastodon: return "at.circle"
         case .email: return "envelope.circle"
+        case .google: return "g.circle"
+        case .apple: return "applelogo"
+        case .github: return "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
+enum OAuthProvider: String {
+    case google
+    case apple
+    case github
+
+    var displayName: String {
+        switch self {
+        case .google: return "Google"
+        case .apple: return "Apple"
+        case .github: return "GitHub"
+        }
+    }
+
+    var authMethod: AuthMethod {
+        switch self {
+        case .google: return .google
+        case .apple: return .apple
+        case .github: return .github
         }
     }
 }
@@ -1146,6 +1309,9 @@ struct DeviceCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
+        case .google: return .red
+        case .apple: return .black
+        case .github: return .indigo
         }
     }
 

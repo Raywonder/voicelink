@@ -8,7 +8,7 @@ final class LocalMonitorManager: ObservableObject {
 
     private let engine = AVAudioEngine()
     private var isConfigured = false
-    private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
+    private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInteractive)
     private var isTransitioning = false
 
     private init() {}

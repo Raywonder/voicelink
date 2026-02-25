@@ -28,8 +28,8 @@ class ServerManager: ObservableObject {
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
     private var domainRecoveryTimer: Timer?
-    private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
-    private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInitiated)
+    private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInteractive)
+    private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInteractive)
     private var pendingAudioStartWorkItem: DispatchWorkItem?
     private var pendingJoinRoomId: String?
     private var pendingJoinTimeoutWorkItem: DispatchWorkItem?
@@ -382,10 +382,26 @@ class ServerManager: ObservableObject {
                 ?? self.pendingJoinRoomId
 
             if let roomId {
+                let shouldAnnounceJoin = (self.pendingJoinRoomId == roomId)
                 self.completePendingJoin(for: roomId)
                 DispatchQueue.main.async {
                     self.activeRoomId = roomId
                     self.audioTransmissionStatus = "Joined room"
+                    if shouldAnnounceJoin {
+                        AppSoundManager.shared.playSound(.userJoin)
+                        let roomName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let label = (roomName?.isEmpty == false) ? roomName! : "Room"
+                        NotificationCenter.default.post(
+                            name: .incomingChatMessage,
+                            object: nil,
+                            userInfo: [
+                                "senderId": "system",
+                                "senderName": "System",
+                                "content": "Joined \(label).",
+                                "type": "system"
+                            ]
+                        )
+                    }
                 }
                 self.fetchActiveRoomStream(for: roomId)
                 self.scheduleAudioTransmissionStart(for: roomId)
@@ -422,6 +438,16 @@ class ServerManager: ObservableObject {
                         AppSoundManager.shared.playSound(.userJoin)
                         // Announce user joined
                         AccessibilityManager.shared.announceUserJoined(user.username)
+                        NotificationCenter.default.post(
+                            name: .incomingChatMessage,
+                            object: nil,
+                            userInfo: [
+                                "senderId": "system",
+                                "senderName": "System",
+                                "content": "\(user.username) joined the room.",
+                                "type": "system"
+                            ]
+                        )
                     }
                 }
             }
@@ -441,6 +467,16 @@ class ServerManager: ObservableObject {
                     // Announce user left
                     if let name = userName {
                         AccessibilityManager.shared.announceUserLeft(name)
+                        NotificationCenter.default.post(
+                            name: .incomingChatMessage,
+                            object: nil,
+                            userInfo: [
+                                "senderId": "system",
+                                "senderName": "System",
+                                "content": "\(name) left the room.",
+                                "type": "system"
+                            ]
+                        )
                     }
                 }
             }
@@ -891,10 +927,26 @@ class ServerManager: ObservableObject {
             ?? payload["id"] as? String
             ?? roomId
 
+        let shouldAnnounceJoin = (pendingJoinRoomId == joinedRoomId)
         completePendingJoin(for: joinedRoomId)
         DispatchQueue.main.async {
             self.activeRoomId = joinedRoomId
             self.audioTransmissionStatus = "Joined room"
+            if shouldAnnounceJoin {
+                AppSoundManager.shared.playSound(.userJoin)
+                let roomName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = (roomName?.isEmpty == false) ? roomName! : "Room"
+                NotificationCenter.default.post(
+                    name: .incomingChatMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": "system",
+                        "senderName": "System",
+                        "content": "Joined \(label).",
+                        "type": "system"
+                    ]
+                )
+            }
         }
         fetchActiveRoomStream(for: joinedRoomId)
         scheduleAudioTransmissionStart(for: joinedRoomId)
@@ -1003,6 +1055,7 @@ class ServerManager: ObservableObject {
     }
 
     func leaveRoom() {
+        let wasInRoom = activeRoomId != nil
         cancelJoinTimeout()
         pendingJoinRoomId = nil
         pendingAudioStartWorkItem?.cancel()
@@ -1013,6 +1066,19 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.currentRoomUsers = []
             self.activeRoomId = nil
+            if wasInRoom {
+                AppSoundManager.shared.playSound(.userLeave)
+                NotificationCenter.default.post(
+                    name: .incomingChatMessage,
+                    object: nil,
+                    userInfo: [
+                        "senderId": "system",
+                        "senderName": "System",
+                        "content": "You left the room.",
+                        "type": "system"
+                    ]
+                )
+            }
         }
     }
 
@@ -1205,6 +1271,45 @@ class ServerManager: ObservableObject {
     func startAudioTransmission() {
         audioStartQueue.async { [weak self] in
             self?.startAudioTransmissionNow()
+        }
+    }
+
+    func runStartupAudioSelfTest() {
+        audioStartQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            do {
+                try SpatialAudioEngine.shared.start()
+            } catch {
+                print("[AudioSelfTest] Spatial audio startup warning: \(error)")
+            }
+
+            guard self.isConnected else {
+                DispatchQueue.main.async {
+                    self.audioTransmissionStatus = "Audio ready (waiting for server)"
+                }
+                return
+            }
+
+            guard self.activeRoomId != nil else {
+                DispatchQueue.main.async {
+                    if !self.isAudioTransmitting {
+                        self.audioTransmissionStatus = "Audio ready (join a room to transmit)"
+                    }
+                }
+                return
+            }
+
+            guard !self.inputMuted else {
+                DispatchQueue.main.async {
+                    self.audioTransmissionStatus = "Input muted"
+                }
+                return
+            }
+
+            if !self.isTransmitting {
+                self.startAudioTransmissionNow()
+            }
         }
     }
 

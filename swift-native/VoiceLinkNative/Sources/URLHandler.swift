@@ -45,7 +45,7 @@ class URLHandler: ObservableObject {
         case openSettings
         case openLicense
         case openWeb(url: URL)
-        case oauthCallback(code: String)
+        case oauthCallback(params: [String: String])
     }
 
     struct ParsedURL {
@@ -140,11 +140,16 @@ class URLHandler: ObservableObject {
             action = .openLicense
 
         case "oauth":
-            // voicelink://oauth/callback?code=xxx
-            // Handle OAuth callbacks (Mastodon, etc.)
-            if pathComponents.first == "callback",
-               let code = queryItems.first(where: { $0.name == "code" })?.value {
-                action = .oauthCallback(code: code)
+            // voicelink://oauth/callback?...params...
+            // Handle OAuth callbacks (Mastodon/Google/Apple/GitHub)
+            if pathComponents.first == "callback" {
+                var oauthParams: [String: String] = [:]
+                queryItems.forEach { item in
+                    oauthParams[item.name] = item.value ?? ""
+                }
+                if !oauthParams.isEmpty {
+                    action = .oauthCallback(params: oauthParams)
+                }
             }
 
         default:
@@ -270,11 +275,11 @@ class URLHandler: ObservableObject {
         case .openWeb(let url):
             NSWorkspace.shared.open(url)
 
-        case .oauthCallback(let code):
-            print("[URLHandler] OAuth callback received with code")
+        case .oauthCallback(let params):
+            print("[URLHandler] OAuth callback received")
             NotificationCenter.default.post(
                 name: .oauthCallback,
-                object: ["code": code]
+                object: params
             )
         }
     }

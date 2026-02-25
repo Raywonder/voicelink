@@ -86,11 +86,8 @@ class MediaRoomsModule {
             }
         };
 
-        // Media paths - check multiple locations
-        this.mediaPaths = [
-            '/home/dom/apps/media',
-            '/home/devinecr/apps/media'
-        ];
+        // Media paths - discover local libraries from common locations.
+        this.mediaPaths = this.discoverMediaPaths();
         // Check both lowercase and capitalized folder names
         this.introsPath = this.config.introsPath || this.findMediaPath('Intros') || this.findMediaPath('intros');
         this.trailersPath = this.config.trailersPath || this.findMediaPath('trailers') || this.findMediaPath('Trailers');
@@ -112,8 +109,8 @@ class MediaRoomsModule {
      */
     findMediaPath(subdir) {
         for (const basePath of this.mediaPaths) {
-            const fullPath = path.join(basePath, subdir);
-            if (fs.existsSync(fullPath)) {
+            const fullPath = this.resolveMediaPath(path.join(basePath, subdir));
+            if (fullPath) {
                 return fullPath;
             }
         }
@@ -131,13 +128,71 @@ class MediaRoomsModule {
 
         for (const basePath of this.mediaPaths) {
             for (const variant of variants) {
-                const fullPath = path.join(basePath, variant);
-                if (fs.existsSync(fullPath) && !paths.includes(fullPath)) {
+                const fullPath = this.resolveMediaPath(path.join(basePath, variant));
+                if (fullPath && !paths.includes(fullPath)) {
                     paths.push(fullPath);
                 }
             }
         }
         return paths;
+    }
+
+    resolveMediaPath(candidatePath) {
+        if (!candidatePath) return null;
+        if (fs.existsSync(candidatePath)) {
+            return candidatePath;
+        }
+        try {
+            const resolved = fs.realpathSync(candidatePath);
+            if (fs.existsSync(resolved)) {
+                return resolved;
+            }
+        } catch (e) {
+            // Ignore bad symlink/path and continue fallback scanning.
+        }
+        return null;
+    }
+
+    discoverMediaPaths() {
+        const defaults = ['/home/dom/apps/media', '/home/devinecr/apps/media'];
+        const discovered = new Set();
+
+        const addIfDir = (candidate) => {
+            const resolved = this.resolveMediaPath(candidate);
+            if (!resolved) return;
+            try {
+                if (fs.statSync(resolved).isDirectory()) {
+                    discovered.add(resolved);
+                }
+            } catch (e) {}
+        };
+
+        for (const base of defaults) addIfDir(base);
+
+        const scanBases = [
+            { root: '/home', joiner: (name) => path.join('/home', name, 'apps', 'media') },
+            { root: '/mnt', joiner: (name) => path.join('/mnt', name, 'media') },
+            { root: '/mnt', joiner: (name) => path.join('/mnt', name, 'apps', 'media') }
+        ];
+
+        for (const scan of scanBases) {
+            if (!fs.existsSync(scan.root)) continue;
+            let entries = [];
+            try {
+                entries = fs.readdirSync(scan.root, { withFileTypes: true });
+            } catch (e) {
+                continue;
+            }
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                addIfDir(scan.joiner(entry.name));
+            }
+        }
+
+        if (discovered.size === 0) {
+            return defaults;
+        }
+        return Array.from(discovered);
     }
 
     loadState() {
