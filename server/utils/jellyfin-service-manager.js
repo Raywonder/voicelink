@@ -19,7 +19,7 @@ class JellyfinServiceManager extends EventEmitter {
             restartDelay: 5000, // 5 seconds
             maxRestartAttempts: 3,
             restartWindow: 300000, // 5 minutes
-            logFile: '/home/devinecr/logs/jellyfin-manager.log'
+            logFile: process.env.VOICELINK_JELLYFIN_LOG_FILE || path.join(process.cwd(), 'data', 'logs', 'jellyfin-manager.log')
         };
         this.restartCounters = new Map(); // processName -> { count, lastAttempt }
         this.monitoringInterval = null;
