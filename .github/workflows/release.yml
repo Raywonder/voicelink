@@ -1,0 +1,12 @@
+name: Raywonder Shared Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: Raywonder/.GITHUB/.github/workflows/release.yml@main
+    secrets: inherit
