@@ -238,7 +238,16 @@ class ServerManager: ObservableObject {
     }
 
     private func resolveBestMainServer() async -> String {
-        for candidate in APIEndpointResolver.mainBaseCandidates(preferred: currentServerURL) {
+        let candidates = APIEndpointResolver.mainBaseCandidates(preferred: currentServerURL)
+        for candidate in candidates {
+            if await isReachableServer(candidate) {
+                return candidate
+            }
+        }
+
+        await requestMainServerStart(candidates: candidates)
+
+        for candidate in candidates {
             if await isReachableServer(candidate) {
                 return candidate
             }
@@ -263,6 +272,28 @@ class ServerManager: ObservableObject {
             return (200...499).contains(httpResponse.statusCode)
         } catch {
             return false
+        }
+    }
+
+    private func requestMainServerStart(candidates: [String]) async {
+        let normalizedCandidates = Array(Set(candidates.map { APIEndpointResolver.normalize($0) }))
+        for base in normalizedCandidates {
+            for path in ["/api/service/voicelink/start", "/api/admin/start"] {
+                guard let url = APIEndpointResolver.url(base: base, path: path) else { continue }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 4
+                request.httpMethod = "POST"
+                do {
+                    let (_, response) = try await URLSession.shared.data(for: request)
+                    if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
+                        print("Requested PM2/API start via \(url.absoluteString)")
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        return
+                    }
+                } catch {
+                    continue
+                }
+            }
         }
     }
 

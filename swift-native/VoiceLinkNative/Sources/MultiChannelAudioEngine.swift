@@ -173,27 +173,8 @@ class MultiChannelAudioEngine: ObservableObject {
     }
 
     private func getDeviceInfo(deviceID: AudioDeviceID) -> AudioInterfaceInfo? {
-        // Get device name
-        var nameSize: UInt32 = 256
-        var nameAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var name: CFString = "" as CFString
-        AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
-
-        // Get manufacturer
-        var manufacturerSize: UInt32 = 256
-        var manufacturerAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyManufacturer,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        var manufacturer: CFString = "" as CFString
-        AudioObjectGetPropertyData(deviceID, &manufacturerAddress, 0, nil, &manufacturerSize, &manufacturer)
+        let name = getStringProperty(deviceID: deviceID, selector: kAudioObjectPropertyName) ?? ""
+        let manufacturer = getStringProperty(deviceID: deviceID, selector: kAudioObjectPropertyManufacturer) ?? ""
 
         // Get input channel count
         var inputStreamSize: UInt32 = 0
@@ -254,14 +235,32 @@ class MultiChannelAudioEngine: ObservableObject {
 
         return AudioInterfaceInfo(
             id: deviceID,
-            name: name as String,
-            manufacturer: manufacturer as String,
+            name: name,
+            manufacturer: manufacturer,
             inputChannelCount: inputChannelCount,
             outputChannelCount: outputChannelCount,
             supportedSampleRates: [44100, 48000, 96000, 192000],
             supportedBitDepths: [16, 24, 32],
             isDefault: deviceID == defaultInputID
         )
+    }
+
+    private func getStringProperty(deviceID: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var value: Unmanaged<CFString>?
+        let status = withUnsafeMutablePointer(to: &value) { valuePtr in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, valuePtr)
+        }
+        guard status == noErr else { return nil }
+        if let resolved = value?.takeUnretainedValue() {
+            return resolved as String
+        }
+        return nil
     }
 
     // MARK: - Channel Management

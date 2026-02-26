@@ -128,6 +128,7 @@ class VoiceLinkLocalServer {
         this.setupRoutes();
         this.setupSocketHandlers();
         this.loadPersistedRooms();
+        this.reconcileManagedSeedRooms();
         this.start();
     }
 
@@ -326,6 +327,15 @@ class VoiceLinkLocalServer {
         return this.getSchedulerRole(req) === 'admin';
     }
 
+    isModeratorOrAdminRequest(req) {
+        const requester = this.getRequesterContext(req);
+        if (requester.isAdmin) return true;
+        const role = String(requester.role || '').toLowerCase();
+        if (['moderator', 'mod', 'room_moderator', 'room-moderator'].includes(role)) return true;
+        const bodyPermissions = Array.isArray(req.body?.permissions) ? req.body.permissions : [];
+        return bodyPermissions.map((p) => String(p).toLowerCase()).some((p) => ['moderator', 'mod', 'room.moderate', 'rooms.moderate'].includes(p));
+    }
+
     parseBool(value, defaultValue = false) {
         if (value === undefined || value === null || value === '') {
             return defaultValue;
@@ -334,6 +344,214 @@ class VoiceLinkLocalServer {
             return value;
         }
         return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+    }
+
+    resolveRoomAccessProfile(accessTypeInput = 'hybrid') {
+        const normalized = String(accessTypeInput || 'hybrid').toLowerCase();
+        const accessType = ['web-only', 'app-only', 'hybrid', 'hidden'].includes(normalized)
+            ? normalized
+            : 'hybrid';
+        const showInApp = accessType === 'app-only' || accessType === 'hybrid';
+        const allowEmbed = accessType === 'web-only' || accessType === 'hybrid';
+        return {
+            accessType,
+            showInApp,
+            allowEmbed,
+            accessPriority: {
+                primary: showInApp ? 'app' : 'web',
+                secondary: showInApp && allowEmbed ? 'web' : null
+            }
+        };
+    }
+
+    getManagedPrivateRoomPassword(roomName = 'voicelink-room') {
+        if (process.env.VOICELINK_DEFAULT_PRIVATE_ROOM_PASSWORD) {
+            return String(process.env.VOICELINK_DEFAULT_PRIVATE_ROOM_PASSWORD);
+        }
+        const seed = `${roomName}:${process.env.VOICELINK_ADMIN_KEY || 'voicelink-local'}`;
+        const digest = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 12);
+        return `vl-${digest}`;
+    }
+
+    getManagedSeedRooms() {
+        const buildPrivate = (name, description, maxUsers = 12) => ({
+            name,
+            description,
+            maxUsers,
+            visibility: 'private',
+            accessType: 'hybrid',
+            locked: true,
+            password: this.getManagedPrivateRoomPassword(name),
+            adminOnly: true,
+            visibleToGuests: false,
+            jukeboxEnabled: true,
+            autoplayMusic: false,
+            autoplayPlaylist: null,
+            isDefault: true,
+            template: 'private'
+        });
+
+        return [
+            { name: 'General Chat', description: 'Open space for casual conversations and meeting new people', maxUsers: 50, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: false, autoplayPlaylist: null, isDefault: true, template: 'social' },
+            { name: 'Music Lounge', description: 'Relaxed atmosphere to share and discuss music together', maxUsers: 20, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: true, autoplayPlaylist: 'ambient-music', isDefault: true, template: 'social' },
+            { name: 'Gaming Voice', description: 'Voice chat for gamers to coordinate and hang out', maxUsers: 10, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: false, autoplayPlaylist: null, isDefault: true, template: 'workspace' },
+            { name: 'Tech Talk', description: 'Discuss technology, coding, and the latest innovations', maxUsers: 25, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: false, autoplayPlaylist: null, isDefault: true, template: 'workspace' },
+            { name: 'Creative Corner', description: 'Space for artists, writers, and creators to collaborate', maxUsers: 15, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: false, autoplayPlaylist: null, isDefault: true, template: 'social' },
+            { name: 'Late Night', description: 'Night owl hangout for those burning the midnight oil', maxUsers: 20, visibility: 'public', accessType: 'hybrid', locked: false, password: null, jukeboxEnabled: true, autoplayMusic: true, autoplayPlaylist: 'late-night-radio', isDefault: true, template: 'social' },
+            buildPrivate('Staff Ops Room', 'Private locked operations room for moderators and admins', 16),
+            buildPrivate('Support Escalation', 'Private locked room for support triage and incident handling', 12),
+            buildPrivate('Leadership Boardroom', 'Private locked leadership and planning room', 12),
+            buildPrivate('Security Response', 'Private locked security response and audit room', 10)
+        ];
+    }
+
+    getDefaultRoomPolicyPath() {
+        return path.join(__dirname, '../../data/default-room-policy.json');
+    }
+
+    loadDefaultRoomPolicy() {
+        if (this.defaultRoomPolicy) {
+            return this.defaultRoomPolicy;
+        }
+
+        const templates = this.getManagedSeedRooms();
+        const defaultPolicy = {
+            autoRecreateMissing: true,
+            rooms: templates.map((room) => ({
+                name: room.name,
+                enabled: true
+            }))
+        };
+
+        const policyPath = this.getDefaultRoomPolicyPath();
+        try {
+            if (fs.existsSync(policyPath)) {
+                const parsed = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+                if (parsed && typeof parsed === 'object' && Array.isArray(parsed.rooms)) {
+                    defaultPolicy.autoRecreateMissing = parsed.autoRecreateMissing !== false;
+                    defaultPolicy.rooms = parsed.rooms
+                        .map((entry) => ({
+                            name: String(entry?.name || '').trim(),
+                            enabled: entry?.enabled !== false
+                        }))
+                        .filter((entry) => entry.name);
+                }
+            }
+        } catch (error) {
+            console.warn('[Rooms] Failed to load default room policy, using fallback:', error.message);
+        }
+
+        this.defaultRoomPolicy = defaultPolicy;
+        return this.defaultRoomPolicy;
+    }
+
+    saveDefaultRoomPolicy(policy) {
+        const normalized = {
+            autoRecreateMissing: policy?.autoRecreateMissing !== false,
+            rooms: Array.isArray(policy?.rooms)
+                ? policy.rooms.map((entry) => ({
+                    name: String(entry?.name || '').trim(),
+                    enabled: entry?.enabled !== false
+                })).filter((entry) => entry.name)
+                : []
+        };
+        this.defaultRoomPolicy = normalized;
+        fs.mkdirSync(path.dirname(this.getDefaultRoomPolicyPath()), { recursive: true });
+        fs.writeFileSync(this.getDefaultRoomPolicyPath(), JSON.stringify(normalized, null, 2), 'utf8');
+        return normalized;
+    }
+
+    getConfiguredSeedRooms() {
+        const templates = this.getManagedSeedRooms();
+        const byName = new Map(templates.map((room) => [room.name.toLowerCase(), room]));
+        const policy = this.loadDefaultRoomPolicy();
+        const enabledNames = new Set(
+            (policy.rooms || [])
+                .filter((entry) => entry.enabled !== false)
+                .map((entry) => String(entry.name || '').toLowerCase())
+        );
+
+        const configured = [];
+        enabledNames.forEach((name) => {
+            const room = byName.get(name);
+            if (room) configured.push(room);
+        });
+        return configured;
+    }
+
+    createSeedRoomFromConfig(roomConfig, idPrefix = 'default') {
+        const roomId = `${idPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const access = this.resolveRoomAccessProfile(roomConfig.accessType || 'hybrid');
+        const room = {
+            id: roomId,
+            name: roomConfig.name,
+            description: roomConfig.description || '',
+            password: roomConfig.password || null,
+            maxUsers: roomConfig.maxUsers || 10,
+            users: [],
+            visibility: roomConfig.visibility || 'public',
+            accessType: access.accessType,
+            allowEmbed: access.allowEmbed,
+            showInApp: access.showInApp,
+            accessPriority: access.accessPriority,
+            visibleToGuests: roomConfig.visibility !== 'private',
+            isDefault: roomConfig.isDefault !== false,
+            template: roomConfig.template || null,
+            hasPassword: !!roomConfig.password,
+            locked: !!roomConfig.locked,
+            lockedAt: roomConfig.locked ? new Date() : null,
+            lockedBy: roomConfig.locked ? 'system' : null,
+            adminOnly: !!roomConfig.adminOnly,
+            jukeboxEnabled: roomConfig.jukeboxEnabled !== false,
+            autoplayMusic: roomConfig.autoplayMusic === true,
+            autoplayPlaylist: roomConfig.autoplayPlaylist || null,
+            createdAt: new Date(),
+            audioSettings: {
+                spatialAudio: true,
+                quality: 'high',
+                effects: []
+            }
+        };
+
+        this.rooms.set(roomId, room);
+        if (room.visibility === 'public' && room.showInApp) {
+            this.federation.broadcastRoomChange('created', room);
+        }
+        return room;
+    }
+
+    reconcileManagedSeedRooms(options = {}) {
+        const policy = this.loadDefaultRoomPolicy();
+        const autoRecreate = options.autoRecreateMissing !== undefined
+            ? options.autoRecreateMissing
+            : policy.autoRecreateMissing !== false;
+        const configuredRooms = this.getConfiguredSeedRooms();
+        const missing = [];
+        const created = [];
+
+        for (const roomConfig of configuredRooms) {
+            const exists = Array.from(this.rooms.values()).some(
+                (room) => String(room.name || '').toLowerCase() === roomConfig.name.toLowerCase()
+            );
+            if (exists) continue;
+            missing.push(roomConfig.name);
+            if (autoRecreate) {
+                created.push(this.createSeedRoomFromConfig(roomConfig, 'seed'));
+            }
+        }
+
+        if (created.length) {
+            this.saveRoomsToDisk();
+            console.log(`[Rooms] Recreated ${created.length} missing configured room(s)`);
+        } else if (missing.length) {
+            console.log(`[Rooms] Missing configured room(s): ${missing.join(', ')}`);
+        }
+
+        return {
+            configuredCount: configuredRooms.length,
+            missing,
+            createdCount: created.length
+        };
     }
 
     resolveBundledJellyfinPaths(options = {}) {
@@ -1552,6 +1770,7 @@ class VoiceLinkLocalServer {
         this.app.get('/api/rooms', async (req, res) => {
             const source = req.query.source || 'app'; // 'app', 'web', 'all'
             const includeHidden = req.query.includeHidden === 'true';
+            const requester = this.getRequesterContext(req);
 
             // Fetch rooms from main server first
             let mainServerRooms = [];
@@ -1563,12 +1782,12 @@ class VoiceLinkLocalServer {
 
             // Get local rooms
             let localRooms = Array.from(this.rooms.values());
+            localRooms = localRooms.filter((room) => !(room.adminOnly && !requester.isAdmin));
 
             // Filter local rooms by access type based on request source
             if (!includeHidden) {
                 localRooms = localRooms.filter(room => {
                     if (room.accessType === 'hidden') return false;
-                    if (source === 'app' && !room.showInApp) return false;
                     if (source === 'web' && !room.allowEmbed) return false;
                     return true;
                 });
@@ -1583,9 +1802,12 @@ class VoiceLinkLocalServer {
                 hasPassword: !!room.password,
                 visibility: room.visibility,
                 accessType: room.accessType,
+                accessPriority: room.accessPriority || { primary: 'app', secondary: room.allowEmbed ? 'web' : null },
                 allowEmbed: room.allowEmbed,
                 visibleToGuests: room.visibleToGuests,
+                adminOnly: !!room.adminOnly,
                 isDefault: room.isDefault || false,
+                persistent: !!room.persistent,
                 template: room.template || null,
                 serverSource: 'local',
                 // Lock status
@@ -1597,7 +1819,7 @@ class VoiceLinkLocalServer {
             // Merge: main server rooms first, then local rooms (avoiding duplicates)
             const mainRoomIds = new Set(mainServerRooms.map(r => r.id));
             const mergedRooms = [
-                ...mainServerRooms,
+                ...mainServerRooms.filter((room) => !(room.adminOnly && !requester.isAdmin)),
                 ...localRoomList.filter(r => !mainRoomIds.has(r.id))
             ];
 
@@ -1620,10 +1842,13 @@ class VoiceLinkLocalServer {
                 creatorHandle,
                 isDefault,
                 template,
+                adminOnly = false,
                 locked = false,
                 autoLock = null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
+                jukeboxEnabled = true,
                 autoplayMusic = false,
                 autoplayPlaylist = null,
+                permanent = false,
                 isAuthenticated = false
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
@@ -1663,9 +1888,21 @@ class VoiceLinkLocalServer {
                 }
             }
 
+            if (adminOnly && !this.isAdminRequest(req)) {
+                return res.status(403).json({
+                    error: 'Only admins can create admin-only rooms.'
+                });
+            }
+
+            if (permanent && !this.isModeratorOrAdminRequest(req)) {
+                return res.status(403).json({
+                    error: 'Only admins or moderators can create permanent rooms.'
+                });
+            }
+
             // Calculate expiration if duration is set
             let expiresAt = null;
-            if (duration && typeof duration === 'number') {
+            if (!permanent && duration && typeof duration === 'number') {
                 expiresAt = new Date(Date.now() + duration);
             }
 
@@ -1675,6 +1912,7 @@ class VoiceLinkLocalServer {
             // - hybrid: Both app and web embed access
             // - hidden: Not listed anywhere, only direct link works
 
+            const access = this.resolveRoomAccessProfile(accessType || 'hybrid');
             const room = {
                 id: roomId,
                 name: name || `Room ${roomId.slice(0, 8)}`,
@@ -1684,16 +1922,19 @@ class VoiceLinkLocalServer {
                 maxUsers,
                 users: [],
                 visibility,  // 'public', 'unlisted', 'private'
-                visibleToGuests: accessType === 'hidden' ? false : visibleToGuests,
-                accessType,
-                allowEmbed: accessType === 'web-only' || accessType === 'hybrid',
-                showInApp: accessType === 'app-only' || accessType === 'hybrid',
+                visibleToGuests: access.accessType === 'hidden' ? false : visibleToGuests,
+                accessType: access.accessType,
+                allowEmbed: access.allowEmbed,
+                showInApp: access.showInApp,
+                accessPriority: access.accessPriority,
                 privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
                 isDefault: isDefault || false,
                 template: template || null,
+                adminOnly: !!adminOnly,
                 createdAt: new Date(),
+                persistent: !!permanent,
                 expiresAt,
                 audioSettings: {
                     spatialAudio: true,
@@ -1706,6 +1947,7 @@ class VoiceLinkLocalServer {
                 lockedBy: locked ? creatorHandle : null,
                 autoLock: autoLock || null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoLockScheduled: null,  // Timeout ID for scheduled auto-lock
+                jukeboxEnabled: jukeboxEnabled !== false,
                 autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : false,  // Auto-play music when room is empty
                 autoplayPlaylist: autoplayPlaylist || null,  // Playlist ID for autoplay
                 jellyfinAccess: {
@@ -2382,16 +2624,7 @@ class VoiceLinkLocalServer {
 
         // Generate default rooms
         this.app.post('/api/rooms/generate-defaults', (req, res) => {
-            const defaultRooms = [
-                { name: 'General Chat', description: 'Open space for casual conversations and meeting new people', maxUsers: 50, visibility: 'public' },
-                { name: 'Music Lounge', description: 'Relaxed atmosphere to share and discuss music together', maxUsers: 20, visibility: 'public' },
-                { name: 'Gaming Voice', description: 'Voice chat for gamers to coordinate and hang out', maxUsers: 10, visibility: 'public' },
-                { name: 'Podcast Studio', description: 'Professional space for recording podcasts and interviews', maxUsers: 5, visibility: 'public' },
-                { name: 'Chill Zone', description: 'Laid-back vibes for unwinding and casual chat', maxUsers: 30, visibility: 'public' },
-                { name: 'Tech Talk', description: 'Discuss technology, coding, and the latest innovations', maxUsers: 25, visibility: 'public' },
-                { name: 'Creative Corner', description: 'Space for artists, writers, and creators to collaborate', maxUsers: 15, visibility: 'public' },
-                { name: 'Late Night', description: 'Night owl hangout for those burning the midnight oil', maxUsers: 20, visibility: 'public' }
-            ];
+            const defaultRooms = this.getConfiguredSeedRooms();
 
             const created = [];
 
@@ -2402,30 +2635,12 @@ class VoiceLinkLocalServer {
                 );
 
                 if (!exists) {
-                    const roomId = uuidv4();
-                    const room = {
-                        id: roomId,
-                        name: roomConfig.name,
-                        description: roomConfig.description,
-                        password: null,
-                        maxUsers: roomConfig.maxUsers,
-                        users: [],
-                        visibility: roomConfig.visibility,
-                        isDefault: true,
-                        createdAt: new Date(),
-                        audioSettings: {
-                            spatialAudio: true,
-                            quality: 'high',
-                            effects: []
-                        }
-                    };
-
-                    this.rooms.set(roomId, room);
-                    this.federation.broadcastRoomChange('created', room);
+                    const room = this.createSeedRoomFromConfig(roomConfig, 'default');
                     created.push(room);
                 }
             }
 
+            this.saveRoomsToDisk();
             res.json({ success: true, count: created.length, rooms: created });
         });
 
@@ -2438,6 +2653,7 @@ class VoiceLinkLocalServer {
             for (const [roomId, room] of this.rooms) {
                 // Skip default rooms if keepDefaults is true
                 if (keepDefaults && room.isDefault) continue;
+                if (room.persistent) continue;
 
                 // Check if room is empty and old
                 const isEmpty = !room.users || room.users.length === 0;
@@ -6138,43 +6354,20 @@ class VoiceLinkLocalServer {
                 // Regenerate default rooms if requested
                 let regenerated = 0;
                 if (regenerateDefaults) {
-                    // Trigger default room generation
-                    const defaultRooms = [
-                        { name: 'General Chat', description: 'Open space for casual conversations and meeting new people', maxUsers: 50 },
-                        { name: 'Music Lounge', description: 'Relaxed atmosphere to share and discuss music together', maxUsers: 20 },
-                        { name: 'Gaming Voice', description: 'Voice chat for gamers to coordinate and hang out', maxUsers: 10 },
-                        { name: 'Podcast Studio', description: 'Professional space for recording podcasts and interviews', maxUsers: 5 },
-                        { name: 'Chill Zone', description: 'Laid-back vibes for unwinding and casual chat', maxUsers: 30 },
-                        { name: 'Tech Talk', description: 'Discuss technology, coding, and the latest innovations', maxUsers: 25 },
-                        { name: 'Creative Corner', description: 'Space for artists, writers, and creators to collaborate', maxUsers: 15 },
-                        { name: 'Late Night', description: 'Night owl hangout for those burning the midnight oil', maxUsers: 20 }
-                    ];
+                    const defaultRooms = this.getConfiguredSeedRooms();
 
                     for (const config of defaultRooms) {
                         const exists = Array.from(this.rooms.values()).some(
                             r => r.name.toLowerCase() === config.name.toLowerCase()
                         );
                         if (!exists) {
-                            const roomId = 'default_' + config.name.toLowerCase().replace(/\s+/g, '_');
-                            const room = {
-                                id: roomId,
-                                name: config.name,
-                                description: config.description,
-                                maxUsers: config.maxUsers,
-                                users: [],
-                                visibility: 'public',
-                                isDefault: true,
-                                federated: true,
-                                federationApproved: true,
-                                createdAt: new Date()
-                            };
-                            this.rooms.set(roomId, room);
-                            this.federation.broadcastRoomChange('created', room);
+                            this.createSeedRoomFromConfig(config, 'default');
                             regenerated++;
                         }
                     }
                 }
 
+                this.saveRoomsToDisk();
                 res.json({
                     success: true,
                     totalRooms: this.rooms.size,
@@ -6183,6 +6376,93 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.status(500).json({ error: error.message });
             }
+        });
+
+        this.app.get('/api/admin/rooms/default-policy', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const policy = this.loadDefaultRoomPolicy();
+            const available = this.getManagedSeedRooms().map((room) => ({
+                name: room.name,
+                description: room.description || '',
+                visibility: room.visibility || 'public',
+                adminOnly: !!room.adminOnly,
+                locked: !!room.locked
+            }));
+            res.json({ success: true, policy, available });
+        });
+
+        this.app.put('/api/admin/rooms/default-policy', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const availableNames = new Set(this.getManagedSeedRooms().map((room) => room.name.toLowerCase()));
+            const requestedRooms = Array.isArray(req.body?.rooms) ? req.body.rooms : [];
+            const normalizedRooms = requestedRooms
+                .map((entry) => ({
+                    name: String(entry?.name || '').trim(),
+                    enabled: entry?.enabled !== false
+                }))
+                .filter((entry) => entry.name && availableNames.has(entry.name.toLowerCase()));
+
+            const nextPolicy = this.saveDefaultRoomPolicy({
+                autoRecreateMissing: req.body?.autoRecreateMissing !== false,
+                rooms: normalizedRooms.length ? normalizedRooms : this.getManagedSeedRooms().map((room) => ({ name: room.name, enabled: true }))
+            });
+
+            const reconcile = this.reconcileManagedSeedRooms({ autoRecreateMissing: nextPolicy.autoRecreateMissing });
+            res.json({ success: true, policy: nextPolicy, reconcile });
+        });
+
+        this.app.post('/api/admin/rooms/reconcile-defaults', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const result = this.reconcileManagedSeedRooms({
+                autoRecreateMissing: req.body?.autoRecreateMissing
+            });
+            res.json({ success: true, ...result });
+        });
+
+        this.app.post('/api/admin/rooms/defaults/remove', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const alsoDisablePolicy = req.body?.alsoDisablePolicy === true;
+            let removed = 0;
+            for (const [roomId, room] of this.rooms) {
+                if (!room.isDefault) continue;
+                this.rooms.delete(roomId);
+                if (room.visibility === 'public') {
+                    this.federation.broadcastRoomChange('deleted', { id: roomId });
+                }
+                removed++;
+            }
+            if (alsoDisablePolicy) {
+                const policy = this.loadDefaultRoomPolicy();
+                policy.rooms = (policy.rooms || []).map((entry) => ({ ...entry, enabled: false }));
+                this.saveDefaultRoomPolicy(policy);
+            }
+            this.saveRoomsToDisk();
+            res.json({ success: true, removedDefaults: removed, policyDisabled: alsoDisablePolicy });
+        });
+
+        this.app.post('/api/admin/rooms/defaults/restore', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            const enableAll = req.body?.enableAll !== false;
+            if (enableAll) {
+                this.saveDefaultRoomPolicy({
+                    autoRecreateMissing: req.body?.autoRecreateMissing !== false,
+                    rooms: this.getManagedSeedRooms().map((room) => ({ name: room.name, enabled: true }))
+                });
+            }
+            const reconcile = this.reconcileManagedSeedRooms({
+                autoRecreateMissing: req.body?.autoRecreateMissing !== false
+            });
+            res.json({ success: true, restored: reconcile.createdCount, ...reconcile });
         });
 
         // Admin restart server (graceful)
@@ -7575,7 +7855,7 @@ class VoiceLinkLocalServer {
 
             // Get room list for desktop/mobile apps
             socket.on('get-rooms', () => {
-                const roomList = Array.from(this.rooms.values()).map(room => ({
+                const roomList = Array.from(this.rooms.values()).filter(room => !room.adminOnly).map(room => ({
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
@@ -7588,8 +7868,11 @@ class VoiceLinkLocalServer {
                     maxUsers: room.maxUsers || 50,
                     hasPassword: !!room.password,
                     visibility: room.visibility || 'public',
+                    accessPriority: room.accessPriority || { primary: 'app', secondary: room.allowEmbed ? 'web' : null },
                     visibleToGuests: room.visibleToGuests !== false,
+                    adminOnly: !!room.adminOnly,
                     isDefault: room.isDefault || false,
+                    persistent: !!room.persistent,
                     locked: room.locked || false
                 }));
                 console.log('[Socket] Sending room-list with ' + roomList.length + ' rooms');
@@ -7601,9 +7884,15 @@ class VoiceLinkLocalServer {
                 const { roomId, userName, username, password } = data;
                 const resolvedUserName = userName || username;
                 const room = this.rooms.get(roomId);
+                const authUser = this.authenticatedUsers.get(socket.id);
 
                 if (!room) {
                     socket.emit('error', { message: 'Room not found' });
+                    return;
+                }
+
+                if (room.adminOnly && !authUser?.isAdmin) {
+                    socket.emit('error', { message: 'This room is restricted to admins.' });
                     return;
                 }
 
@@ -7639,7 +7928,6 @@ class VoiceLinkLocalServer {
                 }
 
                 // Check if user is authenticated (Mastodon/email) or guest
-                const authUser = this.authenticatedUsers.get(socket.id);
                 const isAuthenticated = !!authUser;
 
                 // Add user to room
@@ -8345,13 +8633,7 @@ class VoiceLinkLocalServer {
      * Internal method to generate default rooms
      */
     generateDefaultRoomsInternal() {
-        const templates = [
-            { template: 'social', name: 'General Chat', maxUsers: 50 },
-            { template: 'social', name: 'Music Lounge', maxUsers: 20 },
-            { template: 'workspace', name: 'Gaming Voice', maxUsers: 10 },
-            { template: 'social', name: 'Chill Zone', maxUsers: 30 },
-            { template: 'workspace', name: 'Tech Talk', maxUsers: 25 }
-        ];
+        const templates = this.getConfiguredSeedRooms();
 
         for (const config of templates) {
             const exists = Array.from(this.rooms.values()).some(
@@ -8362,19 +8644,25 @@ class VoiceLinkLocalServer {
                 const room = {
                     id: roomId,
                     name: config.name,
-                    description: '',
-                    password: null,
+                    description: config.description || '',
+                    password: config.password || null,
                     maxUsers: config.maxUsers,
                     users: [],
-                    visibility: 'public',
-                    accessType: 'hybrid',
-                    allowEmbed: true,
-                    visibleToGuests: true,
-                    isDefault: true,
-                    template: config.template,
+                    visibility: config.visibility || 'public',
+                    accessType: config.accessType || 'hybrid',
+                    allowEmbed: (config.accessType || 'hybrid') !== 'app-only',
+                    visibleToGuests: config.visibility !== 'private',
+                    isDefault: config.isDefault !== false,
+                    template: config.template || null,
+                    hasPassword: !!config.password,
+                    adminOnly: !!config.adminOnly,
                     serverSource: 'local',
-                    locked: false,
-                    lockedAt: null,
+                    locked: !!config.locked,
+                    lockedAt: config.locked ? new Date().toISOString() : null,
+                    lockedBy: config.locked ? 'system' : null,
+                    jukeboxEnabled: config.jukeboxEnabled !== false,
+                    autoplayMusic: config.autoplayMusic === true,
+                    autoplayPlaylist: config.autoplayPlaylist || null,
                     createdAt: new Date().toISOString()
                 };
                 this.rooms.set(roomId, room);

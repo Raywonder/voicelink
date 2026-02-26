@@ -149,7 +149,7 @@ struct LibrariesResponse: Codable {
 }
 
 // MARK: - Playback Session
-class PlaybackSession: ObservableObject {
+class PlaybackSession: ObservableObject, @unchecked Sendable {
     let id: String
     let serverId: String
     let mediaItem: MediaItem
@@ -193,7 +193,7 @@ struct AmbientSettings {
 }
 
 // MARK: - Jellyfin Manager
-class JellyfinManager: ObservableObject {
+class JellyfinManager: ObservableObject, @unchecked Sendable {
     static let shared = JellyfinManager()
 
     // Servers
@@ -1066,7 +1066,7 @@ struct LibraryContentView: View {
         }
         .navigationTitle(library.name)
         .task {
-            try? await manager.browseLibrary(libraryId: library.id)
+            _ = try? await manager.browseLibrary(libraryId: library.id)
         }
     }
 }

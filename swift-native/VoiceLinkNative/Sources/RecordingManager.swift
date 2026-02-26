@@ -346,7 +346,7 @@ class RecordingManager: ObservableObject {
     }
 
     private func createRecordingFiles(roomId: String, roomName: String) throws {
-        guard let sessionId = currentSessionId else { return }
+        guard currentSessionId != nil else { return }
 
         // Create session directory
         let dateFormatter = DateFormatter()
@@ -400,7 +400,7 @@ class RecordingManager: ObservableObject {
     }
 
     private func createUserTrack(userId: String, username: String) {
-        guard let sessionId = currentSessionId else { return }
+        guard currentSessionId != nil else { return }
 
         // Get session directory from existing track
         guard let existingURL = tracks.first?.fileURL?.deletingLastPathComponent() else { return }

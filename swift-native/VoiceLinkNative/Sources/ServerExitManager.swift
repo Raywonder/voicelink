@@ -19,7 +19,6 @@ class ServerExitManager: ObservableObject {
     private var ambiencePlayer: AVAudioPlayer?
 
     // Managers
-    private let adminManager = AdminServerManager.shared
     private let roomManager = RoomManager.shared
     private let pairingManager = PairingManager.shared
     private let serverManager = ServerManager.shared
@@ -1003,6 +1002,7 @@ class RemoteServerControl: ObservableObject {
     private var openLinkControlRoom: OpenLinkRoom?
     private var openLinkWebSocket: URLSessionWebSocketTask?
     private var directIPSession: URLSession?
+    private var pendingCommandObservers: [String: NSObjectProtocol] = [:]
 
     // Discovery timeout
     private static let discoveryTimeout: TimeInterval = 10.0
@@ -1313,13 +1313,7 @@ class RemoteServerControl: ObservableObject {
     // MARK: - Local Network Discovery
 
     private func discoverLocalIP(for serverDevice: LinkedServer, completion: @escaping (String?) -> Void) {
-        // Try mDNS/Bonjour discovery first
-        let serviceBrowser = NetServiceBrowser()
-        let discoveryDelegate = DeviceDiscoveryDelegate { ip in
-            completion(ip)
-        }
-
-        // Also try direct probe to known local IP ranges
+        // Probe known local IP ranges for the device.
         probeLocalNetwork(deviceId: serverDevice.id) { ip in
             if let foundIP = ip {
                 completion(foundIP)
@@ -1502,29 +1496,36 @@ class RemoteServerControl: ObservableObject {
         bodyWithId["commandId"] = commandId
 
         // Set up response listener
-        var observer: NSObjectProtocol?
-        observer = NotificationCenter.default.addObserver(forName: .openLinkCommandResponse, object: nil, queue: .main) { notification in
+        let observer = NotificationCenter.default.addObserver(forName: .openLinkCommandResponse, object: nil, queue: .main) { [weak self] notification in
             if let response = notification.object as? [String: Any],
                response["commandId"] as? String == commandId {
-                NotificationCenter.default.removeObserver(observer!)
+                self?.removePendingCommandObserver(commandId)
                 let success = response["success"] as? Bool ?? false
                 let result = response["result"] as? String
                 completion(success, result)
             }
         }
+        pendingCommandObservers[commandId] = observer
 
         // Send via WebSocket
-        ws.send(.string(jsonString)) { error in
+        ws.send(.string(jsonString)) { [weak self] error in
             if let error = error {
-                NotificationCenter.default.removeObserver(observer!)
+                self?.removePendingCommandObserver(commandId)
                 completion(false, error.localizedDescription)
             }
         }
 
         // Timeout for response
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            NotificationCenter.default.removeObserver(observer!)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            self?.removePendingCommandObserver(commandId)
         }
+    }
+
+    private func removePendingCommandObserver(_ commandId: String) {
+        guard let observer = pendingCommandObservers.removeValue(forKey: commandId) else {
+            return
+        }
+        NotificationCenter.default.removeObserver(observer)
     }
 
     // MARK: - Send via Direct IP

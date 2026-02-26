@@ -21,6 +21,8 @@ namespace VoiceLinkNative
             ConfigureServices(serviceCollection);
             _services = serviceCollection.BuildServiceProvider();
 
+            _ = ServerManager.Instance.EnsureLocalApiRunningAsync();
+
             MainWindow mainWindow = new MainWindow();
             mainWindow.Show();
         }

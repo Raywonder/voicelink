@@ -448,16 +448,15 @@
       {
         "id": "streammadness",
         "name": "Stream Madness Radio",
-        "url": "http://streammadness.com:8030/index.html?sid=1",
-        "streamUrl": "http://streammadness.com:8030/stream",
-        "volume": 30,
+        "url": "http://streammadness.com:8020/index.html?sid=1",
+        "streamUrl": "http://streammadness.com:8020/stream",
+        "volume": 12,
         "hidden": true,
         "autoPlay": true,
-        "rooms": ["default_social_1768208219717_ckd9k1"],
-        "roomPatterns": ["*Pub*", "*pub*"]
+        "roomPatterns": ["*Lounge*", "*lounge*"]
       }
     ],
-    "defaultVolume": 30,
+    "defaultVolume": 12,
     "fadeInDuration": 2000,
     "crossfadeDuration": 1000
   },

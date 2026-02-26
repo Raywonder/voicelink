@@ -4,6 +4,7 @@ import AppKit
 import SocketIO
 import CoreAudio
 import Combine
+import UserNotifications
 
 @main
 struct VoiceLinkApp: App {
@@ -402,6 +403,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         AppDelegate.shared = self
 
+        // Ensure local API is up for desktop-first usage.
+        LocalAPIBootstrap.shared.ensureRunningIfNeeded()
+
         // Initialize menubar status item
         statusBarController = StatusBarController()
 
@@ -469,7 +473,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             forName: .serverConnectionChanged,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { _ in
             let serverManager = ServerManager.shared
             let settings = SettingsManager.shared
 
@@ -677,7 +681,9 @@ class AppState: ObservableObject {
                   let roomId = data["roomId"] as? String else { return }
 
             let server = data["server"] as? String
-            self?.handleURLJoinRoom(roomId: roomId, server: server)
+            Task { @MainActor in
+                self?.handleURLJoinRoom(roomId: roomId, server: server)
+            }
         }
 
         // Handle URL view room
@@ -685,7 +691,9 @@ class AppState: ObservableObject {
             guard let data = notification.object as? [String: Any],
                   let roomId = data["roomId"] as? String else { return }
 
-            self?.handleURLViewRoom(roomId: roomId)
+            Task { @MainActor in
+                self?.handleURLViewRoom(roomId: roomId)
+            }
         }
 
         // Handle URL connect server
@@ -693,7 +701,9 @@ class AppState: ObservableObject {
             guard let data = notification.object as? [String: Any],
                   let serverUrl = data["serverUrl"] as? String else { return }
 
-            self?.handleURLConnectServer(serverUrl: serverUrl)
+            Task { @MainActor in
+                self?.handleURLConnectServer(serverUrl: serverUrl)
+            }
         }
 
         // Handle URL invite
@@ -701,17 +711,23 @@ class AppState: ObservableObject {
             guard let data = notification.object as? [String: Any],
                   let code = data["code"] as? String else { return }
 
-            self?.handleURLInvite(code: code)
+            Task { @MainActor in
+                self?.handleURLInvite(code: code)
+            }
         }
 
         // Handle URL open settings
         NotificationCenter.default.addObserver(forName: .urlOpenSettings, object: nil, queue: .main) { [weak self] _ in
-            self?.currentScreen = .settings
+            Task { @MainActor in
+                self?.currentScreen = .settings
+            }
         }
 
         // Handle URL open license
         NotificationCenter.default.addObserver(forName: .urlOpenLicense, object: nil, queue: .main) { [weak self] _ in
-            self?.currentScreen = .licensing
+            Task { @MainActor in
+                self?.currentScreen = .licensing
+            }
         }
     }
 
@@ -922,124 +938,146 @@ class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .removeDuplicates()
             .sink { [weak self] _ in
-                self?.refreshAdminCapabilities()
+                Task { @MainActor in
+                    self?.refreshAdminCapabilities()
+                }
             }
             .store(in: &cancellables)
 
         // Listen for room joined notification
         NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: .main) { [weak self] notification in
-            guard let self else { return }
-            guard let roomData = notification.object as? [String: Any] else { return }
-            let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String ?? self.pendingJoinRoomId
-            guard let roomId else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                guard let roomData = notification.object as? [String: Any] else { return }
+                let roomId = roomData["roomId"] as? String ?? roomData["id"] as? String ?? self.pendingJoinRoomId
+                guard let roomId else { return }
 
-            let joinedRoom: Room = {
-                if let existing = self.rooms.first(where: { $0.id == roomId }) {
-                    return existing
-                }
-                let fallbackName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let fallbackDescription = (roomData["description"] as? String) ?? ""
-                let fallbackUsers = (roomData["userCount"] as? Int) ?? 0
-                let fallbackPrivate = (roomData["isPrivate"] as? Bool) ?? false
-                let fallbackMaxUsers = (roomData["maxUsers"] as? Int) ?? 50
-                return Room(
-                    id: roomId,
-                    name: (fallbackName?.isEmpty == false ? fallbackName! : "Room \(roomId)"),
-                    description: fallbackDescription,
-                    userCount: fallbackUsers,
-                    isPrivate: fallbackPrivate,
-                    maxUsers: fallbackMaxUsers
-                )
-            }()
+                let joinedRoom: Room = {
+                    if let existing = self.rooms.first(where: { $0.id == roomId }) {
+                        return existing
+                    }
+                    let fallbackName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let fallbackDescription = (roomData["description"] as? String) ?? ""
+                    let fallbackUsers = (roomData["userCount"] as? Int) ?? 0
+                    let fallbackPrivate = (roomData["isPrivate"] as? Bool) ?? false
+                    let fallbackMaxUsers = (roomData["maxUsers"] as? Int) ?? 50
+                    return Room(
+                        id: roomId,
+                        name: (fallbackName?.isEmpty == false ? fallbackName! : "Room \(roomId)"),
+                        description: fallbackDescription,
+                        userCount: fallbackUsers,
+                        isPrivate: fallbackPrivate,
+                        maxUsers: fallbackMaxUsers
+                    )
+                }()
 
-            self.currentRoom = joinedRoom
-            self.minimizedRoom = nil
-            self.currentScreen = .voiceChat
-            self.pendingJoinRoomId = nil
-            self.errorMessage = "Joined \(joinedRoom.name)."
+                self.currentRoom = joinedRoom
+                self.minimizedRoom = nil
+                self.currentScreen = .voiceChat
+                self.pendingJoinRoomId = nil
+                self.errorMessage = "Joined \(joinedRoom.name)."
+            }
         }
 
         // Listen for navigation back to main menu
         NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
-            self?.currentScreen = .mainMenu
+            Task { @MainActor in
+                self?.currentScreen = .mainMenu
+            }
         }
     }
 
     private func setupRoomActionObservers() {
         NotificationCenter.default.addObserver(forName: .roomActionMinimize, object: nil, queue: .main) { [weak self] _ in
-            self?.minimizeCurrentRoom()
+            Task { @MainActor in
+                self?.minimizeCurrentRoom()
+            }
         }
         NotificationCenter.default.addObserver(forName: .roomActionRestore, object: nil, queue: .main) { [weak self] _ in
-            self?.restoreMinimizedRoom()
+            Task { @MainActor in
+                self?.restoreMinimizedRoom()
+            }
         }
         NotificationCenter.default.addObserver(forName: .roomActionLeave, object: nil, queue: .main) { [weak self] _ in
-            self?.leaveCurrentRoom()
+            Task { @MainActor in
+                self?.leaveCurrentRoom()
+            }
         }
         NotificationCenter.default.addObserver(forName: .roomActionJoin, object: nil, queue: .main) { [weak self] notification in
-            guard let self else { return }
-            guard let room = notification.object as? Room else { return }
-            self.setFocusedRoom(room)
-            self.joinOrShowRoom(room)
+            Task { @MainActor in
+                guard let self else { return }
+                guard let room = notification.object as? Room else { return }
+                self.setFocusedRoom(room)
+                self.joinOrShowRoom(room)
+            }
         }
         NotificationCenter.default.addObserver(forName: .roomActionOpenSettings, object: nil, queue: .main) { [weak self] notification in
-            guard let self else { return }
-            guard let room = notification.object as? Room else { return }
-            guard self.canManageRoom(room) else {
-                self.errorMessage = "Room settings denied for \(room.name). Your current account is not recognized as owner/admin on this server."
-                return
+            Task { @MainActor in
+                guard let self else { return }
+                guard let room = notification.object as? Room else { return }
+                guard self.canManageRoom(room) else {
+                    self.errorMessage = "Room settings denied for \(room.name). Your current account is not recognized as owner/admin on this server."
+                    return
+                }
+                self.setFocusedRoom(room)
+                self.currentScreen = .admin
             }
-            self.setFocusedRoom(room)
-            self.currentScreen = .admin
         }
         NotificationCenter.default.addObserver(forName: .roomActionCreate, object: nil, queue: .main) { [weak self] _ in
-            self?.currentScreen = .createRoom
+            Task { @MainActor in
+                self?.currentScreen = .createRoom
+            }
         }
         NotificationCenter.default.addObserver(forName: .roomActionDelete, object: nil, queue: .main) { [weak self] notification in
-            guard let self else { return }
-            guard let room = notification.object as? Room else { return }
-            guard self.canManageRoom(room) else {
-                self.errorMessage = "Delete denied for \(room.name). Your current account is not recognized as owner/admin on this server."
-                return
+            Task { @MainActor in
+                guard let self else { return }
+                guard let room = notification.object as? Room else { return }
+                guard self.canManageRoom(room) else {
+                    self.errorMessage = "Delete denied for \(room.name). Your current account is not recognized as owner/admin on this server."
+                    return
+                }
+                self.deleteRoomFromMenu(room)
             }
-            self.deleteRoomFromMenu(room)
         }
     }
 
     private func setupWindowBehaviorObservers() {
         NotificationCenter.default.addObserver(forName: .mainWindowCloseRequested, object: nil, queue: .main) { [weak self] _ in
-            guard let self = self else { return }
-            let settings = SettingsManager.shared
+            Task { @MainActor in
+                guard let self = self else { return }
+                let settings = SettingsManager.shared
 
-            if self.currentScreen != .mainMenu {
+                if self.currentScreen != .mainMenu {
+                    if self.currentRoom != nil {
+                        self.currentScreen = .voiceChat
+                        self.errorMessage = nil
+                        return
+                    }
+                    if self.minimizedRoom != nil {
+                        self.restoreMinimizedRoom()
+                        self.errorMessage = nil
+                        return
+                    }
+                    let fallback: Screen = (self.previousScreen != self.currentScreen) ? self.previousScreen : .mainMenu
+                    self.currentScreen = fallback
+                    self.errorMessage = nil
+                    return
+                }
+
+                // If user is actively in a room, always minimize the room first
+                // so session continuity is preserved before hiding/minimizing window.
                 if self.currentRoom != nil {
-                    self.currentScreen = .voiceChat
-                    self.errorMessage = nil
-                    return
+                    self.minimizeCurrentRoom()
                 }
-                if self.minimizedRoom != nil {
-                    self.restoreMinimizedRoom()
-                    self.errorMessage = nil
-                    return
+
+                switch settings.closeButtonBehavior {
+                case .hideToTray:
+                    AppDelegate.shared?.hideMainWindow()
+                case .minimizeWindow:
+                    AppDelegate.shared?.minimizeMainWindow()
+                case .goToMainThenHide:
+                    AppDelegate.shared?.hideMainWindow()
                 }
-                let fallback: Screen = (self.previousScreen != self.currentScreen) ? self.previousScreen : .mainMenu
-                self.currentScreen = fallback
-                self.errorMessage = nil
-                return
-            }
-
-            // If user is actively in a room, always minimize the room first
-            // so session continuity is preserved before hiding/minimizing window.
-            if self.currentRoom != nil {
-                self.minimizeCurrentRoom()
-            }
-
-            switch settings.closeButtonBehavior {
-            case .hideToTray:
-                AppDelegate.shared?.hideMainWindow()
-            case .minimizeWindow:
-                AppDelegate.shared?.minimizeMainWindow()
-            case .goToMainThenHide:
-                AppDelegate.shared?.hideMainWindow()
             }
         }
     }
@@ -1047,19 +1085,25 @@ class AppState: ObservableObject {
     private func setupAdminObservers() {
         // Refresh admin capabilities after Mastodon auth completes.
         NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: .main) { [weak self] _ in
-            self?.refreshAdminCapabilities()
+            Task { @MainActor in
+                self?.refreshAdminCapabilities()
+            }
         }
 
         // Refresh when server endpoint changes (switch, disconnect, reconnect).
         NotificationCenter.default.addObserver(forName: .serverConnectionChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.refreshAdminCapabilities()
+            Task { @MainActor in
+                self?.refreshAdminCapabilities()
+            }
         }
 
         // Email and persisted auth sessions don't emit mastodonAccountLoaded.
         AuthenticationManager.shared.$currentUser
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.refreshAdminCapabilities()
+                Task { @MainActor in
+                    self?.refreshAdminCapabilities()
+                }
             }
             .store(in: &cancellables)
     }
@@ -4230,17 +4274,7 @@ class SettingsManager: ObservableObject {
         AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &propertySize, &deviceIDs)
 
         for deviceID in deviceIDs {
-            // Get device name
-            var nameSize: UInt32 = 256
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-
-            var name: CFString = "" as CFString
-            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
-            let deviceName = name as String
+            let deviceName = coreAudioDeviceName(deviceID: deviceID) ?? ""
 
             // Check if input device
             var inputStreamSize: UInt32 = 0
@@ -4367,22 +4401,30 @@ class SettingsManager: ObservableObject {
                 continue
             }
 
-            var nameSize = UInt32(MemoryLayout<CFString?>.size)
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var cfName: CFString?
-            guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &cfName) == noErr else {
-                continue
-            }
-            let deviceName = (cfName as String?) ?? ""
+            let deviceName = coreAudioDeviceName(deviceID: deviceID) ?? ""
             if deviceName == targetName {
                 return deviceID
             }
         }
 
+        return nil
+    }
+
+    private func coreAudioDeviceName(deviceID: AudioDeviceID) -> String? {
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var cfName: Unmanaged<CFString>?
+        let status = withUnsafeMutablePointer(to: &cfName) { pointer in
+            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, pointer)
+        }
+        guard status == noErr else { return nil }
+        if let resolved = cfName?.takeUnretainedValue() {
+            return resolved as String
+        }
         return nil
     }
 }
@@ -4853,15 +4895,7 @@ struct SettingsView: View {
             return "Not detected"
         }
 
-        var nameAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var nameSize = UInt32(MemoryLayout<CFString?>.size)
-        var cfName: CFString?
-        guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &cfName) == noErr,
-              let name = cfName as String?,
+        guard let name = coreAudioDeviceName(deviceID: deviceID),
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Not detected"
         }
@@ -4924,19 +4958,27 @@ struct SettingsView: View {
             }
             if streamSize == 0 { continue }
 
-            var nameSize = UInt32(MemoryLayout<CFString?>.size)
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var cfName: CFString?
-            guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &cfName) == noErr else {
-                continue
-            }
-            if (cfName as String?) == targetName {
+            if coreAudioDeviceName(deviceID: deviceID) == targetName {
                 return deviceID
             }
+        }
+        return nil
+    }
+
+    private func coreAudioDeviceName(deviceID: AudioDeviceID) -> String? {
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var cfName: Unmanaged<CFString>?
+        let status = withUnsafeMutablePointer(to: &cfName) { pointer in
+            AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, pointer)
+        }
+        guard status == noErr else { return nil }
+        if let resolved = cfName?.takeUnretainedValue() {
+            return resolved as String
         }
         return nil
     }
@@ -5030,10 +5072,20 @@ struct SettingsView: View {
             Toggle("Enable desktop notifications", isOn: $settings.desktopNotifications)
 
             Button("Test Notification") {
-                let notification = NSUserNotification()
-                notification.title = "VoiceLink"
-                notification.informativeText = "Test notification"
-                NSUserNotificationCenter.default.deliver(notification)
+                let center = UNUserNotificationCenter.current()
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    guard granted else { return }
+                    let content = UNMutableNotificationContent()
+                    content.title = "VoiceLink"
+                    content.body = "Test notification"
+                    content.sound = .default
+                    let request = UNNotificationRequest(
+                        identifier: "voicelink-test-notification",
+                        content: content,
+                        trigger: nil
+                    )
+                    center.add(request, withCompletionHandler: nil)
+                }
             }
             .buttonStyle(.bordered)
         }
@@ -5133,7 +5185,7 @@ struct SettingsView: View {
                             Text(user.displayName)
                                 .font(.headline)
                             if let instance = user.mastodonInstance {
-                                Text("@\(user.username ?? "")@\(instance)")
+                                Text("@\(user.username)@\(instance)")
                                     .font(.caption)
                                     .foregroundColor(.gray)
                             }

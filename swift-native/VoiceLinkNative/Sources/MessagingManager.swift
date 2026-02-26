@@ -421,7 +421,7 @@ struct ChatBubble: View {
 
             VStack(alignment: isOwnMessage ? .trailing : .leading, spacing: 4) {
                 // Reply indicator
-                if let replyId = message.replyToId {
+                if message.replyToId != nil {
                     HStack(spacing: 4) {
                         Image(systemName: "arrowshape.turn.up.left")
                             .font(.caption2)
@@ -627,7 +627,7 @@ struct ChatView: View {
             }
 
             // Typing indicator
-            if let typing = messagingManager.isTyping.first(where: { $0.value == true }) {
+            if messagingManager.isTyping.first(where: { $0.value == true }) != nil {
                 HStack {
                     Text("Someone is typing...")
                         .font(.caption)

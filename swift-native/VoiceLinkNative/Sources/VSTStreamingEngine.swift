@@ -247,7 +247,7 @@ class VSTPluginInstance: ObservableObject, Identifiable {
 }
 
 // MARK: - VST Streaming Engine
-class VSTStreamingEngine: ObservableObject {
+class VSTStreamingEngine: ObservableObject, @unchecked Sendable {
     static let shared = VSTStreamingEngine()
 
     // Plugin management
@@ -544,7 +544,7 @@ class VSTStreamingEngine: ObservableObject {
 
     func handleIncomingStream(_ packet: VSTStreamPacket) {
         // Convert samples back to audio buffer
-        guard let engine = audioEngine else { return }
+        guard audioEngine != nil else { return }
 
         let format = AVAudioFormat(standardFormatWithSampleRate: packet.sampleRate, channels: 1)!
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(packet.samples.count)) else { return }
@@ -568,7 +568,7 @@ class VSTStreamingEngine: ObservableObject {
         engine.attach(playerNode)
         engine.connect(playerNode, to: engine.mainMixerNode, format: buffer.format)
 
-        playerNode.scheduleBuffer(buffer, completionHandler: { [weak self] in
+        playerNode.scheduleBuffer(buffer, completionHandler: {
             DispatchQueue.main.async {
                 engine.detach(playerNode)
             }
@@ -580,7 +580,7 @@ class VSTStreamingEngine: ObservableObject {
     private func broadcastParameterChange(instanceId: String, parameter: String, value: Float) {
         guard let instance = pluginInstances[instanceId] else { return }
 
-        let change = VSTParameterChange(
+        _ = VSTParameterChange(
             instanceId: instanceId,
             parameter: parameter,
             value: value,

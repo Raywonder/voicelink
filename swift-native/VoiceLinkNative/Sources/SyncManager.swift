@@ -70,7 +70,7 @@ class SyncManager: ObservableObject {
 
         let group = DispatchGroup()
         var successCount = 0
-        var totalTasks = 4
+        let totalTasks = 4
 
         // 1. Sync membership data
         group.enter()

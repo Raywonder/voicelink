@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AuthenticationServices
 import Security
+import LocalAuthentication
 
 // MARK: - Authentication Manager
 class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
@@ -421,6 +422,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         // Always keep a local fallback to avoid SecurityAgent prompt loops.
         UserDefaults.standard.set(data, forKey: authDefaultsKey)
 
+        let context = noInteractionAuthContext()
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VoiceLink",
@@ -428,7 +430,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         ]
         let addQuery: [String: Any] = baseQuery.merging([
             kSecValueData as String: data,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
+            kSecUseAuthenticationContext as String: context
         ]) { _, new in new }
 
         SecItemDelete(baseQuery as CFDictionary)
@@ -455,12 +457,13 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             return
         }
 
+        let context = noInteractionAuthContext()
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VoiceLink",
             kSecAttrAccount as String: "authUser",
             kSecReturnData as String: true,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
+            kSecUseAuthenticationContext as String: context
         ]
 
         var result: AnyObject?
@@ -476,13 +479,20 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     private func clearStoredAuth() {
         UserDefaults.standard.removeObject(forKey: authDefaultsKey)
 
+        let context = noInteractionAuthContext()
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VoiceLink",
             kSecAttrAccount as String: "authUser",
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
+            kSecUseAuthenticationContext as String: context
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    private func noInteractionAuthContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 
     private func getClientId() -> String {

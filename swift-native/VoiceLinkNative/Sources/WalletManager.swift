@@ -991,7 +991,7 @@ struct EcryptoInstallSheet: View {
             .background(Color.white.opacity(0.05))
             .cornerRadius(10)
 
-            if let link = walletManager.inviteLink {
+            if walletManager.inviteLink != nil {
                 VStack(spacing: 8) {
                     Text("Your invite link is ready!")
                         .font(.caption)

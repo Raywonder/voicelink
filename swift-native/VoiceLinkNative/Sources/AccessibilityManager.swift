@@ -199,7 +199,7 @@ class AccessibilityManager: ObservableObject {
         )
 
         NSAccessibility.post(
-            element: NSApp,
+            element: NSApp as Any,
             notification: .announcementRequested,
             userInfo: [.announcement: announcement]
         )

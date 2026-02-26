@@ -16,8 +16,8 @@ namespace VoiceLinkNative.Services
         private AuthState _currentState = AuthState.Unauthenticated;
         private AuthenticatedUser? _currentUser;
         private string? _mastodonInstance;
-        private string? _mastodonClientId;
-        private string? _mastodonClientSecret;
+        private string _mastodonClientId = "voicelink";
+        private string _mastodonClientSecret = "";
         private string? _pendingEmail;
         private string? _errorMessage;
 

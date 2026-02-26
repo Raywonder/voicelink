@@ -391,7 +391,7 @@ struct AdminUsersSection: View {
             Button("Kick", role: .destructive) {
                 if let user = selectedUser {
                     Task {
-                        await adminManager.kickUser(user.id, reason: kickReason.isEmpty ? nil : kickReason)
+                        _ = await adminManager.kickUser(user.id, reason: kickReason.isEmpty ? nil : kickReason)
                         await adminManager.fetchConnectedUsers()
                     }
                 }
@@ -404,7 +404,7 @@ struct AdminUsersSection: View {
             Button("Ban", role: .destructive) {
                 if let user = selectedUser {
                     Task {
-                        await adminManager.banUser(user.id, reason: banReason.isEmpty ? nil : banReason, duration: banDuration * 3600)
+                        _ = await adminManager.banUser(user.id, reason: banReason.isEmpty ? nil : banReason, duration: banDuration * 3600)
                         await adminManager.fetchConnectedUsers()
                     }
                 }
@@ -1163,7 +1163,7 @@ struct AdminAPISyncSection: View {
         isSaving = true
 
         Task {
-            await adminManager.updateAPISyncSettings(config)
+            _ = await adminManager.updateAPISyncSettings(config)
             isSaving = false
         }
     }
@@ -1317,7 +1317,7 @@ struct AdminFederationSection: View {
         isSaving = true
 
         Task {
-            await adminManager.updateFederationSettings(config)
+            _ = await adminManager.updateFederationSettings(config)
             isSaving = false
         }
     }
