@@ -85,17 +85,48 @@ class AudioTestManager {
     }
 
     async preloadAudioFiles() {
+        const fileAliases = {
+            'disconnect.wav': ['connection lost.wav'],
+            'message.wav': ['message-incoming-ding.wav', 'message-receve.wav'],
+            'progress.wav': ['success.wav', 'notification.wav'],
+            'Audio-Portrit-Sound-Test.wav': ['your-sound-test.wav']
+        };
+
+        const buildCandidates = (fileName) => {
+            const variants = [fileName, ...(fileAliases[fileName] || [])];
+            const urls = [];
+            for (const variant of variants) {
+                const encoded = encodeURIComponent(variant);
+                urls.push(`assets/test-audio/${variant}`);
+                urls.push(`assets/sounds/${variant}`);
+                urls.push(`sounds/${variant}`);
+                urls.push(`/api/sounds/${encoded}`);
+                urls.push(`/downloads/voicelink/sounds/${encoded}`);
+                urls.push(`https://voicelink.devinecreations.net/downloads/voicelink/sounds/${encoded}`);
+            }
+            return urls;
+        };
+
         for (const testFile of this.testFiles) {
             try {
                 const audio = new Audio();
                 audio.preload = 'auto';
-                audio.src = `assets/test-audio/${testFile.file}`;
+                const candidates = buildCandidates(testFile.file);
 
-                // Wait for audio to load
+                // Try multiple local/API/download URLs before failing.
                 await new Promise((resolve, reject) => {
-                    audio.addEventListener('canplaythrough', resolve);
-                    audio.addEventListener('error', reject);
-                    audio.load();
+                    let index = 0;
+                    const tryNext = () => {
+                        if (index >= candidates.length) {
+                            reject(new Error(`No playable source found for ${testFile.file}`));
+                            return;
+                        }
+                        audio.src = candidates[index++];
+                        audio.onerror = tryNext;
+                        audio.oncanplaythrough = () => resolve();
+                        audio.load();
+                    };
+                    tryNext();
                 });
 
                 this.audioFiles.set(testFile.id, {

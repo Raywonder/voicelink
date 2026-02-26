@@ -17,6 +17,9 @@ node_modules/
 *.log
 *.tmp
 
+# Local runtime state (admin-manageable via UI/API)
+data/rooms.json
+
 # Large archives
 releases.zip
 *.tar.gz

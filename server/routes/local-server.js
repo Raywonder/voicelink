@@ -865,6 +865,71 @@ class VoiceLinkLocalServer {
         };
     }
 
+    wildcardPatternToRegex(pattern = '') {
+        const escaped = String(pattern)
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*')
+            .replace(/\?/g, '.');
+        return new RegExp(`^${escaped}$`, 'i');
+    }
+
+    resolveRoomBackgroundStream(room = {}) {
+        const cfg = deployConfig.get('backgroundStreams') || {};
+        if (!cfg.enabled || !Array.isArray(cfg.streams)) return null;
+
+        const roomId = String(room.id || '');
+        const roomName = String(room.name || '');
+
+        for (const stream of cfg.streams) {
+            if (!stream || stream.enabled === false) continue;
+            const streamUrl = String(stream.streamUrl || stream.url || '').trim();
+            if (!streamUrl) continue;
+
+            const explicitRooms = Array.isArray(stream.rooms) ? stream.rooms : [];
+            if (explicitRooms.includes(roomId)) return stream;
+
+            const patterns = Array.isArray(stream.roomPatterns) ? stream.roomPatterns : [];
+            if (patterns.length > 0) {
+                const matched = patterns.some((pattern) => {
+                    try {
+                        return this.wildcardPatternToRegex(pattern).test(roomName) ||
+                            this.wildcardPatternToRegex(pattern).test(roomId);
+                    } catch {
+                        return false;
+                    }
+                });
+                if (matched) return stream;
+            }
+        }
+        return null;
+    }
+
+    getSoundCandidatePaths(fileName = '') {
+        const safe = path.basename(decodeURIComponent(String(fileName || '')).trim());
+        if (!safe) return [];
+
+        const configuredMediaRoot = String(process.env.VOICELINK_MEDIA_PATH || '').trim();
+        const fallbackMediaRoots = [
+            configuredMediaRoot,
+            '/home/devinecr/media',
+            '/home/devinecr/apps/media',
+            '/home/devinecr/devinecreations.net/media'
+        ].filter(Boolean);
+
+        const candidates = [
+            path.join(__dirname, '../../assets/sounds', safe),
+            path.join(__dirname, '../../source/assets/sounds', safe),
+            path.join(__dirname, '../../client/sounds', safe),
+            path.join(__dirname, '../../source/client/sounds', safe)
+        ];
+
+        for (const mediaRoot of fallbackMediaRoots) {
+            candidates.push(path.join(mediaRoot, 'sounds', safe));
+            candidates.push(path.join(mediaRoot, safe));
+        }
+        return candidates;
+    }
+
     async buildOpenLinkShareLink({ token = '', timeoutMs = 6000 } = {}) {
         const cfg = this.getOpenLinkShareConfig();
         if (!cfg.enabled) {
@@ -1794,6 +1859,15 @@ class VoiceLinkLocalServer {
             }
 
             const localRoomList = localRooms.map(room => ({
+                // Room media state (Jellyfin/playlist/radio) for room cards and LCD/metadata displays.
+                nowPlaying: (() => {
+                    try {
+                        const np = this.modules.mediaRooms?.getNowPlaying?.(room.id);
+                        return np?.playing ? np : null;
+                    } catch {
+                        return null;
+                    }
+                })(),
                 id: room.id,
                 name: room.name,
                 description: room.description || '',
@@ -1813,7 +1887,9 @@ class VoiceLinkLocalServer {
                 // Lock status
                 locked: room.locked || false,
                 lockedAt: room.lockedAt || null,
-                canJoin: !room.locked
+                canJoin: !room.locked,
+                mediaTitle: room.mediaTitle || room.currentMedia || null,
+                jukeboxTrack: room.jukeboxTrack || null
             }));
 
             // Merge: main server rooms first, then local rooms (avoiding duplicates)
@@ -2516,6 +2592,36 @@ class VoiceLinkLocalServer {
         // Serve the main client
         this.app.get('/', (req, res) => {
             res.sendFile(path.join(__dirname, '..', '..', 'client', 'index.html'));
+        });
+
+        // Sound resolver for web clients: local source -> media paths -> public downloads/CopyParty.
+        this.app.get('/api/sounds/:fileName', (req, res) => {
+            const fileName = String(req.params.fileName || '').trim();
+            if (!fileName) {
+                return res.status(400).json({ error: 'Missing sound file name' });
+            }
+
+            const candidates = this.getSoundCandidatePaths(fileName);
+            for (const candidate of candidates) {
+                try {
+                    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                        return res.sendFile(candidate);
+                    }
+                } catch {
+                    // keep searching
+                }
+            }
+
+            const fallbackUrls = [
+                `https://voicelink.devinecreations.net/downloads/voicelink/sounds/${encodeURIComponent(path.basename(fileName))}`,
+                `https://dl.voicelink.devinecreations.net/copyparty/sounds/${encodeURIComponent(path.basename(fileName))}`,
+                `https://im.tappedin.fm/copyparty/sounds/${encodeURIComponent(path.basename(fileName))}`
+            ];
+            return res.status(404).json({
+                error: 'Sound file not found',
+                fileName: path.basename(fileName),
+                fallbackUrls
+            });
         });
 
         // Serve downloads page
@@ -7982,6 +8088,19 @@ class VoiceLinkLocalServer {
 
                 socket.emit('joined-room', { room: roomState, user });
                 socket.to(roomId).emit('user-joined', user);
+
+                const backgroundStream = this.resolveRoomBackgroundStream(room);
+                if (backgroundStream && (backgroundStream.autoPlay !== false)) {
+                    socket.emit('background-stream', {
+                        id: backgroundStream.id || `stream-${Date.now()}`,
+                        name: backgroundStream.name || 'Background Stream',
+                        url: backgroundStream.streamUrl || backgroundStream.url,
+                        volume: Number(backgroundStream.volume ?? deployConfig.get('backgroundStreams')?.defaultVolume ?? 12),
+                        hidden: backgroundStream.hidden !== false,
+                        autoPlay: true,
+                        fadeInDuration: Number(deployConfig.get('backgroundStreams')?.fadeInDuration ?? 1500)
+                    });
+                }
 
                 // Broadcast updated user count to all in room
                 this.io.to(roomId).emit('room-user-count', {

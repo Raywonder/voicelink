@@ -3719,10 +3719,13 @@ class VoiceLinkApp {
     playUiSound(filename, volume = 0.6) {
         try {
             const candidates = [
+                `/api/sounds/${encodeURIComponent(filename)}`,
                 `sounds/${filename}`,
                 `assets/sounds/${filename}`,
                 `client/sounds/${filename}`,
-                `source/assets/sounds/${filename}`
+                `source/assets/sounds/${filename}`,
+                `/downloads/voicelink/sounds/${filename}`,
+                `https://voicelink.devinecreations.net/downloads/voicelink/sounds/${filename}`
             ];
 
             const audio = new Audio();
