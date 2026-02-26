@@ -1,392 +1,96 @@
-# VoiceLink Local - P2P Voice Chat System
+# VoiceLink
 
-A comprehensive voice chat application with native desktop clients (not Electron), featuring 3D binaural audio, multi-channel support, VST plugin streaming, and advanced security features.
+VoiceLink is a native voice chat app for macOS and Windows, with a web client for quick access.
 
-## Platform Priority Policy
+## Quick Start
 
-- Desktop app is the primary VoiceLink experience.
-- Desktop clients are native apps (macOS/Windows), not Electron.
-- iOS builds should include the same desktop features as much as possible.
-- Web app is secondary and receives a subset of features.
-- Features not implemented for web must be hidden for web users.
-- New feature work should target desktop first, then web support where practical.
+1. Download VoiceLink for your platform.
+2. Install and open the app.
+3. Add your server URL (or use an invite link).
+4. Sign in.
+5. Join or create a room.
 
-## Latest macOS Native Update (Build 20, 2026-02-23)
+## Downloads
 
-- Startup no longer plays the default macOS fallback system tone when welcome audio is unavailable.
-- Missing UI sounds now download in the background with a non-blocking in-app notice.
-- Added reminder behavior for pending sound downloads on subsequent launches.
-- Added built-in self-test scheduler and admin controls under Admin -> Self Tests.
-- Added admin login fallback for `datboydommo@layor8.space`.
+- macOS (Universal): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
+- macOS checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip.sha256
+- Windows (x64): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip
+- Windows checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip.sha256
+- Web client: https://voicelink.devinecreations.net/
 
-## Current Implementation Status (Audit: 2026-02-11)
+Mirror:
+- https://node2.voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
+- https://node2.voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip
 
-- Active native desktop source is currently maintained in `../voicelink-local/swift-native/VoiceLinkNative/Sources` and `../voicelink-local/windows-native/VoiceLinkNative`.
-- This repo currently still contains Electron build/runtime scripts in `package.json` for legacy compatibility and web-runtime packaging paths.
-- In this repo, `swift-native/VoiceLinkNative` currently contains build artifacts and packaged outputs, not full source files.
-- In this repo, `windows-native/VoiceLinkNative` currently contains build output/intermediate files, not full source files.
+## Install
 
-## Desktop + API Parity Checklist
+### macOS
 
-Status labels:
-- `[x]` implemented in active workspace (`../voicelink-local`)
-- `[ ]` not yet synced/verified in this repo
+1. Download `VoiceLinkMacOS.zip`.
+2. Extract it.
+3. Move `VoiceLink.app` to `/Applications`.
+4. Open VoiceLink.
 
-### Desktop UX and Room Controls
+If macOS blocks the app, run:
 
-- `[x]` Room preview/peek flow with privacy handling (`../voicelink-local/source/client/js/core/app.js`)
-- `[x]` Double-Escape room actions menu (`../voicelink-local/source/client/js/core/app.js`)
-- `[x]` Room lock/unlock actions and API calls (`../voicelink-local/source/client/js/core/app.js`, `../voicelink-local/source/routes/local-server.js`)
-- `[x]` Room jukebox integration and controls (`../voicelink-local/source/client/js/core/app.js`, `../voicelink-local/source/client/js/media/jellyfin-manager.js`)
-- `[x]` Auto-update check UX/settings for desktop (`../voicelink-local/source/client/index.html`, `../voicelink-local/swift-native/VoiceLinkNative/Sources/AutoUpdater.swift`)
-- `[ ]` Sync these exact desktop UX flows into this repo's native source tree
-
-### API Endpoints Required by Desktop
-
-- `[x]` Auth/Authelia endpoints (`../voicelink-local/source/routes/local-server.js`)
-- `[x]` Update check + downloads metadata endpoints (`../voicelink-local/source/routes/local-server.js`)
-- `[x]` Room actions endpoints (lock/unlock/visibility/status) (`../voicelink-local/source/routes/local-server.js`)
-- `[x]` Jellyfin/Jukebox room + queue + stream endpoints (`../voicelink-local/source/routes/local-server.js`)
-- `[x]` Admin operations used by desktop UI (`../voicelink-local/source/routes/local-server.js`)
-- `[x]` Wallet/ecripto integration endpoints (`../voicelink-local/source/routes/local-server.js`)
-- `[ ]` Ensure parity between `server/routes/local-server.js`, `source/routes/local-server.js`, and `source/server/routes/local-server.js` in this repo
-
-### QA and Release Hygiene
-
-- `[ ]` Populate real tests under `tests/unit`, `tests/integration`, and `tests/e2e` (currently scaffold dirs)
-- `[ ]` Remove stale artifact-only native trees from git tracking or replace with source-of-truth code
-- `[ ]` Keep release docs aligned with ZIP-first macOS distribution policy
-
-## Features
-
-### Core Features
-- **P2P Voice Communication**: Direct peer-to-peer voice chat using WebRTC
-- **3D Binaural Audio**: Advanced spatial audio processing with HRTF
-- **Multi-Channel Support**: Up to 64 input/output channels (mono, stereo, binaural)
-- **VST Plugin Streaming**: Real-time audio effects processing and sharing
-- **Comprehensive Settings**: Tabbed interface for all configuration options
-- **Full Accessibility Support**: Complete screen reader integration with NVDA, system TTS, and ARIA compliance
-- **Jellyfin Webhook Push**: Jellyfin webhook events are pushed in real time to connected desktop clients
-- **Direct HTTPS Media Streaming**: Stream direct HTTPS media URLs to self or to an entire room
-- **Optional Media Save**: Admin-configurable option to save direct URL media for future playback
-
-### Audio Features
-- 3D spatial audio with customizable room acoustics
-- Advanced audio routing and channel matrix
-- Built-in VST plugins (Reverb, Compressor, EQ, Delay, Chorus, etc.)
-- Professional audio device management
-- Audio testing suite with synthetic TTS generation
-- Pink noise and tone generation for testing
-
-### Security Features
-- End-to-end encryption (AES-256, RSA-4096)
-- Two-factor authentication (TOTP, SMS, Email, Hardware Keys, Biometric)
-- Cross-platform keychain integration (iCloud, Windows Credential Manager, Linux Secret Service)
-- Perfect Forward Secrecy support
-
-### Server Access
-- Multiple connection methods (Direct IP, Domain, Invite Links, QR Codes)
-- Public and private server access
-- VPN and proxy support
-- Local network discovery
-- Public server browser
-
-### Administration
-- Unified local/remote admin interface
-- Real-time monitoring and control
-- User and room management
-- Audio system administration
-
-## Project Structure
-
-```
-voicelink-local/
-├── client/                     # Frontend application
-│   ├── index.html             # Main HTML file
-│   ├── css/                   # Stylesheets
-│   ├── js/                    # JavaScript modules
-│   │   ├── core/              # Core application logic
-│   │   ├── audio/             # Audio processing modules
-│   │   ├── network/           # Network and communication
-│   │   ├── security/          # Security and encryption
-│   │   ├── ui/                # User interface components
-│   │   └── tests/             # Testing and audio tools
-│   └── assets/                # Static assets
-│       ├── audio/             # Audio test files
-│       ├── images/            # Images and icons
-│       └── fonts/             # Custom fonts
-├── server/                    # Backend server
-│   ├── routes/                # Server routes and handlers
-│   ├── middleware/            # Express middleware
-│   ├── models/                # Data models
-│   └── utils/                 # Server utilities
-├── build/                     # Build configurations
-│   ├── dev/                   # Development builds
-│   └── prod/                  # Production builds
-├── tests/                     # Test suites
-│   ├── unit/                  # Unit tests
-│   ├── integration/           # Integration tests
-│   └── e2e/                   # End-to-end tests
-├── api/                       # API documentation
-├── config/                    # Configuration files
-└── docs/                      # Documentation
-```
-
-## Download & Installation
-
-### Pre-built Applications (Recommended)
-
-Download the latest release for your platform:
-
-#### 🍎 **macOS**
-- **Primary distribution artifact**: `VoiceLinkMacOS.zip`
-- **Compatibility alias artifact**: `VoiceLink-macOS.zip`
-- **Public download URL**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
-- **Updater manifest**: `swift-native/VoiceLinkNative/latest-mac.yml`
-- **Server updater manifest**: `swift-native/VoiceLinkNative/latest-mac.server.yml`
-- **Installation**: Extract ZIP, place `VoiceLink.app` in `/Applications`, launch.
-
-#### 🪟 **Windows**
-- Windows desktop is currently not released for production users in this channel.
-
-#### 🐧 **Linux**
-- Linux desktop packages are not the active production distribution path in this channel.
-
-### Permissions Troubleshooting (Room Settings / Delete)
-
-If you see:
-- `Room settings denied ... account is not recognized as owner/admin on this server`
-- `Delete denied ... account is not recognized as owner/admin on this server`
-
-VoiceLink only allows room-management actions when your current identity is recognized by the connected server as one of:
-- Room owner/creator identity for that room
-- Admin/owner role on that server instance
-- Moderator/manager permissions allowed by the server role model
-
-When using Mastodon or federated login, make sure you are signed into the same instance/account that created the room (or one granted admin/moderator rights on that server).
-
-### Development Installation
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd voicelink-local
+xattr -cr /Applications/VoiceLink.app
 ```
 
-2. Install dependencies:
-```bash
-npm install
-```
+### Windows
 
-3. Start the application:
-```bash
-npm start
-```
+1. Download `VoiceLink-windows.zip`.
+2. Extract it.
+3. Run `VoiceLink.exe`.
 
-## Development
+## Get an Account / Sign In
 
-### Available Scripts
+Available login methods depend on how your server is configured.
 
-- `npm start` - Start the desktop client development runtime
-- `npm run dev` - Start in development mode with hot reload
-- `npm run build` - Build for production
-- `npm run test` - Run test suite
-- `npm run lint` - Run code linting
-- `npm run package` - Package the application
+### 1) Mastodon Login
 
-### Architecture
+- Choose Mastodon login in the app.
+- Enter your instance domain (example: `mastodon.social`).
+- Approve login in your browser.
 
-#### Core Components
+### 2) Email Login (when enabled by server admin)
 
-1. **Audio Engine** (`client/js/core/audio-engine.js`)
-   - Core audio processing and device management
-   - Input/output routing and gain control
-   - Professional audio interface support
+- Use email verification flow in the desktop app.
+- Enter your email.
+- Confirm with the code sent to your inbox.
 
-2. **Spatial Audio Engine** (`client/js/audio/spatial-audio.js`)
-   - 3D binaural audio processing
-   - HRTF-based positioning
-   - Room acoustics simulation
+### 3) SSO Login (when enabled)
 
-3. **Multi-Channel Engine** (`client/js/audio/multi-channel-engine.js`)
-   - 64-channel audio matrix
-   - Channel routing and assignment
-   - Professional audio workflows
+- Some servers use SSO gateways (example: Authelia).
+- Use the SSO sign-in button shown by that server.
 
-4. **VST Streaming Engine** (`client/js/audio/vst-streaming-engine.js`)
-   - Real-time audio effects processing
-   - Plugin chain management
-   - Cross-user effect streaming
+### 4) Admin Invite / Magic Invite Link
 
-5. **WebRTC Manager** (`client/js/network/webrtc-manager.js`)
-   - P2P connection management
-   - Audio stream handling
-   - Network optimization
+- Open the invite link from the server owner.
+- Complete account activation (email, username, password).
+- Sign in with the new credentials.
 
-6. **Security Manager** (`client/js/security/security-encryption-manager.js`)
-   - End-to-end encryption
-   - Key management
-   - Security policy enforcement
+## Connect to a Server
 
-#### User Interface
+- Use a full URL (example: `https://voicelink.devinecreations.net`).
+- Or use an invite/deep link (`vcl://...`).
+- Desktop also supports legacy `voicelink://...` links.
 
-1. **Settings Interface Manager** (`client/js/ui/settings-interface-manager.js`)
-   - Comprehensive tabbed settings interface
-   - Real-time configuration updates
-   - Settings import/export
+## First Room Checklist
 
-2. **Admin Interface** (`client/js/ui/unified-admin-interface.js`)
-   - Server administration
-   - User and room management
-   - System monitoring
+1. Sign in.
+2. Join a public room or create your own.
+3. Allow microphone access.
+4. Test audio from settings.
 
-#### Testing & Audio Tools
+## Need Help?
 
-1. **Audio Test Manager** (`client/js/tests/audio-test-manager.js`)
-   - Audio playback testing
-   - Device testing and calibration
-   - Quality assurance tools
+- Main downloads page: https://voicelink.devinecreations.net/downloads.html
+- Server/community mirror: https://node2.voicelink.devinecreations.net/downloads.html
 
-2. **Synthetic Audio Generator** (`client/js/tests/synthetic-audio-generator.js`)
-   - TTS-based test generation
-   - 3D positioning tests
-   - Frequency and distance testing
+## For Developers
 
-## Configuration
-
-### Audio Settings
-Configure audio devices, channel routing, and processing in the comprehensive settings interface:
-- Audio Devices: Input/output device selection and configuration
-- Channel Matrix: 64-channel routing and assignments
-- VST Plugins: Effects processing and streaming
-- 3D Audio: Spatial processing and room acoustics
-
-### Security Settings
-Configure encryption and authentication:
-- Encryption Level: Basic, Medium, or High security
-- Two-Factor Authentication: Multiple methods supported
-- Keychain Integration: Platform-specific credential storage
-
-### Server Settings
-Configure connection and networking:
-- Connection Methods: Direct IP, domain, invite links, QR codes
-- Proxy/VPN: Advanced networking options
-- Discovery: Local and public server discovery
-
-## API Integration
-
-### TTS Integration (Synthetic Audio Generation)
-To use synthetic audio generation features:
-
-1. Get an API key from Eleven Labs or similar TTS service
-2. Configure in Settings > Audio Testing > TTS Configuration
-3. Generate custom test audio for 3D positioning and quality testing
-
-### Third-Party Media Players
-The application supports API integration with external media players and streaming services through the plugin system.
-
-## Testing
-
-### Audio Testing
-The application includes comprehensive audio testing tools:
-
-1. **Playback Tests**: Test speakers and audio routing
-2. **Recording Tests**: Test microphones and input devices
-3. **3D Spatial Tests**: Test binaural audio positioning
-4. **Synthetic Tests**: Generate custom test audio with TTS
-
-### Network Testing
-Test P2P connections and network performance:
-- Connection quality monitoring
-- Latency and jitter measurement
-- Bandwidth optimization
-
-## Security
-
-### Encryption
-- AES-256-GCM for real-time audio encryption
-- RSA-4096 for key exchange
-- Perfect Forward Secrecy support
-
-### Authentication
-- Multiple 2FA methods supported
-- Biometric authentication
-- Hardware key support (WebAuthn)
-- Cross-platform keychain integration
-
-### Privacy
-- No data collection or telemetry
-- Local-first architecture
-- End-to-end encryption by default
-
-## Recent Updates (v1.0.0)
-
-### 🔧 **Critical Fixes**
-- **Fixed Room Creation**: Resolved issue where users were returned to main screen instead of joining created rooms
-- **Fixed UI Sounds**: Restored all UI sound effects with improved fallback system and error handling
-- **Fixed Audio Initialization**: Enhanced audio startup with better browser autoplay policy compliance
-- **Improved Error Handling**: Added robust fallback systems for audio context failures
-
-### 🚀 **Enhancements**
-- Enhanced `joinRoom()` method with proper audio initialization sequencing
-- Improved `playUISound` function with comprehensive error handling
-- Better `setupAudioGestureHandler()` for reliable audio startup
-- Added fallback audio systems for better reliability
-
-### 🔄 **Technical Improvements**
-- Fixed audio engine initialization timing issues
-- Enhanced WebRTC connection reliability
-- Improved browser compatibility for audio contexts
-- Better handling of deferred audio initialization
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Audio Device Access**
-   - Ensure microphone permissions are granted
-   - Check audio device drivers
-   - Verify device compatibility
-
-2. **Connection Issues**
-   - Check firewall settings
-   - Verify network connectivity
-   - Test with different connection methods
-
-3. **Performance Issues**
-   - Adjust buffer sizes in audio settings
-   - Disable unnecessary VST plugins
-   - Check system resource usage
-
-### Logs and Debugging
-- Enable verbose logging in development mode
-- Check browser developer tools for errors
-- Monitor network connections in admin interface
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new features
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Web Audio API for audio processing
-- WebRTC for P2P communication
-- Native desktop clients (macOS/Windows)
-- SimplePeer for WebRTC abstraction
-- Socket.IO for real-time communication
-
-## Support
-
-For issues and support:
-1. Check the troubleshooting section
-2. Search existing issues
-3. Create a new issue with detailed information
-4. Include system information and logs
+- Main docs: `docs/`
+- Setup guide: `SETUP.md`
+- macOS packaging details: `MACOS_BUILD_INSTRUCTIONS.md`
+- Windows packaging details: `WINDOWS_BUILD_INSTRUCTIONS.md`
