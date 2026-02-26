@@ -1044,6 +1044,7 @@ struct LinkedServerCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
+        case .adminInvite: return .indigo
         }
     }
 }
@@ -1251,6 +1252,7 @@ struct PairingSheetView: View {
     @State private var selectedAuthMethod: AuthMethod = .pairingCode
     @State private var showMastodonAuth = false
     @State private var showEmailAuth = false
+    @State private var showAdminInviteAuth = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -1295,6 +1297,15 @@ struct PairingSheetView: View {
                         } else {
                             showEmailAuth = true
                         }
+                    }
+
+                    AuthMethodButton(
+                        method: .adminInvite,
+                        isSelected: selectedAuthMethod == .adminInvite,
+                        isAuthenticated: authManager.currentUser?.authMethod == .email
+                    ) {
+                        selectedAuthMethod = .adminInvite
+                        showAdminInviteAuth = true
                     }
                 }
             }
@@ -1367,6 +1378,11 @@ struct PairingSheetView: View {
         }
         .sheet(isPresented: $showEmailAuth) {
             EmailAuthView(isPresented: $showEmailAuth, serverURL: serverURL.isEmpty ? "http://localhost:4004" : serverURL) {
+                selectedAuthMethod = .email
+            }
+        }
+        .sheet(isPresented: $showAdminInviteAuth) {
+            AdminInviteAuthView(isPresented: $showAdminInviteAuth) {
                 selectedAuthMethod = .email
             }
         }

@@ -211,6 +211,16 @@
                             <p>Host your own VoiceLink Local server for maximum control and privacy.</p>
 
                             <div class="server-specs">
+                                <h4>Runtime Layout (Recommended)</h4>
+                                <ul>
+                                    <li><strong>Primary runtime:</strong> <code>/home/devinecr/apps/voicelink-local/*</code> (desktop app + frontend client)</li>
+                                    <li><strong>HubNode gateway:</strong> <code>/home/devinecr/apps/hubnode/voicelink/*</code> (external apps using HubNode APIs)</li>
+                                    <li><strong>PM2 primary:</strong> <code>voicelink-primary</code> on <code>PORT=3010</code></li>
+                                    <li><strong>PM2 gateway:</strong> <code>voicelink-hubnode-gateway</code> on <code>PORT=3110</code></li>
+                                </ul>
+                            </div>
+
+                            <div class="server-specs">
                                 <h4>Minimum Requirements:</h4>
                                 <ul>
                                     <li><strong>CPU:</strong> 2 cores, 2.0 GHz</li>

@@ -263,6 +263,35 @@
             </div>
         </section>
 
+        <!-- Runtime Topology -->
+        <section class="features-section">
+            <h2>🧭 Runtime Topology</h2>
+            <div class="feature-category">
+                <h3>Primary vs Gateway Services</h3>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">🟢</div>
+                        <div class="feature-content">
+                            <h4>Primary Runtime</h4>
+                            <p><code>/home/devinecr/apps/voicelink-local/*</code></p>
+                            <p>Used by desktop apps and frontend clients.</p>
+                            <p><strong>PM2:</strong> <code>voicelink-primary</code> on <code>PORT=3010</code></p>
+                        </div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔗</div>
+                        <div class="feature-content">
+                            <h4>HubNode Gateway</h4>
+                            <p><code>/home/devinecr/apps/hubnode/voicelink/*</code></p>
+                            <p>Used by external apps/services that integrate through HubNode.</p>
+                            <p><strong>PM2:</strong> <code>voicelink-hubnode-gateway</code> on <code>PORT=3110</code></p>
+                        </div>
+                    </div>
+                </div>
+                <p><strong>Note:</strong> Keep desktop/web clients pointed at the primary runtime unless a service explicitly requires the HubNode gateway.</p>
+            </div>
+        </section>
+
         <!-- Troubleshooting -->
         <section class="troubleshooting-section">
             <h2>🔧 Troubleshooting</h2>

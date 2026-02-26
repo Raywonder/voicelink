@@ -703,6 +703,12 @@ class AppState: ObservableObject {
 
             self?.handleURLInvite(code: code)
         }
+        NotificationCenter.default.addObserver(forName: .urlAdminInvite, object: nil, queue: .main) { [weak self] notification in
+            guard let data = notification.object as? [String: Any],
+                  let token = data["token"] as? String else { return }
+            let server = data["server"] as? String
+            self?.handleURLAdminInvite(token: token, server: server)
+        }
 
         // Handle URL open settings
         NotificationCenter.default.addObserver(forName: .urlOpenSettings, object: nil, queue: .main) { [weak self] _ in
@@ -786,6 +792,17 @@ class AppState: ObservableObject {
             errorMessage = "Joining room \(code)..."
             serverManager.joinRoom(roomId: code, username: joinName)
         }
+    }
+
+    private func handleURLAdminInvite(token: String, server: String?) {
+        let normalizedServer: String? = {
+            guard let server, !server.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return server
+        }()
+        AuthenticationManager.shared.stageAdminInvite(token: token, serverURL: normalizedServer)
+        currentScreen = .servers
+        errorMessage = "Admin invite detected. Open Link a Server and choose Admin Invite to activate."
+        AccessibilityManager.shared.announceStatus("Admin invite link received. Open Link a Server, then Admin Invite.")
     }
 
     private func initializeLicensing() {

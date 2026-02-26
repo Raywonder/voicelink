@@ -21,6 +21,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     // Email verification state
     @Published var pendingEmailVerification: String?
     @Published var emailVerificationExpiry: Date?
+    @Published var pendingAdminInviteToken: String?
+    @Published var pendingAdminInviteServerURL: String?
+    @Published var pendingAdminInviteEmail: String?
+    @Published var pendingAdminInviteRole: String?
 
     enum AuthState {
         case unauthenticated
@@ -405,6 +409,109 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         }.resume()
     }
 
+    // MARK: - Admin Invite (Magic Link)
+
+    func stageAdminInvite(token: String, serverURL: String?) {
+        pendingAdminInviteToken = token
+        pendingAdminInviteServerURL = serverURL
+    }
+
+    func fetchAdminInvite(token: String, serverURL: String, completion: @escaping (Bool, String?) -> Void) {
+        guard let url = URL(string: "\(serverURL)/api/auth/local/admin-invite/\(token)") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data = data,
+                      let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      (json["success"] as? Bool) == true else {
+                    let errorMsg = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any])?["error"] as? String
+                    completion(false, errorMsg ?? "Invite is invalid or expired")
+                    return
+                }
+                self?.pendingAdminInviteEmail = json["email"] as? String
+                self?.pendingAdminInviteRole = json["role"] as? String
+                completion(true, nil)
+            }
+        }.resume()
+    }
+
+    func acceptAdminInvite(
+        token: String,
+        email: String,
+        username: String,
+        displayName: String,
+        password: String,
+        serverURL: String,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        guard let url = URL(string: "\(serverURL)/api/auth/local/admin-invite/accept") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "token": token,
+            "email": email,
+            "username": username,
+            "displayName": displayName,
+            "password": password
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data = data,
+                      let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool, success,
+                      let accessToken = json["accessToken"] as? String,
+                      let userJson = json["user"] as? [String: Any] else {
+                    let errorMsg = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any])?["error"] as? String
+                    completion(false, errorMsg ?? "Failed to activate invite")
+                    return
+                }
+
+                let emailValue = (userJson["email"] as? String) ?? email
+                let usernameValue = (userJson["username"] as? String) ?? username
+                let displayNameValue = (userJson["displayName"] as? String) ?? displayName
+                let userId = (userJson["id"] as? String) ?? UUID().uuidString
+                let user = AuthenticatedUser(
+                    id: userId,
+                    username: usernameValue,
+                    displayName: displayNameValue,
+                    email: emailValue,
+                    authMethod: .email,
+                    mastodonInstance: nil,
+                    accessToken: accessToken,
+                    avatarURL: nil
+                )
+                self?.currentUser = user
+                self?.authState = .authenticated
+                self?.saveAuth(user: user)
+                self?.pendingAdminInviteToken = nil
+                self?.pendingAdminInviteServerURL = nil
+                completion(true, nil)
+            }
+        }.resume()
+    }
+
     // MARK: - Session Management
 
     func logout() {
@@ -628,12 +735,14 @@ enum AuthMethod: String, Codable {
     case pairingCode = "pairing"
     case mastodon = "mastodon"
     case email = "email"
+    case adminInvite = "admin_invite"
 
     var displayName: String {
         switch self {
         case .pairingCode: return "Pairing Code"
         case .mastodon: return "Mastodon"
         case .email: return "Email"
+        case .adminInvite: return "Admin Invite"
         }
     }
 
@@ -642,6 +751,7 @@ enum AuthMethod: String, Codable {
         case .pairingCode: return "number.circle"
         case .mastodon: return "at.circle"
         case .email: return "envelope.circle"
+        case .adminInvite: return "person.badge.key"
         }
     }
 }
@@ -1023,6 +1133,128 @@ struct EmailAuthView: View {
     }
 }
 
+struct AdminInviteAuthView: View {
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @State private var tokenInput: String = ""
+    @State private var serverURLInput: String = ""
+    @State private var emailInput: String = ""
+    @State private var usernameInput: String = ""
+    @State private var displayNameInput: String = ""
+    @State private var passwordInput: String = ""
+    @State private var isLoading = false
+    @State private var statusMessage: String?
+    @Binding var isPresented: Bool
+    var onSuccess: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "person.badge.key.fill")
+                .font(.system(size: 44))
+                .foregroundColor(.purple)
+            Text("Admin Invite Activation")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            TextField("Server URL (https://...)", text: $serverURLInput)
+                .textFieldStyle(.roundedBorder)
+            TextField("Invite Token", text: $tokenInput)
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 8) {
+                Button("Load Invite") { loadInvite() }
+                    .buttonStyle(.bordered)
+                Spacer()
+                if let role = authManager.pendingAdminInviteRole, !role.isEmpty {
+                    Text("Role: \(role)").font(.caption).foregroundColor(.secondary)
+                }
+            }
+
+            TextField("Email", text: $emailInput)
+                .textFieldStyle(.roundedBorder)
+            TextField("Username", text: $usernameInput)
+                .textFieldStyle(.roundedBorder)
+            TextField("Display Name", text: $displayNameInput)
+                .textFieldStyle(.roundedBorder)
+            SecureField("Password (min 8 chars)", text: $passwordInput)
+                .textFieldStyle(.roundedBorder)
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if let err = authManager.authError {
+                Text(err).font(.caption).foregroundColor(.red)
+            }
+
+            HStack(spacing: 10) {
+                Button("Cancel") { isPresented = false }
+                    .buttonStyle(.bordered)
+                Button("Activate") { activateInvite() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(tokenInput.isEmpty || serverURLInput.isEmpty || usernameInput.isEmpty || passwordInput.count < 8 || isLoading)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+        .onAppear {
+            if tokenInput.isEmpty { tokenInput = authManager.pendingAdminInviteToken ?? "" }
+            if serverURLInput.isEmpty {
+                serverURLInput = authManager.pendingAdminInviteServerURL ?? ServerManager.mainServer
+            }
+        }
+    }
+
+    private func normalizedServerURL() -> String {
+        var server = serverURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !server.hasPrefix("http://") && !server.hasPrefix("https://") {
+            server = "https://" + server
+        }
+        return server.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func loadInvite() {
+        isLoading = true
+        statusMessage = "Loading invite..."
+        let server = normalizedServerURL()
+        authManager.fetchAdminInvite(token: tokenInput, serverURL: server) { success, error in
+            isLoading = false
+            if success {
+                emailInput = authManager.pendingAdminInviteEmail ?? emailInput
+                if displayNameInput.isEmpty {
+                    displayNameInput = usernameInput
+                }
+                statusMessage = "Invite loaded."
+            } else {
+                statusMessage = error ?? "Failed to load invite."
+            }
+        }
+    }
+
+    private func activateInvite() {
+        isLoading = true
+        statusMessage = "Activating admin access..."
+        let server = normalizedServerURL()
+        authManager.acceptAdminInvite(
+            token: tokenInput,
+            email: emailInput,
+            username: usernameInput,
+            displayName: displayNameInput.isEmpty ? usernameInput : displayNameInput,
+            password: passwordInput,
+            serverURL: server
+        ) { success, error in
+            isLoading = false
+            if success {
+                statusMessage = "Admin access activated."
+                isPresented = false
+                onSuccess?()
+            } else {
+                statusMessage = error ?? "Activation failed."
+            }
+        }
+    }
+}
+
 // MARK: - Device Management View (for server admin/menubar)
 
 struct DeviceManagementView: View {
@@ -1146,6 +1378,7 @@ struct DeviceCard: View {
         case .pairingCode: return .gray
         case .mastodon: return .purple
         case .email: return .blue
+        case .adminInvite: return .indigo
         }
     }
 

@@ -91,6 +91,10 @@ class VoiceLinkApp {
         this.setupLogCapture();
         this.setupGlobalErrorLogHooks();
 
+        if (this.tryRenderAdminInviteRoute()) {
+            return;
+        }
+
         // IMMEDIATE: Hide platform-specific elements based on environment
         // This must run FIRST to prevent flash of unwanted content
         const nativeAPI = window.nativeAPI || null;
@@ -435,6 +439,103 @@ class VoiceLinkApp {
         }
 
         console.log('Advanced systems initialized');
+    }
+
+    tryRenderAdminInviteRoute() {
+        const pathname = String(window.location.pathname || '').toLowerCase();
+        const params = new URLSearchParams(window.location.search || '');
+        const token = params.get('token') || params.get('admin_invite');
+        const isInvitePath = pathname.includes('admin-invite');
+
+        if (!isInvitePath || !token) {
+            return false;
+        }
+
+        document.body.innerHTML = `
+            <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(1200px 700px at 20% -10%, #1d356b 0%, #0b1220 60%);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#e8eefc;">
+              <section style="width:min(640px,100%);background:linear-gradient(160deg,#101b33 0%,#152445 100%);border:1px solid #2a3d69;border-radius:14px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+                <h1 style="margin:0 0 8px;font-size:1.4rem;">VoiceLink Admin Invite</h1>
+                <p id="invite-meta" style="color:#95a6cd;margin-bottom:14px;line-height:1.45;">Checking invite details...</p>
+                <label for="invite-email" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Email</label>
+                <input id="invite-email" type="email" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-username" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Username</label>
+                <input id="invite-username" type="text" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-display" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Display Name</label>
+                <input id="invite-display" type="text" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-password" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Password</label>
+                <input id="invite-password" type="password" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+                  <button id="invite-activate" style="border:0;border-radius:8px;padding:10px 14px;background:#3b82f6;color:#fff;font-weight:600;cursor:pointer;">Activate Admin Access</button>
+                  <button id="invite-open-desktop" style="border:0;border-radius:8px;padding:10px 14px;background:#21365f;color:#d9e5ff;font-weight:600;cursor:pointer;">Open in VoiceLink Desktop</button>
+                </div>
+                <p id="invite-status" style="margin-top:12px;color:#95a6cd;min-height:24px;"></p>
+              </section>
+            </main>
+        `;
+
+        const metaEl = document.getElementById('invite-meta');
+        const statusEl = document.getElementById('invite-status');
+        const setStatus = (text, color = '#95a6cd') => {
+            statusEl.textContent = text || '';
+            statusEl.style.color = color;
+        };
+
+        const loadInvite = async () => {
+            try {
+                const response = await fetch(`/api/auth/local/admin-invite/${encodeURIComponent(token)}`);
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    metaEl.textContent = result.error || 'Invalid or expired invite.';
+                    metaEl.style.color = '#ef4444';
+                    return;
+                }
+                metaEl.textContent = `Invited as ${result.role} by ${result.invitedBy || 'Server Admin'} - Expires ${new Date(result.expiresAt).toLocaleString()}`;
+                document.getElementById('invite-email').value = result.email || '';
+            } catch (_error) {
+                metaEl.textContent = 'Unable to load invite details.';
+                metaEl.style.color = '#ef4444';
+            }
+        };
+
+        document.getElementById('invite-open-desktop')?.addEventListener('click', () => {
+            const base = window.location.origin;
+            window.location.href = `vcl://admin-invite?token=${encodeURIComponent(token)}&server=${encodeURIComponent(base)}`;
+        });
+
+        document.getElementById('invite-activate')?.addEventListener('click', async () => {
+            const payload = {
+                token,
+                email: document.getElementById('invite-email').value.trim(),
+                username: document.getElementById('invite-username').value.trim(),
+                displayName: document.getElementById('invite-display').value.trim(),
+                password: document.getElementById('invite-password').value
+            };
+            setStatus('Activating invite...');
+            try {
+                const response = await fetch('/api/auth/local/admin-invite/accept', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    setStatus(result.error || 'Activation failed.', '#ef4444');
+                    return;
+                }
+                if (result.accessToken) {
+                    localStorage.setItem('voicelink_local_token', result.accessToken);
+                }
+                if (result.user) {
+                    localStorage.setItem('voicelink_local_user', JSON.stringify(result.user));
+                }
+                setStatus('Admin access activated. You can now sign in with your credentials.', '#22c55e');
+            } catch (_error) {
+                setStatus('Activation failed. Please try again.', '#ef4444');
+            }
+        });
+
+        loadInvite();
+        return true;
     }
 
     initializePASystemAndTTS() {
@@ -5777,6 +5878,62 @@ class VoiceLinkApp {
         const requireAuthRow = this.createCheckboxRow('Require Authentication', 'admin-require-auth');
         settingsCard.appendChild(requireAuthRow);
 
+        const dbSection = document.createElement('div');
+        dbSection.className = 'setting-row';
+        dbSection.innerHTML = `
+            <label style="display:block;margin-top:10px;font-weight:600;">Database Configuration</label>
+            <label><input type="checkbox" id="admin-db-enabled"> Enable external database backend</label>
+            <div style="margin-top:8px;">
+                <label style="display:block;">Provider:</label>
+                <select id="admin-db-provider">
+                    <option value="sqlite">SQLite (Recommended default)</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                    <option value="mariadb">MariaDB</option>
+                </select>
+            </div>
+            <div id="admin-db-sqlite-fields" style="margin-top:8px;">
+                <label style="display:block;">SQLite DB Path:</label>
+                <input type="text" id="admin-db-sqlite-path" value="./data/voicelink.db">
+            </div>
+            <div id="admin-db-network-fields" style="margin-top:8px;display:none;">
+                <label style="display:block;">Host:</label>
+                <input type="text" id="admin-db-host" value="127.0.0.1">
+                <label style="display:block;">Port:</label>
+                <input type="number" id="admin-db-port" value="5432">
+                <label style="display:block;">Database Name:</label>
+                <input type="text" id="admin-db-name" value="voicelink">
+                <label style="display:block;">Username:</label>
+                <input type="text" id="admin-db-user" value="voicelink">
+                <label style="display:block;">Password:</label>
+                <input type="password" id="admin-db-password" value="">
+            </div>
+            <div style="margin-top:8px;">
+                <button class="admin-action-btn" id="admin-db-test-btn" type="button">Test Database Connection</button>
+            </div>
+        `;
+        settingsCard.appendChild(dbSection);
+
+        const inviteSection = document.createElement('div');
+        inviteSection.className = 'setting-row';
+        inviteSection.innerHTML = `
+            <label style="display:block;margin-top:12px;font-weight:600;">Admin Invite (Magic Link)</label>
+            <label style="display:block;">Admin Email:</label>
+            <input type="email" id="admin-invite-email" placeholder="admin@example.com">
+            <label style="display:block;margin-top:6px;">Role:</label>
+            <select id="admin-invite-role">
+                <option value="admin">Admin</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Owner</option>
+            </select>
+            <div style="margin-top:8px;">
+                <button class="admin-action-btn" id="admin-send-invite-btn" type="button">Send/Generate Invite Link</button>
+            </div>
+            <label style="display:block;margin-top:6px;">Last Invite Link:</label>
+            <input type="text" id="admin-last-invite-link" readonly>
+        `;
+        settingsCard.appendChild(inviteSection);
+
         const saveBtn = document.createElement('button');
         saveBtn.className = 'primary-btn';
         saveBtn.textContent = 'Save Settings';
@@ -5785,6 +5942,13 @@ class VoiceLinkApp {
 
         grid.appendChild(settingsCard);
         tab.appendChild(grid);
+
+        setTimeout(() => {
+            document.getElementById('admin-db-provider')?.addEventListener('change', () => this.updateDatabaseFieldsVisibility());
+            document.getElementById('admin-db-test-btn')?.addEventListener('click', () => this.testDatabaseConnection());
+            document.getElementById('admin-send-invite-btn')?.addEventListener('click', () => this.sendAdminInvite());
+            this.updateDatabaseFieldsVisibility();
+        }, 0);
 
         return tab;
     }
@@ -6057,11 +6221,139 @@ class VoiceLinkApp {
     async loadAdminData() {
         await Promise.all([
             this.loadAdminServerStats(),
+            this.loadAdminSettings(),
             this.loadAdminRooms(),
             this.loadAdminUsers(),
             this.loadAdminBots(),
             this.loadFederatedServers()
         ]);
+    }
+
+    async loadAdminSettings() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/admin/settings`, {
+                headers: authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {}
+            });
+            if (!response.ok) return;
+            const settings = await response.json();
+
+            const maxRoomsEl = document.getElementById('admin-max-rooms');
+            const requireAuthEl = document.getElementById('admin-require-auth');
+            if (maxRoomsEl && settings.maxRooms != null) maxRoomsEl.value = settings.maxRooms;
+            if (requireAuthEl) requireAuthEl.checked = !!settings.requireAuth;
+
+            const db = settings.database || {};
+            const provider = db.provider || 'sqlite';
+            const enabled = !!db.enabled;
+
+            const enabledEl = document.getElementById('admin-db-enabled');
+            const providerEl = document.getElementById('admin-db-provider');
+            if (enabledEl) enabledEl.checked = enabled;
+            if (providerEl) providerEl.value = provider;
+
+            const sqlitePathEl = document.getElementById('admin-db-sqlite-path');
+            if (sqlitePathEl) sqlitePathEl.value = db.sqlite?.path || './data/voicelink.db';
+
+            const netCfg = db[provider] || {};
+            const hostEl = document.getElementById('admin-db-host');
+            const portEl = document.getElementById('admin-db-port');
+            const nameEl = document.getElementById('admin-db-name');
+            const userEl = document.getElementById('admin-db-user');
+            const passEl = document.getElementById('admin-db-password');
+            if (hostEl) hostEl.value = netCfg.host || '127.0.0.1';
+            if (portEl) portEl.value = netCfg.port || (provider === 'postgres' ? 5432 : 3306);
+            if (nameEl) nameEl.value = netCfg.database || 'voicelink';
+            if (userEl) userEl.value = netCfg.user || 'voicelink';
+            if (passEl) passEl.value = '';
+
+            this.updateDatabaseFieldsVisibility();
+        } catch (error) {
+            console.error('Failed to load admin settings:', error);
+        }
+    }
+
+    updateDatabaseFieldsVisibility() {
+        const provider = document.getElementById('admin-db-provider')?.value || 'sqlite';
+        const sqliteFields = document.getElementById('admin-db-sqlite-fields');
+        const networkFields = document.getElementById('admin-db-network-fields');
+        const portInput = document.getElementById('admin-db-port');
+
+        if (sqliteFields) sqliteFields.style.display = provider === 'sqlite' ? '' : 'none';
+        if (networkFields) networkFields.style.display = provider === 'sqlite' ? 'none' : '';
+        if (portInput && !portInput.value) {
+            portInput.value = provider === 'postgres' ? '5432' : '3306';
+        }
+    }
+
+    async testDatabaseConnection() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const provider = document.getElementById('admin-db-provider')?.value || 'sqlite';
+            const payload = {
+                provider,
+                config: provider === 'sqlite'
+                    ? { path: document.getElementById('admin-db-sqlite-path')?.value || '' }
+                    : {
+                        host: document.getElementById('admin-db-host')?.value || '',
+                        port: Number(document.getElementById('admin-db-port')?.value || 0),
+                        database: document.getElementById('admin-db-name')?.value || '',
+                        user: document.getElementById('admin-db-user')?.value || '',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    }
+            };
+
+            const response = await fetch(`${apiBase}/api/admin/database/test`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (response.ok && result.success) {
+                this.showNotification(result.message || 'Database test successful', 'success');
+            } else {
+                this.showNotification(result.error || 'Database test failed', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Database test failed', 'error');
+        }
+    }
+
+    async sendAdminInvite() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const email = document.getElementById('admin-invite-email')?.value?.trim();
+            const role = document.getElementById('admin-invite-role')?.value || 'admin';
+            if (!email) {
+                this.showNotification('Enter admin email first', 'error');
+                return;
+            }
+
+            const response = await fetch(`${apiBase}/api/admin/invites`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify({ email, role })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to create invite', 'error');
+                return;
+            }
+            const linkEl = document.getElementById('admin-last-invite-link');
+            if (linkEl) linkEl.value = result.inviteUrl || '';
+            this.showNotification('Admin invite created', 'success');
+        } catch (error) {
+            this.showNotification('Failed to create invite', 'error');
+        }
     }
 
     async loadAdminServerStats() {
@@ -6522,15 +6814,47 @@ class VoiceLinkApp {
     async saveServerSettings() {
         try {
             const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
 
             const settings = {
                 maxRooms: document.getElementById('admin-max-rooms')?.value,
-                requireAuth: document.getElementById('admin-require-auth')?.checked
+                requireAuth: document.getElementById('admin-require-auth')?.checked,
+                database: {
+                    enabled: !!document.getElementById('admin-db-enabled')?.checked,
+                    provider: document.getElementById('admin-db-provider')?.value || 'sqlite',
+                    sqlite: {
+                        path: document.getElementById('admin-db-sqlite-path')?.value || './data/voicelink.db'
+                    },
+                    postgres: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 5432),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    },
+                    mysql: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 3306),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    },
+                    mariadb: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 3306),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    }
+                }
             };
 
             await fetch(`${apiBase}/api/admin/settings`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
                 body: JSON.stringify(settings)
             });
 

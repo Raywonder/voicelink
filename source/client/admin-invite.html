@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VoiceLink Admin Invite</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #101b33;
+      --panel-2: #152445;
+      --text: #e8eefc;
+      --muted: #95a6cd;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --accent: #3b82f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: radial-gradient(1200px 700px at 20% -10%, #1d356b 0%, var(--bg) 60%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(640px, 100%);
+      background: linear-gradient(160deg, var(--panel) 0%, var(--panel-2) 100%);
+      border: 1px solid #2a3d69;
+      border-radius: 14px;
+      padding: 22px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.4rem; }
+    .meta { color: var(--muted); margin-bottom: 14px; line-height: 1.45; }
+    .grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 1fr;
+    }
+    .full { grid-column: 1 / -1; }
+    label { font-size: 0.9rem; color: #c7d4f1; display: block; margin-bottom: 4px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #314a7d;
+      background: #0d1730;
+      color: var(--text);
+      outline: none;
+    }
+    input:focus { border-color: #5c84d6; }
+    .actions {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .primary { background: var(--accent); color: white; }
+    .secondary { background: #21365f; color: #d9e5ff; }
+    .status { margin-top: 12px; color: var(--muted); min-height: 24px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card" role="main">
+    <h1>VoiceLink Admin Invite</h1>
+    <p class="meta" id="invite-meta">Checking invite details...</p>
+
+    <div class="grid">
+      <div class="full">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+      </div>
+      <div>
+        <label for="username">Username</label>
+        <input id="username" type="text" autocomplete="username" placeholder="your_username">
+      </div>
+      <div>
+        <label for="displayName">Display Name</label>
+        <input id="displayName" type="text" autocomplete="name" placeholder="Your Name">
+      </div>
+      <div class="full">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="new-password" placeholder="At least 8 characters">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="activate">Activate Admin Access</button>
+      <button class="secondary" id="open-desktop" type="button">Open in VoiceLink Desktop</button>
+    </div>
+
+    <p class="status" id="status"></p>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const metaEl = document.getElementById('invite-meta');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(text, cls = '') {
+      statusEl.textContent = text || '';
+      statusEl.className = `status${cls ? ' ' + cls : ''}`;
+    }
+
+    async function loadInvite() {
+      if (!token) {
+        metaEl.textContent = 'Missing invite token.';
+        metaEl.style.color = 'var(--err)';
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/auth/local/admin-invite/${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          metaEl.textContent = data.error || 'Invalid or expired invite.';
+          metaEl.style.color = 'var(--err)';
+          return;
+        }
+
+        metaEl.textContent = `Invited as ${data.role} by ${data.invitedBy || 'Server Admin'} · Expires ${new Date(data.expiresAt).toLocaleString()}`;
+        document.getElementById('email').value = data.email || '';
+      } catch (error) {
+        metaEl.textContent = 'Unable to load invite details right now.';
+        metaEl.style.color = 'var(--err)';
+      }
+    }
+
+    async function activateInvite() {
+      if (!token) return;
+      const payload = {
+        token,
+        email: document.getElementById('email').value.trim(),
+        username: document.getElementById('username').value.trim(),
+        displayName: document.getElementById('displayName').value.trim(),
+        password: document.getElementById('password').value
+      };
+
+      setStatus('Activating invite...');
+      try {
+        const res = await fetch('/api/auth/local/admin-invite/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          setStatus(data.error || 'Activation failed.', 'err');
+          return;
+        }
+
+        if (data.accessToken) {
+          localStorage.setItem('voicelink_local_token', data.accessToken);
+        }
+        if (data.user) {
+          localStorage.setItem('voicelink_local_user', JSON.stringify(data.user));
+        }
+
+        setStatus('Admin access activated. You can sign in immediately.', 'ok');
+      } catch (error) {
+        setStatus('Activation failed. Please try again.', 'err');
+      }
+    }
+
+    function openDesktop() {
+      if (!token) return;
+      const base = window.location.origin;
+      window.location.href = `vcl://admin-invite?token=${encodeURIComponent(token)}&server=${encodeURIComponent(base)}`;
+    }
+
+    document.getElementById('activate').addEventListener('click', activateInvite);
+    document.getElementById('open-desktop').addEventListener('click', openDesktop);
+    loadInvite();
+  </script>
+</body>
+</html>

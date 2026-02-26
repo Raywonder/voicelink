@@ -5,7 +5,10 @@ const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
+const crypto = require('crypto');
+const net = require('net');
 const { v4: uuidv4 } = require('uuid');
+const nodemailer = require('nodemailer');
 const FederationManager = require('../utils/federation-manager');
 const MastodonBotManager = require('../utils/mastodon-bot');
 const { deployConfig, PRESETS } = require('../config/deploy-config');
@@ -111,12 +114,59 @@ class VoiceLinkLocalServer {
             updater: null
         };
         this.initializeModules();
+        this.initializeMailer();
 
         this.setupMiddleware();
         this.setupRoutes();
         this.setupSocketHandlers();
         this.loadPersistedRooms();
         this.start();
+    }
+
+    initializeMailer() {
+        const smtpHost = process.env.VOICELINK_SMTP_HOST || process.env.SMTP_HOST || '';
+        const smtpPort = Number(process.env.VOICELINK_SMTP_PORT || process.env.SMTP_PORT || 587);
+        const smtpUser = process.env.VOICELINK_SMTP_USER || process.env.SMTP_USER || '';
+        const smtpPass = process.env.VOICELINK_SMTP_PASS || process.env.SMTP_PASS || '';
+        const smtpSecureRaw = process.env.VOICELINK_SMTP_SECURE || process.env.SMTP_SECURE || '';
+        const useInternalSmtp = String(process.env.VOICELINK_SMTP_INTERNAL || '').toLowerCase() === 'true';
+        const smtpSecure = smtpSecureRaw
+            ? String(smtpSecureRaw).toLowerCase() === 'true'
+            : smtpPort === 465;
+
+        this.emailFrom = process.env.VOICELINK_EMAIL_FROM || process.env.EMAIL_FROM || 'services@devine-creations.com';
+        this.mailer = null;
+
+        const host = smtpHost || (useInternalSmtp ? '127.0.0.1' : '');
+        if (!host) {
+            console.log('[Mail] SMTP not configured; email sending disabled');
+            return;
+        }
+
+        const transportConfig = {
+            host,
+            port: smtpPort,
+            secure: smtpSecure
+        };
+
+        if (smtpUser && smtpPass) {
+            transportConfig.auth = { user: smtpUser, pass: smtpPass };
+        }
+
+        if (String(process.env.VOICELINK_SMTP_REQUIRE_TLS || '').toLowerCase() === 'false') {
+            transportConfig.requireTLS = false;
+            transportConfig.tls = { rejectUnauthorized: false };
+        }
+
+        try {
+            this.mailer = nodemailer.createTransport(transportConfig);
+            this.mailer.verify()
+                .then(() => console.log(`[Mail] SMTP ready via ${host}:${smtpPort} as ${smtpUser || 'unauthenticated sender'}`))
+                .catch((error) => console.warn('[Mail] SMTP verify failed:', error.message));
+        } catch (error) {
+            console.warn('[Mail] SMTP init failed:', error.message);
+            this.mailer = null;
+        }
     }
 
     getRequesterContext(req) {
@@ -2142,7 +2192,7 @@ class VoiceLinkLocalServer {
         // Setup federation API routes
         this.federation.setupRoutes(this.app);
 
-        // Protocol handler redirect (voicelink:// URLs)
+        // Protocol handler redirect (vcl:// and legacy voicelink:// URLs)
         this.app.get('/join/:roomId', (req, res) => {
             const { roomId } = req.params;
             const room = this.rooms.get(roomId);
@@ -2160,7 +2210,8 @@ class VoiceLinkLocalServer {
             res.json({
                 roomId,
                 webUrl: `${serverUrl}/?room=${roomId}`,
-                protocolUrl: `voicelink://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
+                protocolUrl: `vcl://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
+                legacyProtocolUrl: `voicelink://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
                 serverUrl
             });
         });
@@ -2709,6 +2760,456 @@ class VoiceLinkLocalServer {
         // Remote authentication and access control
         // ============================================
 
+        const localAuthDataPath = path.join(__dirname, '../../data/local-auth-users.json');
+        this.localAuthUsers = this.localAuthUsers || new Map();
+        this.localAuthSessions = this.localAuthSessions || new Map();
+        this.localAuthSessionTtlMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+        // If SMTP is not configured, allow credential registration without blocking on email code.
+        this.localAuthVerificationRequired = process.env.VOICELINK_REQUIRE_EMAIL_VERIFICATION !== 'false' && !!this.mailer;
+
+        const persistLocalAuthUsers = () => {
+            try {
+                const users = Array.from(this.localAuthUsers.values());
+                fs.writeFileSync(localAuthDataPath, JSON.stringify({ users }, null, 2));
+            } catch (error) {
+                console.error('[Auth] Failed to persist local auth users:', error.message);
+            }
+        };
+
+        if (!this.localAuthLoaded) {
+            this.localAuthLoaded = true;
+            try {
+                if (fs.existsSync(localAuthDataPath)) {
+                    const parsed = JSON.parse(fs.readFileSync(localAuthDataPath, 'utf8') || '{}');
+                    const users = Array.isArray(parsed.users) ? parsed.users : [];
+                    users.forEach((user) => {
+                        if (user?.id) this.localAuthUsers.set(user.id, user);
+                    });
+                    console.log(`[Auth] Loaded ${this.localAuthUsers.size} local credential users`);
+                }
+            } catch (error) {
+                console.error('[Auth] Failed loading local auth users:', error.message);
+            }
+        }
+
+        const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+        const normalizeUsername = (username) => String(username || '').trim().toLowerCase();
+        const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+        const validateUsername = (username) => /^[a-zA-Z0-9._-]{3,32}$/.test(String(username || '').trim());
+        const issueLocalAuthToken = (userId) => {
+            const token = `vl_local_${uuidv4()}_${Date.now().toString(36)}`;
+            this.localAuthSessions.set(token, {
+                userId,
+                createdAt: new Date(),
+                expiresAt: new Date(Date.now() + this.localAuthSessionTtlMs)
+            });
+            return token;
+        };
+        const tokenFromRequest = (req) => {
+            const header = req.headers.authorization || req.headers.Authorization;
+            if (header && typeof header === 'string' && header.startsWith('Bearer ')) {
+                return header.slice(7).trim();
+            }
+            return String(req.body?.accessToken || req.query?.accessToken || '').trim() || null;
+        };
+        const getUserFromToken = (token) => {
+            if (!token) return null;
+            const session = this.localAuthSessions.get(token);
+            if (!session) return null;
+            if (new Date() > new Date(session.expiresAt)) {
+                this.localAuthSessions.delete(token);
+                return null;
+            }
+            return this.localAuthUsers.get(session.userId) || null;
+        };
+        this.getLocalAuthUserFromRequest = (req) => getUserFromToken(tokenFromRequest(req));
+        this.isLocalAdminRequest = (req) => {
+            const user = this.getLocalAuthUserFromRequest(req);
+            if (!user) return false;
+            const role = String(user.role || 'user').toLowerCase();
+            return role === 'owner' || role === 'admin';
+        };
+        const hashPassword = (password, salt) => crypto.pbkdf2Sync(
+            String(password || ''),
+            salt,
+            120000,
+            64,
+            'sha512'
+        ).toString('hex');
+        const buildPasswordHash = (password) => {
+            const salt = crypto.randomBytes(16).toString('hex');
+            const hash = hashPassword(password, salt);
+            return { salt, hash };
+        };
+        const findLocalUserByIdentity = (identity) => {
+            const value = String(identity || '').trim();
+            if (!value) return null;
+            const email = normalizeEmail(value);
+            const username = normalizeUsername(value);
+            for (const user of this.localAuthUsers.values()) {
+                if (normalizeEmail(user.email) === email || normalizeUsername(user.username) === username) {
+                    return user;
+                }
+            }
+            return null;
+        };
+        const publicLocalUser = (user) => ({
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            displayName: user.displayName || user.username,
+            authMethod: 'email',
+            role: user.role || 'user',
+            isAdmin: ['owner', 'admin'].includes(String(user.role || '').toLowerCase()),
+            isVerified: !!user.isVerified,
+            createdAt: user.createdAt
+        });
+
+        // Local credential auth (email + username + password)
+        this.app.post('/api/auth/local/register', (req, res) => {
+            const email = normalizeEmail(req.body?.email);
+            const username = normalizeUsername(req.body?.username);
+            const displayName = String(req.body?.displayName || req.body?.username || '').trim();
+            const password = String(req.body?.password || '');
+            const verificationCode = String(req.body?.verificationCode || '').trim();
+            const clientId = String(req.body?.clientId || '').trim();
+
+            if (!email || !username || !password) {
+                return res.status(400).json({ error: 'Email, username, and password are required' });
+            }
+            if (!validateEmail(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+            if (!validateUsername(username)) {
+                return res.status(400).json({ error: 'Username must be 3-32 chars (letters, numbers, ., _, -)' });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ error: 'Password must be at least 8 characters' });
+            }
+            if (findLocalUserByIdentity(email) || findLocalUserByIdentity(username)) {
+                return res.status(409).json({ error: 'An account with this email or username already exists' });
+            }
+
+            if (this.localAuthVerificationRequired) {
+                const verification = this.emailVerificationCodes.get(email);
+                if (!verification) {
+                    return res.status(400).json({ error: 'Email verification required. Request a code first.' });
+                }
+                if (new Date() > verification.expiresAt) {
+                    this.emailVerificationCodes.delete(email);
+                    return res.status(400).json({ error: 'Verification code expired. Request a new code.' });
+                }
+                if (clientId && verification.clientId && verification.clientId !== clientId) {
+                    return res.status(400).json({ error: 'Verification must be completed on the same device' });
+                }
+                if (!verificationCode || verification.code !== verificationCode) {
+                    return res.status(400).json({ error: 'Invalid verification code' });
+                }
+                this.emailVerificationCodes.delete(email);
+            }
+
+            const { salt, hash } = buildPasswordHash(password);
+            const hasOwner = Array.from(this.localAuthUsers.values()).some((u) =>
+                String(u.role || '').toLowerCase() === 'owner'
+            );
+            const assignedRole = hasOwner ? 'user' : 'owner';
+            const user = {
+                id: `usr_${uuidv4()}`,
+                username,
+                displayName: displayName || username,
+                email,
+                passwordSalt: salt,
+                passwordHash: hash,
+                role: assignedRole,
+                isVerified: this.localAuthVerificationRequired,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.post('/api/auth/local/login', (req, res) => {
+            const identity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            const password = String(req.body?.password || '');
+            if (!identity || !password) {
+                return res.status(400).json({ error: 'Identity and password are required' });
+            }
+
+            const user = findLocalUserByIdentity(identity);
+            if (!user) {
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+
+            const candidate = hashPassword(password, user.passwordSalt);
+            const expectedBuffer = Buffer.from(user.passwordHash || '', 'hex');
+            const candidateBuffer = Buffer.from(candidate, 'hex');
+            if (expectedBuffer.length !== candidateBuffer.length || !crypto.timingSafeEqual(expectedBuffer, candidateBuffer)) {
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+
+            if (this.localAuthVerificationRequired && !user.isVerified) {
+                return res.status(403).json({ error: 'Account is not verified' });
+            }
+
+            user.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.get('/api/auth/local/me', (req, res) => {
+            const token = tokenFromRequest(req);
+            const user = getUserFromToken(token);
+            if (!user) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+            return res.json({ success: true, user: publicLocalUser(user) });
+        });
+
+        this.app.post('/api/auth/local/logout', (req, res) => {
+            const token = tokenFromRequest(req);
+            if (token) this.localAuthSessions.delete(token);
+            return res.json({ success: true });
+        });
+
+        this.ownerSetupTokens = this.ownerSetupTokens || new Map();
+        this.adminInviteTokens = this.adminInviteTokens || new Map();
+
+        this.app.post('/api/auth/local/owner-token', (req, res) => {
+            const hasOwner = Array.from(this.localAuthUsers.values()).some((u) =>
+                String(u.role || '').toLowerCase() === 'owner'
+            );
+            if (hasOwner && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin authentication required' });
+            }
+            const token = `vlowner_${uuidv4()}_${Date.now().toString(36)}`;
+            const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+            this.ownerSetupTokens.set(token, { createdAt: new Date(), expiresAt });
+            return res.json({ success: true, token, expiresAt });
+        });
+
+        this.app.post('/api/auth/local/claim-owner', (req, res) => {
+            const token = String(req.body?.token || '').trim();
+            const identity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            if (!token || !identity) {
+                return res.status(400).json({ success: false, error: 'Token and identity are required' });
+            }
+            const record = this.ownerSetupTokens.get(token);
+            if (!record || new Date() > new Date(record.expiresAt)) {
+                this.ownerSetupTokens.delete(token);
+                return res.status(400).json({ success: false, error: 'Token is invalid or expired' });
+            }
+            const user = findLocalUserByIdentity(identity);
+            if (!user) {
+                return res.status(404).json({ success: false, error: 'User not found' });
+            }
+            user.role = 'owner';
+            user.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(user.id, user);
+            this.ownerSetupTokens.delete(token);
+            persistLocalAuthUsers();
+            return res.json({ success: true, user: publicLocalUser(user) });
+        });
+
+        this.app.post('/api/admin/invites', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            const email = normalizeEmail(req.body?.email);
+            const requestedRole = String(req.body?.role || 'admin').toLowerCase();
+            const role = ['admin', 'moderator', 'owner'].includes(requestedRole) ? requestedRole : 'admin';
+            const expiresMinutes = Math.max(5, Math.min(Number(req.body?.expiresMinutes || 60), 1440));
+            if (!email || !validateEmail(email)) {
+                return res.status(400).json({ success: false, error: 'Valid email is required' });
+            }
+
+            const token = `vlinvite_${uuidv4()}_${Date.now().toString(36)}`;
+            const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
+            const inviter = this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null;
+            this.adminInviteTokens.set(token, {
+                email,
+                role,
+                invitedBy: inviter?.username || inviter?.email || 'admin',
+                createdAt: new Date(),
+                expiresAt
+            });
+
+            const host = req.get('host');
+            const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
+            const inviteUrl = `${protocol}://${host}/admin-invite.html?token=${encodeURIComponent(token)}`;
+            const desktopUrl = `vcl://admin-invite?token=${encodeURIComponent(token)}&server=${encodeURIComponent(`${protocol}://${host}`)}`;
+
+            try {
+                if (this.mailer) {
+                    const supportAddress = this.emailFrom || 'services@devine-creations.com';
+                    await this.mailer.sendMail({
+                        from: supportAddress,
+                        to: email,
+                        subject: `VoiceLink Admin Access Invite (${role})`,
+                        text: `You were invited to VoiceLink as ${role}.\n\nWeb activation link:\n${inviteUrl}\n\nDesktop app deep link:\n${desktopUrl}\n\nInvited by: ${inviter?.username || inviter?.email || 'Server Admin'}\nExpires: ${expiresAt.toISOString()}\n\nIf you were not expecting this invite, ignore this email.\nSupport: ${supportAddress}`,
+                        html: `
+                            <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; padding: 20px;">
+                                <h2 style="color: #6366f1;">VoiceLink Admin Invite</h2>
+                                <p>You were invited as <strong>${role}</strong>.</p>
+                                <p>Use this secure link to activate your admin profile and set your username/password:</p>
+                                <p><a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#4f46e5;color:#fff;text-decoration:none;border-radius:8px;">Activate Admin Access</a></p>
+                                <p style="word-break:break-all;color:#555;font-size:13px;">Web link: ${inviteUrl}</p>
+                                <p style="word-break:break-all;color:#555;font-size:13px;">Desktop link: ${desktopUrl}</p>
+                                <p style="color:#666;font-size:13px;">Invited by: ${inviter?.username || inviter?.email || 'Server Admin'}</p>
+                                <p style="color:#666;font-size:13px;">Expires: ${expiresAt.toISOString()}</p>
+                                <p style="color:#999;font-size:12px;">If you were not expecting this invite, ignore this email.</p>
+                                <p style="color:#999;font-size:12px;">Support: ${supportAddress}</p>
+                            </div>
+                        `
+                    });
+                }
+            } catch (error) {
+                console.warn('[Auth] Failed to send admin invite email:', error.message);
+            }
+
+            return res.json({ success: true, email, role, inviteUrl, expiresAt });
+        });
+
+        this.app.get('/api/auth/local/admin-invite/:token', (req, res) => {
+            const token = String(req.params.token || '').trim();
+            const invite = this.adminInviteTokens.get(token);
+            if (!invite || new Date() > new Date(invite.expiresAt)) {
+                this.adminInviteTokens.delete(token);
+                return res.status(404).json({ success: false, error: 'Invite link is invalid or expired' });
+            }
+            return res.json({
+                success: true,
+                email: invite.email,
+                role: invite.role,
+                invitedBy: invite.invitedBy,
+                expiresAt: invite.expiresAt
+            });
+        });
+
+        this.app.post('/api/auth/local/admin-invite/accept', (req, res) => {
+            const token = String(req.body?.token || '').trim();
+            const username = normalizeUsername(req.body?.username);
+            const email = normalizeEmail(req.body?.email);
+            const displayName = String(req.body?.displayName || username || '').trim();
+            const password = String(req.body?.password || '');
+            if (!token || !username || !password) {
+                return res.status(400).json({ success: false, error: 'Token, username, and password are required' });
+            }
+            if (!validateUsername(username)) {
+                return res.status(400).json({ success: false, error: 'Invalid username format' });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+            }
+
+            const invite = this.adminInviteTokens.get(token);
+            if (!invite || new Date() > new Date(invite.expiresAt)) {
+                this.adminInviteTokens.delete(token);
+                return res.status(400).json({ success: false, error: 'Invite token is invalid or expired' });
+            }
+            if (email && invite.email && email !== invite.email) {
+                return res.status(400).json({ success: false, error: 'Email does not match invite' });
+            }
+
+            const targetEmail = invite.email;
+            let user = findLocalUserByIdentity(targetEmail) || findLocalUserByIdentity(username);
+            if (!user) {
+                const { salt, hash } = buildPasswordHash(password);
+                user = {
+                    id: `usr_${uuidv4()}`,
+                    username,
+                    displayName: displayName || username,
+                    email: targetEmail,
+                    passwordSalt: salt,
+                    passwordHash: hash,
+                    role: invite.role || 'admin',
+                    isVerified: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+            } else {
+                const { salt, hash } = buildPasswordHash(password);
+                user.username = username;
+                user.displayName = displayName || username;
+                user.email = user.email || targetEmail;
+                user.passwordSalt = salt;
+                user.passwordHash = hash;
+                user.role = invite.role || user.role || 'admin';
+                user.isVerified = true;
+                user.updatedAt = new Date().toISOString();
+            }
+
+            this.localAuthUsers.set(user.id, user);
+            this.adminInviteTokens.delete(token);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.get('/admin-invite', (req, res) => {
+            const token = String(req.query?.token || '').trim();
+            if (!token) {
+                return res.status(400).send('<h2>Missing invite token</h2>');
+            }
+            return res.sendFile(path.join(__dirname, '../../client/admin-invite.html'));
+        });
+        this.app.get('/api/admin-invite', (req, res) => {
+            const token = String(req.query?.token || '').trim();
+            if (!token) {
+                return res.status(400).json({ success: false, error: 'Missing invite token' });
+            }
+            return res.redirect(`/admin-invite.html?token=${encodeURIComponent(token)}`);
+        });
+
+        this.app.get('/api/auth/providers', (_req, res) => {
+            res.json({
+                providers: [
+                    { id: 'email', name: 'Email/Username + Password', enabled: true, default: true },
+                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true, default: false }
+                ]
+            });
+        });
+
+        this.app.get('/api/auth/oauth/providers', (_req, res) => {
+            res.json({
+                providers: [
+                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true }
+                ]
+            });
+        });
+
+        this.app.get('/api/admin/status', (req, res) => {
+            const user = this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null;
+            const role = String(user?.role || 'none').toLowerCase();
+            const isAdmin = role === 'owner' || role === 'admin';
+            res.json({
+                isAdmin,
+                role,
+                user: user ? publicLocalUser(user) : null
+            });
+        });
+
         // Store for linked devices and pending email verifications
         this.linkedDevices = new Map(); // deviceId -> LinkedDevice
         this.pairingCodes = new Map(); // code -> { expiresAt, serverInfo }
@@ -2928,20 +3429,22 @@ class VoiceLinkLocalServer {
             // Try to send email if nodemailer is configured
             try {
                 if (this.mailer) {
+                    const supportAddress = this.emailFrom || 'services@devine-creations.com';
                     await this.mailer.sendMail({
-                        from: this.emailFrom || 'noreply@voicelink.local',
+                        from: supportAddress,
                         to: email,
-                        subject: 'VoiceLink Verification Code',
-                        text: `Your VoiceLink verification code is: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, please ignore this email.`,
+                        subject: 'VoiceLink Sign-in Verification Code',
+                        text: `VoiceLink verification code: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, you can safely ignore this message.\n\nNeed help? Contact ${supportAddress}`,
                         html: `
                             <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
-                                <h2 style="color: #6366f1;">VoiceLink Verification</h2>
-                                <p>Your verification code is:</p>
+                                <h2 style="color: #6366f1;">VoiceLink Sign-in Verification</h2>
+                                <p>Use this code to complete sign-in on VoiceLink:</p>
                                 <div style="font-size: 32px; font-weight: bold; letter-spacing: 4px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center;">
                                     ${code}
                                 </div>
                                 <p style="color: #666; font-size: 14px;">This code expires in 5 minutes.</p>
-                                <p style="color: #999; font-size: 12px;">If you did not request this code, please ignore this email.</p>
+                                <p style="color: #999; font-size: 12px;">If you did not request this code, you can ignore this message.</p>
+                                <p style="color: #999; font-size: 12px;">Support: ${supportAddress}</p>
                             </div>
                         `
                     });
@@ -3852,8 +4355,32 @@ class VoiceLinkLocalServer {
         // Create backup
         this.app.post('/api/config/backup', async (req, res) => {
             try {
-                const { label } = req.body;
-                const result = await deployConfig.createBackup(label);
+                const { label, includeFederationSnapshot, includeLinkedServers } = req.body || {};
+                const backupCfg = deployConfig.get('backup') || {};
+                const includeFed = includeFederationSnapshot !== undefined
+                    ? !!includeFederationSnapshot
+                    : backupCfg.includeFederationSnapshot !== false;
+                const includeLinks = includeLinkedServers !== undefined
+                    ? !!includeLinkedServers
+                    : backupCfg.includeLinkedServers !== false;
+
+                const metadata = {};
+                if (includeFed) {
+                    metadata.federation = {
+                        status: {
+                            mode: this.federation?.mode || 'standalone',
+                            peerServers: this.federation?.peerServers || [],
+                            masterServer: this.federation?.masterServerUrl || null,
+                            connectedServers: this.federation?.getConnectedServers?.() || []
+                        },
+                        config: deployConfig.get('federation') || {}
+                    };
+                }
+                if (includeLinks) {
+                    metadata.linkedServers = (deployConfig.get('federation', 'trustedServers') || []).map((url) => ({ url }));
+                }
+
+                const result = await deployConfig.createBackup(label, { metadata });
                 res.json({ success: true, ...result });
             } catch (error) {
                 res.status(500).json({ error: error.message });
@@ -5939,6 +6466,119 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.status(500).json({ error: error.message });
             }
+        });
+
+        // Admin settings (server + database)
+        this.app.get('/api/admin/settings', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const config = deployConfig.getConfig() || {};
+            const database = { ...(config.database || {}) };
+            if (database?.postgres?.password) database.postgres.password = '********';
+            if (database?.mysql?.password) database.mysql.password = '********';
+            if (database?.mariadb?.password) database.mariadb.password = '********';
+
+            res.json({
+                maxRooms: config.rooms?.maxRooms ?? 100,
+                requireAuth: config.security?.requireAuth ?? false,
+                database
+            });
+        });
+
+        this.app.post('/api/admin/settings', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const maxRooms = Number(req.body?.maxRooms);
+                const requireAuth = !!req.body?.requireAuth;
+                const incomingDatabase = req.body?.database && typeof req.body.database === 'object'
+                    ? req.body.database
+                    : null;
+
+                if (!Number.isNaN(maxRooms) && maxRooms > 0) {
+                    deployConfig.updateSection('rooms', { maxRooms });
+                }
+                deployConfig.updateSection('security', { requireAuth });
+
+                if (incomingDatabase) {
+                    const current = deployConfig.get('database') || {};
+                    const merged = {
+                        ...current,
+                        ...incomingDatabase,
+                        sqlite: { ...(current.sqlite || {}), ...(incomingDatabase.sqlite || {}) },
+                        postgres: { ...(current.postgres || {}), ...(incomingDatabase.postgres || {}) },
+                        mysql: { ...(current.mysql || {}), ...(incomingDatabase.mysql || {}) },
+                        mariadb: { ...(current.mariadb || {}), ...(incomingDatabase.mariadb || {}) }
+                    };
+                    deployConfig.updateSection('database', merged);
+                }
+
+                await deployConfig.save();
+                res.json({ success: true });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/database/test', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const provider = String(req.body?.provider || '').toLowerCase();
+            const cfg = req.body?.config || {};
+            if (!provider) {
+                return res.status(400).json({ success: false, error: 'Database provider is required' });
+            }
+
+            if (provider === 'sqlite') {
+                const dbPath = String(cfg.path || '').trim();
+                if (!dbPath) {
+                    return res.status(400).json({ success: false, error: 'SQLite path is required' });
+                }
+                try {
+                    const dir = path.dirname(dbPath);
+                    fs.mkdirSync(dir, { recursive: true });
+                    fs.accessSync(dir, fs.constants.W_OK);
+                    return res.json({
+                        success: true,
+                        provider,
+                        message: 'SQLite path is writable'
+                    });
+                } catch (error) {
+                    return res.status(400).json({ success: false, error: `SQLite path not writable: ${error.message}` });
+                }
+            }
+
+            const expected = new Set(['postgres', 'mysql', 'mariadb']);
+            if (!expected.has(provider)) {
+                return res.status(400).json({ success: false, error: `Unsupported provider: ${provider}` });
+            }
+
+            const host = String(cfg.host || '').trim();
+            const port = Number(cfg.port || (provider === 'postgres' ? 5432 : 3306));
+            if (!host || Number.isNaN(port) || port <= 0) {
+                return res.status(400).json({ success: false, error: 'Host and valid port are required' });
+            }
+
+            const socket = new net.Socket();
+            let done = false;
+            const finish = (ok, message) => {
+                if (done) return;
+                done = true;
+                socket.destroy();
+                if (ok) {
+                    return res.json({ success: true, provider, message });
+                }
+                return res.status(400).json({ success: false, error: message });
+            };
+
+            socket.setTimeout(3000);
+            socket.once('connect', () => finish(true, `Connected to ${host}:${port}`));
+            socket.once('timeout', () => finish(false, `Connection timeout to ${host}:${port}`));
+            socket.once('error', (error) => finish(false, `Connection failed: ${error.message}`));
+            socket.connect(port, host);
         });
 
         // Admin restart server (graceful)

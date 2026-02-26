@@ -388,12 +388,14 @@ class VoiceLinkApp {
             }
         });
 
-        // Register voicelink:// protocol handler
+        // Register vcl:// protocol handler (and legacy voicelink://)
         if (process.defaultApp) {
             if (process.argv.length >= 2) {
+                app.setAsDefaultProtocolClient('vcl', process.execPath, [path.resolve(process.argv[1])]);
                 app.setAsDefaultProtocolClient('voicelink', process.execPath, [path.resolve(process.argv[1])]);
             }
         } else {
+            app.setAsDefaultProtocolClient('vcl');
             app.setAsDefaultProtocolClient('voicelink');
         }
 
@@ -410,7 +412,7 @@ class VoiceLinkApp {
         } else {
             app.on('second-instance', (event, commandLine, workingDirectory) => {
                 // Find the protocol URL in command line args
-                const url = commandLine.find(arg => arg.startsWith('voicelink://'));
+                const url = commandLine.find(arg => arg.startsWith('vcl://') || arg.startsWith('voicelink://'));
                 if (url) {
                     this.handleProtocolUrl(url);
                 }

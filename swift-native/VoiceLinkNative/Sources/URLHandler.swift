@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 
 /// VoiceLink URL Handler
-/// Handles voicelink:// URLs for deep linking into the app
+/// Handles vcl:// (and legacy voicelink://) URLs for deep linking into the app
 ///
 /// URL Formats:
 /// - voicelink://join/{roomId}                    - Join a room by ID
@@ -42,6 +42,7 @@ class URLHandler: ObservableObject {
         case viewRoom(roomId: String, server: String?)
         case connectServer(serverUrl: String)
         case useInvite(code: String)
+        case adminInvite(token: String, server: String?)
         case openSettings
         case openLicense
         case openWeb(url: URL)
@@ -60,7 +61,7 @@ class URLHandler: ObservableObject {
 
     /// Handle incoming URL
     func handleURL(_ url: URL) {
-        guard url.scheme == "voicelink" else {
+        guard let scheme = url.scheme?.lowercased(), scheme == "vcl" || scheme == "voicelink" else {
             print("[URLHandler] Invalid scheme: \(url.scheme ?? "nil")")
             return
         }
@@ -131,6 +132,11 @@ class URLHandler: ObservableObject {
             // voicelink://invite/{code}
             if let code = pathComponents.first {
                 action = .useInvite(code: code)
+            }
+        case "admin-invite", "admininvite":
+            let token = queryItems.first { $0.name == "token" }?.value ?? pathComponents.first
+            if let token = token, !token.isEmpty {
+                action = .adminInvite(token: token, server: serverParam)
             }
 
         case "settings":
@@ -209,6 +215,8 @@ class URLHandler: ObservableObject {
 
         case .useInvite(let code):
             webURL = URL(string: "\(webBaseURL)/#/invite/\(code)")
+        case .adminInvite(let token, _):
+            webURL = URL(string: "https://voicelink.devinecreations.net/admin-invite.html?token=\(token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token)")
 
         case .openSettings:
             webURL = URL(string: "\(webBaseURL)/#/settings")
@@ -259,6 +267,11 @@ class URLHandler: ObservableObject {
             NotificationCenter.default.post(
                 name: .urlUseInvite,
                 object: ["code": code]
+            )
+        case .adminInvite(let token, let server):
+            NotificationCenter.default.post(
+                name: .urlAdminInvite,
+                object: ["token": token, "server": server as Any]
             )
 
         case .openSettings:
@@ -331,6 +344,7 @@ extension Notification.Name {
     static let urlViewRoom = Notification.Name("urlViewRoom")
     static let urlConnectServer = Notification.Name("urlConnectServer")
     static let urlUseInvite = Notification.Name("urlUseInvite")
+    static let urlAdminInvite = Notification.Name("urlAdminInvite")
     static let urlOpenSettings = Notification.Name("urlOpenSettings")
     static let urlOpenLicense = Notification.Name("urlOpenLicense")
     static let oauthCallback = Notification.Name("oauthCallback")

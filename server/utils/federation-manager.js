@@ -27,8 +27,57 @@ class FederationManager {
 
         // Sync interval (ms)
         this.syncInterval = parseInt(process.env.SYNC_INTERVAL) || 30000;
+        this.modeSource = process.env.FEDERATION_MODE ? 'env' : 'standalone';
+
+        // Prefer deploy-config federation settings when explicit env mode is not set.
+        this.applyDeployFederationConfig();
 
         this.init();
+    }
+
+    applyDeployFederationConfig() {
+        if (process.env.FEDERATION_MODE) return;
+        const configDir = process.env.VOICELINK_CONFIG_DIR || path.join(__dirname, '../../data');
+        const deployPath = path.join(configDir, 'deploy.json');
+        if (!fs.existsSync(deployPath)) return;
+
+        try {
+            const parsed = JSON.parse(fs.readFileSync(deployPath, 'utf8') || '{}');
+            const fed = parsed.federation || {};
+            if (!fed.enabled) {
+                this.mode = 'standalone';
+                this.peerServers = [];
+                this.masterServerUrl = null;
+                this.modeSource = 'config';
+                return;
+            }
+
+            const configuredMode = String(fed.mode || 'standalone').toLowerCase();
+            const trustedServers = Array.isArray(fed.trustedServers)
+                ? fed.trustedServers.filter((u) => typeof u === 'string' && u.trim())
+                : [];
+
+            if (configuredMode === 'spoke' && fed.hubUrl) {
+                this.mode = 'master';
+                this.masterServerUrl = String(fed.hubUrl);
+                this.peerServers = [];
+            } else if (configuredMode === 'hub' || configuredMode === 'mesh') {
+                this.mode = 'api';
+                this.peerServers = trustedServers;
+                this.masterServerUrl = null;
+            } else {
+                this.mode = 'standalone';
+                this.peerServers = [];
+                this.masterServerUrl = null;
+            }
+
+            if (Number.isFinite(Number(fed.syncInterval)) && Number(fed.syncInterval) > 0) {
+                this.syncInterval = Number(fed.syncInterval);
+            }
+            this.modeSource = 'config';
+        } catch (err) {
+            console.warn(`Federation config load failed (${deployPath}): ${err.message}`);
+        }
     }
 
     async init() {
@@ -296,6 +345,7 @@ class FederationManager {
             res.json({
                 serverId: this.serverId,
                 mode: this.mode,
+                modeSource: this.modeSource,
                 peerServers: this.peerServers,
                 masterServer: this.masterServerUrl,
                 roomCount: this.server.rooms.size

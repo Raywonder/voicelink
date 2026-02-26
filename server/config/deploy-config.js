@@ -60,6 +60,37 @@ const DEFAULT_CONFIG = {
         sslCertPath: null,
         sslKeyPath: null
     },
+    database: {
+        enabled: false,
+        provider: 'sqlite', // sqlite | postgres | mysql | mariadb
+        sqlite: {
+            path: path.join(CONFIG_DIR, 'voicelink.db')
+        },
+        postgres: {
+            host: '127.0.0.1',
+            port: 5432,
+            database: 'voicelink',
+            user: 'voicelink',
+            password: '',
+            ssl: false
+        },
+        mysql: {
+            host: '127.0.0.1',
+            port: 3306,
+            database: 'voicelink',
+            user: 'voicelink',
+            password: '',
+            ssl: false
+        },
+        mariadb: {
+            host: '127.0.0.1',
+            port: 3306,
+            database: 'voicelink',
+            user: 'voicelink',
+            password: '',
+            ssl: false
+        }
+    },
     federation: {
         enabled: false,
         mode: 'standalone', // 'standalone', 'hub', 'spoke', 'mesh'
@@ -286,7 +317,9 @@ const DEFAULT_CONFIG = {
         intervalMs: 3600000, // 1 hour
         maxBackups: 24,
         includeRooms: true,
-        includeUsers: false // Privacy consideration
+        includeUsers: false, // Privacy consideration
+        includeFederationSnapshot: true,
+        includeLinkedServers: true
     },
     logging: {
         level: 'info', // 'debug', 'info', 'warn', 'error'
@@ -656,6 +689,9 @@ class DeploymentConfig {
         if (options.sanitize) {
             delete exported.config.security?.sslKeyPath;
             delete exported.config.admin?.adminEmails;
+            if (exported.config.database?.postgres) delete exported.config.database.postgres.password;
+            if (exported.config.database?.mysql) delete exported.config.database.mysql.password;
+            if (exported.config.database?.mariadb) delete exported.config.database.mariadb.password;
             if (exported.config.mastodon?.instances) {
                 exported.config.mastodon.instances = exported.config.mastodon.instances.map(i => ({
                     ...i,
@@ -695,7 +731,7 @@ class DeploymentConfig {
     /**
      * Create a backup of current configuration
      */
-    async createBackup(label = null) {
+    async createBackup(label = null, options = {}) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const filename = label
             ? `backup-${label}-${timestamp}.json`
@@ -707,6 +743,9 @@ class DeploymentConfig {
             label: label,
             config: this.config
         };
+        if (options && typeof options === 'object' && options.metadata) {
+            backup.metadata = options.metadata;
+        }
 
         fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2), 'utf8');
         console.log(`[DeployConfig] Created backup: ${filename}`);
