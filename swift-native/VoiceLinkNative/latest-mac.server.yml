@@ -1,18 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0
-build: 22
+build: 25
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-    size: 154968360
+    sha512: CJJi3F1cGJ74zyakMGgpd5Mm2GN26hcTbFIVTxUBrH7Yay0i0fUv3JV40YisgQYCtSR7NxbCrPerqyoqh5sDsw==
+    size: 12797574
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-releaseDate: '2026-02-24T01:47:06.000Z'
+sha512: CJJi3F1cGJ74zyakMGgpd5Mm2GN26hcTbFIVTxUBrH7Yay0i0fUv3JV40YisgQYCtSR7NxbCrPerqyoqh5sDsw==
+releaseDate: '2026-02-26T09:15:44.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Internal Build 22)
-  - Fixed monitor freeze path by blocking local monitor while room audio is active.
-  - Room settings are now separate from app settings and open room administration.
-  - Room action sheet join now executes real room join flow.
-  - Updated macOS release package and checksum manifests.
+  VoiceLink macOS Update (Internal Build 25)
+  - Updated to v1.0.0 build 25 package.
+  - Added vcl:// URL scheme support (legacy voicelink:// kept).
+  - Refresh includes latest room/federation and invite flow fixes.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip

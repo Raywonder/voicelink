@@ -17,9 +17,23 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.5</string>
+	<string>1.0.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>VoiceLink URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>vcl</string>
+				<string>voicelink</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>25</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSCameraUsageDescription</key>
