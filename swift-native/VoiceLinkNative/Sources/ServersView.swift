@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - Servers Tab View
 struct ServersView: View {
@@ -8,6 +9,7 @@ struct ServersView: View {
     @State private var showPairingSheet = false
     @State private var showTransferSheet = false
     @State private var selectedServerForTransfer: OwnedServer?
+    @State private var lastAutoOpenedAdminInviteToken: String?
     var isSheet: Bool = false
 
     var body: some View {
@@ -83,6 +85,26 @@ struct ServersView: View {
             if let server = selectedServerForTransfer {
                 TransferServerSheet(server: server)
             }
+        }
+        .onAppear {
+            maybeOpenAdminInviteFlow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .urlAdminInvite)) { _ in
+            maybeOpenAdminInviteFlow()
+        }
+    }
+
+    private func maybeOpenAdminInviteFlow() {
+        guard let token = AuthenticationManager.shared.pendingAdminInviteToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return
+        }
+        guard lastAutoOpenedAdminInviteToken != token else { return }
+        lastAutoOpenedAdminInviteToken = token
+        selectedTab = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            showPairingSheet = true
         }
     }
 }
@@ -1384,6 +1406,15 @@ struct PairingSheetView: View {
         .sheet(isPresented: $showAdminInviteAuth) {
             AdminInviteAuthView(isPresented: $showAdminInviteAuth) {
                 selectedAuthMethod = .email
+            }
+        }
+        .onAppear {
+            if let token = authManager.pendingAdminInviteToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !token.isEmpty {
+                selectedAuthMethod = .adminInvite
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    showAdminInviteAuth = true
+                }
             }
         }
     }

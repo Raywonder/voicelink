@@ -801,8 +801,8 @@ class AppState: ObservableObject {
         }()
         AuthenticationManager.shared.stageAdminInvite(token: token, serverURL: normalizedServer)
         currentScreen = .servers
-        errorMessage = "Admin invite detected. Open Link a Server and choose Admin Invite to activate."
-        AccessibilityManager.shared.announceStatus("Admin invite link received. Open Link a Server, then Admin Invite.")
+        errorMessage = "Admin invite link received. Opening account activation form."
+        AccessibilityManager.shared.announceStatus("Admin invite link received. Opening account activation form.")
     }
 
     private func initializeLicensing() {
