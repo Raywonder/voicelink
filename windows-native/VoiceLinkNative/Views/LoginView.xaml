@@ -5,208 +5,194 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="Login to VoiceLink"
-        Height="500" Width="600"
+        Height="760" Width="700"
         WindowStartupLocation="CenterScreen"
-        Background="#1a1a2e"
-        ResizeMode="NoResize">
+        Background="#1a1a2e">
 
-    <Window.Resources>
-        <!-- Modern Button Style -->
-        <Style x:Key="ModernButton" TargetType="Button">
-            <Setter Property="Background" Value="#2575fc"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="20,12"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#1a5edb"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Background" Value="#666666"/>
-                    <Setter Property="Cursor" Value="Arrow"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Text Input Style -->
-        <Style x:Key="ModernTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#2d2d44"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="#444466"/>
-            <Setter Property="BorderThickness" Value="2"/>
-            <Setter Property="Padding" Value="12,10"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
-                            <ScrollViewer x:Name="PART_ContentHost"
-                                        Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-
-    <Grid Margin="40">
+    <Grid Margin="28">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,20,0,30">
-            <TextBlock Text="&#xE77B;"
-                       FontFamily="Segoe MDL2 Assets"
-                       FontSize="60"
-                       Foreground="#2575fc"
-                       HorizontalAlignment="Center"
-                       Margin="0,0,0,15"/>
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,10,0,20">
             <TextBlock Text="Login to VoiceLink"
                        FontSize="28"
                        FontWeight="Bold"
                        Foreground="White"
                        HorizontalAlignment="Center"/>
-            <TextBlock Text="Connect with your Mastodon account"
+            <TextBlock Text="Use Mastodon, email verification, or an admin invite."
                        FontSize="14"
                        Foreground="#999999"
                        HorizontalAlignment="Center"
-                       Margin="0,5,0,0"/>
+                       Margin="0,6,0,0"/>
         </StackPanel>
 
-        <!-- Login Form -->
-        <StackPanel Grid.Row="1" Margin="0,0,0,20">
-            <TextBlock Text="Mastodon Instance"
-                       FontSize="14"
-                       FontWeight="SemiBold"
-                       Foreground="White"
-                       Margin="0,0,0,8"/>
-            <TextBox x:Name="MastodonInstanceTextBox"
-                     Style="{StaticResource ModernTextBox}"
-                     Text="{Binding MastodonInstance, UpdateSourceTrigger=PropertyChanged}"
-                     Margin="0,0,0,8"/>
-            <TextBlock Text="Enter your Mastodon instance domain (e.g., mastodon.social)"
-                       FontSize="12"
-                       Foreground="#777777"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,20"/>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Background="#202038" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Mastodon"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"/>
+                        <TextBlock Text="Authenticate with a Mastodon instance."
+                                   FontSize="12"
+                                   Foreground="#9aa0b8"
+                                   Margin="0,4,0,12"/>
+                        <TextBlock Text="Instance"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding MastodonInstance, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10"
+                                 Margin="0,0,0,10"/>
+                        <Button Content="Login with Mastodon"
+                                Padding="12,10"
+                                Click="LoginButton_Click"
+                                IsEnabled="{Binding CanLogin}"/>
+                        <StackPanel Margin="0,12,0,0"
+                                    Visibility="{Binding ShowAuthCodeInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="Authorization Code"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding AuthorizationCode, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                            <Button Content="Complete Mastodon Login"
+                                    Padding="12,10"
+                                    Click="CompleteLoginButton_Click"
+                                    IsEnabled="{Binding CanCompleteLogin}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
 
-            <!-- Login Button -->
-            <Button x:Name="LoginButton"
-                    Content="Login with Mastodon"
-                    Style="{StaticResource ModernButton}"
-                    Click="LoginButton_Click"
-                    IsEnabled="{Binding CanLogin}"
-                    Margin="0,10,0,0"/>
-        </StackPanel>
+                <Border Background="#202038" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Email / Username"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"/>
+                        <TextBlock Text="Request a verification code and sign in without Mastodon."
+                                   FontSize="12"
+                                   Foreground="#9aa0b8"
+                                   Margin="0,4,0,12"/>
+                        <TextBlock Text="Email"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding Email, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10"
+                                 Margin="0,0,0,10"/>
+                        <Button Content="Send Verification Code"
+                                Padding="12,10"
+                                Click="RequestEmailCodeButton_Click"
+                                IsEnabled="{Binding CanRequestEmailCode}"/>
+                        <StackPanel Margin="0,12,0,0"
+                                    Visibility="{Binding ShowEmailCodeInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="Verification Code"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding VerificationCode, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                            <Button Content="Verify and Sign In"
+                                    Padding="12,10"
+                                    Click="VerifyEmailCodeButton_Click"
+                                    IsEnabled="{Binding CanVerifyEmailCode}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
 
-        <!-- Status/Progress -->
-        <StackPanel Grid.Row="2" VerticalAlignment="Center">
-            <ProgressBar x:Name="LoadingProgress"
-                         Height="4"
-                         IsIndeterminate="True"
-                         Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}"
-                         Foreground="#2575fc"
-                         Background="Transparent"
-                         BorderThickness="0"
-                         Margin="0,20"/>
+                <Border Background="#202038" CornerRadius="10" Padding="18">
+                    <StackPanel>
+                        <TextBlock Text="Admin Invite"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"/>
+                        <TextBlock Text="Activate an owner/admin invite from the server."
+                                   FontSize="12"
+                                   Foreground="#9aa0b8"
+                                   Margin="0,4,0,12"/>
+                        <TextBlock Text="Invite Token"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding InviteToken, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10"
+                                 Margin="0,0,0,10"/>
+                        <TextBlock Text="Server URL"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding InviteServerUrl, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10"
+                                 Margin="0,0,0,10"/>
+                        <Button Content="Load Invite"
+                                Padding="12,10"
+                                Click="LoadInviteButton_Click"
+                                IsEnabled="{Binding CanLoadInvite}"/>
 
-            <TextBlock x:Name="StatusText"
-                       Text="{Binding StatusMessage}"
-                       FontSize="13"
-                       Foreground="#2575fc"
-                       HorizontalAlignment="Center"
-                       TextWrapping="Wrap"
-                       Margin="20,10"
-                       Visibility="{Binding HasStatusMessage, Converter={StaticResource BoolToVisibilityConverter}}"/>
-
-            <!-- Authorization Code Input (shown after OAuth redirect) -->
-            <StackPanel x:Name="AuthCodePanel"
-                        Visibility="{Binding ShowAuthCodeInput, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Margin="0,20,0,0">
-                <TextBlock Text="Authorization Code"
-                           FontSize="14"
-                           FontWeight="SemiBold"
-                           Foreground="White"
-                           Margin="0,0,0,8"/>
-                <TextBlock Text="After authorizing in your browser, paste the code here:"
-                           FontSize="12"
-                           Foreground="#777777"
-                           TextWrapping="Wrap"
-                           Margin="0,0,0,8"/>
-                <TextBox x:Name="AuthCodeTextBox"
-                         Style="{StaticResource ModernTextBox}"
-                         Text="{Binding AuthorizationCode, UpdateSourceTrigger=PropertyChanged}"
-                         Margin="0,0,0,10"/>
-                <Button Content="Complete Login"
-                        Style="{StaticResource ModernButton}"
-                        Click="CompleteLoginButton_Click"
-                        IsEnabled="{Binding CanCompleteLogin}"/>
+                        <StackPanel Margin="0,12,0,0"
+                                    Visibility="{Binding ShowInviteActivation, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="Email"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding InviteEmail, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                            <TextBlock Text="Username"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding InviteUsername, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                            <TextBlock Text="Display Name"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding InviteDisplayName, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                            <TextBlock Text="Password"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <PasswordBox x:Name="InvitePasswordBox"
+                                         Padding="10"
+                                         PasswordChanged="InvitePasswordBox_PasswordChanged"
+                                         Margin="0,0,0,10"/>
+                            <Button Content="Activate Admin Invite"
+                                    Padding="12,10"
+                                    Click="ActivateInviteButton_Click"
+                                    IsEnabled="{Binding CanActivateInvite}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Margin="0,18,0,0">
+            <ProgressBar Height="4"
+                         IsIndeterminate="True"
+                         Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}"/>
+            <TextBlock Text="{Binding StatusMessage}"
+                       Foreground="#6fb4ff"
+                       Margin="0,10,0,0"
+                       TextWrapping="Wrap"
+                       Visibility="{Binding HasStatusMessage, Converter={StaticResource BoolToVisibilityConverter}}"/>
         </StackPanel>
 
-        <!-- Error Message -->
-        <Border Grid.Row="3"
-                Background="#aa3333"
-                CornerRadius="6"
-                Padding="15"
-                Visibility="{Binding HasError, Converter={StaticResource BoolToVisibilityConverter}}"
-                Margin="0,10">
-            <TextBlock Text="{Binding ErrorMessage}"
-                       FontSize="13"
-                       Foreground="White"
-                       TextWrapping="Wrap"/>
-        </Border>
-
-        <!-- Back Button -->
-        <Button Grid.Row="4"
-                Content="← Back to Main Menu"
-                HorizontalAlignment="Center"
-                Background="Transparent"
-                Foreground="#999999"
-                BorderThickness="0"
-                FontSize="13"
-                Padding="10,5"
-                Cursor="Hand"
-                Click="BackButton_Click"
-                Margin="0,20,0,0">
-            <Button.Style>
-                <Style TargetType="Button">
-                    <Setter Property="Template">
-                        <Setter.Value>
-                            <ControlTemplate TargetType="Button">
-                                <ContentPresenter/>
-                            </ControlTemplate>
-                        </Setter.Value>
-                    </Setter>
-                    <Style.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Foreground" Value="White"/>
-                        </Trigger>
-                    </Style.Triggers>
-                </Style>
-            </Button.Style>
-        </Button>
+        <StackPanel Grid.Row="3" Margin="0,14,0,0">
+            <Border Background="#8f2f3a"
+                    CornerRadius="8"
+                    Padding="12"
+                    Visibility="{Binding HasError, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="{Binding ErrorMessage}"
+                           Foreground="White"
+                           TextWrapping="Wrap"/>
+            </Border>
+            <Button Content="Back to Main Menu"
+                    HorizontalAlignment="Center"
+                    Margin="0,14,0,0"
+                    Padding="12,8"
+                    Click="BackButton_Click"/>
+        </StackPanel>
     </Grid>
 </Window>

@@ -30,6 +30,31 @@ public partial class LoginView : Window
         await _viewModel.CompleteLoginAsync();
     }
 
+    private async void RequestEmailCodeButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.RequestEmailCodeAsync();
+    }
+
+    private async void VerifyEmailCodeButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.VerifyEmailCodeAsync();
+    }
+
+    private async void LoadInviteButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.LoadInviteAsync();
+    }
+
+    private async void ActivateInviteButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.ActivateInviteAsync();
+    }
+
+    private void InvitePasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        _viewModel.InvitePassword = InvitePasswordBox.Password;
+    }
+
     private void BackButton_Click(object sender, RoutedEventArgs e)
     {
         DialogResult = false;

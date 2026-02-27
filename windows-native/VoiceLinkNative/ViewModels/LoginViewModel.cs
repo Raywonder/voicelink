@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using System.Windows;
 using VoiceLinkNative.Services;
 
 namespace VoiceLinkNative.ViewModels;
@@ -13,10 +12,20 @@ public class LoginViewModel : INotifyPropertyChanged
     private readonly AuthenticationManager _authManager;
     private string _mastodonInstance = "";
     private string _authorizationCode = "";
+    private string _email = "";
+    private string _verificationCode = "";
+    private string _inviteToken = "";
+    private string _inviteServerUrl = ServerManager.MainServerUrl;
+    private string _inviteEmail = "";
+    private string _inviteUsername = "";
+    private string _inviteDisplayName = "";
+    private string _invitePassword = "";
     private bool _isLoading;
     private string? _statusMessage;
     private string? _errorMessage;
     private bool _showAuthCodeInput;
+    private bool _showEmailCodeInput;
+    private bool _showInviteActivation;
     private string? _authUrl;
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -24,7 +33,7 @@ public class LoginViewModel : INotifyPropertyChanged
 
     public LoginViewModel()
     {
-        _authManager = new AuthenticationManager();
+        _authManager = AuthenticationManager.Instance;
     }
 
     public string MastodonInstance
@@ -49,6 +58,98 @@ public class LoginViewModel : INotifyPropertyChanged
         }
     }
 
+    public string Email
+    {
+        get => _email;
+        set
+        {
+            _email = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanRequestEmailCode));
+        }
+    }
+
+    public string VerificationCode
+    {
+        get => _verificationCode;
+        set
+        {
+            _verificationCode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanVerifyEmailCode));
+        }
+    }
+
+    public string InviteToken
+    {
+        get => _inviteToken;
+        set
+        {
+            _inviteToken = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanLoadInvite));
+            OnPropertyChanged(nameof(CanActivateInvite));
+        }
+    }
+
+    public string InviteServerUrl
+    {
+        get => _inviteServerUrl;
+        set
+        {
+            _inviteServerUrl = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanLoadInvite));
+            OnPropertyChanged(nameof(CanActivateInvite));
+        }
+    }
+
+    public string InviteEmail
+    {
+        get => _inviteEmail;
+        set
+        {
+            _inviteEmail = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string InviteUsername
+    {
+        get => _inviteUsername;
+        set
+        {
+            _inviteUsername = value;
+            OnPropertyChanged();
+            if (string.IsNullOrWhiteSpace(InviteDisplayName))
+            {
+                InviteDisplayName = value;
+            }
+            OnPropertyChanged(nameof(CanActivateInvite));
+        }
+    }
+
+    public string InviteDisplayName
+    {
+        get => _inviteDisplayName;
+        set
+        {
+            _inviteDisplayName = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string InvitePassword
+    {
+        get => _invitePassword;
+        set
+        {
+            _invitePassword = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanActivateInvite));
+        }
+    }
+
     public bool IsLoading
     {
         get => _isLoading;
@@ -56,6 +157,12 @@ public class LoginViewModel : INotifyPropertyChanged
         {
             _isLoading = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(CanLogin));
+            OnPropertyChanged(nameof(CanCompleteLogin));
+            OnPropertyChanged(nameof(CanRequestEmailCode));
+            OnPropertyChanged(nameof(CanVerifyEmailCode));
+            OnPropertyChanged(nameof(CanLoadInvite));
+            OnPropertyChanged(nameof(CanActivateInvite));
         }
     }
 
@@ -91,8 +198,37 @@ public class LoginViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool ShowEmailCodeInput
+    {
+        get => _showEmailCodeInput;
+        set
+        {
+            _showEmailCodeInput = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool ShowInviteActivation
+    {
+        get => _showInviteActivation;
+        set
+        {
+            _showInviteActivation = value;
+            OnPropertyChanged();
+        }
+    }
+
     public bool CanLogin => !string.IsNullOrWhiteSpace(MastodonInstance) && !IsLoading;
     public bool CanCompleteLogin => !string.IsNullOrWhiteSpace(AuthorizationCode) && !IsLoading;
+    public bool CanRequestEmailCode => !string.IsNullOrWhiteSpace(Email) && !IsLoading;
+    public bool CanVerifyEmailCode => !string.IsNullOrWhiteSpace(VerificationCode) && !IsLoading;
+    public bool CanLoadInvite => !string.IsNullOrWhiteSpace(InviteToken) && !string.IsNullOrWhiteSpace(InviteServerUrl) && !IsLoading;
+    public bool CanActivateInvite =>
+        !string.IsNullOrWhiteSpace(InviteToken) &&
+        !string.IsNullOrWhiteSpace(InviteServerUrl) &&
+        !string.IsNullOrWhiteSpace(InviteUsername) &&
+        InvitePassword.Length >= 8 &&
+        !IsLoading;
     public bool HasStatusMessage => !string.IsNullOrEmpty(StatusMessage);
     public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
 
@@ -102,32 +238,29 @@ public class LoginViewModel : INotifyPropertyChanged
         {
             IsLoading = true;
             ErrorMessage = null;
-            StatusMessage = "Registering OAuth app with Mastodon instance...";
+            StatusMessage = "Opening Mastodon authorization...";
 
-            // Get the OAuth authorization URL
             _authUrl = await _authManager.GetMastodonAuthUrlAsync(MastodonInstance);
-
             if (_authUrl == null)
             {
                 ErrorMessage = _authManager.ErrorMessage ?? "Failed to start OAuth flow";
+                StatusMessage = null;
                 return;
             }
 
-            // Open the authorization URL in the default browser
-            StatusMessage = "Opening browser for authorization...";
             Process.Start(new ProcessStartInfo
             {
                 FileName = _authUrl,
                 UseShellExecute = true
             });
 
-            // Show the authorization code input
-            StatusMessage = "Complete the authorization in your browser, then paste the code here.";
+            StatusMessage = "Authorize in your browser, then paste the code here.";
             ShowAuthCodeInput = true;
         }
         catch (Exception ex)
         {
             ErrorMessage = $"Login failed: {ex.Message}";
+            StatusMessage = null;
         }
         finally
         {
@@ -141,25 +274,153 @@ public class LoginViewModel : INotifyPropertyChanged
         {
             IsLoading = true;
             ErrorMessage = null;
-            StatusMessage = "Completing authentication...";
+            StatusMessage = "Completing Mastodon authentication...";
 
             var success = await _authManager.HandleMastodonCallbackAsync(AuthorizationCode);
-
             if (success)
             {
-                StatusMessage = "Login successful!";
-                await Task.Delay(500); // Brief delay to show success message
+                StatusMessage = "Login successful.";
+                await Task.Delay(300);
                 LoginCompleted?.Invoke(this, EventArgs.Empty);
+                return;
             }
-            else
-            {
-                ErrorMessage = _authManager.ErrorMessage ?? "Authentication failed";
-                StatusMessage = null;
-            }
+
+            ErrorMessage = _authManager.ErrorMessage ?? "Authentication failed";
+            StatusMessage = null;
         }
         catch (Exception ex)
         {
             ErrorMessage = $"Authentication failed: {ex.Message}";
+            StatusMessage = null;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task RequestEmailCodeAsync()
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            StatusMessage = "Sending verification code...";
+
+            var success = await _authManager.RequestEmailVerificationAsync(Email);
+            if (success)
+            {
+                ShowEmailCodeInput = true;
+                StatusMessage = "Check your email for the verification code.";
+                return;
+            }
+
+            ErrorMessage = _authManager.ErrorMessage ?? "Failed to send verification code";
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Email sign-in failed: {ex.Message}";
+            StatusMessage = null;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task VerifyEmailCodeAsync()
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            StatusMessage = "Verifying code...";
+
+            var success = await _authManager.VerifyEmailCodeAsync(VerificationCode);
+            if (success)
+            {
+                StatusMessage = "Email login successful.";
+                await Task.Delay(300);
+                LoginCompleted?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
+            ErrorMessage = _authManager.ErrorMessage ?? "Verification failed";
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Verification failed: {ex.Message}";
+            StatusMessage = null;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task LoadInviteAsync()
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            StatusMessage = "Loading admin invite...";
+
+            var success = await _authManager.FetchAdminInviteAsync(InviteToken, InviteServerUrl);
+            if (success)
+            {
+                ShowInviteActivation = true;
+                InviteEmail = _authManager.PendingAdminInviteEmail ?? InviteEmail;
+                StatusMessage = $"Invite loaded for {_authManager.PendingAdminInviteRole ?? "admin"} access.";
+                return;
+            }
+
+            ErrorMessage = _authManager.ErrorMessage ?? "Invite is invalid or expired";
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Invite load failed: {ex.Message}";
+            StatusMessage = null;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task ActivateInviteAsync()
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            StatusMessage = "Activating admin invite...";
+
+            var success = await _authManager.AcceptAdminInviteAsync(
+                InviteToken,
+                InviteEmail,
+                InviteUsername,
+                string.IsNullOrWhiteSpace(InviteDisplayName) ? InviteUsername : InviteDisplayName,
+                InvitePassword,
+                InviteServerUrl);
+
+            if (success)
+            {
+                StatusMessage = "Admin invite activated.";
+                await Task.Delay(300);
+                LoginCompleted?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
+            ErrorMessage = _authManager.ErrorMessage ?? "Activation failed";
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Invite activation failed: {ex.Message}";
             StatusMessage = null;
         }
         finally

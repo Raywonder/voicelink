@@ -19,6 +19,10 @@ namespace VoiceLinkNative.Services
         private string? _mastodonClientId;
         private string? _mastodonClientSecret;
         private string? _pendingEmail;
+        private string? _pendingAdminInviteToken;
+        private string? _pendingAdminInviteServerUrl;
+        private string? _pendingAdminInviteEmail;
+        private string? _pendingAdminInviteRole;
         private string? _errorMessage;
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -27,6 +31,30 @@ namespace VoiceLinkNative.Services
         {
             get => _errorMessage;
             private set { _errorMessage = value; OnPropertyChanged(); }
+        }
+
+        public string? PendingAdminInviteToken
+        {
+            get => _pendingAdminInviteToken;
+            private set { _pendingAdminInviteToken = value; OnPropertyChanged(); }
+        }
+
+        public string? PendingAdminInviteServerUrl
+        {
+            get => _pendingAdminInviteServerUrl;
+            private set { _pendingAdminInviteServerUrl = value; OnPropertyChanged(); }
+        }
+
+        public string? PendingAdminInviteEmail
+        {
+            get => _pendingAdminInviteEmail;
+            private set { _pendingAdminInviteEmail = value; OnPropertyChanged(); }
+        }
+
+        public string? PendingAdminInviteRole
+        {
+            get => _pendingAdminInviteRole;
+            private set { _pendingAdminInviteRole = value; OnPropertyChanged(); }
         }
 
         public enum AuthState
@@ -54,6 +82,50 @@ namespace VoiceLinkNative.Services
         public AuthenticationManager()
         {
             _instance = this;
+        }
+
+        private static string NormalizeServerUrl(string? serverUrl)
+        {
+            var trimmed = serverUrl?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                trimmed = ServerManager.MainServerUrl;
+            }
+
+            if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                trimmed = $"https://{trimmed}";
+            }
+
+            return trimmed.TrimEnd('/');
+        }
+
+        private static bool IsLocalhostUrl(string? serverUrl)
+        {
+            if (string.IsNullOrWhiteSpace(serverUrl))
+            {
+                return true;
+            }
+
+            return serverUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase) ||
+                   serverUrl.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetPreferredServerUrl(string? explicitServerUrl = null)
+        {
+            if (!string.IsNullOrWhiteSpace(explicitServerUrl))
+            {
+                return NormalizeServerUrl(explicitServerUrl);
+            }
+
+            var active = ServerManager.Instance.ServerUrl;
+            if (!IsLocalhostUrl(active))
+            {
+                return NormalizeServerUrl(active);
+            }
+
+            return NormalizeServerUrl(ServerManager.MainServerUrl);
         }
 
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
@@ -159,6 +231,7 @@ namespace VoiceLinkNative.Services
         {
             CurrentState = AuthState.Authenticating;
             _pendingEmail = email;
+            ErrorMessage = null;
 
             try
             {
@@ -169,14 +242,23 @@ namespace VoiceLinkNative.Services
                     "application/json");
 
                 var response = await client.PostAsync(
-                    $"{ServerManager.Instance.ServerUrl}/api/auth/email/request",
+                    $"{GetPreferredServerUrl()}/api/auth/email/request",
                     content);
 
-                return response.IsSuccessStatusCode;
+                if (response.IsSuccessStatusCode)
+                {
+                    CurrentState = AuthState.Unauthenticated;
+                    return true;
+                }
+
+                ErrorMessage = await response.Content.ReadAsStringAsync();
+                CurrentState = AuthState.Error;
+                return false;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Email request error: {ex.Message}");
+                ErrorMessage = ex.Message;
                 CurrentState = AuthState.Unauthenticated;
                 return false;
             }
@@ -186,7 +268,10 @@ namespace VoiceLinkNative.Services
         public async Task<bool> VerifyEmailCodeAsync(string code)
         {
             if (string.IsNullOrEmpty(_pendingEmail))
+            {
+                ErrorMessage = "No pending email verification";
                 return false;
+            }
 
             try
             {
@@ -197,7 +282,7 @@ namespace VoiceLinkNative.Services
                     "application/json");
 
                 var response = await client.PostAsync(
-                    $"{ServerManager.Instance.ServerUrl}/api/auth/email/verify",
+                    $"{GetPreferredServerUrl()}/api/auth/email/verify",
                     content);
 
                 if (response.IsSuccessStatusCode)
@@ -220,11 +305,173 @@ namespace VoiceLinkNative.Services
                     }
                 }
 
+                CurrentState = AuthState.Error;
+                ErrorMessage = await response.Content.ReadAsStringAsync();
                 return false;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Email verify error: {ex.Message}");
+                ErrorMessage = ex.Message;
+                CurrentState = AuthState.Error;
+                return false;
+            }
+        }
+
+        public void StageAdminInvite(string token, string? serverUrl)
+        {
+            PendingAdminInviteToken = token;
+            PendingAdminInviteServerUrl = GetPreferredServerUrl(serverUrl);
+            ErrorMessage = null;
+        }
+
+        public async Task<bool> FetchAdminInviteAsync(string token, string? serverUrl = null)
+        {
+            var normalizedToken = token?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedToken))
+            {
+                ErrorMessage = "Invite token is required";
+                return false;
+            }
+
+            var resolvedServerUrl = GetPreferredServerUrl(serverUrl);
+            PendingAdminInviteToken = normalizedToken;
+            PendingAdminInviteServerUrl = resolvedServerUrl;
+            ErrorMessage = null;
+
+            try
+            {
+                using var client = new HttpClient();
+                var response = await client.GetAsync(
+                    $"{resolvedServerUrl}/api/auth/local/admin-invite/{Uri.EscapeDataString(normalizedToken)}");
+
+                var payload = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    ErrorMessage = payload;
+                    return false;
+                }
+
+                using var document = JsonDocument.Parse(payload);
+                var root = document.RootElement;
+
+                if (!root.TryGetProperty("success", out var successElement) || !successElement.GetBoolean())
+                {
+                    ErrorMessage = root.TryGetProperty("error", out var errorElement)
+                        ? errorElement.GetString()
+                        : "Invite is invalid or expired";
+                    return false;
+                }
+
+                PendingAdminInviteEmail = root.TryGetProperty("email", out var emailElement)
+                    ? emailElement.GetString()
+                    : null;
+                PendingAdminInviteRole = root.TryGetProperty("role", out var roleElement)
+                    ? roleElement.GetString()
+                    : null;
+                CurrentState = AuthState.Unauthenticated;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ErrorMessage = ex.Message;
+                return false;
+            }
+        }
+
+        public async Task<bool> AcceptAdminInviteAsync(
+            string token,
+            string email,
+            string username,
+            string displayName,
+            string password,
+            string? serverUrl = null)
+        {
+            var normalizedToken = token?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedToken) ||
+                string.IsNullOrWhiteSpace(username) ||
+                string.IsNullOrWhiteSpace(password))
+            {
+                ErrorMessage = "Token, username, and password are required";
+                return false;
+            }
+
+            CurrentState = AuthState.Authenticating;
+            ErrorMessage = null;
+            var resolvedServerUrl = GetPreferredServerUrl(serverUrl);
+
+            try
+            {
+                using var client = new HttpClient();
+                var content = new StringContent(
+                    JsonSerializer.Serialize(new
+                    {
+                        token = normalizedToken,
+                        email = string.IsNullOrWhiteSpace(email) ? null : email.Trim(),
+                        username = username.Trim(),
+                        displayName = string.IsNullOrWhiteSpace(displayName) ? username.Trim() : displayName.Trim(),
+                        password
+                    }),
+                    Encoding.UTF8,
+                    "application/json");
+
+                var response = await client.PostAsync(
+                    $"{resolvedServerUrl}/api/auth/local/admin-invite/accept",
+                    content);
+
+                var payload = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    CurrentState = AuthState.Error;
+                    ErrorMessage = payload;
+                    return false;
+                }
+
+                using var document = JsonDocument.Parse(payload);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("success", out var successElement) || !successElement.GetBoolean())
+                {
+                    CurrentState = AuthState.Error;
+                    ErrorMessage = root.TryGetProperty("error", out var errorElement)
+                        ? errorElement.GetString()
+                        : "Failed to activate invite";
+                    return false;
+                }
+
+                var accessToken = root.TryGetProperty("accessToken", out var accessTokenElement)
+                    ? accessTokenElement.GetString()
+                    : null;
+                var user = root.TryGetProperty("user", out var userElement) ? userElement : default;
+
+                CurrentUser = new AuthenticatedUser
+                {
+                    UserId = user.ValueKind == JsonValueKind.Object && user.TryGetProperty("id", out var idElement)
+                        ? idElement.GetString() ?? Guid.NewGuid().ToString()
+                        : Guid.NewGuid().ToString(),
+                    Username = user.ValueKind == JsonValueKind.Object && user.TryGetProperty("username", out var usernameElement)
+                        ? usernameElement.GetString() ?? username.Trim()
+                        : username.Trim(),
+                    DisplayName = user.ValueKind == JsonValueKind.Object && user.TryGetProperty("displayName", out var displayNameElement)
+                        ? displayNameElement.GetString() ?? username.Trim()
+                        : (string.IsNullOrWhiteSpace(displayName) ? username.Trim() : displayName.Trim()),
+                    Email = user.ValueKind == JsonValueKind.Object && user.TryGetProperty("email", out var emailElement)
+                        ? emailElement.GetString() ?? email.Trim()
+                        : email.Trim(),
+                    AccessToken = accessToken,
+                    AuthMethod = "email"
+                };
+
+                CurrentState = AuthState.Authenticated;
+                PendingAdminInviteToken = null;
+                PendingAdminInviteServerUrl = null;
+                PendingAdminInviteEmail = null;
+                PendingAdminInviteRole = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                CurrentState = AuthState.Error;
+                ErrorMessage = ex.Message;
                 return false;
             }
         }
@@ -309,6 +556,11 @@ namespace VoiceLinkNative.Services
             CurrentState = AuthState.Unauthenticated;
             _mastodonInstance = null;
             _pendingEmail = null;
+            PendingAdminInviteToken = null;
+            PendingAdminInviteServerUrl = null;
+            PendingAdminInviteEmail = null;
+            PendingAdminInviteRole = null;
+            ErrorMessage = null;
         }
     }
 
