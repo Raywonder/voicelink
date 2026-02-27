@@ -3,14 +3,13 @@ version: 1.0
 build: 25
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: ZSAKwAU0uprgmuHjus7EQgoGVtrKPGP7kvm2U/Zgh0SW+PA4CltY2V9Ydmsg+2bsJCZAayS2EN1EgOPXZUXbOA==
-    size: 12809788
+    sha512: PRX6AHD2pVvwOZqrIeOg9FBe7fxY9TSUDnJtubf7CJQFUXG2SK+a1Tj28+uWP2VsAsqbBgR6WF8YyXYD7wmmHw==
+    size: 12905256
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: ZSAKwAU0uprgmuHjus7EQgoGVtrKPGP7kvm2U/Zgh0SW+PA4CltY2V9Ydmsg+2bsJCZAayS2EN1EgOPXZUXbOA==
-releaseDate: '2026-02-26T11:01:19.000Z'
+sha512: PRX6AHD2pVvwOZqrIeOg9FBe7fxY9TSUDnJtubf7CJQFUXG2SK+a1Tj28+uWP2VsAsqbBgR6WF8YyXYD7wmmHw==
+releaseDate: '2026-02-27T06:06:31.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 25)
-  - Fixed admin invite deep-link flow to open account activation directly.
-  - Admin invite now routes to username/email/password setup (not Mastodon by default).
-mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
+  - Guest mode remains enabled with non-logged-in limits enforced.
+  - Added direct Email/Username + Admin Invite options in login flows.
+  - Added account-context guard to block invite activation while another account is signed in.
