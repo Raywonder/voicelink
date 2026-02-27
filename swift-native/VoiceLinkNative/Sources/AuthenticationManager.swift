@@ -1214,6 +1214,10 @@ struct AdminInviteAuthView: View {
     }
 
     private func loadInvite() {
+        if let current = authManager.currentUser {
+            statusMessage = "Sign out \(current.displayName) before loading an admin invite."
+            return
+        }
         isLoading = true
         statusMessage = "Loading invite..."
         let server = normalizedServerURL()
@@ -1232,6 +1236,10 @@ struct AdminInviteAuthView: View {
     }
 
     private func activateInvite() {
+        if let current = authManager.currentUser {
+            statusMessage = "Sign out \(current.displayName) before activating an admin invite."
+            return
+        }
         isLoading = true
         statusMessage = "Activating admin access..."
         let server = normalizedServerURL()

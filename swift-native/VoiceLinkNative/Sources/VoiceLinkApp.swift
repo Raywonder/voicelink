@@ -795,6 +795,12 @@ class AppState: ObservableObject {
     }
 
     private func handleURLAdminInvite(token: String, server: String?) {
+        if let current = AuthenticationManager.shared.currentUser {
+            currentScreen = .mainMenu
+            errorMessage = "Admin invite received, but you are already signed in as \(current.displayName). Sign out first, then open the invite link again."
+            AccessibilityManager.shared.announceStatus("Admin invite blocked while another account is signed in. Please sign out and retry.")
+            return
+        }
         let normalizedServer: String? = {
             guard let server, !server.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return server
@@ -1735,6 +1741,7 @@ struct MainMenuView: View {
 
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
+    @ObservedObject private var authManager = AuthenticationManager.shared
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -1742,6 +1749,34 @@ struct MainMenuView: View {
     @State private var selectedRoomDetails: Room?
     @State private var selectedRoomActionRoom: Room?
     @State private var showRoomActionMenuSheet = false
+    @State private var showMastodonAuthSheet = false
+    @State private var showEmailAuthSheet = false
+    @State private var showAdminInviteSheet = false
+
+    private var isAuthenticatedForRoomAccess: Bool {
+        authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
+    private var effectiveAuthServerURL: String {
+        if let pending = authManager.pendingAdminInviteServerURL?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pending.isEmpty {
+            return pending
+        }
+        if let base = appState.serverManager.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !base.isEmpty {
+            return base
+        }
+        return ServerManager.mainServer
+    }
+
+    private var hasPendingAdminInvite: Bool {
+        guard let token = authManager.pendingAdminInviteToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return !token.isEmpty
+    }
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -1840,6 +1875,70 @@ struct MainMenuView: View {
         }
     }
 
+    @ViewBuilder
+    private var authRequiredOverlay: some View {
+        VStack(spacing: 14) {
+            Text("Guest Mode Active")
+                .font(.title2.weight(.semibold))
+                .foregroundColor(.white)
+
+            Text("You can browse and join rooms as a guest. Sign in to unlock full room creation and account linking.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+
+            if hasPendingAdminInvite {
+                Text("An admin invite was detected. Activate it first, then continue.")
+                    .font(.caption)
+                    .foregroundColor(.yellow)
+            }
+
+            HStack(spacing: 10) {
+                Button("Sign In: Email") { showEmailAuthSheet = true }
+                    .buttonStyle(.borderedProminent)
+                Button("Mastodon") { showMastodonAuthSheet = true }
+                    .buttonStyle(.bordered)
+                Button("Admin Invite") { showAdminInviteSheet = true }
+                    .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 8) {
+                Button("Google") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Apple") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("GitHub") {
+                    if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Alternative sign in providers")
+        }
+        .padding(20)
+        .frame(maxWidth: 560)
+        .background(Color.black.opacity(0.82))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .cornerRadius(14)
+        .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 10)
+    }
+
     var body: some View {
         let roomsForDisplay = filteredRooms
         HStack(spacing: 0) {
@@ -1852,6 +1951,11 @@ struct MainMenuView: View {
                         .foregroundColor(.white)
                 }
                 .padding(.top, 40)
+
+                if !isAuthenticatedForRoomAccess {
+                    authRequiredOverlay
+                        .padding(.horizontal, 40)
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     let base = appState.serverManager.baseURL ?? ""
@@ -2316,6 +2420,23 @@ struct MainMenuView: View {
             .onAppear {
                 selectedServerFilter = "All Servers"
                 roomScopeFilter = .all
+                if !isAuthenticatedForRoomAccess && hasPendingAdminInvite {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        showAdminInviteSheet = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showMastodonAuthSheet) {
+                MastodonAuthView(isPresented: $showMastodonAuthSheet)
+            }
+            .sheet(isPresented: $showEmailAuthSheet) {
+                EmailAuthView(
+                    isPresented: $showEmailAuthSheet,
+                    serverURL: effectiveAuthServerURL
+                )
+            }
+            .sheet(isPresented: $showAdminInviteSheet) {
+                AdminInviteAuthView(isPresented: $showAdminInviteSheet)
             }
 
             // Right Sidebar - Connection Health & Servers
@@ -2959,6 +3080,14 @@ struct CreateRoomView: View {
                 Toggle("Private Room", isOn: $isPrivate)
                     .foregroundColor(.white)
                     .frame(width: 350)
+                    .disabled(!isLoggedIn)
+
+                if !isLoggedIn {
+                    Text("Guest mode limits: 1 room at a time, public room only, max \(RoomManager.guestRoomMaxMembers) users.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .frame(width: 350, alignment: .leading)
+                }
 
                 if isPrivate {
                     SecureField("Room Password", text: $password)
@@ -3005,11 +3134,24 @@ struct CreateRoomView: View {
 
             HStack(spacing: 15) {
                 Button("Create") {
+                    if !isLoggedIn && !RoomManager.shared.canGuestCreateRoom {
+                        appState.errorMessage = "Guest limit reached. Sign in to create more rooms."
+                        return
+                    }
+
+                    let effectiveRoomType = isLoggedIn ? roomType : "guest"
+                    let effectiveInviteOnly = isLoggedIn ? inviteOnly : false
+                    let effectiveMediaAutoPlay = isLoggedIn ? enableMediaAutoPlay : true
+                    let effectiveMaxUsers = isLoggedIn
+                        ? maxUsers
+                        : min(maxUsers, RoomManager.guestRoomMaxMembers)
+                    let effectivePrivate = isLoggedIn ? isPrivate : false
+
                     var metadata: [String: Any] = [
-                        "maxUsers": maxUsers,
-                        "roomType": roomType,
-                        "inviteOnly": inviteOnly,
-                        "mediaAutoPlay": enableMediaAutoPlay
+                        "maxUsers": effectiveMaxUsers,
+                        "roomType": effectiveRoomType,
+                        "inviteOnly": effectiveInviteOnly,
+                        "mediaAutoPlay": effectiveMediaAutoPlay
                     ]
                     if isLoggedIn, let currentUser = authManager.currentUser {
                         metadata["createdBy"] = currentUser.username
@@ -3023,8 +3165,8 @@ struct CreateRoomView: View {
                     appState.serverManager.createRoom(
                         name: roomName,
                         description: roomDescription,
-                        isPrivate: isPrivate,
-                        password: isPrivate ? password : nil,
+                        isPrivate: effectivePrivate,
+                        password: effectivePrivate ? password : nil,
                         metadata: metadata
                     )
                     // Go back to main menu - room will appear in list

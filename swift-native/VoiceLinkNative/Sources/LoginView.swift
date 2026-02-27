@@ -7,6 +7,21 @@ struct LoginView: View {
     @State private var mastodonInstance: String = ""
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
+    @State private var showEmailAuthSheet = false
+    @State private var showAdminInviteSheet = false
+
+    private var effectiveAuthServerURL: String {
+        if let pending = authManager.pendingAdminInviteServerURL?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pending.isEmpty {
+            return pending
+        }
+        if let base = appState.serverManager.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !base.isEmpty {
+            return base
+        }
+        return ServerManager.mainServer
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -65,6 +80,18 @@ struct LoginView: View {
                 }
                 .disabled(mastodonInstance.isEmpty || isLoading)
 
+                HStack(spacing: 10) {
+                    Button("Email / Username") {
+                        showEmailAuthSheet = true
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Admin Invite") {
+                        showAdminInviteSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 // Error Message
                 if let error = errorMessage ?? authManager.authError {
                     Text(error)
@@ -95,6 +122,16 @@ struct LoginView: View {
         .onAppear {
             // Check if already authenticated
             if authManager.authState == .authenticated {
+                appState.currentScreen = .mainMenu
+            }
+        }
+        .sheet(isPresented: $showEmailAuthSheet) {
+            EmailAuthView(isPresented: $showEmailAuthSheet, serverURL: effectiveAuthServerURL) {
+                appState.currentScreen = .mainMenu
+            }
+        }
+        .sheet(isPresented: $showAdminInviteSheet) {
+            AdminInviteAuthView(isPresented: $showAdminInviteSheet) {
                 appState.currentScreen = .mainMenu
             }
         }
