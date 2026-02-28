@@ -10,6 +10,7 @@ struct VoiceLinkApp: App {
     @StateObject private var appState = AppState()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var localDiscovery = LocalServerDiscovery.shared
+    @StateObject private var adminManager = AdminServerManager.shared
     @State private var showUpdaterSheet = false
 
     var body: some Scene {
@@ -247,7 +248,7 @@ struct VoiceLinkApp: App {
                 }
                 .keyboardShortcut("i", modifiers: .command)
 
-                if AdminServerManager.shared.isAdmin || AdminServerManager.shared.adminRole == .admin || AdminServerManager.shared.adminRole == .owner {
+                if adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner {
                     Divider()
                     Menu("Admin Modes") {
                         Button(settings.adminGodModeEnabled ? "Disable God Mode" : "Enable God Mode") {
@@ -1098,16 +1099,46 @@ class AppState: ObservableObject {
         }
 
         let token = AuthenticationManager.shared.currentUser?.accessToken
-        let trustedAdminEmail = "datboydommo@layor8.space"
         Task {
             await AdminServerManager.shared.checkAdminStatus(serverURL: serverURL, token: token)
-            if let user = AuthenticationManager.shared.currentUser,
-               user.email?.lowercased() == trustedAdminEmail {
-                AdminServerManager.shared.isAdmin = true
-                if AdminServerManager.shared.adminRole == .none {
-                    AdminServerManager.shared.adminRole = .owner
-                }
-            }
+            applyLocalAdminFallbackIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func applyLocalAdminFallbackIfNeeded() {
+        guard let user = AuthenticationManager.shared.currentUser else { return }
+
+        let normalizedEmail = user.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedUsername = user.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedRole = user.role?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedProvider = user.authProvider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalizedPermissions = Set(user.permissions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+
+        let trustedAdminEmails: Set<String> = [
+            "datboydommo@layor8.space",
+            "webmaster@raywonderis.me",
+            "d.stansberry@me.com"
+        ]
+        let trustedAdminUsernames: Set<String> = [
+            "domdom"
+        ]
+        let hasElevatedRole = normalizedRole.contains("owner") || normalizedRole.contains("admin")
+        let hasElevatedProvider = normalizedProvider.contains("whmcs_admin")
+        let hasManagePermission = normalizedPermissions.contains("admin")
+            || normalizedPermissions.contains("owner")
+            || normalizedPermissions.contains("manage.rooms")
+            || normalizedPermissions.contains("manage.server")
+            || normalizedPermissions.contains("manage.config")
+        let isTrustedIdentity = trustedAdminEmails.contains(normalizedEmail) || trustedAdminUsernames.contains(normalizedUsername)
+
+        guard hasElevatedRole || hasElevatedProvider || hasManagePermission || isTrustedIdentity else { return }
+
+        AdminServerManager.shared.isAdmin = true
+        if normalizedRole.contains("owner") || trustedAdminEmails.contains(normalizedEmail) || trustedAdminUsernames.contains(normalizedUsername) {
+            AdminServerManager.shared.adminRole = .owner
+        } else if AdminServerManager.shared.adminRole == .none {
+            AdminServerManager.shared.adminRole = .admin
         }
     }
 
@@ -1757,6 +1788,7 @@ struct MainMenuView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var adminManager = AdminServerManager.shared
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -2408,7 +2440,7 @@ struct MainMenuView: View {
                                 }
                             }
                             Spacer()
-                            if AdminServerManager.shared.isAdmin || AdminServerManager.shared.adminRole == .admin || AdminServerManager.shared.adminRole == .owner {
+                            if adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner {
                                 Button("Server Administration") {
                                     appState.currentScreen = .admin
                                 }
