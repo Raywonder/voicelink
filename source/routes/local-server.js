@@ -5,7 +5,12 @@ const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
+const crypto = require('crypto');
+const net = require('net');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const { v4: uuidv4 } = require('uuid');
+const nodemailer = require('nodemailer');
 const FederationManager = require('../utils/federation-manager');
 const MastodonBotManager = require('../utils/mastodon-bot');
 const { deployConfig, PRESETS } = require('../config/deploy-config');
@@ -20,6 +25,7 @@ const JellyfinServiceManager = require('../utils/jellyfin-service-manager');
 const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
 const fileTransferRoutes = require("./file-transfer");
+const execFileAsync = promisify(execFile);
 
 // Stripe integration - lazy loaded if configured
 let stripe = null;
@@ -57,9 +63,6 @@ class VoiceLinkLocalServer {
         this.users = new Map();
         this.audioRouting = new Map();
         this.whmcsAuthSessions = new Map(); // token -> { user, expiresAt }
-        this.whmcsLoginStates = new Map(); // state -> { email, clientId, createdAt, confirmed }
-        this.ecriptoAuthSessions = new Map(); // token -> { user, expiresAt }
-        this.walletLinks = new Map(); // walletAddress -> { userId, linkedAt, provider }
         this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
         this.socketSessions = new Map(); // socketId -> sessionInfo
         this.deviceSessions = new Map(); // deviceId -> socketId
@@ -71,14 +74,6 @@ class VoiceLinkLocalServer {
             bytesRelayed: 0,
             packetsRelayed: 0,
             activeRelays: 0
-        };
-
-        // API monitor state for room/member visibility snapshots and push updates.
-        this.apiMonitor = {
-            sequence: 0,
-            clients: new Set(),
-            intervalMs: Math.max(1000, Number(process.env.API_MONITOR_INTERVAL_MS || 5000) || 5000),
-            timer: null
         };
 
         // Initialize federation manager for room sync
@@ -126,13 +121,59 @@ class VoiceLinkLocalServer {
             updater: null
         };
         this.initializeModules();
+        this.initializeMailer();
 
         this.setupMiddleware();
         this.setupRoutes();
         this.setupSocketHandlers();
-        this.startApiMonitorTicker();
         this.loadPersistedRooms();
         this.start();
+    }
+
+    initializeMailer() {
+        const smtpHost = process.env.VOICELINK_SMTP_HOST || process.env.SMTP_HOST || '';
+        const smtpPort = Number(process.env.VOICELINK_SMTP_PORT || process.env.SMTP_PORT || 587);
+        const smtpUser = process.env.VOICELINK_SMTP_USER || process.env.SMTP_USER || '';
+        const smtpPass = process.env.VOICELINK_SMTP_PASS || process.env.SMTP_PASS || '';
+        const smtpSecureRaw = process.env.VOICELINK_SMTP_SECURE || process.env.SMTP_SECURE || '';
+        const useInternalSmtp = String(process.env.VOICELINK_SMTP_INTERNAL || '').toLowerCase() === 'true';
+        const smtpSecure = smtpSecureRaw
+            ? String(smtpSecureRaw).toLowerCase() === 'true'
+            : smtpPort === 465;
+
+        this.emailFrom = process.env.VOICELINK_EMAIL_FROM || process.env.EMAIL_FROM || 'services@devine-creations.com';
+        this.mailer = null;
+
+        const host = smtpHost || (useInternalSmtp ? '127.0.0.1' : '');
+        if (!host) {
+            console.log('[Mail] SMTP not configured; email sending disabled');
+            return;
+        }
+
+        const transportConfig = {
+            host,
+            port: smtpPort,
+            secure: smtpSecure
+        };
+
+        if (smtpUser && smtpPass) {
+            transportConfig.auth = { user: smtpUser, pass: smtpPass };
+        }
+
+        if (String(process.env.VOICELINK_SMTP_REQUIRE_TLS || '').toLowerCase() === 'false') {
+            transportConfig.requireTLS = false;
+            transportConfig.tls = { rejectUnauthorized: false };
+        }
+
+        try {
+            this.mailer = nodemailer.createTransport(transportConfig);
+            this.mailer.verify()
+                .then(() => console.log(`[Mail] SMTP ready via ${host}:${smtpPort} as ${smtpUser || 'unauthenticated sender'}`))
+                .catch((error) => console.warn('[Mail] SMTP verify failed:', error.message));
+        } catch (error) {
+            console.warn('[Mail] SMTP init failed:', error.message);
+            this.mailer = null;
+        }
     }
 
     getWhmcsConfig() {
@@ -149,12 +190,16 @@ class VoiceLinkLocalServer {
 
     normalizePortalSite(portalSite) {
         const raw = String(portalSite || '').trim().toLowerCase();
-        if (!raw) return 'tappedin.fm';
+        if (!raw) return 'devine-creations.com';
         const withoutProtocol = raw.replace(/^https?:\/\//, '');
         const host = withoutProtocol.split('/')[0];
-        if (!host) return 'tappedin.fm';
+        if (!host) return 'devine-creations.com';
         const normalizedHost = host.replace(/\.+$/, '');
         const allowedHosts = new Set([
+            'devine-creations.com',
+            'www.devine-creations.com',
+            'devinecreations.net',
+            'www.devinecreations.net',
             'tappedin.fm',
             'www.tappedin.fm',
             'ecripto.app',
@@ -164,28 +209,168 @@ class VoiceLinkLocalServer {
         ]);
         if (allowedHosts.has(normalizedHost)) return normalizedHost;
         if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
-        return 'tappedin.fm';
+        return 'devine-creations.com';
     }
 
     getPortalUrlForSite(portalSite) {
         const host = this.normalizePortalSite(portalSite);
+        if (host === 'devinecreations.net' || host === 'www.devinecreations.net') {
+            return 'https://devinecreations.net/';
+        }
         return `https://${host}/clientarea.php`;
     }
 
-    getEcriptoApiCandidates() {
-        const config = deployConfig.get('ecripto') || {};
-        const candidates = [
-            config.apiUrl,
-            process.env.ECRIPTO_API_URL,
-            'https://api.ecripto.app',
-            'https://ecripto.app',
-            'https://api.ecripto.token',
-            'https://ecripto.token'
-        ]
-            .filter(Boolean)
-            .map((value) => String(value).trim())
-            .map((value) => value.replace(/\/+$/, ''));
-        return [...new Set(candidates)];
+    getWhmcsAuthorityConfig() {
+        const explicitBaseUrl = process.env.VOICELINK_WHMCS_AUTHORITY_URL
+            || process.env.VOICELINK_AUTHORITY_URL
+            || process.env.VOICELINK_MAIN_API_URL
+            || MAIN_SERVER_URL;
+        const baseUrl = String(explicitBaseUrl || '').trim().replace(/\/+$/, '');
+        const mode = String(process.env.VOICELINK_WHMCS_AUTH_MODE || '').trim().toLowerCase();
+        const sharedSecret = process.env.VOICELINK_AUTH_SHARED_SECRET || process.env.VOICELINK_AUTHORITY_SHARED_SECRET || '';
+        return {
+            baseUrl,
+            mode,
+            sharedSecret,
+            enabled: Boolean(baseUrl),
+            forceDelegate: mode === 'delegate' || mode === 'remote' || mode === 'authority'
+        };
+    }
+
+    shouldDelegateWhmcsAuth() {
+        const authority = this.getWhmcsAuthorityConfig();
+        if (!authority.enabled) return false;
+        if (authority.forceDelegate) return true;
+        const adminBridge = this.getWhmcsAdminBridgeConfig();
+        if (adminBridge.enabled && adminBridge.configPath) {
+            return false;
+        }
+        const config = this.getWhmcsConfig();
+        return !(config.identifier && config.secret);
+    }
+
+    async requestWhmcsAuthority(pathname, payload = {}, options = {}) {
+        const authority = this.getWhmcsAuthorityConfig();
+        if (!authority.enabled) {
+            throw new Error('Central auth authority is not configured');
+        }
+
+        const url = `${authority.baseUrl}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            ...(options.headers || {})
+        };
+        if (authority.sharedSecret) {
+            headers['x-voicelink-shared-secret'] = authority.sharedSecret;
+        }
+
+        const response = await fetch(url, {
+            method: options.method || 'POST',
+            headers,
+            body: payload === null ? undefined : JSON.stringify(payload)
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const message = data?.error || data?.message || `Authority request failed (${response.status})`;
+            const error = new Error(message);
+            error.status = response.status;
+            error.payload = data;
+            throw error;
+        }
+        return data;
+    }
+
+    applyAuthorityRoleOverrides(user = {}) {
+        const adminEmails = new Set([
+            ...(deployConfig.get('admin')?.adminEmails || []),
+            ...String(process.env.VOICELINK_CENTRAL_ADMIN_EMAILS || '')
+                .split(',')
+                .map((value) => value.trim().toLowerCase())
+                .filter(Boolean)
+        ]);
+        const moderatorEmails = new Set(
+            String(process.env.VOICELINK_CENTRAL_MODERATOR_EMAILS || '')
+                .split(',')
+                .map((value) => value.trim().toLowerCase())
+                .filter(Boolean)
+        );
+        const hostingRoleNames = [
+            ...(Array.isArray(user.hostingRoles) ? user.hostingRoles : []),
+            ...(Array.isArray(user.controlPanelRoles) ? user.controlPanelRoles : []),
+            ...(Array.isArray(user.panelRoles) ? user.panelRoles : [])
+        ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+        const hostingPermissions = new Set([
+            ...(Array.isArray(user.hostingPermissions) ? user.hostingPermissions : []),
+            ...(Array.isArray(user.controlPanelPermissions) ? user.controlPanelPermissions : []),
+            ...(Array.isArray(user.panelPermissions) ? user.panelPermissions : [])
+        ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean));
+        const hasHostingOwnerRole = hostingRoleNames.some((value) => ['owner', 'server_owner', 'account_owner', 'reseller', 'root', 'administrator', 'admin'].includes(value));
+        const hasHostingManagerRole = hostingRoleNames.some((value) => ['manager', 'operator', 'support', 'staff', 'moderator', 'site_owner', 'hosting_admin'].includes(value));
+        const hasHostingAdminPermission = ['admin', 'owner', 'server.manage', 'server.admin', 'hosting.admin', 'hosting.owner', 'license.manage', 'install.manage'].some((permission) => hostingPermissions.has(permission));
+        const hasHostingStaffPermission = ['support', 'staff', 'moderate', 'server.support', 'hosting.support', 'install.support'].some((permission) => hostingPermissions.has(permission));
+
+        const email = String(user.email || '').trim().toLowerCase();
+        const currentRole = this.normalizeUserRole(user.role);
+        if (hasHostingOwnerRole || hasHostingAdminPermission) {
+            user.role = currentRole === 'owner' ? 'owner' : 'admin';
+            user.permissions = Array.from(new Set([...(user.permissions || []), ...this.buildPermissionsForRole(user.role), ...hostingPermissions]));
+            user.isAdmin = true;
+            user.isModerator = true;
+        } else if (hasHostingManagerRole || hasHostingStaffPermission) {
+            user.role = currentRole === 'owner' || currentRole === 'admin' ? currentRole : 'staff';
+            user.permissions = Array.from(new Set([...(user.permissions || []), ...this.buildPermissionsForRole(user.role), ...hostingPermissions]));
+            user.isModerator = true;
+        }
+
+        if (email && adminEmails.has(email)) {
+            user.role = 'admin';
+            user.permissions = Array.from(new Set([...(user.permissions || []), 'admin', 'staff', 'client']));
+            user.isAdmin = true;
+            user.isModerator = true;
+        } else if (email && moderatorEmails.has(email)) {
+            user.role = user.role === 'admin' ? 'admin' : 'staff';
+            user.permissions = Array.from(new Set([...(user.permissions || []), 'staff', 'client']));
+            user.isModerator = true;
+        }
+
+        return user;
+    }
+
+    async createDelegatedWhmcsSession(payload = {}) {
+        const delegated = await this.requestWhmcsAuthority('/api/auth/whmcs/login', payload);
+        if (!delegated?.user) {
+            throw new Error('Central auth authority did not return a user');
+        }
+
+        const upstreamUser = delegated.user;
+        const user = this.applyAuthorityRoleOverrides({
+            ...upstreamUser,
+            portalSite: this.normalizePortalSite(payload.portalSite || upstreamUser.portalSite),
+            authProvider: upstreamUser.authProvider || 'whmcs'
+        });
+
+        const localSession = this.createAuthSession(
+            this.whmcsAuthSessions,
+            'whmcs',
+            user,
+            payload.remember === true
+        );
+        const localRecord = this.whmcsAuthSessions.get(localSession.token);
+        if (localRecord) {
+            localRecord.upstreamToken = delegated.token || null;
+            localRecord.authorityBaseUrl = this.getWhmcsAuthorityConfig().baseUrl;
+        }
+
+        return {
+            success: true,
+            token: localSession.token,
+            expiresAt: localSession.expiresAt,
+            portalUrl: delegated.portalUrl || this.getPortalUrlForSite(user.portalSite),
+            delegated: true,
+            user
+        };
     }
 
     async whmcsRequest(action, params = {}) {
@@ -224,38 +409,37 @@ class VoiceLinkLocalServer {
         const roleConfig = deployConfig.get('whmcs')?.roles || {};
         const adminGroups = new Set(roleConfig.adminGroups || []);
         const staffGroups = new Set(roleConfig.staffGroups || []);
-        const adminAddons = (roleConfig.adminAddons || []).map(a => a.toLowerCase());
-        const staffAddons = (roleConfig.staffAddons || []).map(a => a.toLowerCase());
+        const adminAddons = (roleConfig.adminAddons || []).map((addon) => addon.toLowerCase());
+        const staffAddons = (roleConfig.staffAddons || []).map((addon) => addon.toLowerCase());
 
         const groupId = client?.groupid ? Number(client.groupid) : null;
         const groupName = (client?.groupname || '').toLowerCase();
 
-        let role = 'client';
+        let role = 'user';
         if (groupId && adminGroups.has(groupId)) role = 'admin';
         else if (groupId && staffGroups.has(groupId)) role = 'staff';
+        else if (groupName.includes('owner')) role = 'owner';
         else if (groupName.includes('admin')) role = 'admin';
-        else if (groupName.includes('staff')) role = 'staff';
+        else if (groupName.includes('moderator') || groupName.includes('staff') || groupName.includes('support')) role = 'staff';
+        else if (groupName.includes('member') || groupName.includes('client') || groupName.includes('customer')) role = 'user';
 
         const addonNames = [];
-        services.forEach(service => {
+        services.forEach((service) => {
             if (Array.isArray(service.addons)) {
-                service.addons.forEach(addon => {
+                service.addons.forEach((addon) => {
                     if (addon?.name) addonNames.push(addon.name.toLowerCase());
                 });
             }
         });
 
-        if (adminAddons.length && addonNames.some(name => adminAddons.includes(name))) {
+        if (adminAddons.length && addonNames.some((name) => adminAddons.includes(name))) {
             role = 'admin';
-        } else if (staffAddons.length && addonNames.some(name => staffAddons.includes(name))) {
+        } else if (staffAddons.length && addonNames.some((name) => staffAddons.includes(name))) {
             role = role === 'admin' ? 'admin' : 'staff';
         }
 
-        const permissions = role === 'admin'
-            ? ['admin', 'staff', 'client']
-            : role === 'staff'
-                ? ['staff', 'client']
-                : ['client'];
+        role = this.normalizeUserRole(role);
+        const permissions = this.buildPermissionsForRole(role);
 
         return { role, permissions };
     }
@@ -273,19 +457,36 @@ class VoiceLinkLocalServer {
         return text;
     }
 
+    normalizeUserRole(role) {
+        const value = String(role || '').trim().toLowerCase();
+        if (['owner', 'server_owner'].includes(value)) return 'owner';
+        if (['admin', 'administrator', 'server_admin'].includes(value)) return 'admin';
+        if (['moderator', 'mod', 'staff', 'support', 'manager', 'room_admin', 'room_moderator'].includes(value)) return 'staff';
+        if (['member', 'client', 'customer', 'subscriber', 'user'].includes(value)) return 'user';
+        return value || 'user';
+    }
+
+    buildPermissionsForRole(role) {
+        const normalizedRole = this.normalizeUserRole(role);
+        if (normalizedRole === 'owner') return ['owner', 'admin', 'staff', 'client'];
+        if (normalizedRole === 'admin') return ['admin', 'staff', 'client'];
+        if (normalizedRole === 'staff') return ['staff', 'client'];
+        return ['client'];
+    }
+
     extractServiceOptions(services = []) {
         const options = {};
-        services.forEach(service => {
+        services.forEach((service) => {
             const collect = (entry) => {
                 if (!entry) return;
                 if (Array.isArray(entry)) {
-                    entry.forEach(item => {
+                    entry.forEach((item) => {
                         const name = item?.name || item?.optionname;
                         const value = item?.value ?? item?.optionvalue ?? item?.qty ?? item?.optionid;
                         if (name) options[name] = this.normalizeWhmcsOptionValue(value);
                     });
                 } else if (typeof entry === 'object') {
-                    Object.keys(entry).forEach(key => {
+                    Object.keys(entry).forEach((key) => {
                         options[key] = this.normalizeWhmcsOptionValue(entry[key]);
                     });
                 }
@@ -316,18 +517,135 @@ class VoiceLinkLocalServer {
 
         const maxDevicesRaw = readOption('Max Devices', 'Device Slots', 'VoiceLink Max Devices', 'MaxDeviceSlots');
         const maxDevices = Number.isFinite(maxDevicesRaw) ? Number(maxDevicesRaw) : (defaults.maxDevices ?? null);
+        const installSlotsRaw = readOption('Install Slots', 'VoiceLink Install Slots', 'Max Installs', 'InstallSlots');
+        const installSlots = Number.isFinite(installSlotsRaw) ? Number(installSlotsRaw) : (defaults.installSlots ?? 1);
+        const serverSlotsRaw = readOption('Server Slots', 'VoiceLink Server Slots', 'Max Servers', 'ServerSlots');
+        const serverSlots = Number.isFinite(serverSlotsRaw) ? Number(serverSlotsRaw) : (defaults.serverSlots ?? 0);
+        const serverOwnerLicense = readOption('Server Owner License', 'VoiceLink Server Owner', 'Hosted Server License', 'ServerOwnerLicense');
+        const hostedControlPanel = readOption('Hosting Control Panel', 'Control Panel Access', 'Hosting Panel Enabled');
+        const hostedControlPanelRoles = readOption('Hosting Roles', 'Control Panel Roles', 'HostingRoleList');
+        const hostedControlPanelPermissions = readOption('Hosting Permissions', 'Control Panel Permissions', 'HostingPermissionList');
 
         const allowMultiDeviceSettings = readOption('Allow Multi-Device Settings', 'Allow Multi Device Settings', 'Enable Multi-Device Settings');
         const allowDeviceList = readOption('Allow Device List', 'Enable Device List', 'Allow Device Management');
         const requiresIapApple = readOption('Require Apple IAP', 'Require iOS IAP', 'Apple IAP Required');
+        const licenseTier = readOption('License Tier', 'VoiceLink License Tier', 'Support Tier', 'LicenseTier')
+            || defaults.licenseTier
+            || 'member';
 
         return {
             deviceTier,
             maxDevices,
+            installSlots,
+            serverSlots,
+            licenseTier,
+            serverOwnerLicense: serverOwnerLicense === null ? (defaults.serverOwnerLicense ?? false) : !!serverOwnerLicense,
+            hostingControlPanelLinked: hostedControlPanel === null ? (defaults.hostingControlPanelLinked ?? false) : !!hostedControlPanel,
+            hostingRoles: Array.isArray(hostedControlPanelRoles)
+                ? hostedControlPanelRoles
+                : String(hostedControlPanelRoles || '')
+                    .split(/[;,|]/)
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+            hostingPermissions: Array.isArray(hostedControlPanelPermissions)
+                ? hostedControlPanelPermissions
+                : String(hostedControlPanelPermissions || '')
+                    .split(/[;,|]/)
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+            licenses: {
+                user: {
+                    type: 'member',
+                    installsAllowed: installSlots,
+                    devicesAllowed: maxDevices
+                },
+                server: {
+                    type: serverOwnerLicense ? 'server_owner' : 'none',
+                    installsAllowed: installSlots,
+                    serversAllowed: serverSlots
+                }
+            },
             allowMultiDeviceSettings: allowMultiDeviceSettings === null ? (defaults.allowMultiDeviceSettings ?? true) : !!allowMultiDeviceSettings,
             allowDeviceList: allowDeviceList === null ? (defaults.allowDeviceList ?? true) : !!allowDeviceList,
             requiresIapApple: requiresIapApple === null ? (defaults.requiresIapApple ?? false) : !!requiresIapApple
         };
+    }
+
+    resolveWhmcsIdentity(identity = '') {
+        const raw = String(identity || '').trim();
+        if (!raw) return { identity: '', email: '', username: '' };
+
+        const email = raw.includes('@') ? raw.toLowerCase() : '';
+        const username = raw.includes('@') ? '' : raw.toLowerCase();
+        if (email) {
+            return { identity: raw, email, username: '' };
+        }
+
+        const aliases = new Map(
+            String(process.env.VOICELINK_WHMCS_IDENTITY_ALIASES || '')
+                .split(',')
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+                .map((entry) => {
+                    const [alias, mappedEmail] = entry.split(':').map((part) => String(part || '').trim());
+                    return [alias.toLowerCase(), mappedEmail.toLowerCase()];
+                })
+                .filter(([alias, mappedEmail]) => alias && mappedEmail)
+        );
+        const mappedEmail = aliases.get(username);
+        if (mappedEmail) {
+            return { identity: raw, email: mappedEmail, username };
+        }
+
+        if (this.localAuthUsers?.size) {
+            const localMatch = Array.from(this.localAuthUsers.values()).find((user) => {
+                const candidate = String(user?.username || '').trim().toLowerCase();
+                return candidate && candidate === username && String(user?.email || '').includes('@');
+            });
+            if (localMatch?.email) {
+                return { identity: raw, email: String(localMatch.email).trim().toLowerCase(), username };
+            }
+        }
+
+        return { identity: raw, email: '', username };
+    }
+
+    getWhmcsAdminBridgeConfig() {
+        return {
+            enabled: process.env.VOICELINK_WHMCS_ADMIN_BRIDGE !== 'false',
+            phpBin: process.env.VOICELINK_PHP_BIN || 'php',
+            configPath: process.env.VOICELINK_WHMCS_CONFIG_PATH || '',
+            adminUrl: process.env.VOICELINK_WHMCS_ADMIN_URL || ''
+        };
+    }
+
+    async authenticateWhmcsAdmin(identity = '', password = '') {
+        const config = this.getWhmcsAdminBridgeConfig();
+        if (!config.enabled || !config.configPath) {
+            return null;
+        }
+
+        const loginIdentity = String(identity || '').trim();
+        const loginPassword = String(password || '');
+        if (!loginIdentity || !loginPassword) {
+            return null;
+        }
+        const helperPath = path.join(__dirname, '../tools/whmcs-admin-auth.php');
+
+        try {
+            const { stdout } = await execFileAsync(config.phpBin, [helperPath, loginIdentity, loginPassword, config.configPath], {
+                timeout: 10000,
+                maxBuffer: 1024 * 256
+            });
+            const parsed = JSON.parse(String(stdout || '{}').trim() || '{}');
+            if (!parsed?.success || !parsed?.admin) {
+                return null;
+            }
+            return parsed.admin;
+        } catch (error) {
+            console.warn('[WHMCS] Admin bridge failed:', error.message);
+            return null;
+        }
     }
 
     createAuthSession(store, prefix, user, remember = false) {
@@ -348,39 +666,63 @@ class VoiceLinkLocalServer {
         return session;
     }
 
+    registerSocketSession(socket, sessionInfo) {
+        if (!sessionInfo?.userId) return;
+        if (!this.activeSessionsByUser.has(sessionInfo.userId)) {
+            this.activeSessionsByUser.set(sessionInfo.userId, new Map());
+        }
+        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
+        userSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
+        this.socketSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
+        if (sessionInfo.deviceId) {
+            this.deviceSessions.set(sessionInfo.deviceId, socket.id);
+        }
+    }
+
+    unregisterSocketSession(socketId) {
+        const sessionInfo = this.socketSessions.get(socketId);
+        if (!sessionInfo) return;
+        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
+        if (userSessions) {
+            userSessions.delete(socketId);
+            if (userSessions.size === 0) {
+                this.activeSessionsByUser.delete(sessionInfo.userId);
+            }
+        }
+        if (sessionInfo.deviceId) {
+            this.deviceSessions.delete(sessionInfo.deviceId);
+        }
+        this.socketSessions.delete(socketId);
+    }
+
+    getUserSessions(userId) {
+        const sessions = this.activeSessionsByUser.get(userId);
+        if (!sessions) return [];
+        return Array.from(sessions.values());
+    }
+
+    getOtherUserSessions(userId, socketId) {
+        const sessions = this.activeSessionsByUser.get(userId);
+        if (!sessions) return [];
+        return Array.from(sessions.values()).filter((session) => session.socketId !== socketId);
+    }
+
     getRequesterContext(req) {
         const body = req.body || {};
         const query = req.query || {};
         const headers = req.headers || {};
-
         const userId = body.userId || body.user?.id || query.userId || headers['x-user-id'] || null;
-        const userName = body.userName
-            || body.username
-            || body.creatorHandle
-            || body.startedBy
-            || body.user?.displayName
-            || query.userName
-            || headers['x-user-name']
-            || null;
-        const role = String(
-            body.role
-            || body.user?.role
-            || query.role
-            || headers['x-user-role']
-            || headers['x-whmcs-role']
-            || ''
-        ).toLowerCase();
+        const userName = body.userName || body.username || body.creatorHandle || body.startedBy || query.userName || headers['x-user-name'] || null;
+        const role = String(body.role || body.user?.role || query.role || headers['x-user-role'] || '').toLowerCase();
         const permissions = Array.isArray(body.permissions)
             ? body.permissions
             : (Array.isArray(body.user?.permissions) ? body.user.permissions : []);
-
         const isAdmin = body.isAdmin === true
             || body.user?.isAdmin === true
             || query.isAdmin === 'true'
             || headers['x-user-admin'] === 'true'
             || role === 'admin'
             || permissions.includes('admin');
-
         return {
             userId: userId ? String(userId) : null,
             userName: userName ? String(userName) : null,
@@ -396,12 +738,8 @@ class VoiceLinkLocalServer {
         }
         const cfg = room.jellyfinAccess;
         if (!Array.isArray(cfg.allowedServerIds)) cfg.allowedServerIds = [];
-        if (!cfg.allowedLibraryIdsByServer || typeof cfg.allowedLibraryIdsByServer !== 'object') {
-            cfg.allowedLibraryIdsByServer = {};
-        }
-        if (!cfg.roomUserPermissions || typeof cfg.roomUserPermissions !== 'object') {
-            cfg.roomUserPermissions = {};
-        }
+        if (!cfg.allowedLibraryIdsByServer || typeof cfg.allowedLibraryIdsByServer !== 'object') cfg.allowedLibraryIdsByServer = {};
+        if (!cfg.roomUserPermissions || typeof cfg.roomUserPermissions !== 'object') cfg.roomUserPermissions = {};
         if (typeof cfg.enabled !== 'boolean') cfg.enabled = true;
         if (typeof cfg.adminCanAccessAll !== 'boolean') cfg.adminCanAccessAll = true;
         if (typeof cfg.allowRoomOwnerUploads !== 'boolean') cfg.allowRoomOwnerUploads = true;
@@ -425,7 +763,6 @@ class VoiceLinkLocalServer {
         const explicit = (keyFromId && cfg.roomUserPermissions[keyFromId])
             || (keyFromName && cfg.roomUserPermissions[keyFromName])
             || null;
-
         const owner = this.canManageRoomJellyfin(room, requester) && !requester?.isAdmin;
         const defaults = {
             canUseLibraries: true,
@@ -434,11 +771,7 @@ class VoiceLinkLocalServer {
             allowedServerIds: [],
             allowedLibraryIdsByServer: {}
         };
-        return {
-            ...defaults,
-            ...(explicit || {}),
-            principal: keyFromId || keyFromName || null
-        };
+        return { ...defaults, ...(explicit || {}) };
     }
 
     isServerAllowedForRoom(room, serverId, requester) {
@@ -457,11 +790,9 @@ class VoiceLinkLocalServer {
         const cfg = this.ensureRoomJellyfinAccess(room);
         if (requester?.isAdmin && cfg.adminCanAccessAll) return true;
         const perm = this.getRoomJellyfinPermission(room, requester);
-
         const roomMap = cfg.allowedLibraryIdsByServer?.[serverId];
         const userMap = perm.allowedLibraryIdsByServer?.[serverId];
         const allowed = Array.isArray(userMap) && userMap.length ? userMap : (Array.isArray(roomMap) ? roomMap : []);
-
         if (!allowed.length) return true;
         if (!libraryId) return false;
         return allowed.includes(String(libraryId));
@@ -544,6 +875,890 @@ class VoiceLinkLocalServer {
         } catch (e) {
             console.error('[Modules] Failed to initialize Updater:', e.message);
         }
+
+        // Initialize Internal Scheduler module (always enabled - core feature)
+        try {
+            this.modules.internalScheduler = new InternalScheduler({
+                io: this.io,
+                dataDir: path.join(__dirname, '../../data/scheduler'),
+                logger: console
+            });
+            console.log('[Modules] Internal Scheduler module initialized');
+        } catch (e) {
+            console.error('[Modules] Failed to initialize Internal Scheduler:', e.message);
+        }
+    }
+
+    getSchedulerRole(req) {
+        const groupsHeader = (req.headers['remote-groups'] || req.headers['x-user-groups'] || '').toString();
+        const groups = groupsHeader.split(',').map((g) => g.trim().toLowerCase()).filter(Boolean);
+        const isAdminGroup = groups.some((g) => ['admins', 'admin', 'wheel', 'sudo'].includes(g));
+        const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+        const validAdminKey = process.env.VOICELINK_ADMIN_KEY && adminKey && adminKey === process.env.VOICELINK_ADMIN_KEY;
+        return (isAdminGroup || validAdminKey) ? 'admin' : 'user';
+    }
+
+    isAdminRequest(req) {
+        return this.getSchedulerRole(req) === 'admin';
+    }
+
+    parseBool(value, defaultValue = false) {
+        if (value === undefined || value === null || value === '') {
+            return defaultValue;
+        }
+        if (typeof value === 'boolean') {
+            return value;
+        }
+        return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+    }
+
+    sanitizeExportSegment(input, fallback = 'export') {
+        const cleaned = String(input || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9._-]+/g, '-')
+            .replace(/^-+/, '')
+            .replace(/-+$/, '');
+        return cleaned || fallback;
+    }
+
+    ensureEscortSessionsStore() {
+        if (!this.escortSessions) {
+            this.escortSessions = new Map();
+        }
+        return this.escortSessions;
+    }
+
+    runCommand(executable, args, options = {}) {
+        return new Promise((resolve, reject) => {
+            const proc = spawn(executable, args, options);
+            let stdout = '';
+            let stderr = '';
+            proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+            proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+            proc.on('error', reject);
+            proc.on('close', (code) => {
+                if (code === 0) {
+                    resolve({ code, stdout, stderr });
+                    return;
+                }
+                reject(new Error(`${executable} exited ${code}: ${stderr || stdout}`));
+            });
+        });
+    }
+
+    getCopyPartyExportConfig() {
+        const baseUrl = String(process.env.VOICELINK_COPYPARTY_URL || 'https://files.raywonderis.me')
+            .trim()
+            .replace(/\/+$/, '');
+        let exportPath = String(process.env.VOICELINK_COPYPARTY_EXPORT_PATH || '/uploads/voicelink-exports').trim();
+        if (!exportPath.startsWith('/')) {
+            exportPath = `/${exportPath}`;
+        }
+        exportPath = exportPath.replace(/\/+$/, '');
+        return {
+            enabled: Boolean(baseUrl),
+            baseUrl,
+            exportPath,
+            username: process.env.VOICELINK_COPYPARTY_USERNAME || '',
+            password: process.env.VOICELINK_COPYPARTY_PASSWORD || ''
+        };
+    }
+
+    async createJsonZipArchive(payload, { prefix = 'voicelink-export' } = {}) {
+        const exportDir = path.join(__dirname, '../../data/exports');
+        fs.mkdirSync(exportDir, { recursive: true });
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const safePrefix = this.sanitizeExportSegment(prefix, 'voicelink-export');
+        const baseName = `${safePrefix}-${timestamp}-${uuidv4().slice(0, 8)}`;
+        const jsonPath = path.join(exportDir, `${baseName}.json`);
+        const zipPath = path.join(exportDir, `${baseName}.zip`);
+
+        fs.writeFileSync(jsonPath, JSON.stringify(payload, null, 2), 'utf8');
+        await this.runCommand('zip', ['-j', '-q', zipPath, jsonPath]);
+        fs.unlinkSync(jsonPath);
+
+        const stats = fs.statSync(zipPath);
+        return {
+            fileName: `${baseName}.zip`,
+            zipPath,
+            size: stats.size,
+            createdAt: new Date().toISOString(),
+            downloadUrl: `/exports/${baseName}.zip`
+        };
+    }
+
+    async uploadArchiveToCopyParty(zipPath, fileName) {
+        const config = this.getCopyPartyExportConfig();
+        if (!config.enabled) {
+            return { uploaded: false, reason: 'CopyParty not configured' };
+        }
+
+        const uploadUrl = `${config.baseUrl}${config.exportPath}/${encodeURIComponent(fileName)}`;
+        const headers = { 'Content-Type': 'application/zip' };
+        if (config.username) {
+            const auth = Buffer.from(`${config.username}:${config.password || ''}`).toString('base64');
+            headers.Authorization = `Basic ${auth}`;
+        }
+
+        const response = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers,
+            body: fs.readFileSync(zipPath)
+        });
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            throw new Error(`CopyParty upload failed (${response.status}): ${errorText.slice(0, 240)}`);
+        }
+
+        return {
+            uploaded: true,
+            url: uploadUrl,
+            baseUrl: config.baseUrl,
+            exportPath: config.exportPath
+        };
+    }
+
+    getOpenLinkShareConfig() {
+        const baseUrl = String(process.env.VOICELINK_OPENLINK_URL || 'https://openlink.tappedin.fm')
+            .trim()
+            .replace(/\/+$/, '');
+        const regeneratePath = String(process.env.VOICELINK_OPENLINK_REGENERATE_PATH || '/api/regenerate').trim();
+        return {
+            enabled: Boolean(baseUrl),
+            baseUrl,
+            regeneratePath: regeneratePath.startsWith('/') ? regeneratePath : `/${regeneratePath}`
+        };
+    }
+
+    createShareToken(seed = '') {
+        const clean = this.sanitizeExportSegment(seed || uuidv4().slice(0, 8), 'share');
+        return `${clean}-${Date.now().toString(36)}`;
+    }
+
+    withTimeoutSignal(timeoutMs = 6000) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        return { signal: controller.signal, clear: () => clearTimeout(timer) };
+    }
+
+    async probeUrl(url, timeoutMs = 6000) {
+        const probeHead = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(url, {
+                method: 'HEAD',
+                signal: probeHead.signal
+            });
+            if (response.ok) {
+                return { ok: true, status: response.status };
+            }
+            if (response.status !== 405) {
+                return { ok: false, status: response.status };
+            }
+        } catch (error) {
+            // Fall back to GET probe for hosts that do not support HEAD.
+            if (error?.name !== 'AbortError') {
+                // continue
+            }
+        } finally {
+            probeHead.clear();
+        }
+
+        const probeGet = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                signal: probeGet.signal
+            });
+            return { ok: response.ok, status: response.status };
+        } catch (error) {
+            return { ok: false, error: error.message };
+        } finally {
+            probeGet.clear();
+        }
+    }
+
+    buildCopyPartyLink({ fileName = '', directUrl = '' } = {}) {
+        if (directUrl && /^https?:\/\//i.test(directUrl)) {
+            return { url: directUrl, configured: true };
+        }
+        const cfg = this.getCopyPartyExportConfig();
+        if (!cfg.enabled || !fileName) {
+            return { url: '', configured: false };
+        }
+        return {
+            url: `${cfg.baseUrl}${cfg.exportPath}/${encodeURIComponent(fileName)}`,
+            configured: true
+        };
+    }
+
+    async buildOpenLinkShareLink({ token = '', timeoutMs = 6000 } = {}) {
+        const cfg = this.getOpenLinkShareConfig();
+        if (!cfg.enabled) {
+            return { ok: false, reason: 'OpenLink not configured' };
+        }
+
+        const base = new URL(cfg.baseUrl);
+        const shareToken = this.sanitizeExportSegment(token || this.createShareToken('olink'), 'olink');
+        const regenerateUrl = `${cfg.baseUrl}${cfg.regeneratePath}/${encodeURIComponent(shareToken)}`;
+
+        const regenTimeout = this.withTimeoutSignal(timeoutMs);
+        try {
+            const response = await fetch(regenerateUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}',
+                signal: regenTimeout.signal
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                return { ok: false, reason: `OpenLink regenerate failed (${response.status}): ${text.slice(0, 120)}` };
+            }
+        } catch (error) {
+            return { ok: false, reason: `OpenLink regenerate failed: ${error.message}` };
+        } finally {
+            regenTimeout.clear();
+        }
+
+        const wildcardUrl = `${base.protocol}//${shareToken}.${base.host}`;
+        const healthProbe = await this.probeUrl(`${wildcardUrl}/health`, timeoutMs);
+        if (!healthProbe.ok) {
+            return {
+                ok: false,
+                reason: `OpenLink wildcard check failed (${healthProbe.status || 'error'})`
+            };
+        }
+
+        return {
+            ok: true,
+            provider: 'openlink',
+            token: shareToken,
+            url: wildcardUrl,
+            regenerateUrl
+        };
+    }
+
+    buildUserDataExport({ userId = '', username = '', includeMessages = true, includeRooms = true } = {}) {
+        const cleanUserId = String(userId || '').trim();
+        const cleanUsername = String(username || '').trim();
+        const roomIds = new Set();
+        const memberships = [];
+
+        if (includeRooms) {
+            for (const room of this.rooms.values()) {
+                const users = Array.isArray(room.users) ? room.users : [];
+                const member = users.find((u) => {
+                    const uid = String(u?.id || u?.userId || '').trim();
+                    const uname = String(u?.name || u?.username || '').trim();
+                    return (cleanUserId && uid === cleanUserId) || (cleanUsername && uname === cleanUsername);
+                });
+                if (member) {
+                    roomIds.add(room.id);
+                    memberships.push({
+                        id: room.id,
+                        roomId: room.roomId || room.id,
+                        name: room.name,
+                        visibility: room.visibility || 'public'
+                    });
+                }
+            }
+        }
+
+        const directMessages = [];
+        if (includeMessages) {
+            for (const messages of this.directMessages.values()) {
+                const filtered = (messages || []).filter((msg) => {
+                    const senderId = String(msg.senderId || msg.userId || '').trim();
+                    const receiverId = String(msg.receiverId || msg.targetUserId || '').trim();
+                    return (cleanUserId && (senderId === cleanUserId || receiverId === cleanUserId));
+                });
+                directMessages.push(...filtered);
+            }
+        }
+
+        const roomMessages = {};
+        if (includeMessages && includeRooms) {
+            for (const roomId of roomIds) {
+                roomMessages[roomId] = this.roomMessages.get(roomId) || [];
+            }
+        }
+
+        return {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            user: { userId: cleanUserId || null, username: cleanUsername || null },
+            rooms: memberships,
+            directMessages,
+            roomMessages
+        };
+    }
+
+    buildAdminMigrationSnapshot(options = {}) {
+        const includeMessages = this.parseBool(options.includeMessages, true);
+        const includeRooms = this.parseBool(options.includeRooms, true);
+        const includeApiKeys = this.parseBool(options.includeApiKeys, false);
+        const includeAuthSessions = this.parseBool(options.includeAuthSessions, true);
+        const includeAccessPasses = this.parseBool(options.includeAccessPasses, true);
+
+        return {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            host: os.hostname(),
+            rooms: includeRooms ? Array.from(this.rooms.values()).map((room) => ({ ...room, users: [] })) : [],
+            users: Array.from(this.users.values()).map((user) => ({
+                id: user.id || user.userId || null,
+                name: user.name || user.username || null,
+                roomId: user.roomId || null,
+                roleContext: user.roleContext || null
+            })),
+            apiSessions: includeAuthSessions ? Array.from(this.apiSessions.entries()).map(([token, session]) => ({
+                token,
+                userId: session.userId || null,
+                userName: session.userName || null,
+                roleContext: session.roleContext || null,
+                metadata: session.metadata || {},
+                expiresAt: session.expiresAt || null
+            })) : [],
+            apiKeys: includeApiKeys ? Array.from(this.apiKeys.entries()).map(([key, data]) => ({ key, ...data })) : [],
+            accessPasses: includeAccessPasses ? Array.from((this.accessPasses || new Map()).values()) : [],
+            roomMessages: includeMessages ? Object.fromEntries(this.roomMessages.entries()) : {},
+            directMessages: includeMessages ? Object.fromEntries(this.directMessages.entries()) : {}
+        };
+    }
+
+    applyAdminMigrationSnapshot(snapshot = {}) {
+        const result = {
+            importedRooms: 0,
+            importedSessions: 0,
+            importedApiKeys: 0,
+            importedAccessPasses: 0,
+            importedRoomMessageBuckets: 0,
+            importedDirectMessageBuckets: 0
+        };
+
+        if (Array.isArray(snapshot.rooms)) {
+            for (const room of snapshot.rooms) {
+                if (!room || !room.id) continue;
+                const existing = this.rooms.get(room.id) || {};
+                this.rooms.set(room.id, { ...existing, ...room, users: existing.users || [] });
+                result.importedRooms += 1;
+            }
+        }
+
+        if (Array.isArray(snapshot.apiSessions)) {
+            for (const item of snapshot.apiSessions) {
+                if (!item?.token) continue;
+                this.apiSessions.set(item.token, {
+                    userId: item.userId || '',
+                    userName: item.userName || '',
+                    roleContext: item.roleContext || null,
+                    metadata: item.metadata || {},
+                    createdAt: new Date(),
+                    expiresAt: item.expiresAt ? new Date(item.expiresAt) : new Date(Date.now() + 3600000)
+                });
+                result.importedSessions += 1;
+            }
+        }
+
+        if (Array.isArray(snapshot.apiKeys)) {
+            for (const keyData of snapshot.apiKeys) {
+                if (!keyData?.key) continue;
+                const { key, ...rest } = keyData;
+                this.apiKeys.set(key, rest);
+                result.importedApiKeys += 1;
+            }
+        }
+
+        if (Array.isArray(snapshot.accessPasses)) {
+            for (const pass of snapshot.accessPasses) {
+                const passId = pass.id || `pass_${uuidv4()}`;
+                this.accessPasses.set(passId, pass);
+                result.importedAccessPasses += 1;
+            }
+        }
+
+        if (snapshot.roomMessages && typeof snapshot.roomMessages === 'object') {
+            for (const [roomId, messages] of Object.entries(snapshot.roomMessages)) {
+                this.roomMessages.set(roomId, Array.isArray(messages) ? messages : []);
+                result.importedRoomMessageBuckets += 1;
+            }
+        }
+
+        if (snapshot.directMessages && typeof snapshot.directMessages === 'object') {
+            for (const [dmKey, messages] of Object.entries(snapshot.directMessages)) {
+                this.directMessages.set(dmKey, Array.isArray(messages) ? messages : []);
+                result.importedDirectMessageBuckets += 1;
+            }
+        }
+
+        return result;
+    }
+
+    startMigrationRoomTransfer({ sourceRoomId, targetRoomId, targetServerUrl = '' } = {}) {
+        this.ensureEscortSessionsStore();
+        const sourceRoom = this.rooms.get(sourceRoomId);
+        if (!sourceRoom) {
+            throw new Error('Source room not found');
+        }
+
+        const escortId = `escort_migration_${uuidv4().slice(0, 8)}`;
+        const session = {
+            id: escortId,
+            leaderId: 'system_migration',
+            leaderName: 'Server Migration',
+            sourceRoomId,
+            targetRoomId,
+            targetServerUrl: targetServerUrl || null,
+            followers: [],
+            status: 'active',
+            migrationMode: true,
+            createdAt: new Date(),
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+        };
+        this.escortSessions.set(escortId, session);
+
+        this.io.to(sourceRoomId).emit('escort-started', {
+            escortId,
+            leaderName: session.leaderName,
+            targetRoomId,
+            targetServerUrl: session.targetServerUrl,
+            migrationMode: true,
+            message: targetServerUrl
+                ? `Server migration in progress. Follow to move to ${targetRoomId} on ${targetServerUrl}`
+                : `Server migration in progress. Follow to move to ${targetRoomId}.`
+        });
+        return session;
+    }
+
+    getRoleContextFromRequest(req) {
+        const groupsHeader = (req.headers['remote-groups'] || req.headers['x-user-groups'] || '').toString();
+        const groups = groupsHeader.split(',').map((g) => g.trim()).filter(Boolean);
+        const remoteUser = (req.headers['remote-user'] || req.headers['x-user-id'] || '').toString().trim();
+        const remoteEmail = (req.headers['remote-email'] || req.headers['x-user-email'] || '').toString().trim();
+        const roleInput = {
+            provider: req.headers['x-auth-provider'] || req.query.provider || 'unknown',
+            groups,
+            roles: req.headers['x-user-roles'] || req.query.roles || '',
+            userName: remoteUser,
+            userId: remoteUser,
+            email: remoteEmail,
+            isAdmin: this.getSchedulerRole(req) === 'admin',
+            isAuthenticated: Boolean(remoteUser || remoteEmail)
+        };
+        return RoleMapper.normalizeIdentity(roleInput);
+    }
+
+    getMastodonScopePolicy({ instance = '', username = '', email = '', requestElevated = false } = {}) {
+        const cleanInstance = String(instance || '')
+            .toLowerCase()
+            .trim()
+            .replace(/^https?:\/\//, '')
+            .replace(/\/+$/, '');
+        const cleanUsername = String(username || '').toLowerCase().trim();
+        const cleanEmail = String(email || '').toLowerCase().trim();
+        const wantsElevated = String(requestElevated).toLowerCase() === 'true' || requestElevated === true || requestElevated === 1 || requestElevated === '1';
+
+        const identity = RoleMapper.normalizeIdentity({
+            provider: 'mastodon',
+            userName: cleanUsername,
+            userId: cleanUsername,
+            email: cleanEmail,
+            isAuthenticated: Boolean(cleanUsername || cleanEmail)
+        });
+
+        const defaultScope = process.env.VOICELINK_MASTODON_DEFAULT_SCOPE || 'read:accounts';
+        const elevatedScope = process.env.VOICELINK_MASTODON_ADMIN_SCOPE || 'read write';
+        const elevatedInstances = new Set(
+            RoleMapper.envList(
+                'VOICELINK_MASTODON_ELEVATED_INSTANCES',
+                'md.tappedin.fm,mastodon.devinecreations.net'
+            )
+        );
+        const allowAllInstances = elevatedInstances.size === 0 || elevatedInstances.has('*');
+        const instanceAllowed = allowAllInstances || elevatedInstances.has(cleanInstance);
+        const allowUserElevated = String(process.env.VOICELINK_MASTODON_ALLOW_USER_ELEVATED || 'true').toLowerCase() !== 'false';
+        const hasIdentity = Boolean(cleanUsername || cleanEmail);
+        const canRequestElevated = Boolean(
+            instanceAllowed && (
+                identity.isAdmin || (allowUserElevated && hasIdentity)
+            )
+        );
+        const effectiveScope = canRequestElevated && wantsElevated ? elevatedScope : defaultScope;
+
+        return {
+            provider: 'mastodon',
+            instance: cleanInstance,
+            username: cleanUsername || null,
+            primaryRole: identity.primaryRole,
+            isAdmin: identity.isAdmin,
+            isModerator: identity.isModerator,
+            canRequestElevated,
+            requestElevated: wantsElevated,
+            effectiveScope,
+            policy: {
+                allowUserElevated,
+                instanceAllowed
+            },
+            allowed: {
+                defaultScope,
+                elevatedScope
+            }
+        };
+    }
+
+    loadAgentPolicy() {
+        const fallback = {
+            version: 1,
+            defaultStatusTemplates: {
+                offline: 'No room agent active.',
+                available: "I'm here to help you manage your room.",
+                busy: 'I am handling a request. Please wait.',
+                restricted: 'I can help with chat and allowed actions for this room.'
+            },
+            defaults: {
+                maxMessageLength: 2000,
+                allowedIntents: ['chat', 'help', 'account'],
+                allowedActions: []
+            },
+            roles: {
+                guest: { allowedIntents: ['chat', 'help'], allowedActions: [] },
+                member: { allowedIntents: ['chat', 'help', 'account'], allowedActions: [] },
+                moderator: { allowedIntents: ['chat', 'help', 'account', 'moderate'], allowedActions: ['announce'] },
+                admin: {
+                    allowedIntents: ['chat', 'help', 'account', 'moderate', 'manage_room', 'run_admin_action'],
+                    allowedActions: ['announce', 'lock_room', 'unlock_room']
+                }
+            },
+            safetyRules: [
+                'Room scope first: agent can only operate in explicitly targeted room.',
+                'Least privilege: tokens must include only required permissions.',
+                'No cross-user account changes unless caller has admin policy.',
+                'No destructive actions without explicit admin action request.',
+                'Never expose secrets, keys, session tokens, or private room passwords.'
+            ]
+        };
+        try {
+            const policyPath = path.join(__dirname, '../config/agent-policy.json');
+            if (fs.existsSync(policyPath)) {
+                const parsed = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+                return { ...fallback, ...parsed };
+            }
+        } catch (error) {
+            console.warn('[AgentPolicy] Failed to load policy file, using defaults:', error.message);
+        }
+        return fallback;
+    }
+
+    getAgentRoleForPrincipal(principal = {}) {
+        if (principal?.isAdmin) return 'admin';
+        const roles = Array.isArray(principal?.roleContext?.voicelinkRoles)
+            ? principal.roleContext.voicelinkRoles
+            : [];
+        if (roles.includes('room_admin') || roles.includes('room_moderator')) return 'moderator';
+        if (principal?.userId || principal?.userName) return 'member';
+        return 'guest';
+    }
+
+    getAgentRuntimePolicy(principal = {}) {
+        const role = this.getAgentRoleForPrincipal(principal);
+        const defaults = this.agentPolicy?.defaults || {};
+        const roleRules = this.agentPolicy?.roles?.[role] || {};
+        return {
+            role,
+            maxMessageLength: Number(roleRules.maxMessageLength || defaults.maxMessageLength || 2000),
+            allowedIntents: this.normalizeTokenPermissions(roleRules.allowedIntents || defaults.allowedIntents || []),
+            allowedActions: this.normalizeTokenPermissions(roleRules.allowedActions || defaults.allowedActions || [])
+        };
+    }
+
+    loadPushoverConfig() {
+        const fallback = {
+            enabled: false,
+            active: false,
+            appToken: '',
+            userKey: '',
+            device: '',
+            sound: '',
+            priority: 0,
+            titlePrefix: 'VoiceLink',
+            minDeferredSeconds: 15,
+            maxDeferredSeconds: 120,
+            pendingActivationUntil: null,
+            updatedAt: null
+        };
+        try {
+            const cfgPath = path.join(__dirname, '../../data/pushover.json');
+            if (!fs.existsSync(cfgPath)) return fallback;
+            const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            return { ...fallback, ...parsed };
+        } catch (error) {
+            console.warn('[Pushover] Failed to load config:', error.message);
+            return fallback;
+        }
+    }
+
+    savePushoverConfig() {
+        try {
+            const cfgPath = path.join(__dirname, '../../data/pushover.json');
+            fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+            fs.writeFileSync(cfgPath, JSON.stringify(this.pushoverConfig, null, 2), 'utf8');
+            return true;
+        } catch (error) {
+            console.error('[Pushover] Failed to save config:', error.message);
+            return false;
+        }
+    }
+
+    maskedPushoverConfig() {
+        const config = this.pushoverConfig || {};
+        const mask = (value = '') => {
+            const str = String(value || '');
+            if (!str) return '';
+            if (str.length <= 8) return '********';
+            return `${str.slice(0, 4)}…${str.slice(-4)}`;
+        };
+        return {
+            enabled: Boolean(config.enabled),
+            active: Boolean(config.active),
+            hasAppToken: Boolean(config.appToken),
+            hasUserKey: Boolean(config.userKey),
+            appTokenMasked: mask(config.appToken),
+            userKeyMasked: mask(config.userKey),
+            device: config.device || '',
+            sound: config.sound || '',
+            priority: Number(config.priority || 0),
+            titlePrefix: config.titlePrefix || 'VoiceLink',
+            minDeferredSeconds: Number(config.minDeferredSeconds || 15),
+            maxDeferredSeconds: Number(config.maxDeferredSeconds || 120),
+            pendingActivationUntil: config.pendingActivationUntil || null,
+            updatedAt: config.updatedAt || null
+        };
+    }
+
+    schedulePushoverActivation() {
+        if (this.pendingPushoverActivation) {
+            clearTimeout(this.pendingPushoverActivation);
+            this.pendingPushoverActivation = null;
+        }
+        const minDelay = Math.max(1, Number(this.pushoverConfig.minDeferredSeconds || 15));
+        const maxDelay = Math.max(minDelay, Number(this.pushoverConfig.maxDeferredSeconds || 120));
+        const delaySeconds = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+        const activateAt = new Date(Date.now() + (delaySeconds * 1000));
+        this.pushoverConfig.pendingActivationUntil = activateAt.toISOString();
+        this.pushoverConfig.active = false;
+        this.savePushoverConfig();
+
+        this.pendingPushoverActivation = setTimeout(() => {
+            this.pushoverConfig.pendingActivationUntil = null;
+            this.pushoverConfig.active = Boolean(this.pushoverConfig.enabled && this.pushoverConfig.appToken && this.pushoverConfig.userKey);
+            this.savePushoverConfig();
+            this.pendingPushoverActivation = null;
+        }, delaySeconds * 1000);
+    }
+
+    async sendPushoverNotification({ title = '', message = '', url = '', urlTitle = '' } = {}) {
+        const cfg = this.pushoverConfig || {};
+        if (!cfg.enabled || !cfg.active || !cfg.appToken || !cfg.userKey) {
+            return { success: false, skipped: true, reason: 'Pushover not active/configured' };
+        }
+
+        const payload = new URLSearchParams();
+        payload.set('token', String(cfg.appToken));
+        payload.set('user', String(cfg.userKey));
+        payload.set('message', String(message || '').slice(0, 1024));
+        payload.set('title', String(title || `${cfg.titlePrefix || 'VoiceLink'} Notification`).slice(0, 250));
+        payload.set('priority', String(Number(cfg.priority || 0)));
+        if (cfg.device) payload.set('device', String(cfg.device));
+        if (cfg.sound) payload.set('sound', String(cfg.sound));
+        if (url) payload.set('url', String(url));
+        if (urlTitle) payload.set('url_title', String(urlTitle));
+
+        try {
+            const response = await fetch('https://api.pushover.net/1/messages.json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: payload.toString()
+            });
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok || body.status !== 1) {
+                return {
+                    success: false,
+                    skipped: false,
+                    error: body.errors?.[0] || `Pushover API failed (${response.status})`
+                };
+            }
+            return { success: true, request: body.request || null };
+        } catch (error) {
+            return { success: false, skipped: false, error: error.message };
+        }
+    }
+
+    normalizeTokenPermissions(input = []) {
+        if (!input) return [];
+        const values = Array.isArray(input)
+            ? input
+            : String(input).split(',');
+        const cleaned = values
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+        return Array.from(new Set(cleaned));
+    }
+
+    extractTokenFromRequest(req) {
+        const authHeader = String(req.headers.authorization || '').trim();
+        if (authHeader.toLowerCase().startsWith('bearer ')) {
+            return authHeader.slice(7).trim();
+        }
+        const tokenHeader = req.headers['x-voicelink-token'] || req.headers['x-session-token'] || req.headers['x-api-key'];
+        if (tokenHeader) return String(tokenHeader).trim();
+        if (req.query?.token) return String(req.query.token).trim();
+        if (req.body?.token) return String(req.body.token).trim();
+        return '';
+    }
+
+    hasTokenPermission(grantedPermissions = [], requestedPermission = '') {
+        const requested = String(requestedPermission || '').trim();
+        if (!requested) return true;
+
+        const granted = new Set(this.normalizeTokenPermissions(grantedPermissions));
+        if (granted.has('*') || granted.has('admin')) return true;
+        if (granted.has(requested)) return true;
+
+        const sections = requested.split('.');
+        if (sections.length > 1) {
+            const wildcardPrefix = `${sections[0]}.*`;
+            if (granted.has(wildcardPrefix)) return true;
+        }
+
+        if (requested.startsWith('agent.') && granted.has('agent.admin')) return true;
+        if (requested.startsWith('admin.') && granted.has('admin.panel')) return true;
+        return false;
+    }
+
+    resolvePrincipalFromToken(token = '', req = null) {
+        const now = Date.now();
+        const cleanToken = String(token || '').trim();
+        if (!cleanToken) {
+            return { valid: false, status: 401, error: 'Missing token' };
+        }
+
+        if (this.integrationTokens?.has(cleanToken)) {
+            const integrationToken = this.integrationTokens.get(cleanToken);
+            if (integrationToken.expiresAt && now > new Date(integrationToken.expiresAt).getTime()) {
+                this.integrationTokens.delete(cleanToken);
+                return { valid: false, status: 401, error: 'Token expired' };
+            }
+            const permissions = this.normalizeTokenPermissions(integrationToken.permissions);
+            const roleContext = integrationToken.roleContext || RoleMapper.normalizeIdentity({ isAuthenticated: false });
+            return {
+                valid: true,
+                principal: {
+                    tokenType: 'integration',
+                    token: cleanToken,
+                    name: integrationToken.name || 'integration',
+                    permissions,
+                    roleContext,
+                    userId: integrationToken.userId || '',
+                    userName: integrationToken.userName || '',
+                    roomScope: integrationToken.roomScope || null,
+                    metadata: integrationToken.metadata || {},
+                    isAdmin: Boolean(roleContext?.isAdmin) || this.hasTokenPermission(permissions, 'agent.admin'),
+                    expiresAt: integrationToken.expiresAt || null
+                }
+            };
+        }
+
+        if (this.apiSessions?.has(cleanToken)) {
+            const session = this.apiSessions.get(cleanToken);
+            if (!session || new Date() > new Date(session.expiresAt)) {
+                this.apiSessions.delete(cleanToken);
+                return { valid: false, status: 401, error: 'Session expired' };
+            }
+            const roleContext = session.roleContext || RoleMapper.normalizeIdentity({ isAuthenticated: true });
+            const permissions = new Set(this.normalizeTokenPermissions(roleContext.permissions || []));
+            permissions.add('agent.chat');
+            if (roleContext.isAdmin) {
+                permissions.add('agent.admin');
+                permissions.add('admin.panel');
+            }
+            return {
+                valid: true,
+                principal: {
+                    tokenType: 'session',
+                    token: cleanToken,
+                    name: session.appName || 'session',
+                    permissions: Array.from(permissions),
+                    roleContext,
+                    userId: session.userId || '',
+                    userName: session.userName || '',
+                    roomScope: null,
+                    metadata: session.metadata || {},
+                    isAdmin: Boolean(roleContext?.isAdmin),
+                    expiresAt: session.expiresAt || null
+                }
+            };
+        }
+
+        if (this.apiKeys?.has(cleanToken)) {
+            const apiKey = this.apiKeys.get(cleanToken);
+            apiKey.lastUsed = new Date();
+            apiKey.requestCount = (apiKey.requestCount || 0) + 1;
+            const permissions = this.normalizeTokenPermissions(apiKey.permissions || []);
+            const roleContext = req ? this.getRoleContextFromRequest(req) : RoleMapper.normalizeIdentity({ isAuthenticated: false });
+            const isAdmin = this.hasTokenPermission(permissions, 'agent.admin') ||
+                this.hasTokenPermission(permissions, 'admin.panel') ||
+                Boolean(roleContext?.isAdmin);
+            return {
+                valid: true,
+                principal: {
+                    tokenType: 'apiKey',
+                    token: cleanToken,
+                    name: apiKey.name || 'api-key',
+                    permissions,
+                    roleContext,
+                    userId: '',
+                    userName: '',
+                    roomScope: null,
+                    metadata: { createdBy: apiKey.createdBy || null },
+                    isAdmin,
+                    expiresAt: null
+                }
+            };
+        }
+
+        return { valid: false, status: 401, error: 'Invalid token' };
+    }
+
+    canManageRoomAgent(principal = {}, room = null) {
+        if (!room || !principal) return false;
+        if (principal.isAdmin) return true;
+        const roleContext = principal.roleContext || {};
+        const roles = Array.isArray(roleContext.voicelinkRoles) ? roleContext.voicelinkRoles : [];
+        if (roles.includes('room_admin') || roles.includes('server_admin') || roles.includes('server_owner')) {
+            return true;
+        }
+        const creator = String(room.creatorHandle || '').trim().toLowerCase();
+        const principalUserName = String(principal.userName || '').trim().toLowerCase();
+        const principalUserId = String(principal.userId || '').trim().toLowerCase();
+        return Boolean(creator && (creator === principalUserName || creator === principalUserId));
+    }
+
+    getRoomAgentState(roomId) {
+        const existing = this.roomAgents.get(roomId);
+        if (existing) return existing;
+        return {
+            enabled: false,
+            roomScoped: true,
+            present: false,
+            agentId: 'openclaw',
+            agentName: 'VoiceLink Agent',
+            statusType: 'offline',
+            statusText: 'No room agent active.',
+            allowedActions: ['chat'],
+            updatedAt: new Date().toISOString(),
+            updatedBy: 'system'
+        };
     }
 
     setupMiddleware() {
@@ -687,8 +1902,87 @@ class VoiceLinkLocalServer {
         }
     }
 
+    getConnectedSocketSet() {
+        if (!this.io?.sockets?.sockets) {
+            return new Set();
+        }
+        return new Set(this.io.sockets.sockets.keys());
+    }
+
+    getLiveRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+
+        const connectedSockets = this.getConnectedSocketSet();
+        const liveUsers = [];
+        const seen = new Set();
+
+        // Authoritative source: active socket/user map.
+        for (const [socketId, user] of this.users.entries()) {
+            if (user?.roomId !== roomId) continue;
+            if (!connectedSockets.has(socketId)) continue;
+            if (seen.has(socketId)) continue;
+            liveUsers.push(user);
+            seen.add(socketId);
+        }
+
+        // Compatibility source: persisted room.users entries.
+        const roomUsers = Array.isArray(room.users) ? room.users : [];
+        for (const roomUser of roomUsers) {
+            if (!roomUser?.id || seen.has(roomUser.id)) continue;
+            if (!connectedSockets.has(roomUser.id)) continue;
+            liveUsers.push(roomUser);
+            seen.add(roomUser.id);
+        }
+
+        return liveUsers;
+    }
+
+    normalizeRoomUsers(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return [];
+        room.users = this.getLiveRoomUsers(roomId);
+        return room.users;
+    }
+
+    getConnectedUsersCount() {
+        const connectedSockets = this.getConnectedSocketSet();
+        let count = 0;
+        for (const socketId of this.users.keys()) {
+            if (connectedSockets.has(socketId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    getRoomMonitorSnapshot() {
+        const rooms = [];
+        for (const room of this.rooms.values()) {
+            const users = this.normalizeRoomUsers(room.id);
+            rooms.push({
+                roomId: room.id,
+                name: room.name,
+                userCount: users.length,
+                users: users.map(user => ({
+                    id: user.id,
+                    name: user.name,
+                    joinedAt: user.joinedAt || null,
+                    isAuthenticated: !!user.isAuthenticated
+                })),
+                maxUsers: room.maxUsers || 50,
+                locked: !!room.locked,
+                isDefault: !!room.isDefault,
+                visibility: room.visibility || 'public',
+                accessType: room.accessType || 'hybrid'
+            });
+        }
+        return rooms;
+    }
+
     setupRoutes() {
         // API Routes - now fetches from main server and merges with local
+        const authPortalBase = process.env.AUTH_PORTAL_URL || 'https://auth.devinecreations.net';
 
         // Health check endpoint for monitoring
         this.app.get("/health", (req, res) => {
@@ -705,22 +1999,95 @@ class VoiceLinkLocalServer {
         // WHMCS AUTHENTICATION
         // ============================================
 
-        const normalizeEmail = (value) => (value || '').trim().toLowerCase();
-        const isTwoFactorError = (message = '') => message.toLowerCase().includes('two factor');
+        const isWhmcsTwoFactorError = (message = '') => message.toLowerCase().includes('two factor');
 
         this.app.post('/api/auth/whmcs/login', async (req, res) => {
             const portalSite = this.normalizePortalSite(req.body.portalSite);
-            const email = normalizeEmail(req.body.email);
+            const identity = String(req.body.identity || req.body.email || req.body.username || '').trim();
+            const resolvedIdentity = this.resolveWhmcsIdentity(identity);
+            const email = resolvedIdentity.email;
             const password = req.body.password || req.body.password2;
             const twoFactorCode = req.body.twoFactorCode || req.body.twofa || null;
             const remember = req.body.remember === true;
             const mastodonHandle = req.body.mastodonHandle || null;
 
-            if (!email || !password) {
-                return res.status(400).json({ success: false, error: 'Email and password required' });
+            if (!identity || !password) {
+                return res.status(400).json({ success: false, error: 'Email or username and password required' });
             }
 
             try {
+                if (this.shouldDelegateWhmcsAuth()) {
+                    const result = await this.createDelegatedWhmcsSession({
+                        ...req.body,
+                        portalSite,
+                        identity,
+                        email
+                    });
+                    return res.json(result);
+                }
+                const bridgedAdmin = await this.authenticateWhmcsAdmin(identity, password);
+                if (bridgedAdmin) {
+                    const roleName = String(bridgedAdmin.roleName || '').trim().toLowerCase();
+                    const role = roleName.includes('owner')
+                        ? 'owner'
+                        : roleName.includes('support') || roleName.includes('staff') || Number(bridgedAdmin.roleId) !== 1
+                            ? 'staff'
+                            : 'admin';
+                    const entitlements = {
+                        ...this.deriveWhmcsEntitlements({}, []),
+                        licenseTier: role === 'owner' ? 'owner' : 'admin',
+                        serverOwnerLicense: true,
+                        serverSlots: 10,
+                        hostingControlPanelLinked: true,
+                        hostingRoles: [bridgedAdmin.roleName || role],
+                        hostingPermissions: this.buildPermissionsForRole(role),
+                        licenses: {
+                            user: {
+                                type: 'admin',
+                                installsAllowed: 10,
+                                devicesAllowed: null
+                            },
+                            server: {
+                                type: 'server_owner',
+                                installsAllowed: 10,
+                                serversAllowed: 10
+                            }
+                        }
+                    };
+                    const user = this.applyAuthorityRoleOverrides({
+                        id: `whmcs-admin:${bridgedAdmin.id}`,
+                        whmcsAdminId: bridgedAdmin.id,
+                        username: bridgedAdmin.username,
+                        email: bridgedAdmin.email || '',
+                        displayName: bridgedAdmin.username,
+                        fullHandle: bridgedAdmin.username,
+                        role,
+                        permissions: this.buildPermissionsForRole(role),
+                        isAdmin: role === 'owner' || role === 'admin',
+                        isModerator: role === 'staff',
+                        authProvider: 'whmcs_admin',
+                        portalSite,
+                        entitlements,
+                        deviceTier: entitlements.deviceTier,
+                        maxDevices: entitlements.maxDevices,
+                        mastodonHandle
+                    });
+                    const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
+                    return res.json({
+                        success: true,
+                        token: session.token,
+                        expiresAt: session.expiresAt,
+                        portalUrl: this.getPortalUrlForSite(portalSite),
+                        user
+                    });
+                }
+                if (!email) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'WHMCS username login requires either a configured identity alias or WHMCS admin bridge on this server'
+                    });
+                }
+
                 let clientDetails = null;
                 try {
                     const clientResponse = await this.whmcsRequest('GetClientsDetails', { email });
@@ -744,7 +2111,7 @@ class VoiceLinkLocalServer {
                         ...(twoFactorCode ? { twofa: twoFactorCode } : {})
                     });
                 } catch (error) {
-                    if (isTwoFactorError(error.message) && !twoFactorCode) {
+                    if (isWhmcsTwoFactorError(error.message) && !twoFactorCode) {
                         return res.status(401).json({
                             success: false,
                             requires2FA: true,
@@ -778,10 +2145,11 @@ class VoiceLinkLocalServer {
                     || clientDetails.email
                     || 'VoiceLink User';
 
-                const user = {
+                const user = this.applyAuthorityRoleOverrides({
                     id: `whmcs:${clientDetails.id}`,
                     whmcsClientId: clientDetails.id,
                     email: clientDetails.email || email,
+                    username: resolvedIdentity.username || undefined,
                     displayName,
                     fullHandle: clientDetails.email || email,
                     role,
@@ -794,7 +2162,7 @@ class VoiceLinkLocalServer {
                     deviceTier: entitlements.deviceTier,
                     maxDevices: entitlements.maxDevices,
                     mastodonHandle
-                };
+                });
 
                 const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
                 res.json({
@@ -833,12 +2201,44 @@ class VoiceLinkLocalServer {
             let session = token ? this.getAuthSession(this.whmcsAuthSessions, token) : null;
 
             try {
+                if (this.shouldDelegateWhmcsAuth()) {
+                    const delegatedPayload = {
+                        ...req.body,
+                        portalSite,
+                        token: session?.upstreamToken || req.body.token || null
+                    };
+                    const delegated = await this.requestWhmcsAuthority('/api/auth/whmcs/sso/start', delegatedPayload);
+                    return res.json({
+                        success: true,
+                        redirectUrl: delegated.redirectUrl || delegated.portalUrl || this.getPortalUrlForSite(portalSite),
+                        token: token || session?.token || null,
+                        portalUrl: delegated.portalUrl || this.getPortalUrlForSite(portalSite),
+                        delegated: true
+                    });
+                }
+
                 if (!session) {
-                    const email = normalizeEmail(req.body.email);
+                    const identity = String(req.body.identity || req.body.email || req.body.username || '').trim();
+                    const resolvedIdentity = this.resolveWhmcsIdentity(identity);
+                    const email = resolvedIdentity.email;
                     const password = req.body.password || req.body.password2;
                     const twoFactorCode = req.body.twoFactorCode || req.body.twofa || null;
-                    if (!email || !password) {
-                        return res.status(400).json({ success: false, error: 'Email and password required' });
+                    if (!identity || !password) {
+                        return res.status(400).json({ success: false, error: 'Email or username and password required' });
+                    }
+                    const bridgedAdmin = await this.authenticateWhmcsAdmin(identity, password);
+                    if (bridgedAdmin) {
+                        const adminBaseUrl = this.getWhmcsAdminBridgeConfig().adminUrl || `${this.getPortalUrlForSite(portalSite).replace(/\/+$/, '')}/admin/`;
+                        return res.json({
+                            success: true,
+                            redirectUrl: adminBaseUrl,
+                            token: null,
+                            portalUrl: adminBaseUrl,
+                            admin: true
+                        });
+                    }
+                    if (!email) {
+                        return res.status(400).json({ success: false, error: 'WHMCS username login requires either a configured identity alias or WHMCS admin bridge on this server' });
                     }
 
                     try {
@@ -848,7 +2248,7 @@ class VoiceLinkLocalServer {
                             ...(twoFactorCode ? { twofa: twoFactorCode } : {})
                         });
                     } catch (error) {
-                        if (isTwoFactorError(error.message) && !twoFactorCode) {
+                        if (isWhmcsTwoFactorError(error.message) && !twoFactorCode) {
                             return res.status(401).json({
                                 success: false,
                                 requires2FA: true,
@@ -871,10 +2271,11 @@ class VoiceLinkLocalServer {
                         || clientDetails.email
                         || 'VoiceLink User';
 
-                    const user = {
+                    const user = this.applyAuthorityRoleOverrides({
                         id: `whmcs:${clientDetails.id}`,
                         whmcsClientId: clientDetails.id,
                         email: clientDetails.email || email,
+                        username: resolvedIdentity.username || undefined,
                         displayName,
                         fullHandle: clientDetails.email || email,
                         role,
@@ -886,7 +2287,7 @@ class VoiceLinkLocalServer {
                         entitlements,
                         deviceTier: entitlements.deviceTier,
                         maxDevices: entitlements.maxDevices
-                    };
+                    });
 
                     const created = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, req.body.remember === true);
                     session = { user, expiresAt: created.expiresAt };
@@ -908,96 +2309,6 @@ class VoiceLinkLocalServer {
                 console.error('[WHMCS] SSO failed:', error.message);
                 res.status(500).json({ success: false, error: error.message || 'SSO failed' });
             }
-        });
-
-        // ============================================
-        // ECRIPTO WALLET AUTHENTICATION
-        // ============================================
-
-        this.app.post('/api/auth/ecripto/login', async (req, res) => {
-            const { deviceId, deviceName, deviceType, walletAddress, remember } = req.body;
-            const apiCandidates = this.getEcriptoApiCandidates();
-            if (!apiCandidates.length) {
-                return res.status(400).json({ success: false, error: 'Ecripto API not configured' });
-            }
-
-            if (!deviceId) {
-                return res.status(400).json({ success: false, error: 'Device ID required' });
-            }
-
-            try {
-                let response = null;
-                let selectedApiBase = null;
-                let lastError = null;
-                for (const apiBase of apiCandidates) {
-                    try {
-                        const candidateResponse = await fetch(`${apiBase}/api/client/register`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ deviceId, deviceName, deviceType, walletAddress })
-                        });
-                        if (!candidateResponse.ok) {
-                            lastError = new Error(`Ecripto API error (${candidateResponse.status}) from ${apiBase}`);
-                            continue;
-                        }
-                        response = candidateResponse;
-                        selectedApiBase = apiBase;
-                        break;
-                    } catch (error) {
-                        lastError = error;
-                    }
-                }
-
-                if (!response) {
-                    throw lastError || new Error('Ecripto API not reachable');
-                }
-
-                const result = await response.json();
-                if (!result?.token) {
-                    throw new Error('Ecripto authentication failed');
-                }
-
-                const user = {
-                    id: `ecripto:${walletAddress || deviceId}`,
-                    walletAddress: walletAddress || null,
-                    linkedUserId: walletAddress ? (this.walletLinks.get(String(walletAddress).toLowerCase())?.userId || null) : null,
-                    deviceId,
-                    deviceName,
-                    deviceType,
-                    authProvider: 'ecripto',
-                    ecriptoToken: result.token,
-                    role: 'client',
-                    permissions: ['client']
-                };
-
-                const session = this.createAuthSession(this.ecriptoAuthSessions, 'ecripto', user, remember === true);
-                res.json({
-                    success: true,
-                    token: session.token,
-                    expiresAt: session.expiresAt,
-                    ecriptoApi: selectedApiBase,
-                    user
-                });
-            } catch (error) {
-                console.error('[Ecripto] Login failed:', error.message);
-                res.status(401).json({ success: false, error: error.message || 'Wallet login failed' });
-            }
-        });
-
-        this.app.get('/api/auth/ecripto/session/:token', (req, res) => {
-            const session = this.getAuthSession(this.ecriptoAuthSessions, req.params.token);
-            if (!session) {
-                return res.status(401).json({ valid: false });
-            }
-            res.json({ valid: true, user: session.user, expiresAt: session.expiresAt });
-        });
-
-        this.app.post('/api/auth/ecripto/logout', (req, res) => {
-            const { token } = req.body;
-            if (token) {
-                this.ecriptoAuthSessions.delete(token);
-            }
-            res.json({ success: true });
         });
 
         this.app.get('/api/rooms', async (req, res) => {
@@ -1029,7 +2340,7 @@ class VoiceLinkLocalServer {
                 id: room.id,
                 name: room.name,
                 description: room.description || '',
-                users: room.users.length,
+                users: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -1056,58 +2367,6 @@ class VoiceLinkLocalServer {
             res.json(mergedRooms);
         });
 
-        // Public rooms alias (compatibility with older clients)
-        this.app.get('/api/rooms/public', async (req, res) => {
-            const source = req.query.source || 'app';
-
-            let mainServerRooms = [];
-            try {
-                mainServerRooms = await this.fetchMainServerRooms();
-            } catch (e) {
-                console.error('[LocalServer] Error fetching main server rooms:', e.message);
-            }
-
-            let localRooms = Array.from(this.rooms.values());
-            localRooms = localRooms.filter(room => {
-                if (room.accessType === 'hidden') return false;
-                if (source === 'app' && !room.showInApp) return false;
-                if (source === 'web' && !room.allowEmbed) return false;
-                return true;
-            });
-
-            const localRoomList = localRooms.map(room => ({
-                id: room.id,
-                name: room.name,
-                description: room.description || '',
-                users: room.users.length,
-                maxUsers: room.maxUsers,
-                hasPassword: !!room.password,
-                visibility: room.visibility,
-                accessType: room.accessType,
-                allowEmbed: room.allowEmbed,
-                visibleToGuests: room.visibleToGuests,
-                isDefault: room.isDefault || false,
-                template: room.template || null,
-                serverSource: 'local',
-                locked: room.locked || false,
-                lockedAt: room.lockedAt || null,
-                canJoin: !room.locked
-            }));
-
-            const mainRoomIds = new Set(mainServerRooms.map(r => r.id));
-            const mergedRooms = [
-                ...mainServerRooms,
-                ...localRoomList.filter(r => !mainRoomIds.has(r.id))
-            ];
-
-            const publicRooms = mergedRooms.filter(room =>
-                room.visibility === 'public' && room.visibleToGuests !== false
-            );
-
-            console.log(`[LocalServer] Returning ${publicRooms.length} public rooms`);
-            res.json(publicRooms);
-        });
-
         this.app.post('/api/rooms', (req, res) => {
             const {
                 name,
@@ -1127,15 +2386,9 @@ class VoiceLinkLocalServer {
                 autoLock = null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoplayMusic = false,
                 autoplayPlaylist = null,
-                isAuthenticated = false,
-                entitlements,
-                deviceTier
+                isAuthenticated = false
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
-            let roomMaxUsers = Number(maxUsers) || 10;
-            let roomVisibility = visibility;
-            let roomAccessType = accessType;
-            let roomDuration = duration;
 
             // Enforce guest restrictions
             if (!isAuthenticated) {
@@ -1172,33 +2425,10 @@ class VoiceLinkLocalServer {
                 }
             }
 
-            // Free tier with license restrictions
-            const tier = entitlements?.deviceTier || deviceTier || null;
-            if (isAuthenticated && tier === 'free') {
-                if (roomVisibility !== 'public') {
-                    return res.status(403).json({
-                        error: 'Free tier can only create public rooms.',
-                        requiresUpgrade: true
-                    });
-                }
-
-                if (roomAccessType === 'hidden') {
-                    return res.status(403).json({
-                        error: 'Free tier rooms cannot be hidden.',
-                        requiresUpgrade: true
-                    });
-                }
-
-                roomMaxUsers = Math.min(roomMaxUsers, 5);
-                if (!roomDuration || roomDuration > 1800000) {
-                    roomDuration = 1800000;
-                }
-            }
-
             // Calculate expiration if duration is set
             let expiresAt = null;
-            if (roomDuration && typeof roomDuration === 'number') {
-                expiresAt = new Date(Date.now() + roomDuration);
+            if (duration && typeof duration === 'number') {
+                expiresAt = new Date(Date.now() + duration);
             }
 
             // Access type determines where the room is accessible:
@@ -1213,14 +2443,14 @@ class VoiceLinkLocalServer {
                 description: description || '',
                 password,
                 hasPassword: !!password,
-                maxUsers: roomMaxUsers,
+                maxUsers,
                 users: [],
-                visibility: roomVisibility,  // 'public', 'unlisted', 'private'
-                visibleToGuests: roomAccessType === 'hidden' ? false : visibleToGuests,
-                accessType: roomAccessType,
-                allowEmbed: roomAccessType === 'web-only' || roomAccessType === 'hybrid',
-                showInApp: roomAccessType === 'app-only' || roomAccessType === 'hybrid',
-                privacyLevel: privacyLevel || roomVisibility,
+                visibility,  // 'public', 'unlisted', 'private'
+                visibleToGuests: accessType === 'hidden' ? false : visibleToGuests,
+                accessType,
+                allowEmbed: accessType === 'web-only' || accessType === 'hybrid',
+                showInApp: accessType === 'app-only' || accessType === 'hybrid',
+                privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
                 isDefault: isDefault || false,
@@ -1573,6 +2803,7 @@ class VoiceLinkLocalServer {
 
         // API status endpoint with relay stats
         this.app.get('/api/status', (req, res) => {
+            const roomSnapshot = this.getRoomMonitorSnapshot();
             res.json({
                 server: 'VoiceLink Local Server',
                 version: '1.0.1',
@@ -1590,7 +2821,12 @@ class VoiceLinkLocalServer {
                 ],
                 lastUpdated: new Date().toISOString(),
                 activeRooms: this.rooms.size,
-                connectedUsers: this.users.size,
+                connectedUsers: this.getConnectedUsersCount(),
+                roomPresence: roomSnapshot.map(room => ({
+                    roomId: room.roomId,
+                    name: room.name,
+                    userCount: room.userCount
+                })),
                 audioRelay: {
                     enabled: true,
                     activeRelays: this.relayStats.activeRelays,
@@ -1601,64 +2837,14 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // HubNode-style room/member monitor snapshot endpoint.
-        this.app.get('/api/api_monitor', (req, res) => {
-            const includeMembers = req.query.includeMembers !== 'false';
-            const snapshot = this.buildApiMonitorSnapshot({
-                includeMembers,
-                reason: 'snapshot'
-            });
-
+        // Compatibility endpoint used by older/native clients
+        this.app.get('/api/health', (req, res) => {
             res.json({
-                ok: true,
-                intervalMs: this.apiMonitor.intervalMs,
-                snapshot
-            });
-        });
-
-        // Backward-compatible typo alias requested by client tooling.
-        this.app.get('/api/api_minitor', (req, res) => {
-            const includeMembers = req.query.includeMembers !== 'false';
-            const snapshot = this.buildApiMonitorSnapshot({
-                includeMembers,
-                reason: 'snapshot-alias'
-            });
-
-            res.json({
-                ok: true,
-                intervalMs: this.apiMonitor.intervalMs,
-                snapshot
-            });
-        });
-
-        // Optional stream for near-real-time member/room tracking updates.
-        this.app.get('/api/api_monitor/stream', (req, res) => {
-            const includeMembers = req.query.includeMembers !== 'false';
-            const intervalMsRaw = Number(req.query.intervalMs);
-            const intervalMs = Number.isFinite(intervalMsRaw)
-                ? Math.max(1000, Math.min(60000, intervalMsRaw))
-                : this.apiMonitor.intervalMs;
-
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache, no-transform');
-            res.setHeader('Connection', 'keep-alive');
-            res.setHeader('X-Accel-Buffering', 'no');
-            if (typeof res.flushHeaders === 'function') {
-                res.flushHeaders();
-            }
-
-            const client = { res, includeMembers, intervalMs };
-            this.apiMonitor.clients.add(client);
-
-            const initial = this.buildApiMonitorSnapshot({
-                includeMembers,
-                reason: 'stream-init'
-            });
-            res.write(`event: snapshot\n`);
-            res.write(`data: ${JSON.stringify(initial)}\n\n`);
-
-            req.on('close', () => {
-                this.apiMonitor.clients.delete(client);
+                service: 'voicelink-local',
+                status: 'healthy',
+                timestamp: new Date().toISOString(),
+                rooms: this.rooms.size,
+                users: this.getConnectedUsersCount()
             });
         });
 
@@ -1670,44 +2856,104 @@ class VoiceLinkLocalServer {
                 version: '1.0.1',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
-                users: this.users.size
+                users: this.getConnectedUsersCount()
             });
+        });
+
+        // Room/user monitoring endpoint for desktop/web API polling and push sync logic.
+        this.app.get(['/api/monitor', '/api_monitor', '/api/minitor', '/api_minitor'], (req, res) => {
+            const pollIntervalSeconds = Math.max(1, Math.min(60, parseInt(req.query.interval || '5', 10) || 5));
+            const roomSnapshot = this.getRoomMonitorSnapshot();
+            const totalUsersInRooms = roomSnapshot.reduce((sum, room) => sum + room.userCount, 0);
+            const connectedUsers = this.getConnectedUsersCount();
+
+            res.json({
+                service: 'voicelink-local',
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                pollIntervalSeconds,
+                connectedUsers,
+                roomUsers: totalUsersInRooms,
+                rooms: {
+                    total: roomSnapshot.length,
+                    active: roomSnapshot.filter(room => room.userCount > 0).length,
+                    items: roomSnapshot
+                },
+                websocket: {
+                    recommendedEvents: ['room-user-count', 'user-joined', 'user-left', 'joined-room']
+                }
+            });
+        });
+
+        // Authelia SSO helper endpoints
+        this.app.get('/api/auth/authelia/user', (req, res) => {
+            const user = req.headers['remote-user'] || null;
+            const rawGroups = req.headers['remote-groups'] || '';
+            const groups = String(rawGroups)
+                .split(',')
+                .map(group => group.trim())
+                .filter(Boolean);
+
+            if (!user) {
+                return res.json({ authenticated: false });
+            }
+
+            const normalizedGroups = groups.map(group => group.toLowerCase());
+            const isAdmin = normalizedGroups.includes('admins') ||
+                normalizedGroups.includes('admin') ||
+                normalizedGroups.includes('wheel') ||
+                normalizedGroups.includes('sudo');
+
+            res.json({
+                authenticated: true,
+                user,
+                name: req.headers['remote-name'] || user,
+                email: req.headers['remote-email'] || '',
+                groups,
+                isAdmin
+            });
+        });
+
+        this.app.get('/api/auth/authelia/login', (req, res) => {
+            const rd = req.query.rd || `${req.protocol}://${req.get('host')}/`;
+            const redirectUrl = `${authPortalBase}/?rd=${encodeURIComponent(rd)}`;
+            res.redirect(302, redirectUrl);
+        });
+
+        this.app.get('/api/auth/authelia/logout', (req, res) => {
+            const rd = req.query.rd || `${req.protocol}://${req.get('host')}/`;
+            const redirectUrl = `${authPortalBase}/logout?rd=${encodeURIComponent(rd)}`;
+            res.redirect(302, redirectUrl);
         });
 
         // Updates check endpoint for native clients
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
-            const normalizedPlatform = (platform || 'macos').toLowerCase();
+            const downloadBase = process.env.VOICELINK_DOWNLOAD_BASE || 'https://voicelink.devinecreations.net/downloads/voicelink';
 
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
-                    version: '1.0.1',
-                    buildNumber: 101,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VOICELINKMACOS.ZIP',
-                    releaseNotes: 'Mandatory update:\n• Audio send/receive reliability improvements for room sessions\n• iOS/Safari media permission handling fixes\n• Authentication settings consolidation\n• UI cleanup and update-path improvements',
-                    forceUpdate: true,
-                    minSupportedVersion: '1.0.1'
+                    version: '1.0.0',
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
+                    releaseNotes: 'Latest native macOS build with room/federation fixes and admin invite activation updates.'
                 },
                 windows: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.',
-                    forceUpdate: false,
-                    minSupportedVersion: '1.0.0'
+                    version: '1.0.0',
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLink-windows.zip`,
+                    releaseNotes: 'Latest Windows native build with federation-aware room listing and improved auth flow.'
                 },
                 linux: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.3-linux.AppImage',
-                    releaseNotes: 'Linux release with AppImage support.',
-                    forceUpdate: false,
-                    minSupportedVersion: '1.0.0'
+                    version: '1.0.0',
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLink-linux.AppImage`,
+                    releaseNotes: 'Linux client release with AppImage and .deb installer support.'
                 }
             };
 
-            const platformInfo = latestVersions[normalizedPlatform] || latestVersions.macos;
+            const platformInfo = latestVersions[platform] || latestVersions.macos;
 
             // Compare versions
             const compareVersions = (v1, v2) => {
@@ -1723,57 +2969,16 @@ class VoiceLinkLocalServer {
             };
 
             const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
-            const mandatoryUpdate = normalizedPlatform === 'macos' ? true : !!platformInfo.forceUpdate;
-            const shouldUpdate = hasUpdate || mandatoryUpdate;
 
             res.json({
-                updateAvailable: shouldUpdate,
-                mandatory: mandatoryUpdate,
-                forceUpdate: mandatoryUpdate,
-                minSupportedVersion: platformInfo.minSupportedVersion || platformInfo.version,
+                updateAvailable: hasUpdate,
                 version: platformInfo.version,
                 buildNumber: platformInfo.buildNumber,
-                downloadURL: shouldUpdate ? platformInfo.downloadURL : null,
-                releaseNotes: shouldUpdate ? platformInfo.releaseNotes : null,
+                downloadURL: hasUpdate ? platformInfo.downloadURL : null,
+                releaseNotes: hasUpdate ? platformInfo.releaseNotes : null,
                 platform: platform || 'unknown',
                 currentVersion: currentVersion || 'unknown'
             });
-        });
-
-        // Support diagnostics log ingestion
-        this.app.post('/api/support/logs', (req, res) => {
-            try {
-                const payload = req.body || {};
-                const logs = Array.isArray(payload.logs) ? payload.logs.slice(-300) : [];
-                const entry = {
-                    receivedAt: new Date().toISOString(),
-                    id: `log_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-                    reason: payload.reason || 'manual',
-                    clientId: payload.clientId || 'unknown',
-                    appVersion: payload.appVersion || 'unknown',
-                    platform: payload.platform || 'unknown',
-                    userAgent: payload.userAgent || '',
-                    room: payload.room || null,
-                    user: payload.user || null,
-                    logCount: logs.length,
-                    logs
-                };
-
-                const dataDir = path.join(__dirname, '../../data');
-                const supportDir = path.join(dataDir, 'support');
-                const logsFile = path.join(supportDir, 'client-logs.jsonl');
-                fs.mkdirSync(supportDir, { recursive: true });
-                fs.appendFileSync(logsFile, JSON.stringify(entry) + '\n', 'utf8');
-
-                res.json({
-                    success: true,
-                    id: entry.id,
-                    stored: logs.length
-                });
-            } catch (error) {
-                console.error('[SupportLogs] Failed to store client logs:', error.message);
-                res.status(500).json({ success: false, error: 'Failed to store logs' });
-            }
         });
 
         // Get all available downloads
@@ -1784,33 +2989,40 @@ class VoiceLinkLocalServer {
                         version: '1.0.0',
                         downloads: [
                             {
-                                name: 'macOS Universal (DMG)',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                                size: '144 MB',
+                                name: 'macOS Universal ZIP',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip',
+                                size: 'Current build',
                                 type: 'native'
                             }
                         ]
                     },
                     windows: {
-                        version: '1.0.3',
+                        version: '1.0.0',
                         downloads: [
                             {
-                                name: 'Windows Portable',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                                size: '193 MB',
-                                type: 'native'
-                            },
-                            {
-                                name: 'Windows Setup',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe',
-                                size: '194 MB',
+                                name: 'Windows ZIP',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip',
+                                size: 'Current build',
                                 type: 'native'
                             }
                         ]
                     },
                     linux: {
-                        version: '1.0.3',
-                        downloads: []
+                        version: '1.0.0',
+                        downloads: [
+                            {
+                                name: 'Linux AppImage',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-linux.AppImage',
+                                size: 'Current build',
+                                type: 'native'
+                            },
+                            {
+                                name: 'Linux DEB',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/voicelink-local_1.0.0_amd64.deb',
+                                size: 'Current build',
+                                type: 'native'
+                            }
+                        ]
                     }
                 },
                 webClient: {
@@ -1842,7 +3054,7 @@ class VoiceLinkLocalServer {
         // Setup federation API routes
         this.federation.setupRoutes(this.app);
 
-        // Protocol handler redirect (voicelink:// URLs)
+        // Protocol handler redirect (vcl:// and legacy voicelink:// URLs)
         this.app.get('/join/:roomId', (req, res) => {
             const { roomId } = req.params;
             const room = this.rooms.get(roomId);
@@ -1860,7 +3072,8 @@ class VoiceLinkLocalServer {
             res.json({
                 roomId,
                 webUrl: `${serverUrl}/?room=${roomId}`,
-                protocolUrl: `voicelink://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
+                protocolUrl: `vcl://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
+                legacyProtocolUrl: `voicelink://join/${roomId}?server=${encodeURIComponent(serverUrl)}`,
                 serverUrl
             });
         });
@@ -2409,6 +3622,661 @@ class VoiceLinkLocalServer {
         // Remote authentication and access control
         // ============================================
 
+        const localAuthDataPath = path.join(__dirname, '../../data/local-auth-users.json');
+        this.localAuthUsers = this.localAuthUsers || new Map();
+        this.localAuthSessions = this.localAuthSessions || new Map();
+        this.localAuthSessionTtlMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+        // If SMTP is not configured, allow credential registration without blocking on email code.
+        this.localAuthVerificationRequired = process.env.VOICELINK_REQUIRE_EMAIL_VERIFICATION !== 'false' && !!this.mailer;
+
+        const persistLocalAuthUsers = () => {
+            try {
+                const users = Array.from(this.localAuthUsers.values());
+                fs.writeFileSync(localAuthDataPath, JSON.stringify({ users }, null, 2));
+            } catch (error) {
+                console.error('[Auth] Failed to persist local auth users:', error.message);
+            }
+        };
+
+        if (!this.localAuthLoaded) {
+            this.localAuthLoaded = true;
+            try {
+                if (fs.existsSync(localAuthDataPath)) {
+                    const parsed = JSON.parse(fs.readFileSync(localAuthDataPath, 'utf8') || '{}');
+                    const users = Array.isArray(parsed.users) ? parsed.users : [];
+                    users.forEach((user) => {
+                        if (user?.id) this.localAuthUsers.set(user.id, user);
+                    });
+                    console.log(`[Auth] Loaded ${this.localAuthUsers.size} local credential users`);
+                }
+            } catch (error) {
+                console.error('[Auth] Failed loading local auth users:', error.message);
+            }
+        }
+
+        const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+        const normalizeUsername = (username) => String(username || '').trim().toLowerCase();
+        const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+        const validateUsername = (username) => /^[a-zA-Z0-9._-]{3,32}$/.test(String(username || '').trim());
+        const normalizeUserRole = (role) => {
+            const value = String(role || '').trim().toLowerCase();
+            if (['owner', 'server_owner'].includes(value)) return 'owner';
+            if (['admin', 'administrator', 'server_admin'].includes(value)) return 'admin';
+            if (['moderator', 'mod', 'staff', 'support', 'manager', 'room_admin', 'room_moderator'].includes(value)) return 'staff';
+            if (['member', 'client', 'customer', 'subscriber', 'user'].includes(value)) return 'user';
+            return value || 'user';
+        };
+        const buildPermissionsForRole = (role) => {
+            const normalizedRole = normalizeUserRole(role);
+            if (normalizedRole === 'owner') return ['owner', 'admin', 'staff', 'client'];
+            if (normalizedRole === 'admin') return ['admin', 'staff', 'client'];
+            if (normalizedRole === 'staff') return ['staff', 'client'];
+            return ['client'];
+        };
+        const buildDefaultEntitlements = (role, existing = {}) => {
+            const normalizedRole = normalizeUserRole(role);
+            const deviceTier = existing?.deviceTier || (normalizedRole === 'owner' ? 'owner' : normalizedRole === 'admin' ? 'admin' : 'standard');
+            const maxDevices = existing?.maxDevices ?? null;
+            const installSlots = existing?.installSlots ?? 1;
+            const serverSlots = existing?.serverSlots ?? (normalizedRole === 'owner' || normalizedRole === 'admin' ? 1 : 0);
+            const serverOwnerLicense = existing?.serverOwnerLicense ?? (normalizedRole === 'owner' || normalizedRole === 'admin');
+            return {
+                deviceTier,
+                maxDevices,
+                installSlots,
+                serverSlots,
+                licenseTier: existing?.licenseTier || (normalizedRole === 'owner' ? 'owner' : normalizedRole === 'admin' ? 'admin' : normalizedRole === 'staff' ? 'staff' : 'member'),
+                serverOwnerLicense,
+                hostingControlPanelLinked: existing?.hostingControlPanelLinked === true,
+                hostingRoles: Array.isArray(existing?.hostingRoles) ? existing.hostingRoles : [],
+                hostingPermissions: Array.isArray(existing?.hostingPermissions) ? existing.hostingPermissions : [],
+                licenses: existing?.licenses || {
+                    user: {
+                        type: 'member',
+                        installsAllowed: installSlots,
+                        devicesAllowed: maxDevices
+                    },
+                    server: {
+                        type: serverOwnerLicense ? 'server_owner' : 'none',
+                        installsAllowed: installSlots,
+                        serversAllowed: serverSlots
+                    }
+                },
+                allowMultiDeviceSettings: existing?.allowMultiDeviceSettings !== false,
+                allowDeviceList: existing?.allowDeviceList !== false,
+                requiresIapApple: existing?.requiresIapApple === true
+            };
+        };
+        const issueLocalAuthToken = (userId) => {
+            const token = `vl_local_${uuidv4()}_${Date.now().toString(36)}`;
+            this.localAuthSessions.set(token, {
+                userId,
+                createdAt: new Date(),
+                expiresAt: new Date(Date.now() + this.localAuthSessionTtlMs)
+            });
+            return token;
+        };
+        const tokenFromRequest = (req) => {
+            const header = req.headers.authorization || req.headers.Authorization;
+            if (header && typeof header === 'string' && header.startsWith('Bearer ')) {
+                return header.slice(7).trim();
+            }
+            return String(req.body?.accessToken || req.query?.accessToken || '').trim() || null;
+        };
+        const getUserFromToken = (token) => {
+            if (!token) return null;
+            const session = this.localAuthSessions.get(token);
+            if (!session) return null;
+            if (new Date() > new Date(session.expiresAt)) {
+                this.localAuthSessions.delete(token);
+                return null;
+            }
+            return this.localAuthUsers.get(session.userId) || null;
+        };
+        const getWhmcsUserFromToken = (token) => {
+            if (!token) return null;
+            const session = this.getAuthSession(this.whmcsAuthSessions, token);
+            return session?.user || null;
+        };
+        this.getLocalAuthUserFromRequest = (req) => getUserFromToken(tokenFromRequest(req));
+        this.getAnyAuthUserFromRequest = (req) => getUserFromToken(tokenFromRequest(req)) || getWhmcsUserFromToken(tokenFromRequest(req));
+        this.isLocalAdminRequest = (req) => {
+            const user = this.getAnyAuthUserFromRequest(req);
+            if (!user) return false;
+            const role = String(user.role || 'user').toLowerCase();
+            return role === 'owner' || role === 'admin';
+        };
+        const hashPassword = (password, salt) => crypto.pbkdf2Sync(
+            String(password || ''),
+            salt,
+            120000,
+            64,
+            'sha512'
+        ).toString('hex');
+        const buildPasswordHash = (password) => {
+            const salt = crypto.randomBytes(16).toString('hex');
+            const hash = hashPassword(password, salt);
+            return { salt, hash };
+        };
+        const findLocalUserByIdentity = (identity) => {
+            const value = String(identity || '').trim();
+            if (!value) return null;
+            const email = normalizeEmail(value);
+            const username = normalizeUsername(value);
+            for (const user of this.localAuthUsers.values()) {
+                if (normalizeEmail(user.email) === email || normalizeUsername(user.username) === username) {
+                    return user;
+                }
+            }
+            return null;
+        };
+        const getLocal2FAState = (user) => {
+            if (!user?.id || !this.modules.twoFactorAuth) {
+                return { required: false, enabled: false, methods: [] };
+            }
+            const normalizedRole = normalizeUserRole(user.role);
+            const methods = this.modules.twoFactorAuth.getAvailableMethods(user.id);
+            const enabled = this.modules.twoFactorAuth.has2FAEnabled(user.id);
+            const required = enabled && this.modules.twoFactorAuth.is2FARequired(user.id, normalizedRole === 'owner' ? 'admin' : normalizedRole);
+            return { required, enabled, methods };
+        };
+        const sendLocalTwoFactorCode = async (user, preferredMethod = '') => {
+            if (!user?.id || !this.modules.twoFactorAuth) {
+                return { success: false, error: 'Two-factor authentication not available' };
+            }
+            const settings = this.modules.twoFactorAuth.getUserSettings(user.id);
+            const normalizedMethod = String(preferredMethod || '').trim().toLowerCase();
+            const emailConfigured = settings?.methods?.email?.enabled && settings?.methods?.email?.verified;
+            const smsConfigured = settings?.methods?.sms?.enabled && settings?.methods?.sms?.verified;
+
+            let method = normalizedMethod;
+            if (!method) {
+                if (emailConfigured) method = 'email';
+                else if (smsConfigured) method = 'sms';
+            }
+
+            if (method === 'email') {
+                return this.modules.twoFactorAuth.sendEmailCode(user.id);
+            }
+            if (method === 'sms') {
+                return this.modules.twoFactorAuth.sendSMSCode(user.id);
+            }
+            return { success: false, error: 'Selected 2FA method does not support code delivery', methods: this.modules.twoFactorAuth.getAvailableMethods(user.id) };
+        };
+        const verifyLocalTwoFactorCode = (user, code) => {
+            if (!user?.id || !this.modules.twoFactorAuth) {
+                return { success: false, error: 'Two-factor authentication not available' };
+            }
+            const token = String(code || '').replace(/\s+/g, '');
+            if (!token) {
+                return { success: false, error: 'Two-factor authentication code required' };
+            }
+
+            const availableMethods = this.modules.twoFactorAuth.getAvailableMethods(user.id);
+            const orderedTypes = availableMethods.map((method) => method.type);
+            if (!orderedTypes.includes('totp')) orderedTypes.unshift('totp');
+            if (!orderedTypes.includes('backup')) orderedTypes.push('backup');
+
+            for (const type of orderedTypes) {
+                let result = null;
+                if (type === 'totp') result = this.modules.twoFactorAuth.verifyTOTP(user.id, token);
+                else if (type === 'email') result = this.modules.twoFactorAuth.verifyEmailLogin(user.id, token);
+                else if (type === 'sms') result = this.modules.twoFactorAuth.verifySMSLogin(user.id, token);
+                else if (type === 'backup') result = this.modules.twoFactorAuth.verifyBackupCode(user.id, token);
+
+                if (result?.success) {
+                    return { success: true, method: type };
+                }
+            }
+
+            return {
+                success: false,
+                error: 'Invalid verification code',
+                methods: availableMethods
+            };
+        };
+        const publicLocalUser = (user) => ({
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            displayName: user.displayName || user.username,
+            authMethod: 'email',
+            authProvider: user.authProvider || 'local',
+            role: normalizeUserRole(user.role),
+            permissions: Array.isArray(user.permissions) && user.permissions.length ? user.permissions : buildPermissionsForRole(user.role),
+            entitlements: buildDefaultEntitlements(user.role, user.entitlements),
+            isAdmin: ['owner', 'admin'].includes(normalizeUserRole(user.role)),
+            isModerator: normalizeUserRole(user.role) === 'staff',
+            isVerified: !!user.isVerified,
+            createdAt: user.createdAt
+        });
+
+        // Local credential auth (email + username + password)
+        this.app.post('/api/auth/local/register', (req, res) => {
+            const email = normalizeEmail(req.body?.email);
+            const username = normalizeUsername(req.body?.username);
+            const displayName = String(req.body?.displayName || req.body?.username || '').trim();
+            const password = String(req.body?.password || '');
+            const verificationCode = String(req.body?.verificationCode || '').trim();
+            const clientId = String(req.body?.clientId || '').trim();
+
+            if (!email || !username || !password) {
+                return res.status(400).json({ error: 'Email, username, and password are required' });
+            }
+            if (!validateEmail(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+            if (!validateUsername(username)) {
+                return res.status(400).json({ error: 'Username must be 3-32 chars (letters, numbers, ., _, -)' });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ error: 'Password must be at least 8 characters' });
+            }
+            if (findLocalUserByIdentity(email) || findLocalUserByIdentity(username)) {
+                return res.status(409).json({ error: 'An account with this email or username already exists' });
+            }
+
+            if (this.localAuthVerificationRequired) {
+                const verification = this.emailVerificationCodes.get(email);
+                if (!verification) {
+                    return res.status(400).json({ error: 'Email verification required. Request a code first.' });
+                }
+                if (new Date() > verification.expiresAt) {
+                    this.emailVerificationCodes.delete(email);
+                    return res.status(400).json({ error: 'Verification code expired. Request a new code.' });
+                }
+                if (clientId && verification.clientId && verification.clientId !== clientId) {
+                    return res.status(400).json({ error: 'Verification must be completed on the same device' });
+                }
+                if (!verificationCode || verification.code !== verificationCode) {
+                    return res.status(400).json({ error: 'Invalid verification code' });
+                }
+                this.emailVerificationCodes.delete(email);
+            }
+
+            const { salt, hash } = buildPasswordHash(password);
+            const hasOwner = Array.from(this.localAuthUsers.values()).some((u) =>
+                String(u.role || '').toLowerCase() === 'owner'
+            );
+            const assignedRole = hasOwner ? 'user' : 'owner';
+            const user = {
+                id: `usr_${uuidv4()}`,
+                username,
+                displayName: displayName || username,
+                email,
+                passwordSalt: salt,
+                passwordHash: hash,
+                role: assignedRole,
+                permissions: buildPermissionsForRole(assignedRole),
+                entitlements: buildDefaultEntitlements(assignedRole),
+                isVerified: this.localAuthVerificationRequired,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.post('/api/auth/local/login', (req, res) => {
+            const identity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            const password = String(req.body?.password || '');
+            const twoFactorCode = String(req.body?.twoFactorCode || req.body?.otp || '').trim();
+            if (!identity || !password) {
+                return res.status(400).json({ error: 'Identity and password are required' });
+            }
+
+            const user = findLocalUserByIdentity(identity);
+            if (!user) {
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+
+            const candidate = hashPassword(password, user.passwordSalt);
+            const expectedBuffer = Buffer.from(user.passwordHash || '', 'hex');
+            const candidateBuffer = Buffer.from(candidate, 'hex');
+            if (expectedBuffer.length !== candidateBuffer.length || !crypto.timingSafeEqual(expectedBuffer, candidateBuffer)) {
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+
+            if (this.localAuthVerificationRequired && !user.isVerified) {
+                return res.status(403).json({ error: 'Account is not verified' });
+            }
+
+            const twoFactorState = getLocal2FAState(user);
+            if (twoFactorState.required) {
+                if (!twoFactorCode) {
+                    return res.status(401).json({
+                        success: false,
+                        requires2FA: true,
+                        availableMethods: twoFactorState.methods,
+                        error: 'Two-factor authentication code required'
+                    });
+                }
+
+                const verificationResult = verifyLocalTwoFactorCode(user, twoFactorCode);
+                if (!verificationResult.success) {
+                    return res.status(401).json({
+                        success: false,
+                        requires2FA: true,
+                        availableMethods: twoFactorState.methods,
+                        error: verificationResult.error || 'Invalid verification code'
+                    });
+                }
+            }
+
+            user.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.post('/api/auth/local/2fa/challenge', async (req, res) => {
+            const identity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            const password = String(req.body?.password || '');
+            const preferredMethod = String(req.body?.method || '').trim().toLowerCase();
+            if (!identity || !password) {
+                return res.status(400).json({ success: false, error: 'Identity and password are required' });
+            }
+
+            const user = findLocalUserByIdentity(identity);
+            if (!user) {
+                return res.status(401).json({ success: false, error: 'Invalid credentials' });
+            }
+
+            const candidate = hashPassword(password, user.passwordSalt);
+            const expectedBuffer = Buffer.from(user.passwordHash || '', 'hex');
+            const candidateBuffer = Buffer.from(candidate, 'hex');
+            if (expectedBuffer.length !== candidateBuffer.length || !crypto.timingSafeEqual(expectedBuffer, candidateBuffer)) {
+                return res.status(401).json({ success: false, error: 'Invalid credentials' });
+            }
+
+            const twoFactorState = getLocal2FAState(user);
+            if (!twoFactorState.required) {
+                return res.json({
+                    success: true,
+                    requires2FA: false,
+                    availableMethods: twoFactorState.methods
+                });
+            }
+
+            const challengeResult = await sendLocalTwoFactorCode(user, preferredMethod);
+            if (!challengeResult.success) {
+                return res.status(400).json({
+                    success: false,
+                    requires2FA: true,
+                    availableMethods: twoFactorState.methods,
+                    error: challengeResult.error || 'Unable to send verification code'
+                });
+            }
+
+            return res.json({
+                success: true,
+                requires2FA: true,
+                method: preferredMethod || 'email',
+                hint: challengeResult.hint || null,
+                expiresIn: challengeResult.expiresIn || null,
+                availableMethods: twoFactorState.methods
+            });
+        });
+
+        this.app.get('/api/auth/local/me', (req, res) => {
+            const token = tokenFromRequest(req);
+            const user = getUserFromToken(token);
+            if (!user) {
+                return res.status(401).json({ error: 'Unauthorized' });
+            }
+            return res.json({ success: true, user: publicLocalUser(user) });
+        });
+
+        this.app.post('/api/auth/local/logout', (req, res) => {
+            const token = tokenFromRequest(req);
+            if (token) this.localAuthSessions.delete(token);
+            return res.json({ success: true });
+        });
+
+        this.ownerSetupTokens = this.ownerSetupTokens || new Map();
+        this.adminInviteTokens = this.adminInviteTokens || new Map();
+
+        this.app.post('/api/auth/local/owner-token', (req, res) => {
+            const hasOwner = Array.from(this.localAuthUsers.values()).some((u) =>
+                String(u.role || '').toLowerCase() === 'owner'
+            );
+            if (hasOwner && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin authentication required' });
+            }
+            const token = `vlowner_${uuidv4()}_${Date.now().toString(36)}`;
+            const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+            this.ownerSetupTokens.set(token, { createdAt: new Date(), expiresAt });
+            return res.json({ success: true, token, expiresAt });
+        });
+
+        this.app.post('/api/auth/local/claim-owner', (req, res) => {
+            const token = String(req.body?.token || '').trim();
+            const identity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            if (!token || !identity) {
+                return res.status(400).json({ success: false, error: 'Token and identity are required' });
+            }
+            const record = this.ownerSetupTokens.get(token);
+            if (!record || new Date() > new Date(record.expiresAt)) {
+                this.ownerSetupTokens.delete(token);
+                return res.status(400).json({ success: false, error: 'Token is invalid or expired' });
+            }
+            const user = findLocalUserByIdentity(identity);
+            if (!user) {
+                return res.status(404).json({ success: false, error: 'User not found' });
+            }
+            user.role = 'owner';
+            user.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(user.id, user);
+            this.ownerSetupTokens.delete(token);
+            persistLocalAuthUsers();
+            return res.json({ success: true, user: publicLocalUser(user) });
+        });
+
+        this.app.post('/api/admin/invites', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            const email = normalizeEmail(req.body?.email);
+            const requestedRole = String(req.body?.role || 'admin').toLowerCase();
+            const role = ['admin', 'moderator', 'owner'].includes(requestedRole) ? requestedRole : 'admin';
+            const expiresMinutes = Math.max(5, Math.min(Number(req.body?.expiresMinutes || 60), 1440));
+            if (!email || !validateEmail(email)) {
+                return res.status(400).json({ success: false, error: 'Valid email is required' });
+            }
+
+            const token = `vlinvite_${uuidv4()}_${Date.now().toString(36)}`;
+            const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
+            const inviter = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
+            this.adminInviteTokens.set(token, {
+                email,
+                role,
+                invitedBy: inviter?.username || inviter?.email || 'admin',
+                createdAt: new Date(),
+                expiresAt
+            });
+
+            const host = req.get('host');
+            const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
+            const inviteUrl = `${protocol}://${host}/admin-invite.html?token=${encodeURIComponent(token)}`;
+            const desktopUrl = `vcl://admin-invite?token=${encodeURIComponent(token)}&server=${encodeURIComponent(`${protocol}://${host}`)}`;
+
+            try {
+                if (this.mailer) {
+                    const supportAddress = this.emailFrom || 'services@devine-creations.com';
+                    await this.mailer.sendMail({
+                        from: supportAddress,
+                        to: email,
+                        subject: `VoiceLink Admin Access Invite (${role})`,
+                        text: `You were invited to VoiceLink as ${role}.\n\nWeb activation link:\n${inviteUrl}\n\nDesktop app deep link:\n${desktopUrl}\n\nInvited by: ${inviter?.username || inviter?.email || 'Server Admin'}\nExpires: ${expiresAt.toISOString()}\n\nIf you were not expecting this invite, ignore this email.\nSupport: ${supportAddress}`,
+                        html: `
+                            <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; padding: 20px;">
+                                <h2 style="color: #6366f1;">VoiceLink Admin Invite</h2>
+                                <p>You were invited as <strong>${role}</strong>.</p>
+                                <p>Use this secure link to activate your admin profile and set your username/password:</p>
+                                <p><a href="${inviteUrl}" style="display:inline-block;padding:12px 16px;background:#4f46e5;color:#fff;text-decoration:none;border-radius:8px;">Activate Admin Access</a></p>
+                                <p style="word-break:break-all;color:#555;font-size:13px;">Web link: ${inviteUrl}</p>
+                                <p style="word-break:break-all;color:#555;font-size:13px;">Desktop link: ${desktopUrl}</p>
+                                <p style="color:#666;font-size:13px;">Invited by: ${inviter?.username || inviter?.email || 'Server Admin'}</p>
+                                <p style="color:#666;font-size:13px;">Expires: ${expiresAt.toISOString()}</p>
+                                <p style="color:#999;font-size:12px;">If you were not expecting this invite, ignore this email.</p>
+                                <p style="color:#999;font-size:12px;">Support: ${supportAddress}</p>
+                            </div>
+                        `
+                    });
+                }
+            } catch (error) {
+                console.warn('[Auth] Failed to send admin invite email:', error.message);
+            }
+
+            return res.json({ success: true, email, role, inviteUrl, expiresAt });
+        });
+
+        this.app.get('/api/auth/local/admin-invite/:token', (req, res) => {
+            const token = String(req.params.token || '').trim();
+            const invite = this.adminInviteTokens.get(token);
+            if (!invite || new Date() > new Date(invite.expiresAt)) {
+                this.adminInviteTokens.delete(token);
+                return res.status(404).json({ success: false, error: 'Invite link is invalid or expired' });
+            }
+            return res.json({
+                success: true,
+                email: invite.email,
+                role: invite.role,
+                invitedBy: invite.invitedBy,
+                expiresAt: invite.expiresAt
+            });
+        });
+
+        this.app.post('/api/auth/local/admin-invite/accept', (req, res) => {
+            const token = String(req.body?.token || '').trim();
+            const username = normalizeUsername(req.body?.username);
+            const email = normalizeEmail(req.body?.email);
+            const displayName = String(req.body?.displayName || username || '').trim();
+            const password = String(req.body?.password || '');
+            if (!token || !username || !password) {
+                return res.status(400).json({ success: false, error: 'Token, username, and password are required' });
+            }
+            if (!validateUsername(username)) {
+                return res.status(400).json({ success: false, error: 'Invalid username format' });
+            }
+            if (password.length < 8) {
+                return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+            }
+
+            const invite = this.adminInviteTokens.get(token);
+            if (!invite || new Date() > new Date(invite.expiresAt)) {
+                this.adminInviteTokens.delete(token);
+                return res.status(400).json({ success: false, error: 'Invite token is invalid or expired' });
+            }
+            if (email && invite.email && email !== invite.email) {
+                return res.status(400).json({ success: false, error: 'Email does not match invite' });
+            }
+
+            const targetEmail = invite.email;
+            let user = findLocalUserByIdentity(targetEmail) || findLocalUserByIdentity(username);
+            if (!user) {
+                const { salt, hash } = buildPasswordHash(password);
+                user = {
+                    id: `usr_${uuidv4()}`,
+                    username,
+                    displayName: displayName || username,
+                    email: targetEmail,
+                    passwordSalt: salt,
+                    passwordHash: hash,
+                    role: invite.role || 'admin',
+                    isVerified: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+            } else {
+                const { salt, hash } = buildPasswordHash(password);
+                user.username = username;
+                user.displayName = displayName || username;
+                user.email = user.email || targetEmail;
+                user.passwordSalt = salt;
+                user.passwordHash = hash;
+                user.role = invite.role || user.role || 'admin';
+                user.isVerified = true;
+                user.updatedAt = new Date().toISOString();
+            }
+
+            this.localAuthUsers.set(user.id, user);
+            this.adminInviteTokens.delete(token);
+            persistLocalAuthUsers();
+            const accessToken = issueLocalAuthToken(user.id);
+
+            return res.json({
+                success: true,
+                accessToken,
+                user: publicLocalUser(user)
+            });
+        });
+
+        this.app.get('/admin-invite', (req, res) => {
+            const token = String(req.query?.token || '').trim();
+            if (!token) {
+                return res.status(400).send('<h2>Missing invite token</h2>');
+            }
+            return res.sendFile(path.join(__dirname, '../../client/admin-invite.html'));
+        });
+        this.app.get('/api/admin-invite', (req, res) => {
+            const token = String(req.query?.token || '').trim();
+            if (!token) {
+                return res.status(400).json({ success: false, error: 'Missing invite token' });
+            }
+            return res.redirect(`/admin-invite.html?token=${encodeURIComponent(token)}`);
+        });
+
+        this.app.get('/api/auth/providers', (_req, res) => {
+            const whmcsConfig = this.getWhmcsConfig();
+            const adminBridge = this.getWhmcsAdminBridgeConfig();
+            const whmcsEnabled = this.shouldDelegateWhmcsAuth()
+                || Boolean(whmcsConfig.identifier && whmcsConfig.secret)
+                || Boolean(adminBridge.enabled && adminBridge.configPath);
+            res.json({
+                providers: [
+                    { id: 'email', name: 'Email/Username + Password', enabled: true, default: true },
+                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true, default: false },
+                    { id: 'whmcs', name: 'WHMCS Account', enabled: whmcsEnabled, default: false }
+                ]
+            });
+        });
+
+        this.app.get('/api/auth/oauth/providers', (_req, res) => {
+            res.json({
+                providers: [
+                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true }
+                ]
+            });
+        });
+
+        this.app.get('/api/admin/status', (req, res) => {
+            const user = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
+            const role = String(user?.role || 'none').toLowerCase();
+            const isAdmin = role === 'owner' || role === 'admin';
+            res.json({
+                isAdmin,
+                role,
+                isModerator: role === 'staff',
+                user: user ? publicLocalUser(user) : null
+            });
+        });
+
         // Store for linked devices and pending email verifications
         this.linkedDevices = new Map(); // deviceId -> LinkedDevice
         this.pairingCodes = new Map(); // code -> { expiresAt, serverInfo }
@@ -2628,20 +4496,22 @@ class VoiceLinkLocalServer {
             // Try to send email if nodemailer is configured
             try {
                 if (this.mailer) {
+                    const supportAddress = this.emailFrom || 'services@devine-creations.com';
                     await this.mailer.sendMail({
-                        from: this.emailFrom || 'noreply@voicelink.local',
+                        from: supportAddress,
                         to: email,
-                        subject: 'VoiceLink Verification Code',
-                        text: `Your VoiceLink verification code is: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, please ignore this email.`,
+                        subject: 'VoiceLink Sign-in Verification Code',
+                        text: `VoiceLink verification code: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, you can safely ignore this message.\n\nNeed help? Contact ${supportAddress}`,
                         html: `
                             <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
-                                <h2 style="color: #6366f1;">VoiceLink Verification</h2>
-                                <p>Your verification code is:</p>
+                                <h2 style="color: #6366f1;">VoiceLink Sign-in Verification</h2>
+                                <p>Use this code to complete sign-in on VoiceLink:</p>
                                 <div style="font-size: 32px; font-weight: bold; letter-spacing: 4px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center;">
                                     ${code}
                                 </div>
                                 <p style="color: #666; font-size: 14px;">This code expires in 5 minutes.</p>
-                                <p style="color: #999; font-size: 12px;">If you did not request this code, please ignore this email.</p>
+                                <p style="color: #999; font-size: 12px;">If you did not request this code, you can ignore this message.</p>
+                                <p style="color: #999; font-size: 12px;">Support: ${supportAddress}</p>
                             </div>
                         `
                     });
@@ -2828,7 +4698,6 @@ class VoiceLinkLocalServer {
             const requester = this.getRequesterContext(req);
             const permission = this.getRoomJellyfinPermission(room, requester);
             if (!permission.canUseLibraries) return res.status(403).json({ error: 'Library access disabled for this user' });
-
             const serverId = String(req.query.serverId || '');
             const server = this.jellyfinServers.get(serverId);
             if (!server) return res.status(404).json({ error: 'Jellyfin server not found' });
@@ -3159,60 +5028,9 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Jellyfin webhook relay -> push event to connected desktop/web clients
-        this.app.post('/api/jellyfin/webhook', (req, res) => {
-            try {
-                const payload = req.body || {};
-                const webhookSecret = deployConfig.get('jellyfin')?.webhookSecret || process.env.JELLYFIN_WEBHOOK_SECRET;
-                const providedToken =
-                    req.headers['x-jellyfin-token']
-                    || req.headers['x-webhook-token']
-                    || req.query.token
-                    || payload.token
-                    || payload.secret;
-
-                if (webhookSecret && String(providedToken || '') !== String(webhookSecret)) {
-                    return res.status(403).json({ error: 'Invalid webhook token' });
-                }
-
-                const eventType = payload.NotificationType || payload.Event || payload.event || 'unknown';
-                const roomId = payload.roomId || payload.RoomId || null;
-                const event = {
-                    id: uuidv4(),
-                    source: 'jellyfin',
-                    eventType,
-                    title: payload.Name || payload.ItemName || payload.SeriesName || payload.Title || 'Jellyfin Event',
-                    message: payload.message || payload.Description || `${eventType}`,
-                    itemId: payload.ItemId || payload.itemId || null,
-                    userName: payload.UserName || payload.userName || null,
-                    serverName: payload.ServerName || payload.serverName || null,
-                    roomId,
-                    timestamp: new Date().toISOString()
-                };
-
-                if (roomId) {
-                    this.io.to(roomId).emit('jellyfin-webhook-event', event);
-                }
-                this.io.emit('jellyfin-webhook-event', event);
-                this.io.emit('admin-notification', {
-                    type: 'jellyfin-webhook',
-                    module: 'jellyfin',
-                    title: event.title,
-                    message: event.message,
-                    eventType: event.eventType,
-                    timestamp: event.timestamp
-                });
-
-                return res.json({ success: true, delivered: true, eventId: event.id });
-            } catch (error) {
-                console.error('[Jellyfin webhook] Failed to process event:', error.message);
-                return res.status(500).json({ error: 'Webhook processing failed' });
-            }
-        });
-
         // Start streaming media to a room
         this.app.post('/api/jellyfin/stream-to-room', (req, res) => {
-            const { serverId, itemId, roomId, libraryId = null, type = 'audio', startedBy = 'Jukebox', title = null } = req.body;
+            const { serverId, itemId, roomId, libraryId = null, type = 'audio', startedBy = 'Jukebox' } = req.body;
 
             const server = this.jellyfinServers.get(serverId);
             if (!server) {
@@ -3242,7 +5060,6 @@ class VoiceLinkLocalServer {
                 itemId,
                 libraryId,
                 type,
-                title,
                 startedAt: new Date(),
                 startedBy,
                 serverUrl: server.url,
@@ -3262,7 +5079,6 @@ class VoiceLinkLocalServer {
                 type,
                 streamUrl,
                 itemId,
-                title,
                 startedBy
             });
 
@@ -3281,16 +5097,10 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'No active stream in room' });
             }
 
-            const existingStream = this.roomMediaStreams.get(roomId);
             this.roomMediaStreams.delete(roomId);
 
             // Notify room users
-            this.io.to(roomId).emit('media-stream-stopped', {
-                roomId,
-                itemId: existingStream?.itemId || null,
-                title: existingStream?.title || null,
-                type: existingStream?.type || 'media'
-            });
+            this.io.to(roomId).emit('media-stream-stopped', { roomId });
 
             res.json({ success: true, message: 'Stream stopped' });
         });
@@ -3436,170 +5246,6 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.json({ success: false, error: error.message, items: [] });
             }
-        });
-
-        const directUrlMediaDefaultPath = path.join(__dirname, '../../data/media/direct-url');
-        const getDirectUrlMediaConfig = () => {
-            const jellyfinConfig = deployConfig.get('jellyfin') || {};
-            const direct = jellyfinConfig.directUrlMedia || {};
-            return {
-                enabled: direct.enabled !== false,
-                allowSave: direct.allowSave !== false,
-                storagePath: direct.storagePath || directUrlMediaDefaultPath
-            };
-        };
-
-        const sanitizeFileName = (value) => String(value || '')
-            .replace(/[^a-z0-9._-]+/gi, '_')
-            .replace(/^_+|_+$/g, '')
-            .slice(0, 120) || `media_${Date.now()}`;
-
-        const resolveRequesterSocketId = (req) => {
-            const candidate = req.body?.socketId
-                || req.headers['x-voicelink-socket-id']
-                || req.query.socketId;
-            if (candidate && this.users.has(String(candidate))) {
-                return String(candidate);
-            }
-            return null;
-        };
-
-        const queueSaveDirectMedia = async ({ mediaUrl, title, storagePath }) => {
-            try {
-                const response = await fetch(mediaUrl);
-                if (!response.ok) {
-                    throw new Error(`Download failed with status ${response.status}`);
-                }
-                const parsedUrl = new URL(mediaUrl);
-                const ext = path.extname(parsedUrl.pathname) || '.bin';
-                const fileName = `${sanitizeFileName(title)}_${Date.now()}${ext.slice(0, 10)}`;
-                fs.mkdirSync(storagePath, { recursive: true });
-                const filePath = path.join(storagePath, fileName);
-                const buffer = Buffer.from(await response.arrayBuffer());
-                fs.writeFileSync(filePath, buffer);
-                return { filePath, fileName, size: buffer.length };
-            } catch (error) {
-                console.error('[Direct URL media] Save failed:', error.message);
-                return null;
-            }
-        };
-
-        // Stream a direct HTTPS URL to self or full room, optionally saving for future use
-        this.app.post('/api/jellyfin/direct-url/stream', async (req, res) => {
-            const { url, target = 'self', roomId, title, startedBy = 'Direct URL', save = false } = req.body || {};
-            const config = getDirectUrlMediaConfig();
-
-            if (!config.enabled) {
-                return res.status(403).json({ success: false, error: 'Direct URL streaming is disabled by admin' });
-            }
-
-            if (!url || typeof url !== 'string') {
-                return res.status(400).json({ success: false, error: 'Missing stream URL' });
-            }
-
-            let parsed;
-            try {
-                parsed = new URL(url);
-            } catch {
-                return res.status(400).json({ success: false, error: 'Invalid stream URL' });
-            }
-
-            if (!['https:'].includes(parsed.protocol)) {
-                return res.status(400).json({ success: false, error: 'Only HTTPS media URLs are allowed' });
-            }
-
-            const mediaTitle = title || decodeURIComponent(path.basename(parsed.pathname)) || 'Direct Media';
-            const payload = {
-                type: 'direct-url',
-                streamUrl: parsed.toString(),
-                title: mediaTitle,
-                itemId: null,
-                startedBy,
-                source: 'direct-url',
-                timestamp: new Date().toISOString()
-            };
-
-            if (target === 'room') {
-                if (!roomId || !this.rooms.has(roomId)) {
-                    return res.status(404).json({ success: false, error: 'Room not found' });
-                }
-                this.roomMediaStreams.set(roomId, {
-                    serverId: 'direct-url',
-                    itemId: null,
-                    type: 'url',
-                    title: mediaTitle,
-                    directUrl: parsed.toString(),
-                    startedAt: new Date(),
-                    startedBy,
-                    serverUrl: parsed.origin,
-                    apiKey: null
-                });
-                this.io.to(roomId).emit('media-stream-started', { ...payload, roomId });
-            } else {
-                const socketId = resolveRequesterSocketId(req);
-                if (socketId) {
-                    this.io.to(socketId).emit('media-stream-started', { ...payload, target: 'self' });
-                } else {
-                    this.io.emit('media-stream-started', { ...payload, target: 'self' });
-                }
-            }
-
-            let saveQueued = false;
-            if (save === true && config.allowSave) {
-                saveQueued = true;
-                queueSaveDirectMedia({
-                    mediaUrl: parsed.toString(),
-                    title: mediaTitle,
-                    storagePath: config.storagePath
-                }).then((saved) => {
-                    if (saved) {
-                        this.io.emit('admin-notification', {
-                            type: 'direct-url-media-saved',
-                            module: 'jellyfin',
-                            title: `Saved media: ${mediaTitle}`,
-                            message: `${saved.fileName} (${saved.size} bytes)`,
-                            timestamp: new Date().toISOString()
-                        });
-                    }
-                });
-            }
-
-            return res.json({
-                success: true,
-                target,
-                roomId: target === 'room' ? roomId : null,
-                streamUrl: parsed.toString(),
-                title: mediaTitle,
-                saveQueued
-            });
-        });
-
-        // Admin config: enable/disable direct URL streaming and save behavior
-        this.app.get('/api/jellyfin/direct-url/config', (req, res) => {
-            res.json({ success: true, config: getDirectUrlMediaConfig() });
-        });
-
-        this.app.put('/api/jellyfin/direct-url/config', async (req, res) => {
-            const expectedAdminKey = deployConfig.get('security')?.adminKey || process.env.VOICELINK_ADMIN_KEY || null;
-            const providedAdminKey = req.body?.adminKey || req.headers['x-admin-key'] || req.query.adminKey;
-            if (expectedAdminKey && String(providedAdminKey || '') !== String(expectedAdminKey)) {
-                return res.status(403).json({ success: false, error: 'Invalid admin key' });
-            }
-
-            const current = deployConfig.get('jellyfin') || {};
-            const direct = current.directUrlMedia || {};
-            const updates = req.body || {};
-            direct.enabled = updates.enabled !== undefined ? !!updates.enabled : (direct.enabled !== false);
-            direct.allowSave = updates.allowSave !== undefined ? !!updates.allowSave : (direct.allowSave !== false);
-            if (typeof updates.storagePath === 'string' && updates.storagePath.trim()) {
-                direct.storagePath = updates.storagePath.trim();
-            } else if (!direct.storagePath) {
-                direct.storagePath = directUrlMediaDefaultPath;
-            }
-            current.directUrlMedia = direct;
-            deployConfig.updateSection('jellyfin', current);
-            await deployConfig.save();
-            return res.json({ success: true, config: getDirectUrlMediaConfig() });
         });
 
         // Wrapper: Get stream URL (POST for JukeboxManager)
@@ -3776,8 +5422,32 @@ class VoiceLinkLocalServer {
         // Create backup
         this.app.post('/api/config/backup', async (req, res) => {
             try {
-                const { label } = req.body;
-                const result = await deployConfig.createBackup(label);
+                const { label, includeFederationSnapshot, includeLinkedServers } = req.body || {};
+                const backupCfg = deployConfig.get('backup') || {};
+                const includeFed = includeFederationSnapshot !== undefined
+                    ? !!includeFederationSnapshot
+                    : backupCfg.includeFederationSnapshot !== false;
+                const includeLinks = includeLinkedServers !== undefined
+                    ? !!includeLinkedServers
+                    : backupCfg.includeLinkedServers !== false;
+
+                const metadata = {};
+                if (includeFed) {
+                    metadata.federation = {
+                        status: {
+                            mode: this.federation?.mode || 'standalone',
+                            peerServers: this.federation?.peerServers || [],
+                            masterServer: this.federation?.masterServerUrl || null,
+                            connectedServers: this.federation?.getConnectedServers?.() || []
+                        },
+                        config: deployConfig.get('federation') || {}
+                    };
+                }
+                if (includeLinks) {
+                    metadata.linkedServers = (deployConfig.get('federation', 'trustedServers') || []).map((url) => ({ url }));
+                }
+
+                const result = await deployConfig.createBackup(label, { metadata });
                 res.json({ success: true, ...result });
             } catch (error) {
                 res.status(500).json({ error: error.message });
@@ -4861,6 +6531,283 @@ class VoiceLinkLocalServer {
 
         // Serve release packages for installer downloads
         this.app.use('/releases', express.static(path.join(__dirname, '../../releases')));
+        this.app.use('/exports', express.static(path.join(__dirname, '../../data/exports')));
+
+        // Generate a share link using OpenLink/CopyParty with automatic provider fallback.
+        this.app.post('/api/links/generate', async (req, res) => {
+            try {
+                const prefer = String(req.body?.prefer || 'auto').trim().toLowerCase();
+                const timeoutMs = Math.max(1000, Math.min(Number(req.body?.timeoutMs) || 6000, 15000));
+                const tokenSeed = String(req.body?.token || req.body?.slug || req.body?.roomId || req.body?.fileName || '').trim();
+                const directCopyPartyUrl = String(req.body?.copyPartyUrl || '').trim();
+                const fileName = String(req.body?.fileName || '').trim();
+                const skipProbe = this.parseBool(req.body?.skipProbe, false);
+
+                const providers = [];
+                const preferOpenLink = prefer === 'auto' || prefer === 'openlink';
+                const preferCopyParty = prefer === 'auto' || prefer === 'copyparty';
+
+                if (preferOpenLink) {
+                    const openLink = await this.buildOpenLinkShareLink({
+                        token: tokenSeed || this.createShareToken('openlink'),
+                        timeoutMs
+                    });
+                    providers.push(openLink);
+                    if (openLink.ok) {
+                        return res.json({
+                            success: true,
+                            provider: 'openlink',
+                            url: openLink.url,
+                            token: openLink.token,
+                            providers
+                        });
+                    }
+                }
+
+                if (preferCopyParty) {
+                    const copyParty = this.buildCopyPartyLink({
+                        fileName,
+                        directUrl: directCopyPartyUrl
+                    });
+                    if (!copyParty.configured || !copyParty.url) {
+                        providers.push({ ok: false, provider: 'copyparty', reason: 'CopyParty link input/config missing' });
+                    } else if (skipProbe) {
+                        providers.push({ ok: true, provider: 'copyparty', url: copyParty.url, skippedProbe: true });
+                        return res.json({
+                            success: true,
+                            provider: 'copyparty',
+                            url: copyParty.url,
+                            providers
+                        });
+                    } else {
+                        const check = await this.probeUrl(copyParty.url, timeoutMs);
+                        if (check.ok) {
+                            providers.push({ ok: true, provider: 'copyparty', url: copyParty.url, status: check.status });
+                            return res.json({
+                                success: true,
+                                provider: 'copyparty',
+                                url: copyParty.url,
+                                providers
+                            });
+                        }
+                        providers.push({
+                            ok: false,
+                            provider: 'copyparty',
+                            url: copyParty.url,
+                            reason: `CopyParty probe failed (${check.status || check.error || 'unknown'})`
+                        });
+                    }
+                }
+
+                return res.status(502).json({
+                    success: false,
+                    error: 'No share provider produced a working link',
+                    providers
+                });
+            } catch (error) {
+                console.error('[links] Failed to generate share link:', error.message);
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // Create a user data export archive and upload to CopyParty when enabled.
+        this.app.post('/api/export/my-data', async (req, res) => {
+            try {
+                const includeMessages = this.parseBool(req.body?.includeMessages, true);
+                const includeRooms = this.parseBool(req.body?.includeRooms, true);
+                const useCopyParty = this.parseBool(req.body?.useCopyParty, true);
+                const userId = String(
+                    req.body?.userId
+                    || req.headers['x-user-id']
+                    || req.headers['remote-user']
+                    || ''
+                ).trim();
+                const username = String(
+                    req.body?.username
+                    || req.headers['x-user-name']
+                    || req.headers['remote-user']
+                    || ''
+                ).trim();
+
+                if (!userId && !username) {
+                    return res.status(400).json({ success: false, error: 'Missing user identity for export' });
+                }
+
+                const payload = this.buildUserDataExport({ userId, username, includeMessages, includeRooms });
+                const archive = await this.createJsonZipArchive(payload, {
+                    prefix: `user-export-${this.sanitizeExportSegment(userId || username, 'user')}`
+                });
+
+                let copyParty = { uploaded: false };
+                if (useCopyParty) {
+                    try {
+                        copyParty = await this.uploadArchiveToCopyParty(archive.zipPath, archive.fileName);
+                    } catch (error) {
+                        copyParty = { uploaded: false, error: error.message };
+                    }
+                }
+
+                res.json({
+                    success: true,
+                    userId: userId || null,
+                    username: username || null,
+                    archive: {
+                        fileName: archive.fileName,
+                        size: archive.size,
+                        createdAt: archive.createdAt,
+                        downloadUrl: archive.downloadUrl
+                    },
+                    copyParty
+                });
+            } catch (error) {
+                console.error('[Export] Failed to export user data:', error.message);
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // Admin: export migration snapshot + optional API push / rsync + Escort Me hook.
+        this.app.post('/api/admin/migration/export', async (req, res) => {
+            try {
+                if (!this.isAdminRequest(req)) {
+                    return res.status(403).json({ success: false, error: 'Admin access required' });
+                }
+
+                const useCopyParty = this.parseBool(req.body?.useCopyParty, true);
+                const pushViaApi = this.parseBool(req.body?.pushViaApi, false);
+                const useRsync = this.parseBool(req.body?.useRsync, false);
+                const triggerRoomTransfer = this.parseBool(req.body?.triggerRoomTransfer, false);
+                const targetServerUrl = String(req.body?.targetServerUrl || '').trim().replace(/\/+$/, '');
+                const targetAdminKey = String(req.body?.targetAdminKey || process.env.VOICELINK_MIGRATION_TARGET_ADMIN_KEY || '').trim();
+                const rsyncTarget = String(req.body?.rsyncTarget || process.env.VOICELINK_MIGRATION_RSYNC_TARGET || '').trim();
+
+                const snapshot = this.buildAdminMigrationSnapshot(req.body || {});
+                const archive = await this.createJsonZipArchive(snapshot, {
+                    prefix: `migration-${this.sanitizeExportSegment(os.hostname(), 'server')}`
+                });
+
+                let copyParty = { uploaded: false };
+                if (useCopyParty) {
+                    try {
+                        copyParty = await this.uploadArchiveToCopyParty(archive.zipPath, archive.fileName);
+                    } catch (error) {
+                        copyParty = { uploaded: false, error: error.message };
+                    }
+                }
+
+                let apiPush = { pushed: false };
+                if (pushViaApi && targetServerUrl) {
+                    try {
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (targetAdminKey) headers['x-admin-key'] = targetAdminKey;
+                        const response = await fetch(`${targetServerUrl}/api/admin/migration/import`, {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({
+                                snapshot,
+                                source: { host: os.hostname(), exportedAt: snapshot.generatedAt }
+                            })
+                        });
+                        apiPush = {
+                            pushed: response.ok,
+                            status: response.status,
+                            response: await response.json().catch(() => ({}))
+                        };
+                    } catch (error) {
+                        apiPush = { pushed: false, error: error.message };
+                    }
+                }
+
+                let rsync = { ran: false };
+                if (useRsync) {
+                    if (!rsyncTarget) {
+                        rsync = { ran: false, error: 'Missing rsyncTarget or VOICELINK_MIGRATION_RSYNC_TARGET' };
+                    } else {
+                        try {
+                            await this.runCommand('rsync', ['-az', '--partial', archive.zipPath, rsyncTarget]);
+                            rsync = { ran: true, target: rsyncTarget };
+                        } catch (error) {
+                            rsync = { ran: false, error: error.message, target: rsyncTarget };
+                        }
+                    }
+                }
+
+                let roomTransfer = null;
+                if (triggerRoomTransfer) {
+                    const sourceRoomId = String(req.body?.sourceRoomId || '').trim();
+                    const targetRoomId = String(req.body?.targetRoomId || '').trim();
+                    if (sourceRoomId && targetRoomId) {
+                        roomTransfer = this.startMigrationRoomTransfer({
+                            sourceRoomId,
+                            targetRoomId,
+                            targetServerUrl
+                        });
+                    }
+                }
+
+                res.json({
+                    success: true,
+                    archive: {
+                        fileName: archive.fileName,
+                        size: archive.size,
+                        createdAt: archive.createdAt,
+                        downloadUrl: archive.downloadUrl
+                    },
+                    copyParty,
+                    apiPush,
+                    rsync,
+                    roomTransfer
+                });
+            } catch (error) {
+                console.error('[Migration] Export failed:', error.message);
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // Admin: import migration snapshot.
+        this.app.post('/api/admin/migration/import', (req, res) => {
+            try {
+                if (!this.isAdminRequest(req)) {
+                    return res.status(403).json({ success: false, error: 'Admin access required' });
+                }
+                const snapshot = req.body?.snapshot || req.body;
+                if (!snapshot || typeof snapshot !== 'object') {
+                    return res.status(400).json({ success: false, error: 'Missing migration snapshot payload' });
+                }
+                const result = this.applyAdminMigrationSnapshot(snapshot);
+                res.json({
+                    success: true,
+                    importedAt: new Date().toISOString(),
+                    source: req.body?.source || null,
+                    result
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        // Admin: direct hook into Escort Me room-to-room transfer flow.
+        this.app.post('/api/admin/migration/room-transfer', (req, res) => {
+            try {
+                if (!this.isAdminRequest(req)) {
+                    return res.status(403).json({ success: false, error: 'Admin access required' });
+                }
+                const sourceRoomId = String(req.body?.sourceRoomId || '').trim();
+                const targetRoomId = String(req.body?.targetRoomId || '').trim();
+                const targetServerUrl = String(req.body?.targetServerUrl || '').trim();
+                if (!sourceRoomId || !targetRoomId) {
+                    return res.status(400).json({ success: false, error: 'sourceRoomId and targetRoomId are required' });
+                }
+
+                const session = this.startMigrationRoomTransfer({
+                    sourceRoomId,
+                    targetRoomId,
+                    targetServerUrl
+                });
+                res.json({ success: true, session });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
 
         // ============================================
         // MODULE INSTALLER API
@@ -5588,6 +7535,119 @@ class VoiceLinkLocalServer {
             }
         });
 
+        // Admin settings (server + database)
+        this.app.get('/api/admin/settings', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const config = deployConfig.getConfig() || {};
+            const database = { ...(config.database || {}) };
+            if (database?.postgres?.password) database.postgres.password = '********';
+            if (database?.mysql?.password) database.mysql.password = '********';
+            if (database?.mariadb?.password) database.mariadb.password = '********';
+
+            res.json({
+                maxRooms: config.rooms?.maxRooms ?? 100,
+                requireAuth: config.security?.requireAuth ?? false,
+                database
+            });
+        });
+
+        this.app.post('/api/admin/settings', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const maxRooms = Number(req.body?.maxRooms);
+                const requireAuth = !!req.body?.requireAuth;
+                const incomingDatabase = req.body?.database && typeof req.body.database === 'object'
+                    ? req.body.database
+                    : null;
+
+                if (!Number.isNaN(maxRooms) && maxRooms > 0) {
+                    deployConfig.updateSection('rooms', { maxRooms });
+                }
+                deployConfig.updateSection('security', { requireAuth });
+
+                if (incomingDatabase) {
+                    const current = deployConfig.get('database') || {};
+                    const merged = {
+                        ...current,
+                        ...incomingDatabase,
+                        sqlite: { ...(current.sqlite || {}), ...(incomingDatabase.sqlite || {}) },
+                        postgres: { ...(current.postgres || {}), ...(incomingDatabase.postgres || {}) },
+                        mysql: { ...(current.mysql || {}), ...(incomingDatabase.mysql || {}) },
+                        mariadb: { ...(current.mariadb || {}), ...(incomingDatabase.mariadb || {}) }
+                    };
+                    deployConfig.updateSection('database', merged);
+                }
+
+                await deployConfig.save();
+                res.json({ success: true });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/database/test', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const provider = String(req.body?.provider || '').toLowerCase();
+            const cfg = req.body?.config || {};
+            if (!provider) {
+                return res.status(400).json({ success: false, error: 'Database provider is required' });
+            }
+
+            if (provider === 'sqlite') {
+                const dbPath = String(cfg.path || '').trim();
+                if (!dbPath) {
+                    return res.status(400).json({ success: false, error: 'SQLite path is required' });
+                }
+                try {
+                    const dir = path.dirname(dbPath);
+                    fs.mkdirSync(dir, { recursive: true });
+                    fs.accessSync(dir, fs.constants.W_OK);
+                    return res.json({
+                        success: true,
+                        provider,
+                        message: 'SQLite path is writable'
+                    });
+                } catch (error) {
+                    return res.status(400).json({ success: false, error: `SQLite path not writable: ${error.message}` });
+                }
+            }
+
+            const expected = new Set(['postgres', 'mysql', 'mariadb']);
+            if (!expected.has(provider)) {
+                return res.status(400).json({ success: false, error: `Unsupported provider: ${provider}` });
+            }
+
+            const host = String(cfg.host || '').trim();
+            const port = Number(cfg.port || (provider === 'postgres' ? 5432 : 3306));
+            if (!host || Number.isNaN(port) || port <= 0) {
+                return res.status(400).json({ success: false, error: 'Host and valid port are required' });
+            }
+
+            const socket = new net.Socket();
+            let done = false;
+            const finish = (ok, message) => {
+                if (done) return;
+                done = true;
+                socket.destroy();
+                if (ok) {
+                    return res.json({ success: true, provider, message });
+                }
+                return res.status(400).json({ success: false, error: message });
+            };
+
+            socket.setTimeout(3000);
+            socket.once('connect', () => finish(true, `Connected to ${host}:${port}`));
+            socket.once('timeout', () => finish(false, `Connection timeout to ${host}:${port}`));
+            socket.once('error', (error) => finish(false, `Connection failed: ${error.message}`));
+            socket.connect(port, host);
+        });
+
         // Admin restart server (graceful)
         this.app.post('/api/admin/restart', (req, res) => {
             res.json({ success: true, message: 'Server restart initiated' });
@@ -5638,64 +7698,6 @@ class VoiceLinkLocalServer {
                 tokens: [],
                 message: 'Wallet verification requires Ecripto API integration'
             });
-        });
-
-        // Link wallet address to an authenticated VoiceLink user
-        this.app.post('/api/auth/link-wallet', (req, res) => {
-            const walletAddress = String(req.body.walletAddress || '').trim();
-            const userId = String(req.body.userId || '').trim();
-            if (!walletAddress || !userId) {
-                return res.status(400).json({ success: false, error: 'walletAddress and userId are required' });
-            }
-
-            this.walletLinks.set(walletAddress.toLowerCase(), {
-                userId,
-                provider: 'ecripto',
-                linkedAt: new Date().toISOString()
-            });
-
-            res.json({ success: true, walletAddress, userId });
-        });
-
-        // Remove wallet association
-        this.app.post('/api/ecripto/unlink-wallet', (req, res) => {
-            const walletAddress = String(req.body.walletAddress || '').trim().toLowerCase();
-            if (!walletAddress) {
-                return res.status(400).json({ success: false, error: 'walletAddress is required' });
-            }
-            this.walletLinks.delete(walletAddress);
-            res.json({ success: true });
-        });
-
-        // Handle disconnect actions for minted rooms
-        this.app.post('/api/ecripto/handle-disconnect', (req, res) => {
-            const walletAddress = String(req.body.walletAddress || '').trim().toLowerCase();
-            const action = String(req.body.action || 'keep-active').trim();
-            const fallbackUserId = String(req.body.fallbackAccount?.id || '').trim();
-
-            if (!walletAddress) {
-                return res.status(400).json({ success: false, error: 'walletAddress is required' });
-            }
-
-            const affected = [];
-            for (const [roomId, mintData] of this.mintedRooms.entries()) {
-                if (String(mintData.owner || '').toLowerCase() !== walletAddress) continue;
-                const room = this.rooms.get(roomId);
-                if (!room) continue;
-
-                if (action === 'mark-inactive') {
-                    room.mintedActive = false;
-                } else if (action === 'transfer-fallback' && fallbackUserId) {
-                    room.mintOwnerUserId = fallbackUserId;
-                } else if (action === 'delegate-admin') {
-                    room.mintOwnerUserId = 'admin:delegated';
-                }
-
-                this.rooms.set(roomId, room);
-                affected.push(roomId);
-            }
-
-            res.json({ success: true, action, affectedRoomIds: affected });
         });
 
         // Purchase access tier for a room
@@ -6974,59 +8976,9 @@ class VoiceLinkLocalServer {
         };
     }
 
-    registerSocketSession(socket, sessionInfo) {
-        if (!sessionInfo || !sessionInfo.userId) return;
-        if (!this.activeSessionsByUser.has(sessionInfo.userId)) {
-            this.activeSessionsByUser.set(sessionInfo.userId, new Map());
-        }
-        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
-        userSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
-        this.socketSessions.set(socket.id, { ...sessionInfo, socketId: socket.id });
-        if (sessionInfo.deviceId) {
-            this.deviceSessions.set(sessionInfo.deviceId, socket.id);
-        }
-    }
-
-    unregisterSocketSession(socketId) {
-        const sessionInfo = this.socketSessions.get(socketId);
-        if (!sessionInfo) return;
-        const userSessions = this.activeSessionsByUser.get(sessionInfo.userId);
-        if (userSessions) {
-            userSessions.delete(socketId);
-            if (userSessions.size === 0) {
-                this.activeSessionsByUser.delete(sessionInfo.userId);
-            }
-        }
-        if (sessionInfo.deviceId) {
-            this.deviceSessions.delete(sessionInfo.deviceId);
-        }
-        this.socketSessions.delete(socketId);
-    }
-
-    getUserSessions(userId) {
-        const sessions = this.activeSessionsByUser.get(userId);
-        if (!sessions) return [];
-        return Array.from(sessions.values());
-    }
-
-    getOtherUserSessions(userId, socketId) {
-        const sessions = this.activeSessionsByUser.get(userId);
-        if (!sessions) return [];
-        return Array.from(sessions.values()).filter((session) => session.socketId !== socketId);
-    }
-
     setupSocketHandlers() {
         this.io.on('connection', (socket) => {
             console.log(`User connected: ${socket.id}`);
-
-            const emitRoomSessionSync = (originSocketId, userId, payload) => {
-                if (!userId) return;
-                const otherSessions = this.getOtherUserSessions(userId, originSocketId);
-                if (!otherSessions.length) return;
-                otherSessions.forEach((session) => {
-                    this.io.to(session.socketId).emit('room-session-sync', payload);
-                });
-            };
 
             socket.on('register-session', (data = {}) => {
                 try {
@@ -7048,13 +9000,6 @@ class VoiceLinkLocalServer {
                         const session = this.getAuthSession(this.whmcsAuthSessions, token);
                         if (!session) {
                             socket.emit('auth_failed', { message: 'Invalid or expired WHMCS session' });
-                            return;
-                        }
-                        user = session.user;
-                    } else if (provider === 'ecripto') {
-                        const session = this.getAuthSession(this.ecriptoAuthSessions, token);
-                        if (!session) {
-                            socket.emit('auth_failed', { message: 'Invalid or expired wallet session' });
                             return;
                         }
                         user = session.user;
@@ -7131,12 +9076,12 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    userCount: Array.isArray(room.users) ? room.users.length : 0,
-                    users: Array.isArray(room.users) ? room.users.map(u => ({
+                    userCount: this.normalizeRoomUsers(room.id).length,
+                    users: this.normalizeRoomUsers(room.id).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false
-                    })) : [],
+                    })),
                     maxUsers: room.maxUsers || 50,
                     hasPassword: !!room.password,
                     visibility: room.visibility || 'public',
@@ -7148,9 +9093,10 @@ class VoiceLinkLocalServer {
                 socket.emit('room-list', roomList);
             });
 
-            // User joins a room (single active room per user/socket)
-            socket.on('join-room', (data = {}) => {
+            // User joins a room
+            socket.on('join-room', (data) => {
                 const { roomId, userName, username, password } = data;
+                const resolvedUserName = userName || username;
                 const room = this.rooms.get(roomId);
 
                 if (!room) {
@@ -7163,46 +9109,30 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                // Enforce one-room-per-user/socket and avoid duplicate join in same room
-                const existingUser = this.users.get(socket.id);
-                if (existingUser?.roomId === roomId) {
-                    const existingMember = room.users.find(u => u.id === socket.id);
-                    socket.emit('room-already-joined', {
-                        roomId,
-                        roomName: room.name,
-                        user: existingMember || existingUser
-                    });
-                    return;
-                }
+                this.normalizeRoomUsers(roomId);
 
-                const existingInTarget = room.users.some(u => u.id === socket.id);
-                if (!existingInTarget && room.users.length >= room.maxUsers) {
+                if (room.users.length >= room.maxUsers) {
                     socket.emit('error', { message: 'Room is full' });
                     return;
                 }
 
-                if (existingUser?.roomId && existingUser.roomId !== roomId) {
-                    const previousRoom = this.rooms.get(existingUser.roomId);
+                // If this socket is already in another room, leave that room first.
+                const existingSession = this.users.get(socket.id);
+                if (existingSession?.roomId && existingSession.roomId !== roomId) {
+                    const previousRoom = this.rooms.get(existingSession.roomId);
                     if (previousRoom) {
-                        previousRoom.users = previousRoom.users.filter(u => u.id !== socket.id);
-                        socket.to(existingUser.roomId).emit('user-left', {
+                        previousRoom.users = (previousRoom.users || []).filter(u => u.id !== socket.id);
+                        socket.to(existingSession.roomId).emit('user-left', {
                             userId: socket.id,
-                            userName: existingUser.name,
-                            switchedToRoomId: roomId
+                            userName: existingSession.name
                         });
-                        this.io.to(existingUser.roomId).emit('room-user-count', {
-                            roomId: existingUser.roomId,
+                        this.io.to(existingSession.roomId).emit('room-user-count', {
+                            roomId: existingSession.roomId,
                             count: previousRoom.users.length,
                             users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
                         });
                     }
-                    socket.leave(existingUser.roomId);
-                    socket.emit('room-switching', {
-                        fromRoomId: existingUser.roomId,
-                        toRoomId: roomId,
-                        fromRoomName: previousRoom?.name || null,
-                        toRoomName: room.name
-                    });
+                    socket.leave(existingSession.roomId);
                 }
 
                 // Check if user is authenticated (Mastodon/email) or guest
@@ -7212,7 +9142,7 @@ class VoiceLinkLocalServer {
                 // Add user to room
                 const user = {
                     id: socket.id,
-                    name: username || userName || `User ${socket.id.slice(0, 8)}`,
+                    name: resolvedUserName || `User ${socket.id.slice(0, 8)}`,
                     joinedAt: new Date(),
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
@@ -7224,6 +9154,7 @@ class VoiceLinkLocalServer {
                     }
                 };
 
+                room.users = (room.users || []).filter(u => u.id !== socket.id);
                 room.users.push(user);
 
                 // Track recent users (keep last 10)
@@ -7239,13 +9170,6 @@ class VoiceLinkLocalServer {
                     room.peakUsers = room.users.length;
                 }
                 this.users.set(socket.id, { ...user, roomId });
-                const session = this.socketSessions.get(socket.id);
-                if (session) {
-                    session.currentRoomId = roomId;
-                    session.currentRoomName = room.name;
-                    session.roomMinimized = false;
-                    session.lastSeen = new Date();
-                }
 
                 socket.join(roomId);
 
@@ -7254,13 +9178,13 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: room.users.map(u => ({
+                    users: this.normalizeRoomUsers(roomId).map(u => ({
                         id: u.id,
                         name: u.name,
                         isAuthenticated: u.isAuthenticated || false,
                         joinedAt: u.joinedAt
                     })),
-                    userCount: room.users.length,
+                    userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false
                 };
@@ -7271,152 +9195,11 @@ class VoiceLinkLocalServer {
                 // Broadcast updated user count to all in room
                 this.io.to(roomId).emit('room-user-count', {
                     roomId,
-                    count: room.users.length,
-                    users: room.users.map(u => ({ id: u.id, name: u.name }))
+                    count: this.normalizeRoomUsers(roomId).length,
+                    users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
                 });
 
-                const syncedUserId = authUser?.id || this.socketSessions.get(socket.id)?.userId || null;
-                emitRoomSessionSync(socket.id, syncedUserId, {
-                    type: 'joined',
-                    roomId,
-                    roomName: room.name,
-                    isJoined: true,
-                    isMinimized: false,
-                    at: new Date().toISOString()
-                });
-
-                console.log(`User ${user.name} joined room ${room.name} (${room.users.length} users now)`);
-                this.broadcastApiMonitorUpdate('join-room');
-            });
-
-            socket.on('leave-room', () => {
-                const user = this.users.get(socket.id);
-                if (!user?.roomId) {
-                    socket.emit('room-left', { roomId: null, reason: 'not-in-room' });
-                    return;
-                }
-
-                const roomId = user.roomId;
-                const room = this.rooms.get(roomId);
-                if (room) {
-                    room.users = room.users.filter(u => u.id !== socket.id);
-                    socket.to(roomId).emit('user-left', {
-                        userId: socket.id,
-                        userName: user.name
-                    });
-
-                    this.io.to(roomId).emit('room-user-count', {
-                        roomId,
-                        count: room.users.length,
-                        users: room.users.map(u => ({ id: u.id, name: u.name }))
-                    });
-
-                    if (room.users.length === 0 && !room.isDefault) {
-                        this.rooms.delete(roomId);
-                        console.log(`Room ${room.name} deleted (empty)`);
-                    }
-                }
-
-                socket.leave(roomId);
-                this.users.delete(socket.id);
-                this.audioRouting.delete(socket.id);
-
-                const session = this.socketSessions.get(socket.id);
-                const syncedUserId = session?.userId || null;
-                if (session) {
-                    session.currentRoomId = null;
-                    session.currentRoomName = null;
-                    session.roomMinimized = false;
-                    session.lastSeen = new Date();
-                }
-
-                socket.emit('room-left', { roomId, reason: 'left-by-user' });
-                emitRoomSessionSync(socket.id, syncedUserId, {
-                    type: 'left',
-                    roomId: null,
-                    roomName: null,
-                    isJoined: false,
-                    isMinimized: false,
-                    at: new Date().toISOString()
-                });
-                this.broadcastApiMonitorUpdate('leave-room');
-            });
-
-            socket.on('minimize-room', () => {
-                const user = this.users.get(socket.id);
-                const session = this.socketSessions.get(socket.id);
-                const syncedUserId = session?.userId || null;
-
-                if (!user?.roomId) {
-                    socket.emit('room-minimized', { ok: false, reason: 'not-in-room' });
-                    return;
-                }
-
-                if (session) {
-                    session.currentRoomId = user.roomId;
-                    session.currentRoomName = this.rooms.get(user.roomId)?.name || session.currentRoomName || null;
-                    session.roomMinimized = true;
-                    session.lastSeen = new Date();
-                }
-
-                const payload = {
-                    ok: true,
-                    roomId: user.roomId,
-                    roomName: this.rooms.get(user.roomId)?.name || null
-                };
-                socket.emit('room-minimized', payload);
-                emitRoomSessionSync(socket.id, syncedUserId, {
-                    type: 'minimized',
-                    roomId: payload.roomId,
-                    roomName: payload.roomName,
-                    isJoined: true,
-                    isMinimized: true,
-                    at: new Date().toISOString()
-                });
-            });
-
-            socket.on('restore-room', () => {
-                const user = this.users.get(socket.id);
-                const session = this.socketSessions.get(socket.id);
-                const syncedUserId = session?.userId || null;
-                const roomId = user?.roomId || session?.currentRoomId || null;
-                const roomName = this.rooms.get(roomId)?.name || session?.currentRoomName || null;
-
-                if (!roomId) {
-                    socket.emit('room-restored', { ok: false, reason: 'no-room' });
-                    return;
-                }
-
-                if (session) {
-                    session.currentRoomId = roomId;
-                    session.currentRoomName = roomName;
-                    session.roomMinimized = false;
-                    session.lastSeen = new Date();
-                }
-
-                const payload = { ok: true, roomId, roomName };
-                socket.emit('room-restored', payload);
-                emitRoomSessionSync(socket.id, syncedUserId, {
-                    type: 'restored',
-                    roomId,
-                    roomName,
-                    isJoined: !!user?.roomId,
-                    isMinimized: false,
-                    at: new Date().toISOString()
-                });
-            });
-
-            socket.on('get-room-session-state', () => {
-                const user = this.users.get(socket.id);
-                const session = this.socketSessions.get(socket.id);
-                const roomId = user?.roomId || session?.currentRoomId || null;
-                socket.emit('room-session-state', {
-                    roomId,
-                    roomName: this.rooms.get(roomId)?.name || session?.currentRoomName || null,
-                    isJoined: !!user?.roomId,
-                    isMinimized: !!session?.roomMinimized,
-                    canShowRoom: !!roomId
-                });
+                console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
 
             // Handle WebRTC signaling
@@ -7712,29 +9495,30 @@ class VoiceLinkLocalServer {
                 const { roomId } = data;
                 const room = this.rooms.get(roomId);
                 if (room) {
+                    const liveUsers = this.normalizeRoomUsers(roomId);
                     socket.emit('room-users', {
                         roomId,
-                        users: room.users.map(u => ({
+                        users: liveUsers.map(u => ({
                             id: u.id,
                             name: u.name,
                             isAuthenticated: u.isAuthenticated || false,
                             joinedAt: u.joinedAt
                         })),
-                        count: room.users.length
+                        count: liveUsers.length
                     });
                 }
             });
 
             // Disconnect handling
             socket.on('disconnect', () => {
+                this.unregisterSocketSession(socket.id);
                 const user = this.users.get(socket.id);
-                const session = this.socketSessions.get(socket.id);
-                const syncedUserId = session?.userId || null;
                 if (user) {
                     const room = this.rooms.get(user.roomId);
                     if (room) {
                         const userName = user.name;
                         room.users = room.users.filter(u => u.id !== socket.id);
+                        const liveUsers = this.normalizeRoomUsers(user.roomId);
 
                         // Notify others user left
                         socket.to(user.roomId).emit('user-left', {
@@ -7745,14 +9529,14 @@ class VoiceLinkLocalServer {
                         // Broadcast updated user count
                         this.io.to(user.roomId).emit('room-user-count', {
                             roomId: user.roomId,
-                            count: room.users.length,
-                            users: room.users.map(u => ({ id: u.id, name: u.name }))
+                            count: liveUsers.length,
+                            users: liveUsers.map(u => ({ id: u.id, name: u.name }))
                         });
 
-                        console.log(`User ${userName} left room ${room.name} (${room.users.length} users remain)`);
+                        console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
 
                         // Clean up empty rooms (but keep default rooms)
-                        if (room.users.length === 0 && !room.isDefault) {
+                        if (liveUsers.length === 0 && !room.isDefault) {
                             this.rooms.delete(user.roomId);
                             console.log(`Room ${room.name} deleted (empty)`);
                         }
@@ -7762,112 +9546,16 @@ class VoiceLinkLocalServer {
                     this.audioRouting.delete(socket.id);
                 }
 
-                emitRoomSessionSync(socket.id, syncedUserId, {
-                    type: 'disconnect',
-                    roomId: null,
-                    roomName: null,
-                    isJoined: false,
-                    isMinimized: false,
-                    at: new Date().toISOString()
-                });
-
                 // Clean up audio relay state
                 if (this.audioRelayEnabled.get(socket.id)) {
                     this.relayStats.activeRelays = Math.max(0, this.relayStats.activeRelays - 1);
                 }
                 this.audioRelayEnabled.delete(socket.id);
                 this.audioBuffers.delete(socket.id);
-                this.unregisterSocketSession(socket.id);
 
                 console.log(`User disconnected: ${socket.id}`);
-                this.broadcastApiMonitorUpdate('disconnect');
             });
         });
-    }
-
-    buildApiMonitorSnapshot(options = {}) {
-        const includeMembers = options.includeMembers !== false;
-        const rooms = Array.from(this.rooms.values()).map((room) => {
-            const users = Array.isArray(room.users) ? room.users : [];
-            return {
-                id: room.id,
-                name: room.name,
-                userCount: users.length,
-                maxUsers: room.maxUsers || 0,
-                locked: !!room.locked,
-                visibility: room.visibility || 'public',
-                accessType: room.accessType || 'hybrid',
-                members: includeMembers
-                    ? users.map((u) => ({
-                        id: u.id,
-                        name: u.name || `User ${String(u.id || '').slice(0, 8)}`,
-                        isAuthenticated: !!u.isAuthenticated,
-                        joinedAt: u.joinedAt || null
-                    }))
-                    : undefined
-            };
-        });
-
-        const members = includeMembers
-            ? Array.from(this.users.entries()).map(([socketId, user]) => ({
-                socketId,
-                id: user.id || socketId,
-                name: user.name || `User ${String(socketId).slice(0, 8)}`,
-                roomId: user.roomId || null,
-                roomName: this.rooms.get(user.roomId)?.name || null,
-                isAuthenticated: !!user.isAuthenticated,
-                joinedAt: user.joinedAt || null
-            }))
-            : [];
-
-        this.apiMonitor.sequence += 1;
-        return {
-            service: 'voicelink-local',
-            source: 'hubnodes-api_monitor',
-            reason: options.reason || 'interval',
-            sequence: this.apiMonitor.sequence,
-            timestamp: new Date().toISOString(),
-            intervalMs: this.apiMonitor.intervalMs,
-            totals: {
-                rooms: rooms.length,
-                members: this.users.size
-            },
-            rooms,
-            members
-        };
-    }
-
-    broadcastApiMonitorUpdate(reason = 'interval') {
-        if (!this.apiMonitor.clients.size) return;
-        const deadClients = [];
-
-        for (const client of this.apiMonitor.clients) {
-            try {
-                const snapshot = this.buildApiMonitorSnapshot({
-                    includeMembers: client.includeMembers,
-                    reason
-                });
-                client.res.write(`event: snapshot\n`);
-                client.res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
-            } catch (error) {
-                deadClients.push(client);
-            }
-        }
-
-        if (deadClients.length) {
-            deadClients.forEach((client) => this.apiMonitor.clients.delete(client));
-        }
-    }
-
-    startApiMonitorTicker() {
-        if (this.apiMonitor.timer) return;
-        this.apiMonitor.timer = setInterval(() => {
-            this.broadcastApiMonitorUpdate('interval');
-        }, this.apiMonitor.intervalMs);
-
-        if (typeof this.apiMonitor.timer.unref === 'function') {
-            this.apiMonitor.timer.unref();
-        }
     }
 
     // ==================== Message Persistence Methods ====================

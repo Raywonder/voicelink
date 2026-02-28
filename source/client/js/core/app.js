@@ -809,6 +809,8 @@ class VoiceLinkApp {
     }
 
     getAuthContext() {
+        const localToken = localStorage.getItem('voicelink_local_token') ||
+            sessionStorage.getItem('voicelink_local_token');
         const whmcsToken = localStorage.getItem('voicelink_whmcs_token') ||
             sessionStorage.getItem('voicelink_whmcs_token');
         const ecriptoToken = localStorage.getItem('voicelink_ecripto_token') ||
@@ -817,6 +819,9 @@ class VoiceLinkApp {
             sessionStorage.getItem('mastodon_access_token');
         const user = this.currentUser || window.mastodonAuth?.getUser() || null;
 
+        if (localToken) {
+            return { provider: 'email', token: localToken, user };
+        }
         if (whmcsToken) {
             return { provider: 'whmcs', token: whmcsToken, user };
         }
@@ -4386,10 +4391,18 @@ class VoiceLinkApp {
             alwaysEnableMediaToggle.checked = audioBehavior.alwaysEnableMedia;
         }
         const sendLogsToggle = document.getElementById('send-support-logs-setting');
+        const sampleRateSelect = document.getElementById('sample-rate-select');
+        const bufferSizeSelect = document.getElementById('buffer-size-select');
         if (sendLogsToggle) {
             const enabled = localStorage.getItem('voicelink_send_support_logs') === 'true';
             sendLogsToggle.checked = enabled;
             this.logCaptureEnabled = enabled;
+        }
+        if (sampleRateSelect) {
+            sampleRateSelect.value = localStorage.getItem('voicelink_audio_sample_rate') || sampleRateSelect.value || '48000';
+        }
+        if (bufferSizeSelect) {
+            bufferSizeSelect.value = localStorage.getItem('voicelink_audio_buffer_size') || bufferSizeSelect.value || '512';
         }
         const savedDisplayName = localStorage.getItem('voicelink_auth_display_name') || '';
         const savedMastodonHandle = localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '';
@@ -4625,6 +4638,8 @@ class VoiceLinkApp {
         const autoEnableMic = document.getElementById('auto-enable-mic-setting')?.checked;
         const alwaysEnableMedia = document.getElementById('always-enable-media-setting')?.checked;
         const sendSupportLogs = document.getElementById('send-support-logs-setting')?.checked;
+        const sampleRate = document.getElementById('sample-rate-select')?.value || '48000';
+        const bufferSize = document.getElementById('buffer-size-select')?.value || '512';
         const authDisplayName = (document.getElementById('auth-display-name')?.value || '').trim();
         const authPreferredMastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || '').trim();
         this.setAudioBehaviorSettings({
@@ -4632,6 +4647,8 @@ class VoiceLinkApp {
             alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
         });
         this.setSupportLogSendingEnabled(!!sendSupportLogs);
+        localStorage.setItem('voicelink_audio_sample_rate', sampleRate);
+        localStorage.setItem('voicelink_audio_buffer_size', bufferSize);
         localStorage.setItem('voicelink_auth_display_name', authDisplayName);
         localStorage.setItem('voicelink_auth_preferred_mastodon_handle', authPreferredMastodonHandle);
         this.applySavedIdentityPreferences();
@@ -4643,6 +4660,8 @@ class VoiceLinkApp {
         localStorage.removeItem('voicelink_audio_auto_enable_mic');
         localStorage.removeItem('voicelink_audio_always_enable_media');
         localStorage.removeItem('voicelink_send_support_logs');
+        localStorage.removeItem('voicelink_audio_sample_rate');
+        localStorage.removeItem('voicelink_audio_buffer_size');
         localStorage.removeItem('voicelink_auth_display_name');
         localStorage.removeItem('voicelink_auth_preferred_mastodon_handle');
         const authDisplayNameInput = document.getElementById('auth-display-name');
@@ -4979,18 +4998,39 @@ class VoiceLinkApp {
             });
         });
 
+        document.getElementById('local-login-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const identity = document.getElementById('local-login-identity')?.value?.trim();
+            const password = document.getElementById('local-login-password')?.value || '';
+            const twoFactorCode = document.getElementById('local-login-2fa')?.value || '';
+            const remember = document.getElementById('local-remember-me')?.checked === true;
+            if (identity && password) {
+                await this.handleLocalAccountLogin(identity, password, { remember, twoFactorCode });
+            }
+        });
+
+        document.getElementById('local-request-2fa-btn')?.addEventListener('click', async () => {
+            const identity = document.getElementById('local-login-identity')?.value?.trim();
+            const password = document.getElementById('local-login-password')?.value || '';
+            if (!identity || !password) {
+                this.showNotification('Enter your email or username and password first.', 'warning');
+                return;
+            }
+            await this.requestLocalTwoFactorChallenge(identity, password);
+        });
+
         // WHMCS Login Form Submit
         document.getElementById('whmcs-login-form')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             const portalSite = document.getElementById('whmcs-portal-site')?.value;
-            const email = document.getElementById('whmcs-login-email')?.value;
+            const identity = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const mastodonHandle = document.getElementById('whmcs-mastodon-handle')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
 
-            if (email && password) {
-                await this.handleWhmcsLogin(email, password, {
+            if (identity && password) {
+                await this.handleWhmcsLogin(identity, password, {
                     portalSite,
                     twoFactorCode,
                     mastodonHandle,
@@ -5001,11 +5041,11 @@ class VoiceLinkApp {
 
         document.getElementById('whmcs-sso-btn')?.addEventListener('click', async () => {
             const portalSite = document.getElementById('whmcs-portal-site')?.value;
-            const email = document.getElementById('whmcs-login-email')?.value;
+            const identity = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
-            await this.handleWhmcsSsoLogin({ portalSite, email, password, twoFactorCode, remember });
+            await this.handleWhmcsSsoLogin({ portalSite, identity, password, twoFactorCode, remember });
         });
 
         document.getElementById('wp-sso-btn')?.addEventListener('click', async () => {
@@ -5065,6 +5105,7 @@ class VoiceLinkApp {
         if (window.mastodonAuth?.isAuthenticated()) {
             this.updateUIForAuthState(window.mastodonAuth.getUser());
         } else {
+            this.restoreLocalSession();
             this.restoreWhmcsSession();
         }
     }
@@ -5073,7 +5114,7 @@ class VoiceLinkApp {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
             modal.style.display = 'flex';
-            this.setActiveAuthTab('mastodon-login');
+            this.setActiveAuthTab('local-login');
         }
     }
 
@@ -5147,7 +5188,7 @@ class VoiceLinkApp {
     /**
      * Handle WHMCS (Client Portal) login
      */
-    async handleWhmcsLogin(email, password, options = {}) {
+    async handleWhmcsLogin(identity, password, options = {}) {
         try {
             this.showNotification('Logging in to client portal...', 'info');
             const apiBase = this.getApiBaseUrl();
@@ -5157,7 +5198,7 @@ class VoiceLinkApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     portalSite: this.normalizePortalSite(options.portalSite),
-                    email,
+                    identity,
                     password,
                     twoFactorCode: options.twoFactorCode || null,
                     remember: options.remember === true,
@@ -5191,6 +5232,75 @@ class VoiceLinkApp {
         }
     }
 
+    async handleLocalAccountLogin(identity, password, options = {}) {
+        try {
+            this.showNotification('Signing in...', 'info');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/auth/local/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    identity,
+                    password,
+                    twoFactorCode: options.twoFactorCode || null
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                if (data?.requires2FA) {
+                    this.showNotification('2FA required. Enter your code and try again, or request a code first.', 'warning');
+                    return;
+                }
+                throw new Error(data.error || 'Login failed');
+            }
+
+            const tokenKey = 'voicelink_local_token';
+            if (options.remember) {
+                localStorage.setItem(tokenKey, data.accessToken);
+                sessionStorage.removeItem(tokenKey);
+            } else {
+                sessionStorage.setItem(tokenKey, data.accessToken);
+                localStorage.removeItem(tokenKey);
+            }
+
+            this.hideMastodonLoginModal();
+            this.updateUIForAuthState(data.user);
+            this.showNotification('Welcome back, ' + (data.user?.displayName || data.user?.username || 'VoiceLink User') + '!', 'success');
+            window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
+        } catch (error) {
+            console.error('Local login failed:', error);
+            this.showNotification(error.message || 'Login failed', 'error');
+        }
+    }
+
+    async requestLocalTwoFactorChallenge(identity, password, method = 'email') {
+        try {
+            this.showNotification('Requesting verification code...', 'info');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/auth/local/2fa/challenge`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ identity, password, method })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to send verification code');
+            }
+
+            if (data?.requires2FA) {
+                const hint = data.hint ? ` (${data.hint})` : '';
+                this.showNotification(`Verification code sent${hint}`, 'success');
+            } else {
+                this.showNotification('2FA is not required for this account.', 'info');
+            }
+        } catch (error) {
+            console.error('Local 2FA challenge failed:', error);
+            this.showNotification(error.message || 'Unable to send verification code', 'error');
+        }
+    }
+
     async handleWhmcsSsoLogin(options = {}) {
         try {
             this.showNotification('Opening client portal...', 'info');
@@ -5201,7 +5311,7 @@ class VoiceLinkApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     portalSite: this.normalizePortalSite(options.portalSite),
-                    email: options.email,
+                    identity: options.identity,
                     password: options.password,
                     twoFactorCode: options.twoFactorCode || null,
                     remember: options.remember === true
@@ -5229,12 +5339,16 @@ class VoiceLinkApp {
 
     normalizePortalSite(site) {
         const raw = String(site || '').trim().toLowerCase();
-        if (!raw) return 'tappedin.fm';
+        if (!raw) return 'devine-creations.com';
         const withoutProtocol = raw.replace(/^https?:\/\//, '');
         const host = withoutProtocol.split('/')[0];
-        if (!host) return 'tappedin.fm';
+        if (!host) return 'devine-creations.com';
         const normalizedHost = host.replace(/\.+$/, '');
         const allowedHosts = new Set([
+            'devine-creations.com',
+            'www.devine-creations.com',
+            'devinecreations.net',
+            'www.devinecreations.net',
             'tappedin.fm',
             'www.tappedin.fm',
             'ecripto.app',
@@ -5244,7 +5358,7 @@ class VoiceLinkApp {
         ]);
         if (allowedHosts.has(normalizedHost)) return normalizedHost;
         if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
-        return 'tappedin.fm';
+        return 'devine-creations.com';
     }
 
     async openWordPressAutheliaLogin(site) {
@@ -5285,6 +5399,26 @@ class VoiceLinkApp {
             .catch(() => {});
     }
 
+    restoreLocalSession() {
+        const tokenKey = 'voicelink_local_token';
+        const token = localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
+        if (!token) return;
+
+        const apiBase = this.getApiBaseUrl();
+        fetch(`${apiBase}/api/auth/local/me`, {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (data?.success && data.user) {
+                    this.updateUIForAuthState(data.user);
+                }
+            })
+            .catch(() => {});
+    }
+
     checkOAuthCallback() {
         // Check URL for OAuth callback params
         const urlParams = new URLSearchParams(window.location.search);
@@ -5316,7 +5450,27 @@ class VoiceLinkApp {
 
     async handleMastodonLogout() {
         try {
+            const localToken = localStorage.getItem('voicelink_local_token') || sessionStorage.getItem('voicelink_local_token');
+            const whmcsToken = localStorage.getItem('voicelink_whmcs_token') || sessionStorage.getItem('voicelink_whmcs_token');
+            if (localToken) {
+                fetch(`${this.getApiBaseUrl()}/api/auth/local/logout`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${localToken}` }
+                }).catch(() => {});
+            }
+            if (whmcsToken) {
+                fetch(`${this.getApiBaseUrl()}/api/auth/whmcs/logout`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: whmcsToken })
+                }).catch(() => {});
+            }
+            localStorage.removeItem('voicelink_local_token');
+            sessionStorage.removeItem('voicelink_local_token');
+            localStorage.removeItem('voicelink_whmcs_token');
+            sessionStorage.removeItem('voicelink_whmcs_token');
             await window.mastodonAuth?.logout();
+            this.updateUIForAuthState(null);
             this.showNotification('Logged out successfully', 'info');
         } catch (error) {
             console.error('Logout failed:', error);
@@ -5393,6 +5547,8 @@ class VoiceLinkApp {
         const currentProvider = document.getElementById('auth-current-provider');
         const currentRole = document.getElementById('auth-current-role');
         const walletStatus = document.getElementById('auth-wallet-status');
+        const authLinkMastodonBtn = document.getElementById('auth-link-mastodon-btn');
+        const authLinkWalletBtn = document.getElementById('auth-link-wallet-btn');
 
         if (currentUser) {
             currentUser.textContent = user ? (user.displayName || user.username || user.email || 'Authenticated User') : 'Not logged in';
@@ -5409,6 +5565,8 @@ class VoiceLinkApp {
             const hasWallet = !!(localStorage.getItem('voicelink_ecripto_token') || sessionStorage.getItem('voicelink_ecripto_token'));
             walletStatus.textContent = hasWallet ? 'Connected' : 'Disconnected';
         }
+        if (authLinkMastodonBtn) authLinkMastodonBtn.disabled = !user;
+        if (authLinkWalletBtn) authLinkWalletBtn.disabled = !user;
     }
 
     async checkForAppUpdates() {
@@ -5447,12 +5605,23 @@ class VoiceLinkApp {
     applyEntitlementVisibility(user) {
         const connectionsTabBtn = document.querySelector('.tab-btn[data-tab="connections"]');
         const connectionsTab = document.getElementById('connections-tab');
+        const advancedTabBtn = document.querySelector('.tab-btn[data-tab="advanced"]');
+        const advancedTab = document.getElementById('advanced-tab');
         const allowByRole = user?.permissions?.includes('admin') || user?.permissions?.includes('staff') || user?.permissions?.includes('client');
         const allowByEntitlement = user?.entitlements?.allowMultiDeviceSettings !== false;
         const allowConnections = !!user && allowByRole && allowByEntitlement;
+        const allowAdvanced = !!user;
 
         if (connectionsTabBtn) connectionsTabBtn.style.display = allowConnections ? '' : 'none';
         if (connectionsTab) connectionsTab.style.display = allowConnections ? '' : 'none';
+        if (advancedTabBtn) advancedTabBtn.disabled = !allowAdvanced;
+        if (advancedTab) {
+            advancedTab.classList.toggle('guest-disabled', !allowAdvanced);
+            advancedTab.querySelectorAll('input, select, button').forEach((control) => {
+                if (control.id === 'back-from-settings' || control.id === 'save-all-settings') return;
+                control.disabled = !allowAdvanced;
+            });
+        }
     }
 
     updateRoleBasedUI(user) {
