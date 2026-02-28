@@ -3,13 +3,13 @@ version: 1.0
 build: 25
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: PRX6AHD2pVvwOZqrIeOg9FBe7fxY9TSUDnJtubf7CJQFUXG2SK+a1Tj28+uWP2VsAsqbBgR6WF8YyXYD7wmmHw==
-    size: 12905256
+    sha512: i4lms0JpC8DyglZayjVjV/CUZdFHCsyEVFnITO6k6mxngOHuBDCcDROQXbkx4uoXxl5xmuKQITCbgexEmDgjOA==
+    size: 13009538
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: PRX6AHD2pVvwOZqrIeOg9FBe7fxY9TSUDnJtubf7CJQFUXG2SK+a1Tj28+uWP2VsAsqbBgR6WF8YyXYD7wmmHw==
-releaseDate: '2026-02-27T06:06:31.000Z'
+sha512: i4lms0JpC8DyglZayjVjV/CUZdFHCsyEVFnITO6k6mxngOHuBDCcDROQXbkx4uoXxl5xmuKQITCbgexEmDgjOA==
+releaseDate: '2026-02-28T21:53:17.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 25)
-  - Guest mode remains enabled with non-logged-in limits enforced.
-  - Added direct Email/Username + Admin Invite options in login flows.
-  - Added account-context guard to block invite activation while another account is signed in.
+  - Added account sign-in with VoiceLink or WHMCS using email or username.
+  - Added WHMCS-backed admin entitlements and username alias sync.
+  - Keeps guest access available while enforcing non-logged-in limits.
