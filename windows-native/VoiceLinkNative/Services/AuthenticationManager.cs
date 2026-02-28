@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
@@ -318,11 +319,128 @@ namespace VoiceLinkNative.Services
             }
         }
 
+        public async Task<(bool Success, bool RequiresTwoFactor, string? Error)> SignInWithAccountAsync(
+            string identity,
+            string password,
+            string provider,
+            string? serverUrl = null,
+            string? twoFactorCode = null)
+        {
+            var normalizedIdentity = identity?.Trim() ?? "";
+            var normalizedPassword = password ?? "";
+            if (string.IsNullOrWhiteSpace(normalizedIdentity) || string.IsNullOrEmpty(normalizedPassword))
+            {
+                return (false, false, "Identity and password are required");
+            }
+
+            var normalizedProvider = string.Equals(provider, "whmcs", StringComparison.OrdinalIgnoreCase) ? "whmcs" : "local";
+            var resolvedServerUrl = GetPreferredServerUrl(serverUrl);
+            CurrentState = AuthState.Authenticating;
+            ErrorMessage = null;
+
+            try
+            {
+                using var client = new HttpClient();
+                var payload = new Dictionary<string, object?>
+                {
+                    ["identity"] = normalizedIdentity,
+                    ["password"] = normalizedPassword,
+                    ["twoFactorCode"] = string.IsNullOrWhiteSpace(twoFactorCode) ? null : twoFactorCode.Trim()
+                };
+                if (normalizedProvider == "whmcs")
+                {
+                    payload["portalSite"] = "devine-creations.com";
+                }
+
+                using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+
+                var response = await client.PostAsync(
+                    $"{resolvedServerUrl}/api/auth/{normalizedProvider}/login",
+                    content);
+
+                var body = await response.Content.ReadAsStringAsync();
+                using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+                var root = document.RootElement;
+
+                if (root.TryGetProperty("requires2FA", out var requires2FAElement) && requires2FAElement.GetBoolean())
+                {
+                    CurrentState = AuthState.Unauthenticated;
+                    ErrorMessage = root.TryGetProperty("error", out var twoFactorError)
+                        ? twoFactorError.GetString()
+                        : (root.TryGetProperty("message", out var twoFactorMessage) ? twoFactorMessage.GetString() : "Two-factor authentication code required");
+                    return (false, true, ErrorMessage);
+                }
+
+                var success = root.TryGetProperty("success", out var successElement) && successElement.GetBoolean();
+                if (!response.IsSuccessStatusCode || !success)
+                {
+                    CurrentState = AuthState.Error;
+                    ErrorMessage = root.TryGetProperty("error", out var errorElement)
+                        ? errorElement.GetString()
+                        : (root.TryGetProperty("message", out var messageElement) ? messageElement.GetString() : body);
+                    return (false, false, ErrorMessage);
+                }
+
+                var userToken = root.TryGetProperty("token", out var tokenElement)
+                    ? tokenElement.GetString()
+                    : (root.TryGetProperty("accessToken", out var accessTokenElement) ? accessTokenElement.GetString() : null);
+                var authMethod = normalizedProvider == "whmcs" ? "whmcs" : "email";
+                CurrentUser = ParseAuthenticatedUser(root.TryGetProperty("user", out var userElement) ? userElement : default, userToken, authMethod);
+                CurrentState = AuthState.Authenticated;
+                return (true, false, null);
+            }
+            catch (Exception ex)
+            {
+                CurrentState = AuthState.Error;
+                ErrorMessage = ex.Message;
+                return (false, false, ex.Message);
+            }
+        }
+
         public void StageAdminInvite(string token, string? serverUrl)
         {
             PendingAdminInviteToken = token;
             PendingAdminInviteServerUrl = GetPreferredServerUrl(serverUrl);
             ErrorMessage = null;
+        }
+
+        private static AuthenticatedUser ParseAuthenticatedUser(JsonElement userElement, string? accessToken, string authMethod)
+        {
+            string? GetString(string name)
+            {
+                return userElement.ValueKind == JsonValueKind.Object && userElement.TryGetProperty(name, out var value)
+                    ? value.GetString()
+                    : null;
+            }
+
+            var user = new AuthenticatedUser
+            {
+                UserId = GetString("id") ?? Guid.NewGuid().ToString(),
+                Username = GetString("username") ?? GetString("email") ?? "user",
+                DisplayName = GetString("displayName") ?? GetString("display_name") ?? GetString("username") ?? "User",
+                Email = GetString("email"),
+                MastodonInstance = GetString("mastodonInstance"),
+                AccessToken = GetString("accessToken") ?? GetString("token") ?? accessToken,
+                AuthMethod = authMethod,
+                AuthProvider = GetString("authProvider"),
+                Role = GetString("role")
+            };
+
+            if (userElement.ValueKind == JsonValueKind.Object &&
+                userElement.TryGetProperty("permissions", out var permissionsElement) &&
+                permissionsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in permissionsElement.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { } permission)
+                    {
+                        user.Permissions.Add(permission);
+                    }
+                }
+            }
+
+            return user;
         }
 
         public async Task<bool> FetchAdminInviteAsync(string token, string? serverUrl = null)
@@ -573,6 +691,9 @@ namespace VoiceLinkNative.Services
         public string? MastodonInstance { get; set; }
         public string? AccessToken { get; set; }
         public string AuthMethod { get; set; } = "";
+        public string? AuthProvider { get; set; }
+        public string? Role { get; set; }
+        public List<string> Permissions { get; set; } = new();
     }
 
     public class AuthResult

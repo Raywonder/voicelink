@@ -501,6 +501,24 @@ class VoiceLinkLocalServer {
     deriveWhmcsEntitlements(client, services = []) {
         const defaults = deployConfig.get('whmcs')?.entitlements || {};
         const optionMap = this.extractServiceOptions(services);
+        const catalogText = services
+            .flatMap((service) => ([
+                service?.name,
+                service?.productname,
+                service?.groupname,
+                service?.domain,
+                service?.billingcycle
+            ]))
+            .filter(Boolean)
+            .map((value) => String(value).toLowerCase());
+        const joinedCatalog = catalogText.join(' | ');
+        const hasHostingProduct = /(virtual private server|vps|self-host|self hosting|hosting|control panel|cpanel|web server|server)/.test(joinedCatalog);
+        const hasServerOwnerProduct = /(virtual private server|vps|self-host|self hosting|web server|server)/.test(joinedCatalog);
+        const inferredTier = /(enterprise|lifetime|yearly|annual)/.test(joinedCatalog)
+            ? 'owner'
+            : /(pro|business|starter|basic|standard|monthly|quarterly|weekly|free)/.test(joinedCatalog)
+                ? 'member'
+                : null;
 
         const readOption = (...keys) => {
             for (const key of keys) {
@@ -520,7 +538,7 @@ class VoiceLinkLocalServer {
         const installSlotsRaw = readOption('Install Slots', 'VoiceLink Install Slots', 'Max Installs', 'InstallSlots');
         const installSlots = Number.isFinite(installSlotsRaw) ? Number(installSlotsRaw) : (defaults.installSlots ?? 1);
         const serverSlotsRaw = readOption('Server Slots', 'VoiceLink Server Slots', 'Max Servers', 'ServerSlots');
-        const serverSlots = Number.isFinite(serverSlotsRaw) ? Number(serverSlotsRaw) : (defaults.serverSlots ?? 0);
+        const serverSlots = Number.isFinite(serverSlotsRaw) ? Number(serverSlotsRaw) : (defaults.serverSlots ?? (hasServerOwnerProduct ? 1 : 0));
         const serverOwnerLicense = readOption('Server Owner License', 'VoiceLink Server Owner', 'Hosted Server License', 'ServerOwnerLicense');
         const hostedControlPanel = readOption('Hosting Control Panel', 'Control Panel Access', 'Hosting Panel Enabled');
         const hostedControlPanelRoles = readOption('Hosting Roles', 'Control Panel Roles', 'HostingRoleList');
@@ -531,7 +549,29 @@ class VoiceLinkLocalServer {
         const requiresIapApple = readOption('Require Apple IAP', 'Require iOS IAP', 'Apple IAP Required');
         const licenseTier = readOption('License Tier', 'VoiceLink License Tier', 'Support Tier', 'LicenseTier')
             || defaults.licenseTier
+            || inferredTier
             || 'member';
+        const normalizedServerOwnerLicense = serverOwnerLicense === null ? (defaults.serverOwnerLicense ?? hasServerOwnerProduct) : !!serverOwnerLicense;
+        const normalizedHostingLinked = hostedControlPanel === null ? (defaults.hostingControlPanelLinked ?? hasHostingProduct) : !!hostedControlPanel;
+        const hostingRoles = Array.isArray(hostedControlPanelRoles)
+            ? hostedControlPanelRoles
+            : String(hostedControlPanelRoles || '')
+                .split(/[;,|]/)
+                .map((value) => value.trim())
+                .filter(Boolean);
+        const hostingPermissions = Array.isArray(hostedControlPanelPermissions)
+            ? hostedControlPanelPermissions
+            : String(hostedControlPanelPermissions || '')
+                .split(/[;,|]/)
+                .map((value) => value.trim())
+                .filter(Boolean);
+
+        if (normalizedServerOwnerLicense) {
+            if (!hostingRoles.length) hostingRoles.push('server_owner');
+            if (!hostingPermissions.length) hostingPermissions.push('hosting.owner', 'server.manage', 'license.manage', 'install.manage');
+        } else if (normalizedHostingLinked && !hostingPermissions.length) {
+            hostingPermissions.push('hosting.support');
+        }
 
         return {
             deviceTier,
@@ -539,28 +579,18 @@ class VoiceLinkLocalServer {
             installSlots,
             serverSlots,
             licenseTier,
-            serverOwnerLicense: serverOwnerLicense === null ? (defaults.serverOwnerLicense ?? false) : !!serverOwnerLicense,
-            hostingControlPanelLinked: hostedControlPanel === null ? (defaults.hostingControlPanelLinked ?? false) : !!hostedControlPanel,
-            hostingRoles: Array.isArray(hostedControlPanelRoles)
-                ? hostedControlPanelRoles
-                : String(hostedControlPanelRoles || '')
-                    .split(/[;,|]/)
-                    .map((value) => value.trim())
-                    .filter(Boolean),
-            hostingPermissions: Array.isArray(hostedControlPanelPermissions)
-                ? hostedControlPanelPermissions
-                : String(hostedControlPanelPermissions || '')
-                    .split(/[;,|]/)
-                    .map((value) => value.trim())
-                    .filter(Boolean),
+            serverOwnerLicense: normalizedServerOwnerLicense,
+            hostingControlPanelLinked: normalizedHostingLinked,
+            hostingRoles,
+            hostingPermissions,
             licenses: {
                 user: {
-                    type: 'member',
+                    type: normalizedServerOwnerLicense ? 'server_member' : 'member',
                     installsAllowed: installSlots,
                     devicesAllowed: maxDevices
                 },
                 server: {
-                    type: serverOwnerLicense ? 'server_owner' : 'none',
+                    type: normalizedServerOwnerLicense ? 'server_owner' : 'none',
                     installsAllowed: installSlots,
                     serversAllowed: serverSlots
                 }
@@ -597,6 +627,11 @@ class VoiceLinkLocalServer {
             return { identity: raw, email: mappedEmail, username };
         }
 
+        const persistedAliasEmail = this.whmcsIdentityAliases?.get(username);
+        if (persistedAliasEmail) {
+            return { identity: raw, email: String(persistedAliasEmail).trim().toLowerCase(), username };
+        }
+
         if (this.localAuthUsers?.size) {
             const localMatch = Array.from(this.localAuthUsers.values()).find((user) => {
                 const candidate = String(user?.username || '').trim().toLowerCase();
@@ -608,6 +643,60 @@ class VoiceLinkLocalServer {
         }
 
         return { identity: raw, email: '', username };
+    }
+
+    slugifyIdentityUsername(value = '') {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/@/g, '.')
+            .replace(/[^a-z0-9._-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .replace(/-{2,}/g, '-')
+            .slice(0, 32);
+    }
+
+    syncWhmcsIdentityAlias(email = '', preferredUsername = '', suffix = '') {
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        if (!normalizedEmail.includes('@')) return '';
+
+        this.whmcsIdentityAliases = this.whmcsIdentityAliases || new Map();
+
+        const existingLocal = this.localAuthUsers?.size
+            ? Array.from(this.localAuthUsers.values()).find((user) => String(user?.email || '').trim().toLowerCase() === normalizedEmail)
+            : null;
+        const existingAlias = Array.from(this.whmcsIdentityAliases.entries())
+            .find(([, mappedEmail]) => String(mappedEmail || '').trim().toLowerCase() === normalizedEmail)?.[0];
+
+        const localPart = normalizedEmail.split('@')[0] || '';
+        const candidates = [
+            preferredUsername,
+            existingLocal?.username,
+            existingAlias,
+            localPart,
+            `${localPart}-${suffix || 'user'}`
+        ]
+            .map((candidate) => this.slugifyIdentityUsername(candidate))
+            .filter(Boolean);
+
+        let chosen = '';
+        for (const candidate of candidates) {
+            const aliasEmail = this.whmcsIdentityAliases.get(candidate);
+            const localEmail = existingLocal?.username && this.slugifyIdentityUsername(existingLocal.username) === candidate
+                ? normalizedEmail
+                : null;
+            if (!aliasEmail || String(aliasEmail).trim().toLowerCase() === normalizedEmail || localEmail === normalizedEmail) {
+                chosen = candidate;
+                break;
+            }
+        }
+
+        if (!chosen) {
+            chosen = this.slugifyIdentityUsername(`${localPart}-${suffix || Date.now().toString(36)}`) || `user-${Date.now().toString(36)}`;
+        }
+
+        this.whmcsIdentityAliases.set(chosen, normalizedEmail);
+        return chosen;
     }
 
     getWhmcsAdminBridgeConfig() {
@@ -2057,7 +2146,7 @@ class VoiceLinkLocalServer {
                     const user = this.applyAuthorityRoleOverrides({
                         id: `whmcs-admin:${bridgedAdmin.id}`,
                         whmcsAdminId: bridgedAdmin.id,
-                        username: bridgedAdmin.username,
+                        username: this.syncWhmcsIdentityAlias(bridgedAdmin.email || '', bridgedAdmin.username, bridgedAdmin.id) || bridgedAdmin.username,
                         email: bridgedAdmin.email || '',
                         displayName: bridgedAdmin.username,
                         fullHandle: bridgedAdmin.username,
@@ -2073,6 +2162,7 @@ class VoiceLinkLocalServer {
                         mastodonHandle
                     });
                     const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
+                    persistLocalAuthUsers();
                     return res.json({
                         success: true,
                         token: session.token,
@@ -2145,11 +2235,12 @@ class VoiceLinkLocalServer {
                     || clientDetails.email
                     || 'VoiceLink User';
 
+                const syncedUsername = this.syncWhmcsIdentityAlias(clientDetails.email || email, resolvedIdentity.username || clientDetails.username || displayName, clientDetails.id);
                 const user = this.applyAuthorityRoleOverrides({
                     id: `whmcs:${clientDetails.id}`,
                     whmcsClientId: clientDetails.id,
                     email: clientDetails.email || email,
-                    username: resolvedIdentity.username || undefined,
+                    username: syncedUsername || undefined,
                     displayName,
                     fullHandle: clientDetails.email || email,
                     role,
@@ -2165,6 +2256,7 @@ class VoiceLinkLocalServer {
                 });
 
                 const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
+                persistLocalAuthUsers();
                 res.json({
                     success: true,
                     token: session.token,
@@ -2271,11 +2363,12 @@ class VoiceLinkLocalServer {
                         || clientDetails.email
                         || 'VoiceLink User';
 
+                    const syncedUsername = this.syncWhmcsIdentityAlias(clientDetails.email || email, resolvedIdentity.username || clientDetails.username || displayName, clientDetails.id);
                     const user = this.applyAuthorityRoleOverrides({
                         id: `whmcs:${clientDetails.id}`,
                         whmcsClientId: clientDetails.id,
                         email: clientDetails.email || email,
-                        username: resolvedIdentity.username || undefined,
+                        username: syncedUsername || undefined,
                         displayName,
                         fullHandle: clientDetails.email || email,
                         role,
@@ -2290,6 +2383,7 @@ class VoiceLinkLocalServer {
                     });
 
                     const created = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, req.body.remember === true);
+                    persistLocalAuthUsers();
                     session = { user, expiresAt: created.expiresAt };
                     session.token = created.token;
                 }
@@ -3624,6 +3718,7 @@ class VoiceLinkLocalServer {
 
         const localAuthDataPath = path.join(__dirname, '../../data/local-auth-users.json');
         this.localAuthUsers = this.localAuthUsers || new Map();
+        this.whmcsIdentityAliases = this.whmcsIdentityAliases || new Map();
         this.localAuthSessions = this.localAuthSessions || new Map();
         this.localAuthSessionTtlMs = 30 * 24 * 60 * 60 * 1000; // 30 days
         // If SMTP is not configured, allow credential registration without blocking on email code.
@@ -3632,7 +3727,8 @@ class VoiceLinkLocalServer {
         const persistLocalAuthUsers = () => {
             try {
                 const users = Array.from(this.localAuthUsers.values());
-                fs.writeFileSync(localAuthDataPath, JSON.stringify({ users }, null, 2));
+                const whmcsAliases = Object.fromEntries(Array.from(this.whmcsIdentityAliases.entries()).sort(([a], [b]) => a.localeCompare(b)));
+                fs.writeFileSync(localAuthDataPath, JSON.stringify({ users, whmcsAliases }, null, 2));
             } catch (error) {
                 console.error('[Auth] Failed to persist local auth users:', error.message);
             }
@@ -3646,6 +3742,16 @@ class VoiceLinkLocalServer {
                     const users = Array.isArray(parsed.users) ? parsed.users : [];
                     users.forEach((user) => {
                         if (user?.id) this.localAuthUsers.set(user.id, user);
+                    });
+                    const aliases = parsed.whmcsAliases && typeof parsed.whmcsAliases === 'object'
+                        ? Object.entries(parsed.whmcsAliases)
+                        : [];
+                    aliases.forEach(([alias, email]) => {
+                        const normalizedAlias = normalizeUsername(alias);
+                        const normalizedEmail = normalizeEmail(email);
+                        if (normalizedAlias && normalizedEmail) {
+                            this.whmcsIdentityAliases.set(normalizedAlias, normalizedEmail);
+                        }
                     });
                     console.log(`[Auth] Loaded ${this.localAuthUsers.size} local credential users`);
                 }

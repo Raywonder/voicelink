@@ -512,6 +512,89 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         }.resume()
     }
 
+    func signInWithAccount(
+        identity: String,
+        password: String,
+        serverURL: String,
+        provider: AccountAuthProvider,
+        twoFactorCode: String = "",
+        completion: @escaping (Bool, String?, Bool) -> Void
+    ) {
+        guard let url = URL(string: "\(serverURL)/api/auth/\(provider.rawValue)/login") else {
+            completion(false, "Invalid server URL", false)
+            return
+        }
+
+        authState = .authenticating
+        authError = nil
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "identity": identity,
+            "password": password
+        ]
+        if !twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["twoFactorCode"] = twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if provider == .whmcs {
+            body["portalSite"] = "devine-creations.com"
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.authState = .error
+                    self?.authError = error.localizedDescription
+                    completion(false, error.localizedDescription, false)
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self?.authState = .error
+                    self?.authError = "Authentication failed"
+                    completion(false, "Authentication failed", false)
+                    return
+                }
+
+                if let requires2FA = json["requires2FA"] as? Bool, requires2FA {
+                    self?.authState = .unauthenticated
+                    let message = json["error"] as? String ?? json["message"] as? String ?? "Two-factor authentication code required"
+                    completion(false, message, true)
+                    return
+                }
+
+                guard let success = json["success"] as? Bool, success else {
+                    let message = json["error"] as? String ?? json["message"] as? String ?? "Authentication failed"
+                    self?.authState = .error
+                    self?.authError = message
+                    completion(false, message, false)
+                    return
+                }
+
+                guard let user = self?.parseAuthenticatedUser(
+                    from: json["user"] as? [String: Any],
+                    accessTokenFallback: (json["token"] as? String) ?? (json["accessToken"] as? String),
+                    authMethod: provider == .local ? .email : .whmcs
+                ) else {
+                    self?.authState = .error
+                    self?.authError = "Invalid user payload"
+                    completion(false, "Invalid user payload", false)
+                    return
+                }
+
+                self?.currentUser = user
+                self?.authState = .authenticated
+                self?.saveAuth(user: user)
+                completion(true, nil, false)
+            }
+        }.resume()
+    }
+
     // MARK: - Session Management
 
     func logout() {
@@ -600,6 +683,44 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         UserDefaults.standard.set(newId, forKey: "clientId")
         return newId
     }
+
+    private func parseAuthenticatedUser(
+        from json: [String: Any]?,
+        accessTokenFallback: String?,
+        authMethod: AuthMethod
+    ) -> AuthenticatedUser? {
+        guard let json = json else { return nil }
+        let id = json["id"] as? String ?? UUID().uuidString
+        let username = json["username"] as? String
+            ?? json["email"] as? String
+            ?? "user"
+        let displayName = json["displayName"] as? String
+            ?? json["display_name"] as? String
+            ?? username
+        let accessToken = json["accessToken"] as? String
+            ?? json["token"] as? String
+            ?? accessTokenFallback
+            ?? ""
+        guard !accessToken.isEmpty else { return nil }
+
+        var user = AuthenticatedUser(
+            id: id,
+            username: username,
+            displayName: displayName,
+            email: json["email"] as? String,
+            authMethod: authMethod,
+            mastodonInstance: json["mastodonInstance"] as? String,
+            accessToken: accessToken,
+            avatarURL: json["avatarURL"] as? String ?? json["avatar"] as? String
+        )
+        user.role = json["role"] as? String
+        user.authProvider = json["authProvider"] as? String
+        user.permissions = json["permissions"] as? [String] ?? []
+        if let entitlements = json["entitlements"] as? [String: Any] {
+            user.entitlements = entitlements.mapValues(AnyCodable.init)
+        }
+        return user
+    }
 }
 
 // MARK: - Models
@@ -613,6 +734,10 @@ struct AuthenticatedUser: Codable, Identifiable {
     let mastodonInstance: String?
     var accessToken: String
     let avatarURL: String?
+    var role: String?
+    var authProvider: String?
+    var permissions: [String] = []
+    var entitlements: [String: AnyCodable] = [:]
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0
@@ -683,6 +808,67 @@ struct AuthenticatedUser: Codable, Identifiable {
     }
 }
 
+struct AnyCodable: Codable {
+    let value: Any
+
+    init(_ value: Any) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intValue = try? container.decode(Int.self) {
+            value = intValue
+        } else if let doubleValue = try? container.decode(Double.self) {
+            value = doubleValue
+        } else if let boolValue = try? container.decode(Bool.self) {
+            value = boolValue
+        } else if let stringValue = try? container.decode(String.self) {
+            value = stringValue
+        } else if let arrayValue = try? container.decode([AnyCodable].self) {
+            value = arrayValue.map(\.value)
+        } else if let dictValue = try? container.decode([String: AnyCodable].self) {
+            value = dictValue.mapValues(\.value)
+        } else {
+            value = ""
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let intValue as Int:
+            try container.encode(intValue)
+        case let doubleValue as Double:
+            try container.encode(doubleValue)
+        case let boolValue as Bool:
+            try container.encode(boolValue)
+        case let stringValue as String:
+            try container.encode(stringValue)
+        case let arrayValue as [Any]:
+            try container.encode(arrayValue.map(AnyCodable.init))
+        case let dictValue as [String: Any]:
+            try container.encode(dictValue.mapValues(AnyCodable.init))
+        default:
+            try container.encodeNil()
+        }
+    }
+}
+
+enum AccountAuthProvider: String, CaseIterable, Identifiable {
+    case local = "local"
+    case whmcs = "whmcs"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .local: return "VoiceLink Account"
+        case .whmcs: return "WHMCS Account"
+        }
+    }
+}
+
 enum AccountReputation: String, Codable {
     case new = "New"           // < 30 days, few followers
     case standard = "Standard" // Default
@@ -736,6 +922,7 @@ enum AuthMethod: String, Codable {
     case mastodon = "mastodon"
     case email = "email"
     case adminInvite = "admin_invite"
+    case whmcs = "whmcs"
 
     var displayName: String {
         switch self {
@@ -743,6 +930,7 @@ enum AuthMethod: String, Codable {
         case .mastodon: return "Mastodon"
         case .email: return "Email"
         case .adminInvite: return "Admin Invite"
+        case .whmcs: return "WHMCS"
         }
     }
 
@@ -752,6 +940,7 @@ enum AuthMethod: String, Codable {
         case .mastodon: return "at.circle"
         case .email: return "envelope.circle"
         case .adminInvite: return "person.badge.key"
+        case .whmcs: return "building.2.crop.circle"
         }
     }
 }
@@ -1020,6 +1209,105 @@ struct MastodonAuthView: View {
             if success {
                 isPresented = false
                 onSuccess?()
+            }
+        }
+    }
+}
+
+struct AccountPasswordAuthView: View {
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @Binding var isPresented: Bool
+    let serverURL: String
+    var onSuccess: (() -> Void)?
+
+    @State private var provider: AccountAuthProvider = .local
+    @State private var identityInput: String = ""
+    @State private var passwordInput: String = ""
+    @State private var twoFactorInput: String = ""
+    @State private var statusMessage: String?
+    @State private var isLoading = false
+    @State private var needsTwoFactor = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 50))
+                .foregroundColor(.blue)
+
+            Text("Account Sign-In")
+                .font(.title2)
+                .fontWeight(.bold)
+
+            Picker("Provider", selection: $provider) {
+                ForEach(AccountAuthProvider.allCases) { option in
+                    Text(option.displayName).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            TextField("Email or Username", text: $identityInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+
+            SecureField("Password", text: $passwordInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+
+            if needsTwoFactor {
+                TextField("2FA Code", text: $twoFactorInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+            }
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            if let error = authManager.authError {
+                Text(error)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: 15) {
+                Button("Cancel") {
+                    isPresented = false
+                }
+                .buttonStyle(.bordered)
+
+                Button(needsTwoFactor ? "Verify 2FA" : "Sign In") {
+                    signIn()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(identityInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || passwordInput.isEmpty || isLoading)
+            }
+        }
+        .padding(30)
+        .frame(width: 420)
+    }
+
+    private func signIn() {
+        isLoading = true
+        statusMessage = needsTwoFactor ? "Verifying code..." : "Signing in..."
+        authManager.signInWithAccount(
+            identity: identityInput,
+            password: passwordInput,
+            serverURL: serverURL,
+            provider: provider,
+            twoFactorCode: twoFactorInput
+        ) { success, error, requires2FA in
+            isLoading = false
+            if success {
+                isPresented = false
+                onSuccess?()
+            } else if requires2FA {
+                needsTwoFactor = true
+                statusMessage = error ?? "Two-factor authentication code required."
+            } else {
+                statusMessage = error ?? "Sign-in failed."
             }
         }
     }
@@ -1385,6 +1673,7 @@ struct DeviceCard: View {
         switch device.authMethod {
         case .pairingCode: return .gray
         case .mastodon: return .purple
+        case .whmcs: return .orange
         case .email: return .blue
         case .adminInvite: return .indigo
         }

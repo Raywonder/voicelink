@@ -1065,6 +1065,7 @@ struct LinkedServerCard: View {
         switch server.authMethod {
         case .pairingCode: return .gray
         case .mastodon: return .purple
+        case .whmcs: return .orange
         case .email: return .blue
         case .adminInvite: return .indigo
         }

@@ -12,6 +12,10 @@ public class LoginViewModel : INotifyPropertyChanged
     private readonly AuthenticationManager _authManager;
     private string _mastodonInstance = "";
     private string _authorizationCode = "";
+    private string _accountProvider = "local";
+    private string _accountIdentity = "";
+    private string _accountPassword = "";
+    private string _accountTwoFactorCode = "";
     private string _email = "";
     private string _verificationCode = "";
     private string _inviteToken = "";
@@ -24,6 +28,7 @@ public class LoginViewModel : INotifyPropertyChanged
     private string? _statusMessage;
     private string? _errorMessage;
     private bool _showAuthCodeInput;
+    private bool _showAccountTwoFactorInput;
     private bool _showEmailCodeInput;
     private bool _showInviteActivation;
     private string? _authUrl;
@@ -55,6 +60,48 @@ public class LoginViewModel : INotifyPropertyChanged
             _authorizationCode = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(CanCompleteLogin));
+        }
+    }
+
+    public string AccountProvider
+    {
+        get => _accountProvider;
+        set
+        {
+            _accountProvider = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string AccountIdentity
+    {
+        get => _accountIdentity;
+        set
+        {
+            _accountIdentity = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanAccountSignIn));
+        }
+    }
+
+    public string AccountPassword
+    {
+        get => _accountPassword;
+        set
+        {
+            _accountPassword = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanAccountSignIn));
+        }
+    }
+
+    public string AccountTwoFactorCode
+    {
+        get => _accountTwoFactorCode;
+        set
+        {
+            _accountTwoFactorCode = value;
+            OnPropertyChanged();
         }
     }
 
@@ -158,6 +205,7 @@ public class LoginViewModel : INotifyPropertyChanged
             _isLoading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(CanLogin));
+            OnPropertyChanged(nameof(CanAccountSignIn));
             OnPropertyChanged(nameof(CanCompleteLogin));
             OnPropertyChanged(nameof(CanRequestEmailCode));
             OnPropertyChanged(nameof(CanVerifyEmailCode));
@@ -218,7 +266,18 @@ public class LoginViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool ShowAccountTwoFactorInput
+    {
+        get => _showAccountTwoFactorInput;
+        set
+        {
+            _showAccountTwoFactorInput = value;
+            OnPropertyChanged();
+        }
+    }
+
     public bool CanLogin => !string.IsNullOrWhiteSpace(MastodonInstance) && !IsLoading;
+    public bool CanAccountSignIn => !string.IsNullOrWhiteSpace(AccountIdentity) && !string.IsNullOrWhiteSpace(AccountPassword) && !IsLoading;
     public bool CanCompleteLogin => !string.IsNullOrWhiteSpace(AuthorizationCode) && !IsLoading;
     public bool CanRequestEmailCode => !string.IsNullOrWhiteSpace(Email) && !IsLoading;
     public bool CanVerifyEmailCode => !string.IsNullOrWhiteSpace(VerificationCode) && !IsLoading;
@@ -260,6 +319,50 @@ public class LoginViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             ErrorMessage = $"Login failed: {ex.Message}";
+            StatusMessage = null;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task SignInWithAccountAsync()
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+            StatusMessage = ShowAccountTwoFactorInput ? "Verifying 2FA..." : "Signing in...";
+
+            var result = await _authManager.SignInWithAccountAsync(
+                AccountIdentity,
+                AccountPassword,
+                AccountProvider,
+                null,
+                ShowAccountTwoFactorInput ? AccountTwoFactorCode : null);
+
+            if (result.Success)
+            {
+                StatusMessage = "Login successful.";
+                await Task.Delay(300);
+                LoginCompleted?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
+            if (result.RequiresTwoFactor)
+            {
+                ShowAccountTwoFactorInput = true;
+                StatusMessage = result.Error ?? "Two-factor authentication code required.";
+                return;
+            }
+
+            ErrorMessage = result.Error ?? _authManager.ErrorMessage ?? "Account sign-in failed";
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Account sign-in failed: {ex.Message}";
             StatusMessage = null;
         }
         finally

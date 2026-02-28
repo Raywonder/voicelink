@@ -7,6 +7,7 @@ struct LoginView: View {
     @State private var mastodonInstance: String = ""
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
+    @State private var showAccountAuthSheet = false
     @State private var showEmailAuthSheet = false
     @State private var showAdminInviteSheet = false
 
@@ -81,10 +82,15 @@ struct LoginView: View {
                 .disabled(mastodonInstance.isEmpty || isLoading)
 
                 HStack(spacing: 10) {
-                    Button("Email / Username") {
-                        showEmailAuthSheet = true
+                    Button("Account Sign-In") {
+                        showAccountAuthSheet = true
                     }
                     .buttonStyle(.borderedProminent)
+
+                    Button("Email Code") {
+                        showEmailAuthSheet = true
+                    }
+                    .buttonStyle(.bordered)
 
                     Button("Admin Invite") {
                         showAdminInviteSheet = true
@@ -127,6 +133,11 @@ struct LoginView: View {
         }
         .sheet(isPresented: $showEmailAuthSheet) {
             EmailAuthView(isPresented: $showEmailAuthSheet, serverURL: effectiveAuthServerURL) {
+                appState.currentScreen = .mainMenu
+            }
+        }
+        .sheet(isPresented: $showAccountAuthSheet) {
+            AccountPasswordAuthView(isPresented: $showAccountAuthSheet, serverURL: effectiveAuthServerURL) {
                 appState.currentScreen = .mainMenu
             }
         }

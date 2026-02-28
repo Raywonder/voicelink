@@ -25,6 +25,11 @@ public partial class LoginView : Window
         await _viewModel.StartLoginAsync();
     }
 
+    private async void AccountSignInButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.SignInWithAccountAsync();
+    }
+
     private async void CompleteLoginButton_Click(object sender, RoutedEventArgs e)
     {
         await _viewModel.CompleteLoginAsync();
@@ -53,6 +58,11 @@ public partial class LoginView : Window
     private void InvitePasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
     {
         _viewModel.InvitePassword = InvitePasswordBox.Password;
+    }
+
+    private void AccountPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        _viewModel.AccountPassword = AccountPasswordBox.Password;
     }
 
     private void BackButton_Click(object sender, RoutedEventArgs e)

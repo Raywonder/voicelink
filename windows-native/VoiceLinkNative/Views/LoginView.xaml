@@ -34,6 +34,54 @@
             <StackPanel>
                 <Border Background="#202038" CornerRadius="10" Padding="18" Margin="0,0,0,14">
                     <StackPanel>
+                        <TextBlock Text="Account Sign-In"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"/>
+                        <TextBlock Text="Sign in with a VoiceLink or WHMCS account using email or username."
+                                   FontSize="12"
+                                   Foreground="#9aa0b8"
+                                   Margin="0,4,0,12"/>
+                        <TextBlock Text="Provider"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <ComboBox SelectedValue="{Binding AccountProvider}"
+                                  SelectedValuePath="Tag"
+                                  Padding="8"
+                                  Margin="0,0,0,10">
+                            <ComboBoxItem Content="VoiceLink Account" Tag="local"/>
+                            <ComboBoxItem Content="WHMCS Account" Tag="whmcs"/>
+                        </ComboBox>
+                        <TextBlock Text="Email or Username"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding AccountIdentity, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="10"
+                                 Margin="0,0,0,10"/>
+                        <TextBlock Text="Password"
+                                   Foreground="White"
+                                   Margin="0,0,0,6"/>
+                        <PasswordBox x:Name="AccountPasswordBox"
+                                     Padding="10"
+                                     Margin="0,0,0,10"
+                                     PasswordChanged="AccountPasswordBox_PasswordChanged"/>
+                        <StackPanel Visibility="{Binding ShowAccountTwoFactorInput, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="2FA Code"
+                                       Foreground="White"
+                                       Margin="0,0,0,6"/>
+                            <TextBox Text="{Binding AccountTwoFactorCode, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="10"
+                                     Margin="0,0,0,10"/>
+                        </StackPanel>
+                        <Button Content="Sign In"
+                                Padding="12,10"
+                                Click="AccountSignInButton_Click"
+                                IsEnabled="{Binding CanAccountSignIn}"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#202038" CornerRadius="10" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
                         <TextBlock Text="Mastodon"
                                    FontSize="18"
                                    FontWeight="SemiBold"
