@@ -1268,6 +1268,8 @@ struct DiscoveredServerCard: View {
 struct PairingSheetView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var pairingManager = PairingManager.shared
     @State private var enteredCode = ""
     @State private var serverURL = ""
     @State private var isPairing = false
@@ -1368,8 +1370,8 @@ struct PairingSheetView: View {
                     enteredCode = String(newValue.uppercased().prefix(6))
                 }
 
-            // Server URL (for remote)
-            TextField("Server URL (optional for local)", text: $serverURL)
+            // Server URL
+            TextField("Server URL", text: $serverURL)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
 
@@ -1400,7 +1402,7 @@ struct PairingSheetView: View {
             }
         }
         .sheet(isPresented: $showEmailAuth) {
-            EmailAuthView(isPresented: $showEmailAuth, serverURL: serverURL.isEmpty ? "http://localhost:4004" : serverURL) {
+            EmailAuthView(isPresented: $showEmailAuth, serverURL: resolvedServerURL()) {
                 selectedAuthMethod = .email
             }
         }
@@ -1410,6 +1412,9 @@ struct PairingSheetView: View {
             }
         }
         .onAppear {
+            if serverURL.isEmpty {
+                serverURL = defaultServerURL()
+            }
             if let token = authManager.pendingAdminInviteToken?.trimmingCharacters(in: .whitespacesAndNewlines),
                !token.isEmpty {
                 selectedAuthMethod = .adminInvite
@@ -1424,7 +1429,7 @@ struct PairingSheetView: View {
         isPairing = true
         errorMessage = nil
 
-        let url = serverURL.isEmpty ? "http://localhost:4004" : serverURL
+        let url = resolvedServerURL()
 
         PairingManager.shared.enterPairingCode(enteredCode, serverURL: url, authMethod: selectedAuthMethod) { success, error in
             isPairing = false
@@ -1434,6 +1439,32 @@ struct PairingSheetView: View {
                 errorMessage = error ?? "Pairing failed"
             }
         }
+    }
+
+    private func defaultServerURL() -> String {
+        if let pending = authManager.pendingAdminInviteServerURL?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pending.isEmpty {
+            return APIEndpointResolver.normalize(pending)
+        }
+        if let connected = serverManager.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !connected.isEmpty {
+            return APIEndpointResolver.normalize(connected)
+        }
+        if let linked = pairingManager.linkedServers.first?.url.trimmingCharacters(in: .whitespacesAndNewlines),
+           !linked.isEmpty {
+            return APIEndpointResolver.normalize(linked)
+        }
+        return APIEndpointResolver.canonicalMainBase
+    }
+
+    private func resolvedServerURL() -> String {
+        let raw = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.isEmpty {
+            return defaultServerURL()
+        }
+        let withScheme = raw.hasPrefix("http://") || raw.hasPrefix("https://") ? raw : "https://" + raw
+        return APIEndpointResolver.normalize(withScheme)
     }
 }
 

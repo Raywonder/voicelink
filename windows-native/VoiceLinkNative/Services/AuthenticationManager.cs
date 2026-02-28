@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -182,46 +183,58 @@ namespace VoiceLinkNative.Services
         }
 
         // Authenticate with pairing code
-        public async Task<bool> AuthenticateWithPairingCodeAsync(string pairingCode)
+        public async Task<bool> AuthenticateWithPairingCodeAsync(string pairingCode, string? serverUrl = null)
         {
             CurrentState = AuthState.Authenticating;
+            ErrorMessage = null;
 
             try
             {
+                var resolvedServerUrl = GetPreferredServerUrl(serverUrl);
                 using var client = new HttpClient();
+                var payload = new
+                {
+                    code = pairingCode?.Trim().ToUpperInvariant(),
+                    clientId = GetOrCreateClientId(),
+                    clientName = Environment.MachineName,
+                    authMethod = "pairingCode"
+                };
                 var content = new StringContent(
-                    JsonSerializer.Serialize(new { code = pairingCode }),
+                    JsonSerializer.Serialize(payload),
                     Encoding.UTF8,
                     "application/json");
 
                 var response = await client.PostAsync(
-                    $"{ServerManager.Instance.ServerUrl}/api/auth/pair",
+                    $"{resolvedServerUrl}/api/pair",
                     content);
 
+                var responseBody = await response.Content.ReadAsStringAsync();
                 if (response.IsSuccessStatusCode)
                 {
-                    var json = await response.Content.ReadAsStringAsync();
-                    var result = JsonSerializer.Deserialize<AuthResult>(json);
+                    var result = JsonSerializer.Deserialize<PairingResponse>(responseBody);
 
                     if (result?.Success == true)
                     {
                         CurrentUser = new AuthenticatedUser
                         {
-                            Username = result.Username ?? "User",
-                            UserId = result.UserId ?? Guid.NewGuid().ToString(),
-                            AuthMethod = "pairing"
+                            Username = result.Server?.Name ?? "Paired Device",
+                            UserId = result.Server?.Id ?? Guid.NewGuid().ToString(),
+                            AuthMethod = "pairing",
+                            AccessToken = result.AccessToken
                         };
                         CurrentState = AuthState.Authenticated;
                         return true;
                     }
                 }
 
+                ErrorMessage = ExtractErrorMessage(responseBody) ?? "Pairing failed";
                 CurrentState = AuthState.Error;
                 return false;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Pairing auth error: {ex.Message}");
+                ErrorMessage = ex.Message;
                 CurrentState = AuthState.Error;
                 return false;
             }
@@ -441,6 +454,59 @@ namespace VoiceLinkNative.Services
             }
 
             return user;
+        }
+
+        private static string GetOrCreateClientId()
+        {
+            try
+            {
+                var appDataPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "VoiceLinkNative");
+                Directory.CreateDirectory(appDataPath);
+
+                var clientIdPath = Path.Combine(appDataPath, "client-id.txt");
+                if (File.Exists(clientIdPath))
+                {
+                    var existing = File.ReadAllText(clientIdPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(existing))
+                    {
+                        return existing;
+                    }
+                }
+
+                var generated = $"win_{Guid.NewGuid():N}";
+                File.WriteAllText(clientIdPath, generated);
+                return generated;
+            }
+            catch
+            {
+                return $"win_{Guid.NewGuid():N}";
+            }
+        }
+
+        private static string? ExtractErrorMessage(string? responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody))
+            {
+                return null;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("error", out var errorElement) &&
+                    errorElement.ValueKind == JsonValueKind.String)
+                {
+                    return errorElement.GetString();
+                }
+            }
+            catch
+            {
+                // Ignore non-JSON error responses.
+            }
+
+            return responseBody;
         }
 
         public async Task<bool> FetchAdminInviteAsync(string token, string? serverUrl = null)
@@ -702,6 +768,33 @@ namespace VoiceLinkNative.Services
         public string? Username { get; set; }
         public string? UserId { get; set; }
         public string? Error { get; set; }
+    }
+
+    public class PairingResponse
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("success")]
+        public bool Success { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("accessToken")]
+        public string? AccessToken { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("server")]
+        public PairingServerInfo? Server { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("error")]
+        public string? Error { get; set; }
+    }
+
+    public class PairingServerInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string? Id { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("url")]
+        public string? Url { get; set; }
     }
 
     public class MastodonTokenResult

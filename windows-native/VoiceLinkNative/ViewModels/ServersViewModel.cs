@@ -12,7 +12,7 @@ public class ServersViewModel : INotifyPropertyChanged
     private readonly AuthenticationManager _authManager;
 
     // Custom server URL
-    private string _customServerUrl = "";
+    private string _customServerUrl = ServerManager.MainServerUrl;
     public string CustomServerUrl
     {
         get => _customServerUrl;
@@ -32,6 +32,13 @@ public class ServersViewModel : INotifyPropertyChanged
     {
         get => _showPairingDialog;
         set { _showPairingDialog = value; OnPropertyChanged(); }
+    }
+
+    private string _pairingServerUrl = ServerManager.MainServerUrl;
+    public string PairingServerUrl
+    {
+        get => _pairingServerUrl;
+        set { _pairingServerUrl = value; OnPropertyChanged(); }
     }
 
     // Email auth
@@ -97,6 +104,11 @@ public class ServersViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(ServerStatus));
             OnPropertyChanged(nameof(ConnectedServer));
+            if (e.PropertyName == nameof(ServerManager.ConnectedServer) ||
+                e.PropertyName == nameof(ServerManager.ServerStatus))
+            {
+                UpdatePreferredServerUrls();
+            }
         };
 
         _authManager.PropertyChanged += (s, e) =>
@@ -124,6 +136,7 @@ public class ServersViewModel : INotifyPropertyChanged
 
         StartMastodonAuthCommand = new RelayCommand(StartMastodonAuth);
         LogoutCommand = new RelayCommand(() => _authManager.Logout());
+        UpdatePreferredServerUrls();
     }
 
     private async Task ConnectCustomAsync()
@@ -138,13 +151,40 @@ public class ServersViewModel : INotifyPropertyChanged
     {
         if (!string.IsNullOrEmpty(PairingCode))
         {
-            var success = await _authManager.AuthenticateWithPairingCodeAsync(PairingCode);
+            var success = await _authManager.AuthenticateWithPairingCodeAsync(PairingCode, PairingServerUrl);
             if (success)
             {
                 ShowPairingDialog = false;
                 PairingCode = "";
             }
         }
+    }
+
+    private void UpdatePreferredServerUrls()
+    {
+        var resolved = ResolvePreferredServerUrl();
+        if (string.IsNullOrWhiteSpace(CustomServerUrl) || string.Equals(CustomServerUrl, ServerManager.MainServerUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            CustomServerUrl = resolved;
+        }
+        PairingServerUrl = resolved;
+    }
+
+    private string ResolvePreferredServerUrl()
+    {
+        if (!string.IsNullOrWhiteSpace(_serverManager.ConnectedServer))
+        {
+            return _serverManager.ConnectedServer;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_serverManager.ServerUrl) &&
+            !_serverManager.ServerUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase) &&
+            !_serverManager.ServerUrl.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+        {
+            return _serverManager.ServerUrl;
+        }
+
+        return ServerManager.MainServerUrl;
     }
 
     private async Task RequestEmailVerificationAsync()
