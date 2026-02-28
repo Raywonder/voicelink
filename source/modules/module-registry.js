@@ -18,6 +18,12 @@ const CATEGORIES = {
     ANALYTICS: 'analytics'
 };
 
+const CORE_MODULE_IDS = new Set([
+    'media-rooms',
+    'updater',
+    'internal-scheduler'
+]);
+
 // Available modules registry
 const AVAILABLE_MODULES = {
     'two-factor-auth': {
@@ -378,6 +384,73 @@ const AVAILABLE_MODULES = {
             },
             cacheTTL: 300000
         }
+    },
+
+    'media-rooms': {
+        id: 'media-rooms',
+        name: 'Media Rooms',
+        description: 'Core room media state, now-playing metadata, and playback coordination',
+        version: '1.0.0',
+        category: CATEGORIES.MEDIA,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        core: true,
+        features: [
+            'Per-room now playing state',
+            'Background media routing',
+            'Playback metadata reporting',
+            'Room media coordination'
+        ],
+        defaultConfig: {
+            enabled: true
+        }
+    },
+
+    updater: {
+        id: 'updater',
+        name: 'Updater',
+        description: 'Core update delivery, manifest handling, and installer coordination',
+        version: '1.0.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        core: true,
+        features: [
+            'Update manifest publishing',
+            'Client update coordination',
+            'Release metadata reporting'
+        ],
+        defaultConfig: {
+            enabled: true
+        }
+    },
+
+    'internal-scheduler': {
+        id: 'internal-scheduler',
+        name: 'Internal Scheduler',
+        description: 'Core scheduled jobs for maintenance, cleanup, and timed automation',
+        version: '1.0.0',
+        category: CATEGORIES.COMMUNICATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: false,
+        dependencies: [],
+        configurable: true,
+        core: true,
+        features: [
+            'Scheduled maintenance jobs',
+            'Timed room automation',
+            'Recurring server tasks'
+        ],
+        defaultConfig: {
+            enabled: true
+        }
     }
 };
 
@@ -386,6 +459,7 @@ class ModuleRegistry {
         this.configDir = configDir || path.join(__dirname, '../../data');
         this.modulesConfigFile = path.join(this.configDir, 'modules.json');
         this.installedModules = this.loadInstalledModules();
+        this.ensureCoreModulesRegistered();
     }
 
     loadInstalledModules() {
@@ -420,6 +494,39 @@ class ModuleRegistry {
         }
     }
 
+    ensureCoreModulesRegistered() {
+        let changed = false;
+
+        for (const moduleId of CORE_MODULE_IDS) {
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module) continue;
+
+            if (!this.installedModules.installed[moduleId]) {
+                this.installedModules.installed[moduleId] = {
+                    installedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                    config: { ...module.defaultConfig, enabled: true }
+                };
+                changed = true;
+            } else if (this.installedModules.installed[moduleId]?.config?.enabled !== true) {
+                this.installedModules.installed[moduleId].config = {
+                    ...module.defaultConfig,
+                    ...this.installedModules.installed[moduleId].config,
+                    enabled: true
+                };
+                changed = true;
+            }
+
+            if (!this.installedModules.installOrder.includes(moduleId)) {
+                this.installedModules.installOrder.unshift(moduleId);
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            this.saveInstalledModules();
+        }
+    }
+
     /**
      * Get all available modules
      */
@@ -436,7 +543,7 @@ class ModuleRegistry {
         // Add installed status
         modules = modules.map(m => ({
             ...m,
-            installed: !!this.installedModules.installed[m.id],
+            installed: CORE_MODULE_IDS.has(m.id) || !!this.installedModules.installed[m.id],
             config: this.installedModules.installed[m.id]?.config || m.defaultConfig
         }));
 
@@ -471,11 +578,27 @@ class ModuleRegistry {
      * Get installed modules
      */
     getInstalledModules() {
-        return this.installedModules.installOrder.map(id => ({
-            ...AVAILABLE_MODULES[id],
-            ...this.installedModules.installed[id],
-            installed: true
-        })).filter(Boolean);
+        const seen = new Set();
+
+        return this.installedModules.installOrder
+            .filter(id => {
+                if (seen.has(id)) return false;
+                seen.add(id);
+                return true;
+            })
+            .map(id => {
+                const module = AVAILABLE_MODULES[id];
+                const installed = this.installedModules.installed[id];
+                if (!module || !installed) return null;
+
+                return {
+                    ...module,
+                    ...installed,
+                    enabled: installed?.config?.enabled ?? module.defaultConfig?.enabled ?? false,
+                    installed: true
+                };
+            })
+            .filter(Boolean);
     }
 
     /**

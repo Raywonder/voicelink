@@ -94,33 +94,39 @@ class AdminServerManager: ObservableObject {
         isLoading = true
         error = nil
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/config") else {
-            error = "Invalid server URL"
-            isLoading = false
-            return
-        }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
+        let decoder = JSONDecoder()
 
-        var request = URLRequest(url: url)
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to fetch server config"
-                isLoading = false
-                return
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/config") else {
+                continue
             }
 
-            let decoder = JSONDecoder()
-            serverConfig = try decoder.decode(ServerConfig.self, from: data)
-        } catch {
-            self.error = error.localizedDescription
+            var request = URLRequest(url: url)
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    continue
+                }
+                if httpResponse.statusCode == 200 {
+                    serverConfig = try decoder.decode(ServerConfig.self, from: data)
+                    currentServerURL = base
+                    isLoading = false
+                    return
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
 
+        if serverConfig == nil {
+            error = error ?? "Failed to fetch server config"
+        }
         isLoading = false
     }
 
@@ -129,8 +135,8 @@ class AdminServerManager: ObservableObject {
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/config") else {
-            error = "Invalid server URL"
+        guard let url = APIEndpointResolver.url(base: currentServerURL, path: "/api/config") else {
+            error = "Invalid server config URL"
             return false
         }
 
@@ -267,10 +273,27 @@ class AdminServerManager: ObservableObject {
                 return
             }
 
-            guard let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                return
-            }
-            serverRooms = rawRooms.map { Self.adminRoom(from: $0) }
+            let parsedRooms = try await Task.detached(priority: .userInitiated) {
+                guard let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    return [AdminRoomInfo]()
+                }
+
+                return rawRooms
+                    .map { Self.adminRoom(from: $0) }
+                    .sorted {
+                        let lhsActive = $0.userCount > 0
+                        let rhsActive = $1.userCount > 0
+                        if lhsActive != rhsActive {
+                            return lhsActive && !rhsActive
+                        }
+                        if $0.userCount != $1.userCount {
+                            return $0.userCount > $1.userCount
+                        }
+                        return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                    }
+            }.value
+
+            serverRooms = parsedRooms
         } catch {
             print("Failed to fetch rooms: \(error)")
         }
@@ -717,7 +740,7 @@ class AdminServerManager: ObservableObject {
         return APIEndpointResolver.canonicalMainBase
     }
 
-    private static func adminRoom(from dict: [String: Any]) -> AdminRoomInfo {
+    nonisolated private static func adminRoom(from dict: [String: Any]) -> AdminRoomInfo {
         let usersValue: Int = {
             if let count = dict["users"] as? Int { return count }
             if let count = dict["userCount"] as? Int { return count }

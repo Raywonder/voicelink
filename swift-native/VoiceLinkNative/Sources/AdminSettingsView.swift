@@ -2,6 +2,7 @@ import SwiftUI
 
 // MARK: - Admin Settings View
 struct AdminSettingsView: View {
+    @EnvironmentObject var appState: AppState
     @ObservedObject var adminManager = AdminServerManager.shared
     @ObservedObject var authManager = AuthenticationManager.shared
     @State private var selectedTab: AdminTab = .overview
@@ -23,7 +24,7 @@ struct AdminSettingsView: View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Button(action: { dismiss() }) {
+                Button(action: { appState.closeAdminScreen() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
                         .foregroundColor(.gray)
@@ -489,6 +490,19 @@ struct AdminRoomsSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var showCreateRoom = false
     @State private var roomBeingEdited: AdminRoomInfo?
+    @State private var roomSearchText = ""
+
+    private var filteredRooms: [AdminRoomInfo] {
+        let query = roomSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return adminManager.serverRooms }
+        return adminManager.serverRooms.filter { room in
+            room.name.lowercased().contains(query)
+                || room.description.lowercased().contains(query)
+                || room.id.lowercased().contains(query)
+                || (room.visibility?.lowercased().contains(query) ?? false)
+                || (room.accessType?.lowercased().contains(query) ?? false)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -543,16 +557,27 @@ struct AdminRoomsSection: View {
             .background(Color.white.opacity(0.05))
             .cornerRadius(10)
 
-            ForEach(adminManager.serverRooms) { room in
-                RoomAdminRow(room: room) { action in
-                    switch action {
-                    case .delete:
-                        Task {
-                            _ = await adminManager.deleteRoom(room.id)
-                            await adminManager.fetchRooms()
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("Search rooms by name, id, visibility, or access", text: $roomSearchText)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("Showing \(filteredRooms.count) of \(adminManager.serverRooms.count) rooms")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+
+            LazyVStack(spacing: 10) {
+                ForEach(filteredRooms) { room in
+                    RoomAdminRow(room: room) { action in
+                        switch action {
+                        case .delete:
+                            Task {
+                                _ = await adminManager.deleteRoom(room.id)
+                                await adminManager.fetchRooms()
+                            }
+                        case .edit:
+                            roomBeingEdited = room
                         }
-                    case .edit:
-                        roomBeingEdited = room
                     }
                 }
             }

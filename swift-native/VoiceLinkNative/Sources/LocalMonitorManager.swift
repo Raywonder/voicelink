@@ -41,15 +41,6 @@ final class LocalMonitorManager: ObservableObject {
         guard !isMonitoring else { return }
         configureIfNeeded()
 
-        // Local input monitoring can deadlock with active room capture.
-        if ServerManager.shared.activeRoomId != nil || ServerManager.shared.isAudioTransmitting {
-            DispatchQueue.main.async {
-                self.isMonitoring = false
-            }
-            AccessibilityManager.shared.announceStatus("Input monitor is unavailable while room audio transmission is active.")
-            return
-        }
-
         let inputNode = engine.inputNode
         let format = inputNode.inputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {

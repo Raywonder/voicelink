@@ -377,6 +377,7 @@ extension Notification.Name {
     static let roomActionLeave = Notification.Name("roomActionLeave")
     static let roomActionJoin = Notification.Name("roomActionJoin")
     static let roomActionOpenSettings = Notification.Name("roomActionOpenSettings")
+    static let reopenRoomDetailsSheet = Notification.Name("reopenRoomDetailsSheet")
     static let roomActionCreate = Notification.Name("roomActionCreate")
     static let roomActionDelete = Notification.Name("roomActionDelete")
     static let mainWindowCloseRequested = Notification.Name("mainWindowCloseRequested")
@@ -615,6 +616,7 @@ class AppState: ObservableObject {
     @Published var pendingCreateRoomName: String = ""
     @Published var roomHasActiveMusic: [String: Bool] = [:]
     @Published var pendingJoinRoomId: String?
+    @Published var roomToRestoreAfterAdminClose: Room?
     private var previousScreen: Screen = .mainMenu
 
     let serverManager = ServerManager.shared
@@ -1012,6 +1014,7 @@ class AppState: ObservableObject {
                 return
             }
             self.setFocusedRoom(room)
+            self.roomToRestoreAfterAdminClose = room
             self.currentScreen = .admin
         }
         NotificationCenter.default.addObserver(forName: .roomActionCreate, object: nil, queue: .main) { [weak self] _ in
@@ -1087,7 +1090,7 @@ class AppState: ObservableObject {
             .store(in: &cancellables)
     }
 
-    private func refreshAdminCapabilities() {
+    func refreshAdminCapabilities() {
         guard let serverURL = serverManager.baseURL, !serverURL.isEmpty else {
             AdminServerManager.shared.isAdmin = false
             AdminServerManager.shared.adminRole = .none
@@ -1433,6 +1436,18 @@ class AppState: ObservableObject {
         errorMessage = nil
     }
 
+    func closeAdminScreen() {
+        let roomToRestore = roomToRestoreAfterAdminClose
+        roomToRestoreAfterAdminClose = nil
+        currentScreen = .mainMenu
+        errorMessage = nil
+
+        guard let room = roomToRestore else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(name: .reopenRoomDetailsSheet, object: room)
+        }
+    }
+
     func leaveCurrentRoom() {
         serverManager.leaveRoom()
         currentRoom = nil
@@ -1752,6 +1767,7 @@ struct MainMenuView: View {
     @State private var showMastodonAuthSheet = false
     @State private var showEmailAuthSheet = false
     @State private var showAdminInviteSheet = false
+    private let statusRefreshTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     private var isAuthenticatedForRoomAccess: Bool {
         authManager.authState == .authenticated && authManager.currentUser != nil
@@ -1796,8 +1812,13 @@ struct MainMenuView: View {
 
     var serverStatusSummary: String {
         let base = appState.serverManager.baseURL ?? ""
-        let host = URL(string: base)?.host ?? appState.serverManager.connectedServer
-        return appState.isConnected ? "Connected (\(host))" : statusText
+        let host = URL(string: base)?.host
+            ?? URL(string: appState.serverManager.connectedServer)?.host
+            ?? appState.serverManager.connectedServer
+        let resolvedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        return appState.isConnected
+            ? "Connected to \(resolvedHost.isEmpty ? "active server" : resolvedHost)"
+            : statusText
     }
 
     var sortedRooms: [Room] {
@@ -2043,8 +2064,8 @@ struct MainMenuView: View {
                         Group {
                             Text("Name: \(room.name)")
                             Text("Description: \(appState.displayDescription(for: room))")
-                            Text("Users: \(room.userCount)/\(room.maxUsers)")
-                            Text("Media: \(appState.roomHasActiveMusic[room.id] == true ? "Playing" : "None")")
+                            Text("Total users in room: \(room.userCount) of \(room.maxUsers)")
+                            Text("Media status: \(appState.roomHasActiveMusic[room.id] == true ? "Playing" : "Not playing")")
                             if let hostedFrom = room.hostedFromLine {
                                 Text(hostedFrom)
                             }
@@ -2327,6 +2348,22 @@ struct MainMenuView: View {
                         }
                     )
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .reopenRoomDetailsSheet)) { notification in
+                    guard let room = notification.object as? Room else { return }
+                    selectedRoomDetails = room
+                }
+                .onAppear {
+                    if appState.isConnected {
+                        appState.refreshRooms()
+                        appState.refreshAdminCapabilities()
+                    }
+                }
+                .onReceive(statusRefreshTimer) { _ in
+                    guard appState.currentScreen == .mainMenu else { return }
+                    guard appState.isConnected else { return }
+                    appState.refreshRooms()
+                    appState.refreshAdminCapabilities()
+                }
                 .sheet(isPresented: $showRoomActionMenuSheet) {
                     if let room = selectedRoomActionRoom {
                         RoomActionMenu(
@@ -2371,6 +2408,18 @@ struct MainMenuView: View {
                                 }
                             }
                             Spacer()
+                            if AdminServerManager.shared.isAdmin || AdminServerManager.shared.adminRole == .admin || AdminServerManager.shared.adminRole == .owner {
+                                Button("Server Administration") {
+                                    appState.currentScreen = .admin
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Button("Registration") {
+                                appState.currentScreen = .licensing
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                             Button("Logout") {
                                 authManager.logout()
                             }
@@ -2383,6 +2432,12 @@ struct MainMenuView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
+                        Button("Open Registration") {
+                            appState.currentScreen = .licensing
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
                         ActionButton(title: "Login with Mastodon", icon: "person.circle.fill", color: .purple) {
                             appState.currentScreen = .login
                         }
@@ -2958,16 +3013,50 @@ struct RoomDetailsSheet: View {
         )
     }
 
+    private var totalUsersLabel: String {
+        "Total users in room: \(room.userCount) of \(room.maxUsers)"
+    }
+
+    private var mediaStatusLabel: String {
+        roomHasActiveMedia ? "Playing" : "Not playing"
+    }
+
+    private var uptimeLabel: String {
+        if let uptimeSeconds = room.uptimeSeconds {
+            return formatDuration(seconds: uptimeSeconds)
+        }
+        if let createdAt = room.createdAt {
+            return formatDuration(seconds: max(0, Int(Date().timeIntervalSince(createdAt))))
+        }
+        return "Unknown"
+    }
+
+    private var lastActivityLabel: String {
+        guard let activityDate = room.lastActivityAt else {
+            return "No recent room activity recorded"
+        }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        let relative = formatter.localizedString(for: activityDate, relativeTo: Date())
+        if let user = room.lastActiveUsername?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+            return "\(user) was last active \(relative)"
+        }
+        return "Last activity was \(relative)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(room.name).font(.title2.weight(.bold))
             Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
                 .foregroundColor(.secondary)
 
-            HStack {
-                Text("Users: \(room.userCount)/\(room.maxUsers)")
-                Spacer()
-                Text(room.isPrivate ? "Private" : "Public")
+            VStack(alignment: .leading, spacing: 6) {
+                Text(totalUsersLabel)
+                Text("Access level: \(room.isPrivate ? "Private room" : "Public room")")
+                Text("Media status: \(mediaStatusLabel)")
+                    .italic()
+                Text("Uptime: \(uptimeLabel)")
+                Text("Last activity: \(lastActivityLabel)")
             }
             .font(.caption)
             .foregroundColor(.secondary)
@@ -3007,7 +3096,20 @@ struct RoomDetailsSheet: View {
             Spacer()
         }
         .padding(20)
-        .frame(minWidth: 460, minHeight: 260)
+        .frame(minWidth: 480, minHeight: 300)
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let days = seconds / 86400
+        let hours = (seconds % 86400) / 3600
+        let minutes = (seconds % 3600) / 60
+        if days > 0 {
+            return "\(days)d \(hours)h \(minutes)m"
+        }
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
     }
 }
 
@@ -3880,10 +3982,6 @@ struct UserRow: View {
 
                         Button(action: {
                             if isCurrentUser {
-                                if isRoomAudioActive && !monitor.isMonitoring {
-                                    AccessibilityManager.shared.announceStatus("Input monitor is unavailable while you are in an active room.")
-                                    return
-                                }
                                 monitor.toggleMonitoring()
                             } else {
                                 audioControl.toggleSolo(for: userId)
@@ -3900,11 +3998,10 @@ struct UserRow: View {
                             .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
-                        .disabled(isCurrentUser && isRoomAudioActive && !monitor.isMonitoring)
                     }
 
                     if isCurrentUser {
-                        Text("You cannot mute yourself in this list. Use main room mute controls.")
+                        Text("You cannot mute yourself in this list. Use main room mute controls. Monitor lets you hear your current input device.")
                             .font(.caption2)
                             .foregroundColor(.orange)
                     }

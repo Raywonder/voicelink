@@ -76,7 +76,7 @@ struct RoomActionMenu: View {
                 Image(systemName: room.isPrivate ? "lock.fill" : "globe")
                     .foregroundColor(room.isPrivate ? .yellow : .green)
 
-                Text("\(room.userCount)/\(room.maxUsers) users")
+                Text("\(room.userCount) users of \(room.maxUsers) max")
                     .font(.caption)
                     .foregroundColor(.gray)
 
@@ -100,9 +100,8 @@ struct RoomActionMenu: View {
                 roomDetailRow(label: "Join Status", value: roomJoinStatusText)
                 roomDetailRow(label: "Media Status", value: roomMediaStatusText)
                 roomDetailRow(label: "Room Controls", value: canManageRoomActions ? "Manage Allowed" : "View Only")
-                roomDetailRow(label: "Total Users", value: "\(room.userCount)/\(room.maxUsers)")
+                roomDetailRow(label: "Total Users in Room", value: "\(room.userCount) users of \(room.maxUsers) max")
                 roomDetailRow(label: "Uptime", value: roomUptimeLabel)
-                roomDetailRow(label: "Last User", value: room.lastActiveUsername ?? "No activity yet")
                 roomDetailRow(label: "Last Activity", value: roomLastActivityLabel)
                 if let hostedFrom = room.hostedFromLine {
                     roomDetailRow(label: "Hosted From", value: hostedFrom)
@@ -461,11 +460,16 @@ struct RoomActionMenu: View {
 
     private var roomLastActivityLabel: String {
         guard let lastActivityAt = room.lastActivityAt else {
-            return "Unknown"
+            return "No recent room activity"
         }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: lastActivityAt, relativeTo: Date())
+        let relative = formatter.localizedString(for: lastActivityAt, relativeTo: Date())
+        if let lastUser = room.lastActiveUsername?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !lastUser.isEmpty {
+            return "\(lastUser) was active \(relative)"
+        }
+        return relative
     }
 
     @ViewBuilder
@@ -518,7 +522,7 @@ struct RoomActionMenu: View {
                 if active {
                     self.roomMediaStatusText = title.isEmpty ? "Playing" : "Playing (\(title))"
                 } else {
-                    self.roomMediaStatusText = "Idle"
+                    self.roomMediaStatusText = "Not Playing"
                 }
             }
         }.resume()
