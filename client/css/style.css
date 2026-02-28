@@ -151,6 +151,90 @@ body {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
+#startup-auth-screen {
+    justify-content: center;
+    align-items: center;
+    padding: 2rem;
+    background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.24), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.18), transparent 28%),
+        linear-gradient(140deg, #0f172a 0%, #12233f 48%, #1d4d7a 100%);
+}
+
+.startup-auth-shell {
+    width: 100%;
+    max-width: 980px;
+}
+
+.startup-auth-panel {
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 24px;
+    padding: 2rem;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.4);
+    backdrop-filter: blur(14px);
+}
+
+.startup-kicker {
+    color: #7dd3fc;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+}
+
+.startup-auth-panel h1 {
+    font-size: clamp(2rem, 4vw, 3.25rem);
+    margin-bottom: 0.75rem;
+}
+
+.startup-copy {
+    color: rgba(226, 232, 240, 0.9);
+    font-size: 1.05rem;
+    line-height: 1.6;
+    max-width: 56rem;
+}
+
+.startup-auth-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin: 2rem 0 1.5rem;
+}
+
+.startup-auth-actions .primary-btn,
+.startup-auth-actions .secondary-btn {
+    width: 100%;
+    justify-content: center;
+    min-height: 56px;
+}
+
+.startup-auth-actions .guest-btn {
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(125, 211, 252, 0.3);
+}
+
+.startup-auth-notes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.startup-auth-notes p {
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+    color: rgba(226, 232, 240, 0.94);
+    line-height: 1.5;
+}
+
+.startup-downloads {
+    margin-top: 0;
+}
+
 .loading-content {
     text-align: center;
 }
@@ -214,6 +298,17 @@ body {
     margin-bottom: 1.5rem;
     font-size: 1.5rem;
     text-align: center;
+}
+
+@media (max-width: 800px) {
+    .startup-auth-actions,
+    .startup-auth-notes {
+        grid-template-columns: 1fr;
+    }
+
+    .startup-auth-panel {
+        padding: 1.5rem;
+    }
 }
 
 /* Buttons */

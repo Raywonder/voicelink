@@ -39,6 +39,7 @@ class VoiceLinkApp {
             currentScreen: 'loading-screen',
             screens: [
                 'loading-screen',
+                'startup-auth-screen',
                 'main-menu',
                 'create-room-screen',
                 'join-room-screen',
@@ -75,6 +76,34 @@ class VoiceLinkApp {
 
     getNativeAPI() {
         return window.nativeAPI || null;
+    }
+
+    isNativeApp() {
+        return !!this.getNativeAPI();
+    }
+
+    hasStoredAuthSession() {
+        return !!(
+            localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token') ||
+            localStorage.getItem('voicelink_local_token') ||
+            sessionStorage.getItem('voicelink_local_token') ||
+            localStorage.getItem('voicelink_whmcs_token') ||
+            sessionStorage.getItem('voicelink_whmcs_token')
+        );
+    }
+
+    shouldShowStartupAuthGate() {
+        return !this.isNativeApp() && !this.currentUser && !this.hasStoredAuthSession();
+    }
+
+    routeStartupExperience() {
+        this.startServerStatusMonitoring();
+        if (this.shouldShowStartupAuthGate()) {
+            this.showScreen('startup-auth-screen');
+        } else {
+            this.showScreen('main-menu');
+        }
     }
 
     async openExternal(url) {
@@ -192,8 +221,7 @@ class VoiceLinkApp {
                 console.log('Demo mode activated');
                 // Keep room list stable; do not auto-create hidden test/demo rooms.
                 setTimeout(() => {
-                    this.showScreen('main-menu');
-                    this.startServerStatusMonitoring();
+                    this.routeStartupExperience();
                     if (testFeature) {
                         this.showNotification(`Demo mode: ${testFeature}`, 'info');
                     }
@@ -201,9 +229,7 @@ class VoiceLinkApp {
             } else {
                 // Show main menu
                 setTimeout(() => {
-                    this.showScreen('main-menu');
-                    // Start periodic server status monitoring
-                    this.startServerStatusMonitoring();
+                    this.routeStartupExperience();
                 }, 2000);
             }
 
@@ -211,7 +237,7 @@ class VoiceLinkApp {
             console.error('Failed to initialize VoiceLink:', error);
             // Show main menu anyway - audio will initialize on first user interaction
             setTimeout(() => {
-                this.showScreen('main-menu');
+                this.routeStartupExperience();
                 // Don't show error - this is normal browser behavior
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
             }, 2000);
@@ -1377,6 +1403,22 @@ class VoiceLinkApp {
     }
 
     setupUIEventListeners() {
+        document.getElementById('startup-local-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('local-login');
+        });
+
+        document.getElementById('startup-whmcs-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('whmcs-login');
+        });
+
+        document.getElementById('startup-mastodon-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('mastodon-login');
+        });
+
+        document.getElementById('startup-guest-btn')?.addEventListener('click', () => {
+            this.showScreen('main-menu');
+        });
+
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
             this.showScreen('create-room-screen');
@@ -5110,11 +5152,11 @@ class VoiceLinkApp {
         }
     }
 
-    showMastodonLoginModal() {
+    showMastodonLoginModal(tabId = 'local-login') {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
             modal.style.display = 'flex';
-            this.setActiveAuthTab('local-login');
+            this.setActiveAuthTab(tabId);
         }
     }
 
@@ -5528,10 +5570,16 @@ class VoiceLinkApp {
                     joinNameInput.value = user.displayName || user.username || currentValue;
                 }
             }
+            if (this.ui.currentScreen === 'startup-auth-screen' || this.ui.currentScreen === 'loading-screen') {
+                this.showScreen('main-menu');
+            }
         } else {
             // Show logged-out state
             if (loginPrompt) loginPrompt.style.display = 'block';
             if (userInfo) userInfo.style.display = 'none';
+            if (!this.isNativeApp() && !this.currentRoom && this.ui.currentScreen !== 'loading-screen') {
+                this.showScreen('startup-auth-screen');
+            }
 
             // Hide admin controls
             this.hideAdminControls();

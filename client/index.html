@@ -23,6 +23,45 @@
             </div>
         </div>
 
+        <!-- Startup Auth Gate -->
+        <div id="startup-auth-screen" class="screen" role="main" aria-label="Login or continue as guest">
+            <div class="startup-auth-shell">
+                <div class="startup-auth-panel">
+                    <p class="startup-kicker">VoiceLink Access</p>
+                    <h1>Choose how to enter VoiceLink</h1>
+                    <p class="startup-copy">Sign in for full account features, or continue as a guest before browsing rooms.</p>
+
+                    <div class="startup-auth-actions">
+                        <button id="startup-local-login-btn" class="primary-btn">Sign In to VoiceLink</button>
+                        <button id="startup-whmcs-login-btn" class="secondary-btn">Sign In with Client Portal</button>
+                        <button id="startup-mastodon-login-btn" class="secondary-btn">Sign In with Mastodon</button>
+                        <button id="startup-guest-btn" class="secondary-btn guest-btn">Continue as Guest</button>
+                    </div>
+
+                    <div class="startup-auth-notes">
+                        <p><strong>Signed-in users:</strong> saved identity, room management, account settings, and linked services.</p>
+                        <p><strong>Guest users:</strong> can still browse and join rooms, with guest limits applied until sign-in.</p>
+                    </div>
+
+                    <div class="download-app-section web-only startup-downloads">
+                        <p class="download-title">Desktop Downloads</p>
+                        <p class="download-subtitle">Use the latest native builds on macOS or Windows.</p>
+                        <div class="download-buttons">
+                            <a href="/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn mac-btn">
+                                <span class="platform-icon">🍎</span> macOS
+                            </a>
+                            <a href="/downloads/voicelink/VoiceLink-windows.zip" class="download-btn">
+                                <span class="platform-icon">🪟</span> Windows
+                            </a>
+                            <a href="/downloads.html" class="download-btn">
+                                <span class="platform-icon">⬇️</span> All Downloads
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Main Menu -->
         <div id="main-menu" class="screen" role="main">
             <a id="main-content" tabindex="-1"></a>
@@ -52,10 +91,16 @@
                     <!-- Download Desktop App (hidden in Electron) -->
                     <div id="download-app-section" class="download-app-section web-only">
                         <p class="download-title">Get the Desktop App</p>
-                        <p class="download-subtitle">macOS app available now</p>
+                        <p class="download-subtitle">Download the current native builds for macOS or Windows.</p>
                         <div class="download-buttons">
-                            <a href="https://voicelink.devinecreations.net/downloads/VoiceLink-mac.dmg" class="download-btn mac-btn">
-                                <span class="platform-icon">🍎</span> Mac
+                            <a href="/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn mac-btn">
+                                <span class="platform-icon">🍎</span> macOS
+                            </a>
+                            <a href="/downloads/voicelink/VoiceLink-windows.zip" class="download-btn">
+                                <span class="platform-icon">🪟</span> Windows
+                            </a>
+                            <a href="/downloads.html" class="download-btn">
+                                <span class="platform-icon">⬇️</span> All Downloads
                             </a>
                         </div>
                     </div>
