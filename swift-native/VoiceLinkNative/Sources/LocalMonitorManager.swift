@@ -9,11 +9,13 @@ final class LocalMonitorManager: ObservableObject {
 
     private var engine = AVAudioEngine()
     private var monitorMixer = AVAudioMixerNode()
-    private var playerNode = AVAudioPlayerNode()
+    private var sourceNode: AVAudioSourceNode?
     private var isConfigured = false
     private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
     private var isTransitioning = false
     private var captureToken: UUID?
+    private var sampleBuffer: [Float] = []
+    private let maxBufferedSamples = 48_000 * 8
 
     private init() {}
 
@@ -46,7 +48,8 @@ final class LocalMonitorManager: ObservableObject {
         engine.reset()
         engine = AVAudioEngine()
         monitorMixer = AVAudioMixerNode()
-        playerNode = AVAudioPlayerNode()
+        sourceNode = nil
+        sampleBuffer.removeAll(keepingCapacity: true)
     }
 
     private func startMonitoring() {
@@ -66,21 +69,25 @@ final class LocalMonitorManager: ObservableObject {
 
         do {
             engine.attach(monitorMixer)
-            engine.attach(playerNode)
             engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.outputVolume)
             monitorMixer.outputVolume = Float(SettingsManager.shared.inputVolume)
-            engine.connect(playerNode, to: monitorMixer, format: nil)
+            let monitorFormat = AVAudioFormat(standardFormatWithSampleRate: outputFormat.sampleRate, channels: max(outputFormat.channelCount, 1))
+            let sourceNode = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+                guard let self else { return noErr }
+                return self.renderMonitorAudio(frameCount: frameCount, audioBufferList: audioBufferList)
+            }
+            self.sourceNode = sourceNode
+            engine.attach(sourceNode)
+            engine.connect(sourceNode, to: monitorMixer, format: monitorFormat)
             engine.connect(monitorMixer, to: engine.mainMixerNode, format: nil)
             engine.prepare()
             if !engine.isRunning {
                 try engine.start()
             }
-            playerNode.play()
             captureToken = SelectedAudioInputCapture.shared.start(deviceName: selectedInput) { [weak self] buffer in
                 guard let self else { return }
-                let copied = self.copyBuffer(buffer)
                 self.audioQueue.async {
-                    self.playerNode.scheduleBuffer(copied, completionHandler: nil)
+                    self.appendSamples(from: buffer)
                 }
             }
             DispatchQueue.main.async {
@@ -107,29 +114,69 @@ final class LocalMonitorManager: ObservableObject {
             SelectedAudioInputCapture.shared.stop(token: captureToken)
             self.captureToken = nil
         }
-        playerNode.stop()
         engine.disconnectNodeOutput(monitorMixer)
+        if let sourceNode {
+            engine.disconnectNodeOutput(sourceNode)
+        }
         engine.stop()
         engine.reset()
+        sourceNode = nil
+        sampleBuffer.removeAll(keepingCapacity: true)
         DispatchQueue.main.async {
             self.isMonitoring = false
         }
         print("[LocalMonitor] Monitoring stopped")
     }
 
-    private func copyBuffer(_ source: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
-        let format = source.format
-        let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: source.frameLength) ?? source
-        copy.frameLength = source.frameLength
-        if let sourceData = source.floatChannelData,
-           let targetData = copy.floatChannelData {
-            let channels = Int(format.channelCount)
-            let frames = Int(source.frameLength)
-            for channel in 0..<channels {
-                memcpy(targetData[channel], sourceData[channel], frames * MemoryLayout<Float>.size)
+    private func appendSamples(from source: AVAudioPCMBuffer) {
+        guard let sourceData = source.floatChannelData else { return }
+        let frames = Int(source.frameLength)
+        guard frames > 0 else { return }
+        let channelCount = Int(max(source.format.channelCount, 1))
+        let currentCount = sampleBuffer.count
+        sampleBuffer.reserveCapacity(currentCount + frames)
+        if channelCount == 1 {
+            sampleBuffer.append(contentsOf: UnsafeBufferPointer(start: sourceData[0], count: frames))
+        } else {
+            for frame in 0..<frames {
+                var mixed: Float = 0
+                for channel in 0..<channelCount {
+                    mixed += sourceData[channel][frame]
+                }
+                sampleBuffer.append(mixed / Float(channelCount))
             }
         }
-        return copy
+        if sampleBuffer.count > maxBufferedSamples {
+            sampleBuffer.removeFirst(sampleBuffer.count - maxBufferedSamples)
+        }
+    }
+
+    private func renderMonitorAudio(frameCount: UInt32, audioBufferList: UnsafeMutablePointer<AudioBufferList>) -> OSStatus {
+        let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        let framesRequested = Int(frameCount)
+        guard framesRequested > 0 else { return noErr }
+        let framesAvailable = min(framesRequested, sampleBuffer.count)
+
+        for bufferIndex in 0..<ablPointer.count {
+            let audioBuffer = ablPointer[bufferIndex]
+            guard let data = audioBuffer.mData else { continue }
+            let samples = data.bindMemory(to: Float.self, capacity: framesRequested)
+            if framesAvailable > 0 {
+                sampleBuffer.withUnsafeBufferPointer { buffer in
+                    samples.assign(from: buffer.baseAddress!, count: framesAvailable)
+                }
+            }
+            if framesAvailable < framesRequested {
+                for frame in framesAvailable..<framesRequested {
+                    samples[frame] = 0
+                }
+            }
+        }
+
+        if framesAvailable > 0 {
+            sampleBuffer.removeFirst(framesAvailable)
+        }
+        return noErr
     }
 
     private func defaultDeviceName(isInput: Bool) -> String {
