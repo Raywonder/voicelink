@@ -4689,9 +4689,51 @@ struct UserProfileSheet: View {
     let onToggleMonitor: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var authManager = AuthenticationManager.shared
+
+    private var authenticatedUser: AuthenticatedUser? {
+        isCurrentUser ? authManager.currentUser : nil
+    }
 
     private var effectiveDisplayName: String {
-        roomUser?.displayName ?? username
+        roomUser?.displayName
+            ?? authenticatedUser?.displayName
+            ?? username
+    }
+
+    private var effectiveUserId: String {
+        authenticatedUser?.id ?? userId
+    }
+
+    private var effectiveRole: String? {
+        roomUser?.role ?? authenticatedUser?.role
+    }
+
+    private var effectiveStatus: String? {
+        if let status = roomUser?.status, !status.isEmpty {
+            return status
+        }
+        return isCurrentUser ? "Signed in" : nil
+    }
+
+    private var effectiveAuthProvider: String? {
+        roomUser?.authProvider ?? authenticatedUser?.authProvider
+    }
+
+    private var effectiveEmail: String? {
+        roomUser?.email ?? authenticatedUser?.email
+    }
+
+    private var effectiveServerTitle: String? {
+        roomUser?.serverTitle ?? connectedServerName
+    }
+
+    private var effectiveJoinedAt: Date? {
+        roomUser?.joinedAt
+    }
+
+    private var effectiveLastActiveAt: Date? {
+        roomUser?.lastActiveAt
     }
 
     private var avatarInitials: String {
@@ -4738,15 +4780,15 @@ struct UserProfileSheet: View {
 
             GroupBox("Details") {
                 VStack(alignment: .leading, spacing: 10) {
-                    detailRow("User ID", value: userId)
-                    detailRow("Role", value: roomUser?.role)
-                    detailRow("Status", value: roomUser?.status)
-                    detailRow("Auth Provider", value: roomUser?.authProvider)
-                    detailRow("Email", value: roomUser?.email)
+                    detailRow("User ID", value: effectiveUserId)
+                    detailRow("Role", value: effectiveRole)
+                    detailRow("Status", value: effectiveStatus)
+                    detailRow("Auth Provider", value: effectiveAuthProvider)
+                    detailRow("Email", value: effectiveEmail)
                     detailRow("Room", value: roomName)
-                    detailRow("Server", value: roomUser?.serverTitle ?? connectedServerName)
-                    detailRow("Joined", value: formattedDate(roomUser?.joinedAt))
-                    detailRow("Last Activity", value: formattedDate(roomUser?.lastActiveAt))
+                    detailRow("Server", value: effectiveServerTitle)
+                    detailRow("Joined", value: formattedDate(effectiveJoinedAt))
+                    detailRow("Last Activity", value: formattedDate(effectiveLastActiveAt))
                 }
             }
 

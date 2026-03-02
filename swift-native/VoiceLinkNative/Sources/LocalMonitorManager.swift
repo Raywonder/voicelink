@@ -8,7 +8,7 @@ final class LocalMonitorManager: ObservableObject {
     @Published private(set) var isMonitoring: Bool = false
 
     private var engine = AVAudioEngine()
-    private var monitorPlayer = AVAudioPlayerNode()
+    private var monitorMixer = AVAudioMixerNode()
     private var isConfigured = false
     private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
     private var isTransitioning = false
@@ -43,7 +43,7 @@ final class LocalMonitorManager: ObservableObject {
         engine.stop()
         engine.reset()
         engine = AVAudioEngine()
-        monitorPlayer = AVAudioPlayerNode()
+        monitorMixer = AVAudioMixerNode()
     }
 
     private func startMonitoring() {
@@ -69,29 +69,16 @@ final class LocalMonitorManager: ObservableObject {
         print("[LocalMonitor] Output format sr=\(outputFormat.sampleRate) channels=\(outputFormat.channelCount)")
 
         do {
-            engine.attach(monitorPlayer)
             engine.disconnectNodeOutput(inputNode)
+            engine.attach(monitorMixer)
             engine.disconnectNodeOutput(engine.mainMixerNode)
-            inputNode.removeTap(onBus: 0)
             engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.outputVolume)
-            let downstreamFormat = outputFormat.sampleRate > 0 ? outputFormat : inputFormat
-            engine.connect(monitorPlayer, to: engine.mainMixerNode, format: inputFormat)
-            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: downstreamFormat)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-                guard let self, self.isMonitoring else { return }
-                guard let copiedBuffer = self.makePCMBufferCopy(from: buffer, format: inputFormat) else { return }
-                self.monitorPlayer.scheduleBuffer(copiedBuffer, completionHandler: nil)
-                if !self.monitorPlayer.isPlaying {
-                    self.monitorPlayer.play()
-                }
-            }
+            monitorMixer.outputVolume = Float(SettingsManager.shared.inputVolume)
+            engine.connect(inputNode, to: monitorMixer, format: inputFormat)
+            engine.connect(monitorMixer, to: engine.mainMixerNode, format: inputFormat)
             engine.prepare()
             if !engine.isRunning {
                 try engine.start()
-            }
-            monitorPlayer.volume = Float(SettingsManager.shared.inputVolume)
-            if !monitorPlayer.isPlaying {
-                monitorPlayer.play()
             }
             DispatchQueue.main.async {
                 self.isMonitoring = true
@@ -110,49 +97,14 @@ final class LocalMonitorManager: ObservableObject {
 
     private func stopMonitoring() {
         guard isMonitoring else { return }
-        monitorPlayer.stop()
-        engine.inputNode.removeTap(onBus: 0)
         engine.disconnectNodeOutput(engine.inputNode)
-        engine.disconnectNodeOutput(monitorPlayer)
+        engine.disconnectNodeOutput(monitorMixer)
         engine.stop()
         engine.reset()
         DispatchQueue.main.async {
             self.isMonitoring = false
         }
         print("[LocalMonitor] Monitoring stopped")
-    }
-
-    private func makePCMBufferCopy(from sourceBuffer: AVAudioPCMBuffer, format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: sourceBuffer.frameLength) else {
-            return nil
-        }
-        copy.frameLength = sourceBuffer.frameLength
-
-        if let sourceFloat = sourceBuffer.floatChannelData,
-           let copyFloat = copy.floatChannelData {
-            for channel in 0..<Int(format.channelCount) {
-                memcpy(copyFloat[channel], sourceFloat[channel], Int(sourceBuffer.frameLength) * MemoryLayout<Float>.size)
-            }
-            return copy
-        }
-
-        if let sourceInt16 = sourceBuffer.int16ChannelData,
-           let copyInt16 = copy.int16ChannelData {
-            for channel in 0..<Int(format.channelCount) {
-                memcpy(copyInt16[channel], sourceInt16[channel], Int(sourceBuffer.frameLength) * MemoryLayout<Int16>.size)
-            }
-            return copy
-        }
-
-        if let sourceInt32 = sourceBuffer.int32ChannelData,
-           let copyInt32 = copy.int32ChannelData {
-            for channel in 0..<Int(format.channelCount) {
-                memcpy(copyInt32[channel], sourceInt32[channel], Int(sourceBuffer.frameLength) * MemoryLayout<Int32>.size)
-            }
-            return copy
-        }
-
-        return nil
     }
 
     private func defaultDeviceName(isInput: Bool) -> String {
