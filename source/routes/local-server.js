@@ -2031,7 +2031,26 @@ class VoiceLinkLocalServer {
         const room = this.rooms.get(roomId);
         if (!room) return [];
         room.users = this.getLiveRoomUsers(roomId);
-        return room.users;
+        const botName = 'VoiceLink Bot';
+        const virtualUsers = [{
+            id: `bot:${roomId}`,
+            roomId,
+            name: botName,
+            username: botName,
+            displayName: botName,
+            joinedAt: room.createdAt || new Date(),
+            lastActiveAt: new Date(),
+            isSpeaking: false,
+            isAuthenticated: true,
+            isBot: true,
+            authProvider: 'voicelink_bot',
+            role: 'bot',
+            audioSettings: {
+                muted: true,
+                deafened: true
+            }
+        }];
+        return [...room.users, ...virtualUsers];
     }
 
     serializeRoomUser(user, roomId = null) {
@@ -2048,6 +2067,7 @@ class VoiceLinkLocalServer {
             role: authInfo.role || user.role || null,
             authProvider: authInfo.authProvider || authInfo.provider || user.authProvider || null,
             isAuthenticated: !!user.isAuthenticated,
+            isBot: !!user.isBot,
             joinedAt: user.joinedAt || null,
             lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
             muted: !!(user.audioSettings?.muted),
@@ -9571,6 +9591,52 @@ class VoiceLinkLocalServer {
                     this.storeRoomMessage(user.roomId, message);
 
                     this.io.to(user.roomId).emit('chat-message', message);
+
+                    const source = (data.message || '').trim();
+                    const lowered = source.toLowerCase();
+                    const addressedToBot =
+                        lowered.startsWith('/bot') ||
+                        lowered.startsWith('@voicelink bot') ||
+                        lowered.includes('@voicelink bot') ||
+                        lowered.includes('voicelink bot');
+
+                    if (addressedToBot) {
+                        const room = this.rooms.get(user.roomId);
+                        const users = this.normalizeRoomUsers(user.roomId);
+                        const config = deployConfig.getConfig() || {};
+                        const motd = typeof config.server?.motd === 'string' ? config.server.motd.trim() : '';
+                        let reply = `Hi ${user.name || 'there'}. Try /bot help.`;
+
+                        if (lowered.includes('help')) {
+                            reply = 'Commands: /me action, /bot help, /bot status, /bot users, /bot motd, /bot server.';
+                        } else if (lowered.includes('status')) {
+                            reply = `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}.`;
+                        } else if (lowered.includes('users') || lowered.includes('who')) {
+                            const names = users.map(entry => entry.displayName || entry.username || entry.name).slice(0, 10);
+                            reply = names.length ? `In room: ${names.join(', ')}.` : 'No users are currently in this room.';
+                        } else if (lowered.includes('motd')) {
+                            reply = motd ? `Message of the day: ${motd}` : 'No message of the day is currently configured.';
+                        } else if (lowered.includes('server')) {
+                            reply = `${config.server?.name || 'VoiceLink'} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
+                        }
+
+                        const botMessage = {
+                            id: uuidv4(),
+                            userId: `bot:${user.roomId}`,
+                            userName: 'VoiceLink Bot',
+                            message: reply,
+                            timestamp: new Date(),
+                            isAuthenticated: true,
+                            isBot: true,
+                            authProvider: 'voicelink_bot',
+                            replyTo: message.id,
+                            reactions: []
+                        };
+                        this.storeRoomMessage(user.roomId, botMessage);
+                        setTimeout(() => {
+                            this.io.to(user.roomId).emit('chat-message', botMessage);
+                        }, 250);
+                    }
                 }
             });
 

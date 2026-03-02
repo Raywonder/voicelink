@@ -84,16 +84,18 @@ class MessagingManager: ObservableObject {
 
     /// Send a message to the current room
     func sendRoomMessage(_ content: String) {
-        guard !content.isEmpty else { return }
-        guard content.count <= MessagingManager.maxMessageLength else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard trimmed.count <= MessagingManager.maxMessageLength else { return }
 
         let userId = getCurrentUserId()
         let username = getCurrentUsername()
+        let normalizedContent = normalizeOutgoingRoomContent(trimmed, username: username)
 
         let message = ChatMessage(
             senderId: userId,
             senderName: username,
-            content: content,
+            content: normalizedContent,
             type: .text
         )
 
@@ -164,15 +166,17 @@ class MessagingManager: ObservableObject {
 
     /// Send a reply to a message
     func sendReply(to messageId: String, content: String) {
-        guard !content.isEmpty else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
 
         let userId = getCurrentUserId()
         let username = getCurrentUsername()
+        let normalizedContent = normalizeOutgoingRoomContent(trimmed, username: username)
 
         var message = ChatMessage(
             senderId: userId,
             senderName: username,
-            content: content,
+            content: normalizedContent,
             type: .reply
         )
         message.replyToId = messageId
@@ -507,6 +511,29 @@ class MessagingManager: ObservableObject {
             if !stripped.isEmpty {
                 return stripped
             }
+        }
+
+        return trimmed
+    }
+
+    private func normalizeOutgoingRoomContent(_ content: String, username: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix("/me ") {
+            let action = trimmed.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !action.isEmpty else { return trimmed }
+            return "* \(username) \(action)"
+        }
+
+        if lowered == "/bot" {
+            return "@VoiceLink Bot help"
+        }
+
+        if lowered.hasPrefix("/bot ") {
+            let remainder = trimmed.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
+            return remainder.isEmpty ? "@VoiceLink Bot help" : "@VoiceLink Bot \(remainder)"
         }
 
         return trimmed

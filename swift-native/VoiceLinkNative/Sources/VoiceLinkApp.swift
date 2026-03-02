@@ -3542,7 +3542,9 @@ struct RoomDetailsSheet: View {
     }
 
     private var totalUsersLabel: String {
-        "Total users in room: \(room.userCount) of \(room.maxUsers)"
+        let liveCount = ServerManager.shared.currentRoomUsers.count
+        let effectiveCount = isActiveRoom && liveCount > 0 ? liveCount : room.userCount
+        return "Total users in room: \(effectiveCount) of \(room.maxUsers)"
     }
 
     private var mediaStatusLabel: String {
