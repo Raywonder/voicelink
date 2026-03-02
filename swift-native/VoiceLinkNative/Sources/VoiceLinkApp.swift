@@ -1042,13 +1042,16 @@ class AppState: ObservableObject {
                 if let room = self.rooms.first(where: { $0.id == activeRoomId }) {
                     self.currentRoom = room
                 } else {
+                    let now = Date()
                     self.currentRoom = Room(
                         id: activeRoomId,
                         name: "Room \(activeRoomId)",
                         description: "",
                         userCount: 1,
                         isPrivate: false,
-                        maxUsers: 50
+                        maxUsers: 50,
+                        createdAt: now,
+                        lastActivityAt: now
                     )
                 }
                 self.minimizedRoom = nil
