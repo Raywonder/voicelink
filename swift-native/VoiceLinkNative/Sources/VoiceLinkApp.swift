@@ -3095,6 +3095,7 @@ struct MainWindowServerStatusSheet: View {
     @ObservedObject private var adminManager = AdminServerManager.shared
     @State private var federationSettings: FederationSettings?
     @State private var isLoadingFederation = false
+    @State private var isRefreshing = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -3107,6 +3108,7 @@ struct MainWindowServerStatusSheet: View {
                     Button("Refresh") {
                         Task { await refresh() }
                     }
+                    .disabled(isRefreshing)
                     Button("Done") { dismiss() }
                 }
 
@@ -3146,6 +3148,9 @@ struct MainWindowServerStatusSheet: View {
                     VStack(alignment: .leading, spacing: 10) {
                         if isLoadingFederation {
                             ProgressView()
+                        } else if federationSettings == nil {
+                            statusRow("Status", value: "Unavailable")
+                            statusRow("Details", value: "Federation settings could not be loaded from the current server.")
                         } else {
                             statusRow("Enabled", value: boolLabel(federationSettings?.enabled))
                             statusRow("Allow Incoming", value: boolLabel(federationSettings?.allowIncoming))
@@ -3181,11 +3186,19 @@ struct MainWindowServerStatusSheet: View {
     }
 
     private func refresh() async {
-        await adminManager.fetchServerStats()
-        await adminManager.fetchServerConfig()
+        guard !isRefreshing else { return }
+        isRefreshing = true
         isLoadingFederation = true
-        federationSettings = await adminManager.fetchFederationSettings()
-        isLoadingFederation = false
+        defer {
+            isRefreshing = false
+            isLoadingFederation = false
+        }
+
+        async let stats: Void = adminManager.fetchServerStats()
+        async let config: Void = adminManager.fetchServerConfig()
+        let federation = await adminManager.fetchFederationSettings()
+        _ = await (stats, config)
+        federationSettings = federation
     }
 
     @ViewBuilder

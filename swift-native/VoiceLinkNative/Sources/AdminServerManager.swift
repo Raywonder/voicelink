@@ -467,29 +467,37 @@ class AdminServerManager: ObservableObject {
     // MARK: - Server Stats
 
     func fetchServerStats() async {
-        guard let url = URL(string: "\(effectiveServerURL)/api/admin/stats") else {
-            return
-        }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
 
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/stats") else {
+                continue
             }
 
-            let decoder = JSONDecoder()
-            serverStats = try decoder.decode(ServerStats.self, from: data)
-        } catch {
-            print("Failed to fetch stats: \(error)")
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    continue
+                }
+                if httpResponse.statusCode == 200 {
+                    serverStats = try decoder.decode(ServerStats.self, from: data)
+                    currentServerURL = base
+                    return
+                }
+            } catch {
+                continue
+            }
         }
+
+        serverStats = nil
     }
 
     func fetchServerLogs() async {
