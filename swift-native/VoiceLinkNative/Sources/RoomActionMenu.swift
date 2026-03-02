@@ -271,9 +271,9 @@ struct RoomActionMenu: View {
                     if canManageRoomActions {
                         ActionMenuItem(
                             icon: "slider.horizontal.3",
-                            label: "Open Room Administration",
+                            label: "Open Server Administration",
                             shortcut: nil,
-                            description: "Manage room permissions and metadata"
+                            description: "Open server-wide administration for this room"
                         ) {
                             NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
                             isPresented = false

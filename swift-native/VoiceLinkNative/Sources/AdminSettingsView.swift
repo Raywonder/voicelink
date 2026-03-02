@@ -120,9 +120,10 @@ struct AdminSettingsView: View {
             )
         )
         .task {
-            await adminManager.fetchServerStats()
-            await adminManager.fetchServerConfig()
-            await adminManager.refreshModulesCenter()
+            async let stats: Void = adminManager.fetchServerStats()
+            async let config: Void = adminManager.fetchServerConfig()
+            async let modules: Void = adminManager.refreshModulesCenter()
+            _ = await (stats, config, modules)
         }
     }
 
@@ -179,6 +180,9 @@ struct AdminTabButton: View {
                 .cornerRadius(8)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityHint(isSelected ? "Current server administration tab." : "Opens the \(title) tab.")
     }
 }
 
@@ -188,6 +192,8 @@ struct AdminOverviewSection: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            overviewHeader
+
             // Stats grid
             if let stats = adminManager.serverStats {
                 LazyVGrid(columns: [
@@ -205,6 +211,8 @@ struct AdminOverviewSection: View {
                     AdminStatCard(title: "Messages/min", value: String(format: "%.1f", stats.messagesPerMinute), icon: "message.fill", color: .yellow)
                     AdminStatCard(title: "Bandwidth", value: formatBandwidth(stats.bandwidthUsage), icon: "network", color: .red)
                 }
+
+                operationalSummary(stats: stats)
             } else {
                 ProgressView("Loading server stats...")
                     .foregroundColor(.white)
@@ -212,22 +220,10 @@ struct AdminOverviewSection: View {
 
             // Server config summary
             if let config = adminManager.serverConfig {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Server Configuration")
-                        .font(.headline)
-                        .foregroundColor(.white)
-
-                    HStack(spacing: 30) {
-                        ConfigSummaryItem(label: "Server Name", value: config.serverName)
-                        ConfigSummaryItem(label: "Max Users", value: "\(config.maxUsers)")
-                        ConfigSummaryItem(label: "Max Rooms", value: "\(config.maxRooms)")
-                        ConfigSummaryItem(label: "Auth Required", value: config.requireAuth ? "Yes" : "No")
-                    }
-                }
-                .padding()
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(12)
+                serverConfigurationSummary(config: config)
             }
+
+            modulesSummary
 
             // Quick actions
             HStack(spacing: 15) {
@@ -252,6 +248,150 @@ struct AdminOverviewSection: View {
         }
     }
 
+    private var overviewHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Overview")
+                .font(.title2.bold())
+                .foregroundColor(.white)
+            Text("Current server health, capacity, and installed feature summary.")
+                .font(.subheadline)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(12)
+    }
+
+    private func operationalSummary(stats: ServerStats) -> some View {
+        let occupancy = stats.totalUsers > 0
+            ? String(format: "%.0f%%", (Double(stats.activeUsers) / Double(max(stats.totalUsers, 1))) * 100.0)
+            : "0%"
+        let roomActivity = stats.totalRooms > 0
+            ? String(format: "%.0f%%", (Double(stats.activeRooms) / Double(max(stats.totalRooms, 1))) * 100.0)
+            : "0%"
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Operational Summary")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 12) {
+                AdminSummaryPanel(
+                    title: "User Activity",
+                    lines: [
+                        "Currently active: \(stats.activeUsers)",
+                        "Known total users: \(stats.totalUsers)",
+                        "Activity ratio: \(occupancy)"
+                    ],
+                    icon: "person.3.sequence.fill",
+                    color: .green
+                )
+
+                AdminSummaryPanel(
+                    title: "Room Activity",
+                    lines: [
+                        "Open rooms: \(stats.totalRooms)",
+                        "Active rooms: \(stats.activeRooms)",
+                        "Room activity ratio: \(roomActivity)"
+                    ],
+                    icon: "rectangle.3.group.bubble.left.fill",
+                    color: .purple
+                )
+
+                AdminSummaryPanel(
+                    title: "Traffic",
+                    lines: [
+                        "Messages per minute: \(String(format: "%.1f", stats.messagesPerMinute))",
+                        "Bandwidth used: \(formatBandwidth(stats.bandwidthUsage))",
+                        "Peak concurrent users: \(stats.peakUsers)"
+                    ],
+                    icon: "waveform.path.ecg.rectangle.fill",
+                    color: .orange
+                )
+
+                AdminSummaryPanel(
+                    title: "Runtime",
+                    lines: [
+                        "Server uptime: \(formatLongUptime(stats.uptime))",
+                        "Quick view: \(formatUptime(stats.uptime))",
+                        "Status: \(stats.activeRooms > 0 || stats.activeUsers > 0 ? "Busy" : "Standing by")"
+                    ],
+                    icon: "clock.arrow.circlepath",
+                    color: .cyan
+                )
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private func serverConfigurationSummary(config: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Server Configuration")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 12) {
+                ConfigSummaryItem(label: "Server Name", value: config.serverName)
+                ConfigSummaryItem(label: "Auth Required", value: config.requireAuth ? "Yes" : "No")
+                ConfigSummaryItem(label: "Registration Enabled", value: config.registrationEnabled ? "Yes" : "No")
+                ConfigSummaryItem(label: "Guest Access", value: config.requireAuth ? "Restricted" : "Allowed")
+                ConfigSummaryItem(label: "Max Users", value: "\(config.maxUsers)")
+                ConfigSummaryItem(label: "Max Rooms", value: "\(config.maxRooms)")
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var modulesSummary: some View {
+        let installedCount = adminManager.availableModules.filter(\.installed).count
+        let enabledCount = adminManager.availableModules.filter { $0.installed && $0.enabled }.count
+        let recommendedMissing = adminManager.availableModules.filter { $0.recommended && !$0.installed }
+        let recommendationSummary: String = {
+            if recommendedMissing.isEmpty {
+                return "Recommended set appears complete"
+            }
+            return "\(recommendedMissing.count) recommended pending"
+        }()
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Installed Features")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            HStack(spacing: 24) {
+                ConfigSummaryItem(label: "Installed Modules", value: "\(installedCount)")
+                ConfigSummaryItem(label: "Enabled Modules", value: "\(enabledCount)")
+                ConfigSummaryItem(label: "Recommended Status", value: recommendationSummary)
+            }
+
+            if recommendedMissing.isEmpty {
+                Text("All recommended modules currently appear installed.")
+                    .font(.caption)
+                    .foregroundColor(.green)
+            } else {
+                Text("Recommended not installed: \(recommendedMissing.prefix(3).map(\.name).joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundColor(.yellow)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
     private func formatUptime(_ seconds: Int) -> String {
         let days = seconds / 86400
         let hours = (seconds % 86400) / 3600
@@ -259,6 +399,19 @@ struct AdminOverviewSection: View {
             return "\(days)d \(hours)h"
         }
         return "\(hours)h"
+    }
+
+    private func formatLongUptime(_ seconds: Int) -> String {
+        let days = seconds / 86400
+        let hours = (seconds % 86400) / 3600
+        let minutes = (seconds % 3600) / 60
+        if days > 0 {
+            return "\(days) days, \(hours) hours, \(minutes) minutes"
+        }
+        if hours > 0 {
+            return "\(hours) hours, \(minutes) minutes"
+        }
+        return "\(minutes) minutes"
     }
 
     private func formatBandwidth(_ bytes: Double) -> String {
@@ -310,9 +463,43 @@ struct ConfigSummaryItem: View {
                 .font(.caption)
                 .foregroundColor(.gray)
             Text(value)
-                .font(.body)
+                .font(.body.weight(.medium))
                 .foregroundColor(.white)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.black.opacity(0.18))
+        .cornerRadius(10)
+    }
+}
+
+struct AdminSummaryPanel: View {
+    let title: String
+    let lines: [String]
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .foregroundColor(color)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+            }
+
+            ForEach(lines, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.black.opacity(0.18))
+        .cornerRadius(10)
     }
 }
 
@@ -491,6 +678,7 @@ struct AdminRoomsSection: View {
     @State private var showCreateRoom = false
     @State private var roomBeingEdited: AdminRoomInfo?
     @State private var roomSearchText = ""
+    @State private var roomPendingDelete: AdminRoomInfo?
 
     private var filteredRooms: [AdminRoomInfo] {
         let query = roomSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -501,6 +689,8 @@ struct AdminRoomsSection: View {
                 || room.id.lowercased().contains(query)
                 || (room.visibility?.lowercased().contains(query) ?? false)
                 || (room.accessType?.lowercased().contains(query) ?? false)
+                || (room.hostServerName?.lowercased().contains(query) ?? false)
+                || (room.serverSource?.lowercased().contains(query) ?? false)
         }
     }
 
@@ -564,6 +754,9 @@ struct AdminRoomsSection: View {
                 Text("Showing \(filteredRooms.count) of \(adminManager.serverRooms.count) rooms")
                     .font(.caption)
                     .foregroundColor(.gray)
+                Text("Only one room per server/source is shown here. Duplicate entries from the same server are merged.")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
             }
 
             LazyVStack(spacing: 10) {
@@ -571,10 +764,7 @@ struct AdminRoomsSection: View {
                     RoomAdminRow(room: room) { action in
                         switch action {
                         case .delete:
-                            Task {
-                                _ = await adminManager.deleteRoom(room.id)
-                                await adminManager.fetchRooms()
-                            }
+                            roomPendingDelete = room
                         case .edit:
                             roomBeingEdited = room
                         }
@@ -594,6 +784,47 @@ struct AdminRoomsSection: View {
         .task {
             await adminManager.fetchRooms()
         }
+        .confirmationDialog(
+            roomPendingDelete == nil ? "Delete room" : "Delete \(roomPendingDelete?.name ?? "room")?",
+            isPresented: Binding(
+                get: { roomPendingDelete != nil },
+                set: { if !$0 { roomPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let room = roomPendingDelete, room.userCount > 0 {
+                Button("Disable Room Instead") {
+                    Task {
+                        var disabled = room
+                        disabled.hidden = true
+                        disabled.enabled = false
+                        disabled.locked = true
+                        _ = await adminManager.updateRoom(disabled)
+                        await adminManager.fetchRooms()
+                    }
+                    roomPendingDelete = nil
+                }
+            }
+
+            Button("Delete Room", role: .destructive) {
+                guard let room = roomPendingDelete else { return }
+                Task {
+                    _ = await adminManager.deleteRoom(room.id)
+                    await adminManager.fetchRooms()
+                }
+                roomPendingDelete = nil
+            }
+
+            Button("Cancel", role: .cancel) {
+                roomPendingDelete = nil
+            }
+        } message: {
+            if let room = roomPendingDelete, room.userCount > 0 {
+                Text("This room currently has \(room.userCount) user(s). Disable it first or move users to another room before deleting.")
+            } else {
+                Text("This permanently removes the room from the server.")
+            }
+        }
     }
 }
 
@@ -604,6 +835,10 @@ struct RoomAdminRow: View {
 
     enum RoomAction {
         case edit, delete
+    }
+
+    private var roomSourceLabel: String {
+        room.hostServerName ?? room.serverSource ?? "Current Server"
     }
 
     var body: some View {
@@ -631,6 +866,29 @@ struct RoomAdminRow: View {
                 Text(room.description)
                     .font(.caption)
                     .foregroundColor(.gray)
+                Text("Displayed from: \(roomSourceLabel)")
+                    .font(.caption2)
+                    .foregroundColor(.mint)
+                if let owner = room.hostServerOwner, !owner.isEmpty {
+                    Text("Server owner: \(owner)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                if let updatedBy = room.updatedBy, !updatedBy.isEmpty {
+                    Text("Last updated by: \(updatedBy)\(room.updatedAt.map { " on \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                } else if let updatedAt = room.updatedAt {
+                    Text("Last updated: \(updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+                if !room.previousNames.isEmpty {
+                    Text("Prior names: \(room.previousNames.prefix(5).joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundColor(.purple)
+                        .lineLimit(2)
+                }
                 HStack(spacing: 8) {
                     Text("Visibility: \(room.visibility ?? (room.isPrivate ? "private" : "public"))")
                     Text("Access: \(room.accessType ?? "hybrid")")
@@ -649,7 +907,7 @@ struct RoomAdminRow: View {
 
             HStack(spacing: 4) {
                 Image(systemName: "person.fill")
-                Text("\(room.userCount)/\(room.maxUsers)")
+                Text("Total users in room: \(room.userCount) of \(room.maxUsers) max")
             }
             .font(.caption)
             .foregroundColor(.white.opacity(0.6))
@@ -949,6 +1207,11 @@ struct AdminConfigSection: View {
             } else {
                 ProgressView("Loading configuration...")
                     .foregroundColor(.white)
+            }
+        }
+        .task {
+            if adminManager.serverConfig == nil && !adminManager.isLoading {
+                await adminManager.fetchServerConfig()
             }
         }
     }

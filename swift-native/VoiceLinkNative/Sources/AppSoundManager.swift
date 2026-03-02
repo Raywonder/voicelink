@@ -225,17 +225,19 @@ class AppSoundManager: ObservableObject {
             ("sounds", soundType.rawValue, "flac")
         ]
 
-        for (subdir, name, ext) in locations {
-            var url: URL?
-            if let sub = subdir {
-                url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: sub)
-            } else {
-                url = Bundle.main.url(forResource: name, withExtension: ext)
-            }
+        for bundle in candidateResourceBundles() {
+            for (subdir, name, ext) in locations {
+                var url: URL?
+                if let sub = subdir {
+                    url = bundle.url(forResource: name, withExtension: ext, subdirectory: sub)
+                } else {
+                    url = bundle.url(forResource: name, withExtension: ext)
+                }
 
-            if let soundURL = url {
-                if cachePlayableSound(for: soundType, url: soundURL) {
-                    return
+                if let soundURL = url {
+                    if cachePlayableSound(for: soundType, url: soundURL) {
+                        return
+                    }
                 }
             }
         }
@@ -263,12 +265,9 @@ class AppSoundManager: ObservableObject {
     }
     
     private func buildSoundLibraryIndex() {
-        guard let resourcesRoot = Bundle.main.resourceURL else { return }
-        let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
         var index: [IndexedSound] = []
-        let roots = [soundsRoot, downloadedSoundsRoot()]
+        let roots = candidateSoundRoots() + [downloadedSoundsRoot()].compactMap { $0 }
         for root in roots {
-            guard let root else { continue }
             if let enumerator = FileManager.default.enumerator(
                 at: root,
                 includingPropertiesForKeys: [.isRegularFileKey],
@@ -295,7 +294,7 @@ class AppSoundManager: ObservableObject {
         }
 
         let assign = {
-            self.soundsRootURL = soundsRoot
+            self.soundsRootURL = roots.first
             self.indexedSounds = index
         }
         if Thread.isMainThread {
@@ -410,27 +409,32 @@ class AppSoundManager: ObservableObject {
     }
 
     private func resolveSoundTestURL() -> URL? {
-        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
+        let candidateRoots = candidateSoundRoots(preferred: soundsRootURL)
+        for soundsRoot in candidateRoots {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
 
-        let preferred = entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
-        }
-        if let preferred { return preferred }
+            let preferred = entries.first { url in
+                guard url.pathExtension.lowercased() == "wav" else { return false }
+                let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
+            }
+            if let preferred { return preferred }
 
-        return entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base.contains("test")
+            if let fallback = entries.first(where: { url in
+                guard url.pathExtension.lowercased() == "wav" else { return false }
+                let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                return base.contains("test")
+            }) {
+                return fallback
+            }
         }
+        return nil
     }
 
     // MARK: - Play Sounds
@@ -683,47 +687,106 @@ class AppSoundManager: ObservableObject {
     }
 
     private func pickRandomStartupIntroURL() -> URL? {
-        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
         let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
-        var rootLevelCandidates: [URL] = []
-        var explicit: [URL] = []
+        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
+            var rootLevelCandidates: [URL] = []
+            var explicit: [URL] = []
 
-        if let entries = try? FileManager.default.contentsOfDirectory(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for url in entries {
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard exts.contains(ext) else { continue }
-                rootLevelCandidates.append(url)
+            if let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for url in entries {
+                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true else { continue }
+                    let ext = url.pathExtension.lowercased()
+                    guard exts.contains(ext) else { continue }
+                    rootLevelCandidates.append(url)
+                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") || base == "connected" {
+                        explicit.append(url)
+                    }
+                }
+            }
+
+            if let preferred = explicit.first(where: { $0.deletingPathExtension().lastPathComponent.lowercased() == "connected" }) {
+                return preferred
+            }
+
+            if let explicitIntro = explicit.randomElement() {
+                return explicitIntro
+            }
+
+            if let randomRoot = rootLevelCandidates.randomElement() {
+                return randomRoot
+            }
+
+            if let enumerator = FileManager.default.enumerator(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let url as URL in enumerator {
+                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true else { continue }
+                    let ext = url.pathExtension.lowercased()
+                    guard exts.contains(ext) else { continue }
+                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") || base == "connected" {
+                        explicit.append(url)
+                    }
+                }
+            }
+
+            if let preferred = explicit.first(where: { $0.deletingPathExtension().lastPathComponent.lowercased() == "connected" }) {
+                return preferred
+            }
+
+            if let match = explicit.randomElement() {
+                return match
             }
         }
 
-        if let randomRoot = rootLevelCandidates.randomElement() {
-            return randomRoot
-        }
+        return nil
+    }
 
-        if let enumerator = FileManager.default.enumerator(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for case let url as URL in enumerator {
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard exts.contains(ext) else { continue }
-                let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
-                    explicit.append(url)
+    private func candidateResourceBundles() -> [Bundle] {
+        var bundles: [Bundle] = [Bundle.main, Bundle.module]
+        if let mainURL = Bundle.main.builtInPlugInsURL,
+           let enumerator = FileManager.default.enumerator(at: mainURL, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator where url.pathExtension == "bundle" {
+                if let bundle = Bundle(url: url) {
+                    bundles.append(bundle)
                 }
             }
         }
 
-        return explicit.randomElement()
+        var seen = Set<String>()
+        return bundles.filter { bundle in
+            let key = bundle.bundleURL.path
+            return seen.insert(key).inserted
+        }
+    }
+
+    private func candidateSoundRoots(preferred: URL? = nil) -> [URL] {
+        var roots: [URL] = []
+        if let preferred {
+            roots.append(preferred)
+        }
+        for bundle in candidateResourceBundles() {
+            if let resourceURL = bundle.resourceURL {
+                roots.append(resourceURL.appendingPathComponent("sounds", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("sounds/ui-sounds", isDirectory: true))
+                roots.append(resourceURL)
+            }
+        }
+
+        var seen = Set<String>()
+        return roots.filter { url in
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            return seen.insert(url.path).inserted
+        }
     }
 
     // MARK: - Background Sound Download

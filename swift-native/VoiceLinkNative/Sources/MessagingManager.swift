@@ -15,6 +15,15 @@ class MessagingManager: ObservableObject {
     @Published var totalUnreadCount: Int = 0
     @Published var isTyping: [String: Bool] = [:]                 // odId -> isTyping
 
+    private struct PendingOutgoingMessage {
+        let senderId: String
+        let senderName: String
+        let content: String
+        let timestamp: Date
+    }
+
+    private var pendingOutgoingMessages: [PendingOutgoingMessage] = []
+
     // MARK: - Types
 
     struct ChatMessage: Identifiable, Codable, Equatable {
@@ -38,12 +47,19 @@ class MessagingManager: ObservableObject {
             case reply
         }
 
-        init(senderId: String, senderName: String, content: String, type: MessageType = .text) {
-            self.id = UUID().uuidString
+        init(
+            id: String = UUID().uuidString,
+            senderId: String,
+            senderName: String,
+            content: String,
+            timestamp: Date = Date(),
+            type: MessageType = .text
+        ) {
+            self.id = id
             self.senderId = senderId
             self.senderName = senderName
             self.content = content
-            self.timestamp = Date()
+            self.timestamp = timestamp
             self.type = type
             self.isRead = false
             self.attachmentId = nil
@@ -82,6 +98,7 @@ class MessagingManager: ObservableObject {
         )
 
         // Add to local messages
+        registerPendingOutgoing(message)
         addMessage(message)
 
         // Send to server
@@ -224,6 +241,10 @@ class MessagingManager: ObservableObject {
 
     private func addMessage(_ message: ChatMessage) {
         DispatchQueue.main.async {
+            self.prunePendingOutgoingMessages()
+            if self.isLikelyDuplicate(message) {
+                return
+            }
             self.messages.append(message)
 
             // Trim if too many messages
@@ -304,11 +325,20 @@ class MessagingManager: ObservableObject {
 
         let typeRaw = data["type"] as? String ?? "text"
         let type = ChatMessage.MessageType(rawValue: typeRaw) ?? .text
+        let messageId = (data["messageId"] as? String) ?? UUID().uuidString
+        let timestamp: Date = {
+            if let value = data["timestamp"] as? Date { return value }
+            if let value = data["timestamp"] as? TimeInterval { return Date(timeIntervalSince1970: value) }
+            if let value = data["timestamp"] as? String, let parsed = ISO8601DateFormatter().date(from: value) { return parsed }
+            return Date()
+        }()
 
         let message = ChatMessage(
+            id: messageId,
             senderId: senderId,
             senderName: senderName,
-            content: content,
+            content: normalizedIncomingContent(content, senderName: senderName),
+            timestamp: timestamp,
             type: type
         )
 
@@ -329,7 +359,7 @@ class MessagingManager: ObservableObject {
         let message = ChatMessage(
             senderId: senderId,
             senderName: senderName,
-            content: content,
+            content: normalizedIncomingContent(content, senderName: senderName),
             type: .text
         )
 
@@ -379,6 +409,107 @@ class MessagingManager: ObservableObject {
 
     private func getCurrentUsername() -> String {
         return UserDefaults.standard.string(forKey: "username") ?? "User"
+    }
+
+    private func registerPendingOutgoing(_ message: ChatMessage) {
+        let pending = PendingOutgoingMessage(
+            senderId: canonicalSenderId(message.senderId),
+            senderName: canonicalSenderName(message.senderName),
+            content: normalizedMessageBody(message.content),
+            timestamp: message.timestamp
+        )
+        pendingOutgoingMessages.append(pending)
+        prunePendingOutgoingMessages()
+    }
+
+    private func prunePendingOutgoingMessages() {
+        let cutoff = Date().addingTimeInterval(-8)
+        pendingOutgoingMessages.removeAll { $0.timestamp < cutoff }
+    }
+
+    private func canonicalSenderId(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func canonicalSenderName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func normalizedMessageBody(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    private func isCurrentUserIdentity(senderId: String, senderName: String) -> Bool {
+        let currentId = canonicalSenderId(getCurrentUserId())
+        let ids = Set([currentId, "self", "me", ""])
+        let currentNames = Set([
+            canonicalSenderName(getCurrentUsername()),
+            canonicalSenderName(UserDefaults.standard.string(forKey: "displayName") ?? ""),
+            "you"
+        ])
+        let candidateId = canonicalSenderId(senderId)
+        let candidateName = canonicalSenderName(senderName)
+        return ids.contains(candidateId) || currentNames.contains(candidateName)
+    }
+
+    private func isLikelyDuplicate(_ message: ChatMessage) -> Bool {
+        if messages.contains(where: { $0.id == message.id }) {
+            return true
+        }
+
+        let normalizedContent = normalizedMessageBody(message.content)
+        let messageSenderId = canonicalSenderId(message.senderId)
+        let messageSenderName = canonicalSenderName(message.senderName)
+        let isCurrentUserMessage = isCurrentUserIdentity(senderId: message.senderId, senderName: message.senderName)
+
+        if messages.contains(where: { existing in
+            let existingContent = normalizedMessageBody(existing.content)
+            let sameBody = existingContent == normalizedContent
+            let closeInTime = abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 4
+            let senderMatches =
+                canonicalSenderId(existing.senderId) == messageSenderId ||
+                canonicalSenderName(existing.senderName) == messageSenderName ||
+                (isCurrentUserMessage && isCurrentUserIdentity(senderId: existing.senderId, senderName: existing.senderName))
+            return sameBody && closeInTime && senderMatches
+        }) {
+            return true
+        }
+
+        if isCurrentUserMessage,
+           pendingOutgoingMessages.contains(where: { pending in
+               pending.content == normalizedContent &&
+               abs(pending.timestamp.timeIntervalSince(message.timestamp)) < 6 &&
+               (pending.senderId == messageSenderId ||
+                pending.senderName == messageSenderName ||
+                messageSenderId.isEmpty ||
+                messageSenderName == "you")
+           }) {
+            return true
+        }
+
+        return false
+    }
+
+    private func normalizedIncomingContent(_ content: String, senderName: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return content }
+
+        let prefixes = [
+            "\(senderName):",
+            "\(senderName) :",
+            "You:",
+            "You :"
+        ]
+
+        for prefix in prefixes where trimmed.hasPrefix(prefix) {
+            let stripped = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stripped.isEmpty {
+                return stripped
+            }
+        }
+
+        return trimmed
     }
 
     // MARK: - Cleanup

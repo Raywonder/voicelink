@@ -7,9 +7,7 @@ enum APIEndpointResolver {
 
     // Ordered fallback list for production API/domain outages.
     private static let mainFallbackBases = [
-        communityNode2Base,
-        "https://64.20.46.178",
-        "https://64.20.46.179"
+        communityNode2Base
     ]
 
     static func normalize(_ base: String) -> String {
@@ -18,11 +16,11 @@ enum APIEndpointResolver {
 
     static func mainBaseCandidates(preferred: String? = nil) -> [String] {
         var candidates: [String] = []
-        candidates.append(canonicalMainBase)
-        candidates.append(contentsOf: mainFallbackBases)
         if let preferred, !preferred.isEmpty {
             candidates.append(normalize(preferred))
         }
+        candidates.append(canonicalMainBase)
+        candidates.append(contentsOf: mainFallbackBases)
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }

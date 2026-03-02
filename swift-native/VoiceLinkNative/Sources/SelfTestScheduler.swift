@@ -229,11 +229,21 @@ final class SelfTestScheduler: ObservableObject {
             }
 
         case .copyPartyAPI:
-            let base = APIEndpointResolver.normalize(CopyPartyManager.shared.config.primaryServer)
-            guard let url = URL(string: "\(base)/?j") else {
-                return (.fail, "Invalid CopyParty URL.")
+            let copyPartyConfig = CopyPartyManager.shared.config
+            let candidates = copyPartyCandidates(config: copyPartyConfig)
+            var failures: [String] = []
+            for base in candidates {
+                guard let url = URL(string: "\(base)/?j") else {
+                    failures.append("\(base) invalid")
+                    continue
+                }
+                let result = await performHTTPCheck(url: url, successRange: 200...499, okMessage: "CopyParty API reachable")
+                if result.0 == .pass {
+                    return (.pass, "CopyParty API reachable at \(base).")
+                }
+                failures.append(result.1)
             }
-            return await performHTTPCheck(url: url, successRange: 200...499, okMessage: "CopyParty API reachable")
+            return (.fail, failures.first ?? "CopyParty API check failed for all configured endpoints.")
 
         case .updaterMetadata:
             for candidate in APIEndpointResolver.mainBaseCandidates(preferred: ServerManager.shared.baseURL) {
@@ -246,17 +256,18 @@ final class SelfTestScheduler: ObservableObject {
             return (.fail, "Updater metadata check failed for all known endpoints.")
 
         case .coreSounds:
-            let required = [
-                "sounds/ui-sounds/button-click.wav",
-                "sounds/ui-sounds/notification.wav",
-                "sounds/ui-sounds/user-join.wav",
-                "sounds/ui-sounds/user-leave.wav"
+            let required: [(AppSoundManager.SoundType, String)] = [
+                (.buttonClick, "button-click.wav"),
+                (.notification, "notification.wav"),
+                (.userJoin, "user-join.wav"),
+                (.userLeave, "user-leave.wav")
             ]
-            let root = Bundle.main.resourceURL
-            let missing = required.filter { rel in
-                guard let root else { return true }
-                let path = root.appendingPathComponent(rel).path
-                return !FileManager.default.fileExists(atPath: path)
+            let missing = required.compactMap { item -> String? in
+                let (soundType, fallbackName) = item
+                if hasBundledSound(soundType: soundType) {
+                    return nil
+                }
+                return fallbackName
             }
             if missing.isEmpty {
                 return (.pass, "Core sound files present.")
@@ -290,6 +301,59 @@ final class SelfTestScheduler: ObservableObject {
             return (.fail, "HTTP \(http.statusCode) from \(url.absoluteString).")
         } catch {
             return (.fail, "Request failed for \(url.absoluteString): \(error.localizedDescription)")
+        }
+    }
+
+    private func copyPartyCandidates(config: CopyPartyManager.CopyPartyConfig) -> [String] {
+        var candidates = [
+            APIEndpointResolver.normalize(config.primaryServer),
+            "https://files.tappedin.fm"
+        ]
+        candidates.append(contentsOf: config.alternativeServers.map(APIEndpointResolver.normalize))
+        candidates.append("http://\(config.directAccessIP):\(config.directAccessPort)")
+
+        var seen = Set<String>()
+        return candidates
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private func hasBundledSound(soundType: AppSoundManager.SoundType) -> Bool {
+        let ext = soundType.fileExtension
+        let name = soundType.rawValue
+        let subdirectories: [String?] = [nil, "sounds", "sounds/ui-sounds"]
+
+        for bundle in candidateResourceBundles() {
+            for subdirectory in subdirectories {
+                let url: URL?
+                if let subdirectory {
+                    url = bundle.url(forResource: name, withExtension: ext, subdirectory: subdirectory)
+                } else {
+                    url = bundle.url(forResource: name, withExtension: ext)
+                }
+                if url != nil {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func candidateResourceBundles() -> [Bundle] {
+        var bundles: [Bundle] = [Bundle.main, Bundle.module]
+        if let pluginsURL = Bundle.main.builtInPlugInsURL,
+           let enumerator = FileManager.default.enumerator(at: pluginsURL, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator where url.pathExtension == "bundle" {
+                if let bundle = Bundle(url: url) {
+                    bundles.append(bundle)
+                }
+            }
+        }
+
+        var seen = Set<String>()
+        return bundles.filter { bundle in
+            let key = bundle.bundleURL.path
+            return seen.insert(key).inserted
         }
     }
 

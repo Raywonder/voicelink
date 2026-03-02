@@ -2435,6 +2435,7 @@ class VoiceLinkLocalServer {
                 name: room.name,
                 description: room.description || '',
                 users: this.normalizeRoomUsers(room.id).length,
+                userCount: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -2444,6 +2445,14 @@ class VoiceLinkLocalServer {
                 isDefault: room.isDefault || false,
                 template: room.template || null,
                 serverSource: 'local',
+                creatorHandle: room.creatorHandle || null,
+                createdBy: room.createdBy || room.creatorHandle || null,
+                createdAt: room.createdAt || null,
+                updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
+                updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
+                previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
+                hostServerName: room.hostServerName || this.serverName || null,
+                hostServerOwner: room.hostServerOwner || null,
                 // Lock status
                 locked: room.locked || false,
                 lockedAt: room.lockedAt || null,
@@ -2547,9 +2556,13 @@ class VoiceLinkLocalServer {
                 privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
+                createdBy: creatorHandle || null,
                 isDefault: isDefault || false,
                 template: template || null,
                 createdAt: new Date(),
+                updatedAt: new Date(),
+                updatedBy: creatorHandle || null,
+                previousNames: [],
                 expiresAt,
                 audioSettings: {
                     spatialAudio: true,
@@ -3345,21 +3358,58 @@ class VoiceLinkLocalServer {
             const { roomId } = req.params;
             const updates = req.body;
             const room = this.rooms.get(roomId);
+            const actingUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
+            const requestedBy = String(
+                actingUser?.username
+                || actingUser?.displayName
+                || actingUser?.email
+                || updates.updatedBy
+                || updates.creatorHandle
+                || ''
+            ).trim();
 
             if (!room) {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
+            const normalizedPreviousNames = Array.isArray(room.previousNames)
+                ? room.previousNames.map((value) => String(value || '').trim()).filter(Boolean)
+                : [];
+            const proposedName = typeof updates.name === 'string' ? updates.name.trim() : '';
+            const currentName = String(room.name || '').trim();
+
             // Apply updates
-            if (updates.name) room.name = updates.name;
+            if (proposedName && proposedName !== currentName) {
+                const dedupedHistory = [
+                    currentName,
+                    ...normalizedPreviousNames.filter((value) => value.toLowerCase() !== currentName.toLowerCase())
+                ].filter(Boolean);
+                room.previousNames = Array.from(new Set(dedupedHistory)).slice(0, 5);
+                room.name = proposedName;
+            } else if (!Array.isArray(room.previousNames)) {
+                room.previousNames = normalizedPreviousNames;
+            }
+            if (updates.description !== undefined) room.description = String(updates.description || '');
             if (updates.maxUsers) room.maxUsers = updates.maxUsers;
             if (updates.visibility) room.visibility = updates.visibility;
+            if (updates.accessType) room.accessType = updates.accessType;
+            if (updates.visibleToGuests !== undefined) room.visibleToGuests = !!updates.visibleToGuests;
+            if (updates.allowEmbed !== undefined) room.allowEmbed = !!updates.allowEmbed;
+            if (updates.showInApp !== undefined) room.showInApp = !!updates.showInApp;
             if (updates.password !== undefined) room.password = updates.password || null;
             if (updates.isDefault !== undefined) room.isDefault = updates.isDefault;
+            if (updates.locked !== undefined) room.locked = !!updates.locked;
+            if (updates.enabled !== undefined) room.enabled = !!updates.enabled;
+            if (updates.hidden !== undefined) room.hidden = !!updates.hidden;
 
             room.lastUpdated = new Date();
+            room.updatedAt = room.lastUpdated;
+            if (requestedBy) {
+                room.updatedBy = requestedBy;
+            }
             this.rooms.set(roomId, room);
             this.federation.broadcastRoomChange('updated', room);
+            this.saveRoomsToDisk();
 
             res.json({ success: true, room });
         });

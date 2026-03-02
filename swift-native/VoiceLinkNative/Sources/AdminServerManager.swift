@@ -51,40 +51,43 @@ class AdminServerManager: ObservableObject {
     // MARK: - Check Admin Status
 
     func checkAdminStatus(serverURL: String, token: String?) async {
-        self.currentServerURL = serverURL
+        self.currentServerURL = APIEndpointResolver.normalize(serverURL)
         self.authToken = token
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
 
-        guard let url = URL(string: "\(serverURL)/api/admin/status") else {
-            isAdmin = false
-            adminRole = .none
-            return
-        }
-
-        var request = URLRequest(url: url)
-        if let token = token {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                isAdmin = false
-                adminRole = .none
-                return
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/status") else {
+                continue
             }
 
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                isAdmin = json["isAdmin"] as? Bool ?? false
-                if let roleStr = json["role"] as? String {
-                    adminRole = AdminRole(rawValue: roleStr) ?? .none
+            var request = URLRequest(url: url)
+            if let token = token {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
                 }
+
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    isAdmin = json["isAdmin"] as? Bool ?? false
+                    if let roleStr = json["role"] as? String {
+                        adminRole = AdminRole(rawValue: roleStr) ?? .none
+                    }
+                    currentServerURL = base
+                    return
+                }
+            } catch {
+                continue
             }
-        } catch {
-            isAdmin = false
-            adminRole = .none
         }
+
+        isAdmin = false
+        adminRole = .none
     }
 
     // MARK: - Fetch Server Config
@@ -93,8 +96,9 @@ class AdminServerManager: ObservableObject {
         guard canManageConfigEffective else { return }
         isLoading = true
         error = nil
+        defer { isLoading = false }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -103,6 +107,7 @@ class AdminServerManager: ObservableObject {
             }
 
             var request = URLRequest(url: url)
+            request.timeoutInterval = 6
             if let token = authToken {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
@@ -116,18 +121,20 @@ class AdminServerManager: ObservableObject {
                 if httpResponse.statusCode == 200 {
                     serverConfig = try decoder.decode(ServerConfig.self, from: data)
                     currentServerURL = base
-                    isLoading = false
+                    error = nil
                     return
                 }
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    error = "Server config access denied (\(httpResponse.statusCode))."
+                }
             } catch {
-                self.error = error.localizedDescription
+                self.error = "Failed to fetch server config: \(error.localizedDescription)"
             }
         }
 
         if serverConfig == nil {
             error = error ?? "Failed to fetch server config"
         }
-        isLoading = false
     }
 
     // MARK: - Update Server Config
@@ -135,13 +142,14 @@ class AdminServerManager: ObservableObject {
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = APIEndpointResolver.url(base: currentServerURL, path: "/api/config") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/config") else {
             error = "Invalid server config URL"
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -172,11 +180,12 @@ class AdminServerManager: ObservableObject {
     func fetchConnectedUsers() async {
         guard canManageUsersEffective else { return }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/users") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users") else {
             return
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -199,12 +208,13 @@ class AdminServerManager: ObservableObject {
     func kickUser(_ userId: String, reason: String? = nil) async -> Bool {
         guard canManageUsersEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/users/\(userId)/kick") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users/\(userId)/kick") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -225,12 +235,13 @@ class AdminServerManager: ObservableObject {
     func banUser(_ userId: String, reason: String?, duration: Int?) async -> Bool {
         guard canManageUsersEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/users/\(userId)/ban") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users/\(userId)/ban") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -256,11 +267,15 @@ class AdminServerManager: ObservableObject {
     func fetchRooms() async {
         guard canManageRoomsEffective else { return }
 
-        guard let url = URL(string: "\(currentServerURL)/api/rooms?source=app") else {
+        guard var components = URLComponents(string: effectiveServerURL) else {
             return
         }
+        components.path = "/api/rooms"
+        components.queryItems = [URLQueryItem(name: "source", value: "app")]
+        guard let url = components.url else { return }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -273,13 +288,15 @@ class AdminServerManager: ObservableObject {
                 return
             }
 
+            let resolvedSource = Self.sourceLabel(from: effectiveServerURL)
             let parsedRooms = try await Task.detached(priority: .userInitiated) {
                 guard let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
                     return [AdminRoomInfo]()
                 }
 
-                return rawRooms
-                    .map { Self.adminRoom(from: $0) }
+                return Self.deduplicateAdminRooms(
+                    rawRooms.map { Self.adminRoom(from: $0, defaultSource: resolvedSource) }
+                )
                     .sorted {
                         let lhsActive = $0.userCount > 0
                         let rhsActive = $1.userCount > 0
@@ -302,12 +319,13 @@ class AdminServerManager: ObservableObject {
     func deleteRoom(_ roomId: String) async -> Bool {
         guard canManageRoomsEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/rooms/\(roomId)") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/rooms/\(roomId)") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -332,12 +350,13 @@ class AdminServerManager: ObservableObject {
     func updateRoom(_ room: AdminRoomInfo) async -> Bool {
         guard canManageRoomsEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/rooms/\(room.id)") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/rooms/\(room.id)") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -375,11 +394,12 @@ class AdminServerManager: ObservableObject {
     // MARK: - Server Stats
 
     func fetchServerStats() async {
-        guard let url = URL(string: "\(currentServerURL)/api/admin/stats") else {
+        guard let url = URL(string: "\(effectiveServerURL)/api/admin/stats") else {
             return
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -404,12 +424,13 @@ class AdminServerManager: ObservableObject {
     func updateBackgroundStreams(_ streams: [BackgroundStreamConfig]) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/background-streams") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/background-streams") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -431,11 +452,12 @@ class AdminServerManager: ObservableObject {
     func fetchAPISyncSettings() async -> APISyncSettings? {
         guard canManageConfigEffective else { return nil }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/api-sync") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/api-sync") else {
             return nil
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -457,12 +479,13 @@ class AdminServerManager: ObservableObject {
     func updateAPISyncSettings(_ settings: APISyncSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/api-sync") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/api-sync") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -484,11 +507,12 @@ class AdminServerManager: ObservableObject {
     func fetchFederationSettings() async -> FederationSettings? {
         guard canManageConfigEffective else { return nil }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/federation") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/federation") else {
             return nil
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -510,12 +534,13 @@ class AdminServerManager: ObservableObject {
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = URL(string: "\(currentServerURL)/api/admin/federation") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/federation") else {
             return false
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -535,8 +560,8 @@ class AdminServerManager: ObservableObject {
     // MARK: - Helper
 
     func refreshModulesCenter() async {
-        await fetchInstalledModules()
         await fetchAvailableModules()
+        await fetchInstalledModules()
     }
 
     func fetchAvailableModules(sortBy: String = "recommended", category: String? = nil) async {
@@ -557,6 +582,7 @@ class AdminServerManager: ObservableObject {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -582,7 +608,14 @@ class AdminServerManager: ObservableObject {
             }
 
             let modulesArray = (json["modules"] as? [[String: Any]]) ?? []
-            availableModules = modulesArray.compactMap { Self.parseModuleInfo(from: $0) }
+            let installedState = Dictionary(uniqueKeysWithValues: availableModules.map { ($0.id, $0) })
+            availableModules = modulesArray.compactMap { Self.parseModuleInfo(from: $0) }.map { module in
+                guard let existing = installedState[module.id] else { return module }
+                var merged = module
+                merged.installed = existing.installed
+                merged.enabled = existing.enabled
+                return merged
+            }
         } catch {
             self.error = "Failed to fetch module catalog: \(error.localizedDescription)"
         }
@@ -595,6 +628,7 @@ class AdminServerManager: ObservableObject {
         }
 
         var request = URLRequest(url: url)
+        request.timeoutInterval = 6
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -616,13 +650,24 @@ class AdminServerManager: ObservableObject {
             if availableModules.isEmpty {
                 availableModules = Array(installedById.values).sorted { $0.name < $1.name }
             } else {
-                availableModules = availableModules.map { module in
-                    guard let installed = installedById[module.id] else {
-                        var copy = module
-                        copy.installed = false
-                        return copy
+                var mergedById = Dictionary(uniqueKeysWithValues: availableModules.map { ($0.id, $0) })
+                for (moduleId, installed) in installedById {
+                    if var existing = mergedById[moduleId] {
+                        existing.installed = installed.installed
+                        existing.enabled = installed.enabled
+                        mergedById[moduleId] = existing
+                    } else {
+                        mergedById[moduleId] = installed
                     }
-                    return installed
+                }
+                availableModules = Array(mergedById.values).sorted { lhs, rhs in
+                    if lhs.installed != rhs.installed {
+                        return lhs.installed && !rhs.installed
+                    }
+                    if lhs.recommended != rhs.recommended {
+                        return lhs.recommended && !rhs.recommended
+                    }
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
                 }
             }
         } catch {
@@ -740,12 +785,52 @@ class AdminServerManager: ObservableObject {
         return APIEndpointResolver.canonicalMainBase
     }
 
-    nonisolated private static func adminRoom(from dict: [String: Any]) -> AdminRoomInfo {
+    nonisolated private static func sourceLabel(from base: String) -> String {
+        if let host = URL(string: base)?.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !host.isEmpty {
+            return host
+        }
+        return APIEndpointResolver.normalize(base)
+    }
+
+    nonisolated private static func adminRoom(from dict: [String: Any], defaultSource: String) -> AdminRoomInfo {
         let usersValue: Int = {
             if let count = dict["users"] as? Int { return count }
             if let count = dict["userCount"] as? Int { return count }
             if let users = dict["users"] as? [[String: Any]] { return users.count }
             return 0
+        }()
+
+        let resolvedHostServerName: String? = {
+            let keys = [
+                "hostServerName",
+                "serverDisplayName",
+                "serverTitle",
+                "serverName",
+                "instanceName",
+                "nodeName"
+            ]
+            for key in keys {
+                if let value = dict[key] as? String {
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
+            }
+            return nil
+        }()
+
+        let resolvedServerSource: String = {
+            let keys = ["serverSource", "sourceServer", "serverHost", "serverDomain"]
+            for key in keys {
+                if let value = dict[key] as? String {
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
+            }
+            if let host = resolvedHostServerName, !host.isEmpty {
+                return host
+            }
+            return defaultSource
         }()
 
         return AdminRoomInfo(
@@ -756,7 +841,7 @@ class AdminServerManager: ObservableObject {
             maxUsers: (dict["maxUsers"] as? Int) ?? 50,
             userCount: usersValue,
             createdBy: dict["createdBy"] as? String,
-            createdAt: nil,
+            createdAt: Self.parseDate(dict["createdAt"] ?? dict["created"]),
             isPermanent: (dict["isDefault"] as? Bool) ?? false,
             backgroundStream: nil,
             visibility: dict["visibility"] as? String,
@@ -764,8 +849,84 @@ class AdminServerManager: ObservableObject {
             hidden: dict["hidden"] as? Bool,
             locked: dict["locked"] as? Bool,
             enabled: dict["enabled"] as? Bool,
-            isDefault: dict["isDefault"] as? Bool
+            isDefault: dict["isDefault"] as? Bool,
+            hostServerName: resolvedHostServerName ?? defaultSource,
+            hostServerOwner: dict["hostServerOwner"] as? String,
+            serverSource: resolvedServerSource,
+            updatedBy: (dict["updatedBy"] as? String) ?? (dict["lastUpdatedBy"] as? String),
+            updatedAt: Self.parseDate(dict["updatedAt"] ?? dict["lastUpdated"]),
+            previousNames: Self.parseStringArray(dict["previousNames"] ?? dict["nameHistory"] ?? dict["priorNames"])
         )
+    }
+
+    nonisolated private static func parseDate(_ value: Any?) -> Date? {
+        switch value {
+        case let date as Date:
+            return date
+        case let timeInterval as TimeInterval:
+            return Date(timeIntervalSince1970: timeInterval)
+        case let intValue as Int:
+            return Date(timeIntervalSince1970: TimeInterval(intValue))
+        case let stringValue as String:
+            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if let parsed = ISO8601DateFormatter().date(from: trimmed) {
+                return parsed
+            }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return formatter.date(from: trimmed)
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func parseStringArray(_ value: Any?) -> [String] {
+        if let strings = value as? [String] {
+            return strings.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        if let array = value as? [Any] {
+            return array.compactMap { item in
+                guard let string = item as? String else { return nil }
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        }
+        return []
+    }
+
+    nonisolated private static func deduplicateAdminRooms(_ rooms: [AdminRoomInfo]) -> [AdminRoomInfo] {
+        func normalizedSource(for room: AdminRoomInfo) -> String {
+            let source = room.serverSource ?? room.hostServerName ?? room.id
+            return source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        func normalizedName(for room: AdminRoomInfo) -> String {
+            room.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        func score(_ room: AdminRoomInfo) -> Int {
+            var value = room.userCount * 100
+            value += room.description.isEmpty ? 0 : 20
+            value += room.backgroundStream == nil ? 0 : 10
+            value += room.hostServerOwner == nil ? 0 : 5
+            value += room.enabled == false ? 0 : 3
+            value += room.locked == true ? 1 : 0
+            value += room.isDefault == true ? 2 : 0
+            return value
+        }
+
+        var deduped: [String: AdminRoomInfo] = [:]
+        for room in rooms {
+            let roomKey = "\(normalizedSource(for: room))::\(normalizedName(for: room))"
+            if let existing = deduped[roomKey] {
+                deduped[roomKey] = score(room) >= score(existing) ? room : existing
+            } else {
+                deduped[roomKey] = room
+            }
+        }
+        return Array(deduped.values)
     }
 
     private static func parseModuleInfo(from dict: [String: Any]) -> AdminModuleInfo? {
@@ -812,6 +973,61 @@ struct ServerConfig: Codable {
     var requireAuth: Bool
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
+
+    enum CodingKeys: String, CodingKey {
+        case serverName
+        case serverDescription
+        case maxUsers
+        case maxRooms
+        case maxUsersPerRoom
+        case welcomeMessage
+        case motd
+        case registrationEnabled
+        case requireAuth
+        case backgroundStreams
+        case pushover
+    }
+
+    init(
+        serverName: String = "VoiceLink",
+        serverDescription: String = "",
+        maxUsers: Int = 500,
+        maxRooms: Int = 100,
+        maxUsersPerRoom: Int = 50,
+        welcomeMessage: String? = nil,
+        motd: String? = nil,
+        registrationEnabled: Bool = true,
+        requireAuth: Bool = false,
+        backgroundStreams: BackgroundStreamsConfig? = nil,
+        pushover: PushoverConfig? = nil
+    ) {
+        self.serverName = serverName
+        self.serverDescription = serverDescription
+        self.maxUsers = maxUsers
+        self.maxRooms = maxRooms
+        self.maxUsersPerRoom = maxUsersPerRoom
+        self.welcomeMessage = welcomeMessage
+        self.motd = motd
+        self.registrationEnabled = registrationEnabled
+        self.requireAuth = requireAuth
+        self.backgroundStreams = backgroundStreams
+        self.pushover = pushover
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        serverName = try container.decodeIfPresent(String.self, forKey: .serverName) ?? "VoiceLink"
+        serverDescription = try container.decodeIfPresent(String.self, forKey: .serverDescription) ?? ""
+        maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 500
+        maxRooms = try container.decodeIfPresent(Int.self, forKey: .maxRooms) ?? 100
+        maxUsersPerRoom = try container.decodeIfPresent(Int.self, forKey: .maxUsersPerRoom) ?? 50
+        welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
+        motd = try container.decodeIfPresent(String.self, forKey: .motd)
+        registrationEnabled = try container.decodeIfPresent(Bool.self, forKey: .registrationEnabled) ?? true
+        requireAuth = try container.decodeIfPresent(Bool.self, forKey: .requireAuth) ?? false
+        backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
+        pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
+    }
 }
 
 struct BackgroundStreamsConfig: Codable {
@@ -864,6 +1080,12 @@ struct AdminRoomInfo: Codable, Identifiable {
     var locked: Bool?
     var enabled: Bool?
     var isDefault: Bool?
+    var hostServerName: String?
+    var hostServerOwner: String?
+    var serverSource: String?
+    var updatedBy: String?
+    var updatedAt: Date?
+    var previousNames: [String]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -882,6 +1104,12 @@ struct AdminRoomInfo: Codable, Identifiable {
         case locked
         case enabled
         case isDefault
+        case hostServerName
+        case hostServerOwner
+        case serverSource
+        case updatedBy
+        case updatedAt
+        case previousNames
     }
 
     init(from decoder: Decoder) throws {
@@ -902,6 +1130,12 @@ struct AdminRoomInfo: Codable, Identifiable {
         locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
         isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault)
+        hostServerName = try container.decodeIfPresent(String.self, forKey: .hostServerName)
+        hostServerOwner = try container.decodeIfPresent(String.self, forKey: .hostServerOwner)
+        serverSource = try container.decodeIfPresent(String.self, forKey: .serverSource)
+        updatedBy = try container.decodeIfPresent(String.self, forKey: .updatedBy)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+        previousNames = try container.decodeIfPresent([String].self, forKey: .previousNames) ?? []
     }
 
     init(
@@ -920,7 +1154,13 @@ struct AdminRoomInfo: Codable, Identifiable {
         hidden: Bool? = nil,
         locked: Bool? = nil,
         enabled: Bool? = nil,
-        isDefault: Bool? = nil
+        isDefault: Bool? = nil,
+        hostServerName: String? = nil,
+        hostServerOwner: String? = nil,
+        serverSource: String? = nil,
+        updatedBy: String? = nil,
+        updatedAt: Date? = nil,
+        previousNames: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -938,6 +1178,12 @@ struct AdminRoomInfo: Codable, Identifiable {
         self.locked = locked
         self.enabled = enabled
         self.isDefault = isDefault
+        self.hostServerName = hostServerName
+        self.hostServerOwner = hostServerOwner
+        self.serverSource = serverSource
+        self.updatedBy = updatedBy
+        self.updatedAt = updatedAt
+        self.previousNames = previousNames
     }
 }
 

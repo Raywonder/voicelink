@@ -25,6 +25,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     @Published var pendingAdminInviteServerURL: String?
     @Published var pendingAdminInviteEmail: String?
     @Published var pendingAdminInviteRole: String?
+    @Published var lastCreatedInviteURL: String?
+    @Published var lastCreatedInviteEmail: String?
+    @Published var lastCreatedInviteRole: String?
+    @Published var lastCreatedInviteExpiry: Date?
 
     enum AuthState {
         case unauthenticated
@@ -508,6 +512,67 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 self?.pendingAdminInviteToken = nil
                 self?.pendingAdminInviteServerURL = nil
                 completion(true, nil)
+            }
+        }.resume()
+    }
+
+    func createAdminInvite(
+        email: String,
+        role: String = "admin",
+        expiresMinutes: Int = 60,
+        serverURL: String,
+        completion: @escaping (Bool, String?, String?) -> Void
+    ) {
+        guard let currentUser else {
+            completion(false, "You must be signed in to create an invite.", nil)
+            return
+        }
+        guard let url = URL(string: "\(serverURL)/api/admin/invites") else {
+            completion(false, "Invalid server URL", nil)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(currentUser.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "email": email,
+            "role": role,
+            "expiresMinutes": expiresMinutes
+        ])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(false, error.localizedDescription, nil)
+                    return
+                }
+
+                guard let data,
+                      let http = response as? HTTPURLResponse,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    completion(false, "Invalid response from server", nil)
+                    return
+                }
+
+                guard (200..<300).contains(http.statusCode),
+                      (json["success"] as? Bool) == true else {
+                    completion(false, json["error"] as? String ?? "Failed to create invite", nil)
+                    return
+                }
+
+                let inviteURL = json["inviteUrl"] as? String
+                self?.lastCreatedInviteURL = inviteURL
+                self?.lastCreatedInviteEmail = json["email"] as? String ?? email
+                self?.lastCreatedInviteRole = json["role"] as? String ?? role
+                if let expiresAt = json["expiresAt"] as? String {
+                    self?.lastCreatedInviteExpiry = ISO8601DateFormatter().date(from: expiresAt)
+                } else {
+                    self?.lastCreatedInviteExpiry = nil
+                }
+                completion(true, nil, inviteURL)
             }
         }.resume()
     }
@@ -1546,6 +1611,139 @@ struct AdminInviteAuthView: View {
                 onSuccess?()
             } else {
                 statusMessage = error ?? "Activation failed."
+            }
+        }
+    }
+}
+
+struct CreateAdminInviteView: View {
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @State private var emailInput: String = ""
+    @State private var roleInput: String = "admin"
+    @State private var expiresMinutes: Int = 60
+    @State private var serverURLInput: String = ""
+    @State private var statusMessage: String?
+    @State private var generatedInviteURL: String = ""
+    @State private var isSubmitting = false
+    @Binding var isPresented: Bool
+
+    private let availableRoles = ["moderator", "admin", "owner"]
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "envelope.badge")
+                .font(.system(size: 42))
+                .foregroundColor(.blue)
+            Text("Invite Someone")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            TextField("Server URL (https://...)", text: $serverURLInput)
+                .textFieldStyle(.roundedBorder)
+            TextField("Invitee Email", text: $emailInput)
+                .textFieldStyle(.roundedBorder)
+
+            Picker("Role", selection: $roleInput) {
+                ForEach(availableRoles, id: \.self) { role in
+                    Text(role.capitalized).tag(role)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Stepper(value: $expiresMinutes, in: 5...1440, step: 5) {
+                Text("Expires in \(expiresMinutes) minutes")
+            }
+
+            if !generatedInviteURL.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Invite link ready")
+                        .font(.headline)
+                    Text(generatedInviteURL)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .foregroundColor(.secondary)
+                    HStack {
+                        Button("Copy Link") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(generatedInviteURL, forType: .string)
+                            statusMessage = "Invite link copied."
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Copy Desktop Link") {
+                            let desktopLink = generatedInviteURL
+                                .replacingOccurrences(of: "/admin-invite.html?token=", with: "/")
+                            if let token = generatedInviteURL.components(separatedBy: "token=").last {
+                                let server = normalizedServerURL()
+                                let link = "vcl://admin-invite?token=\(token)&server=\(server.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? server)"
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(link, forType: .string)
+                                statusMessage = "Desktop invite link copied."
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(10)
+            }
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let authError = authManager.authError {
+                Text(authError)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack(spacing: 10) {
+                Button("Close") { isPresented = false }
+                    .buttonStyle(.bordered)
+                Button("Create Invite") { createInvite() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(emailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .onAppear {
+            if serverURLInput.isEmpty {
+                serverURLInput = AuthenticationManager.shared.pendingAdminInviteServerURL ?? ServerManager.shared.baseURL ?? ServerManager.mainServer
+            }
+        }
+    }
+
+    private func normalizedServerURL() -> String {
+        var server = serverURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !server.hasPrefix("http://") && !server.hasPrefix("https://") {
+            server = "https://" + server
+        }
+        return server.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    private func createInvite() {
+        isSubmitting = true
+        statusMessage = "Creating invite..."
+        let server = normalizedServerURL()
+        authManager.createAdminInvite(
+            email: emailInput.trimmingCharacters(in: .whitespacesAndNewlines),
+            role: roleInput,
+            expiresMinutes: expiresMinutes,
+            serverURL: server
+        ) { success, error, inviteURL in
+            isSubmitting = false
+            if success {
+                generatedInviteURL = inviteURL ?? ""
+                statusMessage = "Invite created. Email send was requested from the server."
+            } else {
+                statusMessage = error ?? "Failed to create invite."
             }
         }
     }

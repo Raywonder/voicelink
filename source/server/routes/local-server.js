@@ -512,6 +512,7 @@ class VoiceLinkLocalServer {
                 name: room.name,
                 description: room.description || '',
                 users: this.normalizeRoomUsers(room.id).length,
+                userCount: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -521,6 +522,14 @@ class VoiceLinkLocalServer {
                 isDefault: room.isDefault || false,
                 template: room.template || null,
                 serverSource: 'local',
+                creatorHandle: room.creatorHandle || null,
+                createdBy: room.createdBy || room.creatorHandle || null,
+                createdAt: room.createdAt || null,
+                updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
+                updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
+                previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
+                hostServerName: room.hostServerName || this.serverName || null,
+                hostServerOwner: room.hostServerOwner || null,
                 // Lock status
                 locked: room.locked || false,
                 lockedAt: room.lockedAt || null,
@@ -624,9 +633,13 @@ class VoiceLinkLocalServer {
                 privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
+                createdBy: creatorHandle || null,
                 isDefault: isDefault || false,
                 template: template || null,
                 createdAt: new Date(),
+                updatedAt: new Date(),
+                updatedBy: creatorHandle || null,
+                previousNames: [],
                 expiresAt,
                 audioSettings: {
                     spatialAudio: true,
@@ -1091,26 +1104,27 @@ class VoiceLinkLocalServer {
         // Updates check endpoint for native clients
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
+            const downloadBase = process.env.VOICELINK_DOWNLOAD_BASE || 'https://voicelink.devinecreations.net/downloads/voicelink';
 
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
                     version: '1.0.0',
-                    buildNumber: 1,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                    releaseNotes: 'Initial release with full SwiftUI native support:\n• Spatial audio engine\n• Multi-channel audio\n• Push-to-talk\n• Jellyfin integration\n• Auto-updates\n• TTS announcements\n• Whisper mode'
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
+                    releaseNotes: 'Latest native macOS build with room/federation fixes and admin invite activation updates.'
                 },
                 windows: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                    releaseNotes: 'Latest Windows release with accessibility improvements and bug fixes.'
+                    version: '1.0.0',
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLink-windows.zip`,
+                    releaseNotes: 'Latest Windows native build with federation-aware room listing and improved auth flow.'
                 },
                 linux: {
-                    version: '1.0.3',
-                    buildNumber: 3,
-                    downloadURL: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.3-linux.AppImage',
-                    releaseNotes: 'Linux release with AppImage support.'
+                    version: '1.0.0',
+                    buildNumber: 25,
+                    downloadURL: `${downloadBase}/VoiceLink-linux.AppImage`,
+                    releaseNotes: 'Linux client release with AppImage and .deb installer support.'
                 }
             };
 
@@ -1150,33 +1164,40 @@ class VoiceLinkLocalServer {
                         version: '1.0.0',
                         downloads: [
                             {
-                                name: 'macOS Universal (DMG)',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-macos.zip',
-                                size: '144 MB',
+                                name: 'macOS Universal ZIP',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip',
+                                size: 'Current build',
                                 type: 'native'
                             }
                         ]
                     },
                     windows: {
-                        version: '1.0.3',
+                        version: '1.0.0',
                         downloads: [
                             {
-                                name: 'Windows Portable',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local-1.0.3-portable.exe',
-                                size: '193 MB',
-                                type: 'native'
-                            },
-                            {
-                                name: 'Windows Setup',
-                                url: 'https://devinecreations.net/uploads/filedump/voicelink/VoiceLink%20Local%20Setup%201.0.3.exe',
-                                size: '194 MB',
+                                name: 'Windows ZIP',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip',
+                                size: 'Current build',
                                 type: 'native'
                             }
                         ]
                     },
                     linux: {
-                        version: '1.0.3',
-                        downloads: []
+                        version: '1.0.0',
+                        downloads: [
+                            {
+                                name: 'Linux AppImage',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-linux.AppImage',
+                                size: 'Current build',
+                                type: 'native'
+                            },
+                            {
+                                name: 'Linux DEB',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/voicelink-local_1.0.0_amd64.deb',
+                                size: 'Current build',
+                                type: 'native'
+                            }
+                        ]
                     }
                 },
                 webClient: {
@@ -1405,21 +1426,58 @@ class VoiceLinkLocalServer {
             const { roomId } = req.params;
             const updates = req.body;
             const room = this.rooms.get(roomId);
+            const actingUser = this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null;
+            const requestedBy = String(
+                actingUser?.username
+                || actingUser?.displayName
+                || actingUser?.email
+                || updates.updatedBy
+                || updates.creatorHandle
+                || ''
+            ).trim();
 
             if (!room) {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
+            const normalizedPreviousNames = Array.isArray(room.previousNames)
+                ? room.previousNames.map((value) => String(value || '').trim()).filter(Boolean)
+                : [];
+            const proposedName = typeof updates.name === 'string' ? updates.name.trim() : '';
+            const currentName = String(room.name || '').trim();
+
             // Apply updates
-            if (updates.name) room.name = updates.name;
+            if (proposedName && proposedName !== currentName) {
+                const dedupedHistory = [
+                    currentName,
+                    ...normalizedPreviousNames.filter((value) => value.toLowerCase() !== currentName.toLowerCase())
+                ].filter(Boolean);
+                room.previousNames = Array.from(new Set(dedupedHistory)).slice(0, 5);
+                room.name = proposedName;
+            } else if (!Array.isArray(room.previousNames)) {
+                room.previousNames = normalizedPreviousNames;
+            }
+            if (updates.description !== undefined) room.description = String(updates.description || '');
             if (updates.maxUsers) room.maxUsers = updates.maxUsers;
             if (updates.visibility) room.visibility = updates.visibility;
+            if (updates.accessType) room.accessType = updates.accessType;
+            if (updates.visibleToGuests !== undefined) room.visibleToGuests = !!updates.visibleToGuests;
+            if (updates.allowEmbed !== undefined) room.allowEmbed = !!updates.allowEmbed;
+            if (updates.showInApp !== undefined) room.showInApp = !!updates.showInApp;
             if (updates.password !== undefined) room.password = updates.password || null;
             if (updates.isDefault !== undefined) room.isDefault = updates.isDefault;
+            if (updates.locked !== undefined) room.locked = !!updates.locked;
+            if (updates.enabled !== undefined) room.enabled = !!updates.enabled;
+            if (updates.hidden !== undefined) room.hidden = !!updates.hidden;
 
             room.lastUpdated = new Date();
+            room.updatedAt = room.lastUpdated;
+            if (requestedBy) {
+                room.updatedBy = requestedBy;
+            }
             this.rooms.set(roomId, room);
             this.federation.broadcastRoomChange('updated', room);
+            this.saveRoomsToDisk();
 
             res.json({ success: true, room });
         });

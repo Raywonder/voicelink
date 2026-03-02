@@ -20,16 +20,17 @@ class CopyPartyManager: ObservableObject {
     @Published var headscalePeers: [HeadscalePeer] = []
     @Published var recentProtectedLinks: [ProtectedShareLink] = []
     @Published var config: CopyPartyConfig
+    @Published private(set) var connectedServerBaseURL: String = ""
 
     // MARK: - Configuration
 
     struct CopyPartyConfig: Codable, Equatable {
-        var primaryServer: String = "https://files.raywonderis.me"
+        var primaryServer: String = "https://files.tappedin.fm"
         var directAccessIP: String = "64.20.46.178"
         var directAccessPort: Int = 3923
         var alternativeServers: [String] = [
-            "https://files.devinecreations.net",
-            "https://files.tappedin.fm"
+            "https://files.raywonderis.me",
+            "https://files.devinecreations.net"
         ]
         var username: String = ""
         var password: String = ""
@@ -186,11 +187,32 @@ class CopyPartyManager: ObservableObject {
            let decoded = try? JSONDecoder().decode(CopyPartyConfig.self, from: data) {
             config = decoded
         }
+        migrateLegacyServerDefaults()
     }
 
     func saveConfig() {
         if let encoded = try? JSONEncoder().encode(config) {
             UserDefaults.standard.set(encoded, forKey: "copyPartyConfig")
+        }
+    }
+
+    private func migrateLegacyServerDefaults() {
+        let invalidPrimaryHosts: Set<String> = [
+            "https://files.raywonderis.me",
+            "https://files.devinecreations.net"
+        ]
+        let normalizedPrimary = APIEndpointResolver.normalize(config.primaryServer)
+        if invalidPrimaryHosts.contains(normalizedPrimary) {
+            config.primaryServer = "https://files.tappedin.fm"
+            var alternatives = config.alternativeServers.map(APIEndpointResolver.normalize)
+            if !alternatives.contains(normalizedPrimary) {
+                alternatives.insert(normalizedPrimary, at: 0)
+            }
+            if !alternatives.contains("https://files.devinecreations.net"), normalizedPrimary != "https://files.devinecreations.net" {
+                alternatives.append("https://files.devinecreations.net")
+            }
+            config.alternativeServers = Array(NSOrderedSet(array: alternatives)) as? [String] ?? alternatives
+            saveConfig()
         }
     }
 
@@ -212,6 +234,7 @@ class CopyPartyManager: ObservableObject {
                 await MainActor.run {
                     self.isConnected = true
                     self.connectionStatus = .connected
+                    self.connectedServerBaseURL = APIEndpointResolver.normalize(self.config.primaryServer)
                 }
                 await fetchShares()
                 return
@@ -223,6 +246,7 @@ class CopyPartyManager: ObservableObject {
                 await MainActor.run {
                     self.isConnected = true
                     self.connectionStatus = .connected
+                    self.connectedServerBaseURL = APIEndpointResolver.normalize(directURL)
                 }
                 await fetchShares()
                 return
@@ -234,6 +258,7 @@ class CopyPartyManager: ObservableObject {
                     await MainActor.run {
                         self.isConnected = true
                         self.connectionStatus = .connected
+                        self.connectedServerBaseURL = APIEndpointResolver.normalize(server)
                     }
                     await fetchShares()
                     return
@@ -242,6 +267,7 @@ class CopyPartyManager: ObservableObject {
 
             await MainActor.run {
                 self.connectionStatus = .error
+                self.connectedServerBaseURL = ""
             }
         }
     }
@@ -267,6 +293,7 @@ class CopyPartyManager: ObservableObject {
     func disconnect() {
         isConnected = false
         connectionStatus = .disconnected
+        connectedServerBaseURL = ""
         availableShares = []
         currentUser = nil
     }
@@ -276,7 +303,7 @@ class CopyPartyManager: ObservableObject {
     func fetchShares() async {
         guard isConnected else { return }
 
-        let serverURL = config.primaryServer
+        let serverURL = effectiveServerBaseURL()
         guard let url = URL(string: "\(serverURL)/?j") else { return }
 
         var request = URLRequest(url: url)
@@ -308,7 +335,7 @@ class CopyPartyManager: ObservableObject {
     func listFiles(at path: String) async -> [CopyPartyFile] {
         guard isConnected else { return [] }
 
-        let serverURL = config.primaryServer
+        let serverURL = effectiveServerBaseURL()
         let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
         guard let url = URL(string: "\(serverURL)\(encodedPath)?j") else { return [] }
 
@@ -382,7 +409,7 @@ class CopyPartyManager: ObservableObject {
         guard let fileData = try? Data(contentsOf: localURL) else {
             throw NSError(domain: "CopyParty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read file"])
         }
-        let serverURL = APIEndpointResolver.normalize(config.primaryServer)
+        let serverURL = effectiveServerBaseURL()
         let encodedPath = remoteFilePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? remoteFilePath
         guard let url = URL(string: "\(serverURL)\(encodedPath)") else {
             throw NSError(domain: "CopyParty", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid upload URL"])
@@ -418,7 +445,7 @@ class CopyPartyManager: ObservableObject {
                 return
             }
 
-            let serverURL = config.primaryServer
+            let serverURL = effectiveServerBaseURL()
             let encodedPath = task.remotePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? task.remotePath
             guard let url = URL(string: "\(serverURL)\(encodedPath)") else {
                 await updateUploadStatus(id: task.id, status: .failed, error: "Invalid URL")
@@ -683,6 +710,14 @@ class CopyPartyManager: ObservableObject {
         return currentUser?.id ?? UserDefaults.standard.string(forKey: "userId") ?? "unknown"
     }
 
+    private func effectiveServerBaseURL() -> String {
+        let connected = APIEndpointResolver.normalize(connectedServerBaseURL)
+        if !connected.isEmpty {
+            return connected
+        }
+        return APIEndpointResolver.normalize(config.primaryServer)
+    }
+
     // MARK: - Protected External Share Links
 
     func createProtectedExternalLink(
@@ -745,6 +780,7 @@ class CopyPartyManager: ObservableObject {
         let baseCandidates = [
             APIEndpointResolver.normalize(ServerManager.shared.baseURL ?? ""),
             APIEndpointResolver.normalize(config.externalShareBaseURL),
+            effectiveServerBaseURL(),
             APIEndpointResolver.normalize(config.primaryServer)
         ].filter { !$0.isEmpty }
 
@@ -809,7 +845,7 @@ class CopyPartyManager: ObservableObject {
 
     private func rawExternalFileURL(path: String) -> String {
         let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
-        return "\(APIEndpointResolver.normalize(config.primaryServer))\(encodedPath)"
+        return "\(effectiveServerBaseURL())\(encodedPath)"
     }
 
     private func parseExpiry(from payload: [String: Any]) -> Date? {

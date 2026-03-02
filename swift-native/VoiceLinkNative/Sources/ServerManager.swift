@@ -614,6 +614,8 @@ class ServerManager: ObservableObject {
                 let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
                 let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
                 let messageType = msgData["type"] as? String ?? "text"
+                let messageId = msgData["messageId"] as? String ?? msgData["id"] as? String ?? ""
+                let timestamp = msgData["timestamp"] ?? msgData["createdAt"] ?? msgData["sentAt"]
 
                 NotificationCenter.default.post(
                     name: .incomingChatMessage,
@@ -622,7 +624,9 @@ class ServerManager: ObservableObject {
                         "senderId": senderId,
                         "senderName": senderName,
                         "content": content,
-                        "type": messageType
+                        "type": messageType,
+                        "messageId": messageId,
+                        "timestamp": timestamp as Any
                     ]
                 )
             }
@@ -1493,10 +1497,19 @@ struct RoomUser: Identifiable {
     let isMuted: Bool
     let isDeafened: Bool
     let isSpeaking: Bool
+    let displayName: String?
+    let role: String?
+    let status: String?
+    let authProvider: String?
+    let email: String?
+    let serverTitle: String?
+    let joinedAt: Date?
+    let lastActiveAt: Date?
+    let avatarURL: URL?
 
     init?(from dict: [String: Any]) {
-        guard let odId = dict["odId"] as? String ?? dict["id"] as? String,
-              let username = dict["username"] as? String ?? dict["name"] as? String else {
+        guard let odId = dict["odId"] as? String ?? dict["id"] as? String ?? dict["userId"] as? String,
+              let username = dict["username"] as? String ?? dict["name"] as? String ?? dict["displayName"] as? String else {
             return nil
         }
         self.id = odId
@@ -1505,6 +1518,78 @@ struct RoomUser: Identifiable {
         self.isMuted = dict["muted"] as? Bool ?? dict["isMuted"] as? Bool ?? false
         self.isDeafened = dict["deafened"] as? Bool ?? dict["isDeafened"] as? Bool ?? false
         self.isSpeaking = dict["speaking"] as? Bool ?? dict["isSpeaking"] as? Bool ?? false
+        let rawDisplayName = (dict["displayName"] as? String ?? dict["name"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rawDisplayName, !rawDisplayName.isEmpty, rawDisplayName.caseInsensitiveCompare(username) != .orderedSame {
+            self.displayName = rawDisplayName
+        } else {
+            self.displayName = nil
+        }
+        self.role = dict["role"] as? String
+            ?? dict["userRole"] as? String
+            ?? dict["accountRole"] as? String
+            ?? dict["accessRole"] as? String
+        self.status = dict["status"] as? String
+            ?? dict["presence"] as? String
+            ?? dict["state"] as? String
+        self.authProvider = dict["authProvider"] as? String
+            ?? dict["provider"] as? String
+            ?? dict["loginProvider"] as? String
+        self.email = dict["email"] as? String ?? dict["userEmail"] as? String
+        self.serverTitle = dict["serverTitle"] as? String
+            ?? dict["serverName"] as? String
+            ?? dict["serverDisplayName"] as? String
+            ?? dict["instanceName"] as? String
+        self.joinedAt = RoomUser.parseDate(
+            dict["joinedAt"] ?? dict["joined"] ?? dict["joinedAtUtc"] ?? dict["joinTime"]
+        )
+        self.lastActiveAt = RoomUser.parseDate(
+            dict["lastActiveAt"] ?? dict["lastActive"] ?? dict["lastSeen"] ?? dict["lastActivity"]
+        )
+        if let avatarString = dict["avatarUrl"] as? String
+            ?? dict["avatarURL"] as? String
+            ?? dict["avatar"] as? String
+            ?? dict["profileImageUrl"] as? String {
+            self.avatarURL = URL(string: avatarString)
+        } else {
+            self.avatarURL = nil
+        }
+    }
+
+    private static func parseDate(_ value: Any?) -> Date? {
+        switch value {
+        case let date as Date:
+            return date
+        case let seconds as TimeInterval:
+            if seconds > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: seconds / 1000)
+            }
+            return Date(timeIntervalSince1970: seconds)
+        case let number as NSNumber:
+            let raw = number.doubleValue
+            if raw > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: raw / 1000)
+            }
+            return Date(timeIntervalSince1970: raw)
+        case let string as String:
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return nil }
+            if let interval = TimeInterval(trimmed) {
+                if interval > 1_000_000_000_000 {
+                    return Date(timeIntervalSince1970: interval / 1000)
+                }
+                return Date(timeIntervalSince1970: interval)
+            }
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = isoFormatter.date(from: trimmed) {
+                return date
+            }
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            return isoFormatter.date(from: trimmed)
+        default:
+            return nil
+        }
     }
 }
 
