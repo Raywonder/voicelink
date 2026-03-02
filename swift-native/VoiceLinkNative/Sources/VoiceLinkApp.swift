@@ -5062,11 +5062,13 @@ class SettingsManager: ObservableObject {
     // Available devices
     @Published var availableInputDevices: [String] = ["Default"]
     @Published var availableOutputDevices: [String] = ["Default"]
+    private var hasCompletedInitialAudioSetup = false
 
     init() {
         loadSettings()
-        detectAudioDevices()
-        startAudioDeviceRefreshMonitoring()
+        DispatchQueue.main.async { [weak self] in
+            self?.finishInitialAudioSetup()
+        }
     }
 
     deinit {
@@ -5293,6 +5295,16 @@ class SettingsManager: ObservableObject {
     }
 
     func detectAudioDevices() {
+        detectAudioDevices(applySelectionIfNeeded: true)
+    }
+
+    private func finishInitialAudioSetup() {
+        detectAudioDevices(applySelectionIfNeeded: false)
+        startAudioDeviceRefreshMonitoring()
+        hasCompletedInitialAudioSetup = true
+    }
+
+    func detectAudioDevices(applySelectionIfNeeded: Bool) {
         // Detect input devices
         var inputDevices = ["Default"]
         var outputDevices = ["Default"]
@@ -5368,6 +5380,9 @@ class SettingsManager: ObservableObject {
 
         if didChange {
             print("[Settings] Audio device inventory changed. Inputs=\(availableInputDevices) Outputs=\(availableOutputDevices)")
+        }
+
+        if didChange && applySelectionIfNeeded && hasCompletedInitialAudioSetup {
             applySelectedAudioDevices()
         }
     }
