@@ -1135,6 +1135,7 @@ class ServerManager: ObservableObject {
             self.inputMuted = isMuted
             self.outputMuted = isDeafened
         }
+        LocalMonitorManager.shared.setInputMuted(isMuted)
 
         socket?.emit("audio-state", [
             "muted": isMuted,
@@ -1235,7 +1236,7 @@ class ServerManager: ObservableObject {
         }
 
         let sampleRate = 48000.0
-        let channels: UInt32 = 1
+        let channels: UInt32 = 2
 
         // Request relay mode from server
         socket?.emit("enable-audio-relay", [
@@ -1250,7 +1251,17 @@ class ServerManager: ObservableObject {
             // Convert PCM buffer to Data
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
-            let data = Data(bytes: channelData[0], count: frameLength * MemoryLayout<Float>.size)
+            let channelCount = Int(max(buffer.format.channelCount, 1))
+            var interleaved = [Float](repeating: 0, count: frameLength * channelCount)
+            let gain = Float(min(max(SettingsManager.shared.inputVolume, 0), 1))
+            for frame in 0..<frameLength {
+                for channel in 0..<channelCount {
+                    interleaved[(frame * channelCount) + channel] = channelData[channel][frame] * gain
+                }
+            }
+            let data = interleaved.withUnsafeBufferPointer { pointer in
+                Data(buffer: pointer)
+            }
 
             // Encode as base64 for Socket.IO transmission
             let base64Audio = data.base64EncodedString()
@@ -1259,7 +1270,8 @@ class ServerManager: ObservableObject {
             self.socket?.emit("audio-data", [
                 "audioData": base64Audio,
                 "timestamp": Date().timeIntervalSince1970,
-                "sampleRate": buffer.format.sampleRate
+                "sampleRate": buffer.format.sampleRate,
+                "channels": channelCount
             ])
         }
 

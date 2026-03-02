@@ -15,7 +15,7 @@ final class SelectedAudioInputCapture {
     private var currentDeviceID: AudioDeviceID = 0
     private var currentDeviceName: String?
     private var isRunning = false
-    private let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
+    private let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)
 
     private init() {}
 
@@ -201,14 +201,25 @@ final class SelectedAudioInputCapture {
         }
 
         pcmBuffer.frameLength = inNumberFrames
-        var audioBufferList = AudioBufferList(
-            mNumberBuffers: 1,
-            mBuffers: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: inNumberFrames * UInt32(MemoryLayout<Float>.size),
-                mData: channelData[0]
-            )
+        let bytesPerChannel = inNumberFrames * UInt32(MemoryLayout<Float>.size)
+        let channelCount = Int(outputFormat.channelCount)
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+            + max(0, channelCount - 1) * MemoryLayout<AudioBuffer>.size
+        let audioBufferListRawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
         )
+        defer { audioBufferListRawPointer.deallocate() }
+        let audioBufferListPointer = audioBufferListRawPointer.assumingMemoryBound(to: AudioBufferList.self)
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(audioBufferListPointer)
+        audioBuffers.count = channelCount
+        for channel in 0..<channelCount {
+            audioBuffers[channel] = AudioBuffer(
+                mNumberChannels: 1,
+                mDataByteSize: bytesPerChannel,
+                mData: channelData[channel]
+            )
+        }
 
         let status = AudioUnitRender(
             audioUnit,
@@ -216,7 +227,7 @@ final class SelectedAudioInputCapture {
             inTimeStamp,
             1,
             inNumberFrames,
-            &audioBufferList
+            audioBufferListPointer
         )
         guard status == noErr else {
             print("[SelectedInputCapture] AudioUnitRender failed. status=\(status)")
@@ -240,7 +251,10 @@ final class SelectedAudioInputCapture {
         if let sourceData = source.floatChannelData,
            let targetData = copy.floatChannelData {
             let frames = Int(source.frameLength)
-            memcpy(targetData[0], sourceData[0], frames * MemoryLayout<Float>.size)
+            let channels = Int(source.format.channelCount)
+            for channel in 0..<channels {
+                memcpy(targetData[channel], sourceData[channel], frames * MemoryLayout<Float>.size)
+            }
         }
         return copy
     }

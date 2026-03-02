@@ -2034,6 +2034,47 @@ class VoiceLinkLocalServer {
         return room.users;
     }
 
+    serializeRoomUser(user, roomId = null) {
+        if (!user) return null;
+        const authInfo = user.authInfo || {};
+        return {
+            id: user.id,
+            userId: user.id,
+            odId: user.id,
+            name: user.name,
+            username: authInfo.username || user.username || user.name,
+            displayName: authInfo.displayName || authInfo.name || user.displayName || user.name,
+            email: authInfo.email || user.email || null,
+            role: authInfo.role || user.role || null,
+            authProvider: authInfo.authProvider || authInfo.provider || user.authProvider || null,
+            isAuthenticated: !!user.isAuthenticated,
+            joinedAt: user.joinedAt || null,
+            lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
+            muted: !!(user.audioSettings?.muted),
+            deafened: !!(user.audioSettings?.deafened),
+            speaking: !!user.isSpeaking,
+            isSpeaking: !!user.isSpeaking,
+            roomId: roomId || user.roomId || null,
+            activeRoomId: roomId || user.roomId || null,
+            presence: roomId || user.roomId ? 'active' : 'online',
+            status: roomId || user.roomId ? 'active' : 'online'
+        };
+    }
+
+    emitRoomUsersSnapshot(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+        const liveUsers = this.normalizeRoomUsers(roomId);
+        const serializedUsers = liveUsers.map(user => this.serializeRoomUser(user, roomId)).filter(Boolean);
+        const payload = {
+            roomId,
+            count: serializedUsers.length,
+            users: serializedUsers
+        };
+        this.io.to(roomId).emit('room-users', payload);
+        this.io.to(roomId).emit('room-user-count', payload);
+    }
+
     getConnectedUsersCount() {
         const connectedSockets = this.getConnectedSocketSet();
         let count = 0;
@@ -9363,11 +9404,7 @@ class VoiceLinkLocalServer {
                             userId: socket.id,
                             userName: existingSession.name
                         });
-                        this.io.to(existingSession.roomId).emit('room-user-count', {
-                            roomId: existingSession.roomId,
-                            count: previousRoom.users.length,
-                            users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
-                        });
+                        this.emitRoomUsersSnapshot(existingSession.roomId);
                     }
                     socket.leave(existingSession.roomId);
                 }
@@ -9381,10 +9418,13 @@ class VoiceLinkLocalServer {
                     id: socket.id,
                     name: resolvedUserName || `User ${socket.id.slice(0, 8)}`,
                     joinedAt: new Date(),
+                    lastActiveAt: new Date(),
+                    isSpeaking: false,
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
                     audioSettings: {
                         muted: false,
+                        deafened: false,
                         volume: 1.0,
                         spatialPosition: { x: 0, y: 0, z: 0 },
                         outputDevice: 'default'
@@ -9415,12 +9455,7 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: this.normalizeRoomUsers(roomId).map(u => ({
-                        id: u.id,
-                        name: u.name,
-                        isAuthenticated: u.isAuthenticated || false,
-                        joinedAt: u.joinedAt
-                    })),
+                    users: this.normalizeRoomUsers(roomId).map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
                     userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false
@@ -9430,11 +9465,7 @@ class VoiceLinkLocalServer {
                 socket.to(roomId).emit('user-joined', user);
 
                 // Broadcast updated user count to all in room
-                this.io.to(roomId).emit('room-user-count', {
-                    roomId,
-                    count: this.normalizeRoomUsers(roomId).length,
-                    users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
-                });
+                this.emitRoomUsersSnapshot(roomId);
 
                 console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
@@ -9493,12 +9524,32 @@ class VoiceLinkLocalServer {
                 const user = this.users.get(socket.id);
                 if (user) {
                     Object.assign(user.audioSettings, data);
+                    user.lastActiveAt = new Date();
 
                     socket.to(user.roomId).emit('user-audio-settings-changed', {
                         userId: socket.id,
                         settings: user.audioSettings
                     });
+                    this.emitRoomUsersSnapshot(user.roomId);
                 }
+            });
+
+            socket.on('audio-state', (data) => {
+                const user = this.users.get(socket.id);
+                if (!user) return;
+                user.audioSettings = user.audioSettings || {};
+                user.audioSettings.muted = !!data.muted;
+                user.audioSettings.deafened = !!data.deafened;
+                user.isSpeaking = false;
+                user.lastActiveAt = new Date();
+
+                this.io.to(user.roomId).emit('user-audio-state-changed', {
+                    userId: socket.id,
+                    muted: user.audioSettings.muted,
+                    deafened: user.audioSettings.deafened,
+                    speaking: user.isSpeaking
+                });
+                this.emitRoomUsersSnapshot(user.roomId);
             });
 
             // Chat messages
@@ -9673,7 +9724,9 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                const { audioData, timestamp, sampleRate } = data;
+                const { audioData, timestamp, sampleRate, channels } = data;
+                user.isSpeaking = !user.audioSettings?.muted;
+                user.lastActiveAt = new Date();
 
                 // Update stats
                 this.relayStats.packetsRelayed++;
@@ -9691,10 +9744,12 @@ class VoiceLinkLocalServer {
                                 userName: user.name,
                                 audioData: audioData,
                                 timestamp: timestamp,
-                                sampleRate: sampleRate
+                                sampleRate: sampleRate,
+                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2
                             });
                         }
                     });
+                    this.emitRoomUsersSnapshot(user.roomId);
                 }
             });
 
@@ -9735,12 +9790,7 @@ class VoiceLinkLocalServer {
                     const liveUsers = this.normalizeRoomUsers(roomId);
                     socket.emit('room-users', {
                         roomId,
-                        users: liveUsers.map(u => ({
-                            id: u.id,
-                            name: u.name,
-                            isAuthenticated: u.isAuthenticated || false,
-                            joinedAt: u.joinedAt
-                        })),
+                        users: liveUsers.map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
                         count: liveUsers.length
                     });
                 }
@@ -9764,11 +9814,7 @@ class VoiceLinkLocalServer {
                         });
 
                         // Broadcast updated user count
-                        this.io.to(user.roomId).emit('room-user-count', {
-                            roomId: user.roomId,
-                            count: liveUsers.length,
-                            users: liveUsers.map(u => ({ id: u.id, name: u.name }))
-                        });
+                        this.emitRoomUsersSnapshot(user.roomId);
 
                         console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
 

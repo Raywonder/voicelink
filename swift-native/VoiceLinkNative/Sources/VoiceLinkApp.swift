@@ -5934,6 +5934,10 @@ struct SettingsView: View {
             HStack {
                 Text("Input Volume")
                 Slider(value: $settings.inputVolume, in: 0...1)
+                    .onChange(of: settings.inputVolume) { newValue in
+                        settings.saveSettings()
+                        LocalMonitorManager.shared.setInputGain(newValue)
+                    }
                 Text("\(Int(settings.inputVolume * 100))%")
                     .frame(width: 40)
             }

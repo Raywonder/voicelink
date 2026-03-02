@@ -16,6 +16,7 @@ final class LocalMonitorManager: ObservableObject {
     private var captureToken: UUID?
     private var sampleBuffer: [Float] = []
     private let maxBufferedSamples = 48_000 * 8
+    private var inputMuted = false
 
     private init() {}
 
@@ -35,6 +36,23 @@ final class LocalMonitorManager: ObservableObject {
             } else {
                 self.stopMonitoring()
             }
+        }
+    }
+
+    func setInputMuted(_ muted: Bool) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.inputMuted = muted
+            self.applyMonitorGain()
+        }
+    }
+
+    func setInputGain(_ gain: Double) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let clamped = min(max(gain, 0), 1)
+            SettingsManager.shared.inputVolume = clamped
+            self.applyMonitorGain()
         }
     }
 
@@ -70,7 +88,7 @@ final class LocalMonitorManager: ObservableObject {
         do {
             engine.attach(monitorMixer)
             engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.outputVolume)
-            monitorMixer.outputVolume = Float(SettingsManager.shared.inputVolume)
+            applyMonitorGain()
             let monitorFormat = AVAudioFormat(standardFormatWithSampleRate: outputFormat.sampleRate, channels: max(outputFormat.channelCount, 1))
             let sourceNode = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
                 guard let self else { return noErr }
@@ -126,6 +144,11 @@ final class LocalMonitorManager: ObservableObject {
             self.isMonitoring = false
         }
         print("[LocalMonitor] Monitoring stopped")
+    }
+
+    private func applyMonitorGain() {
+        let volume: Float = inputMuted ? 0 : Float(SettingsManager.shared.inputVolume)
+        monitorMixer.outputVolume = volume
     }
 
     private func appendSamples(from source: AVAudioPCMBuffer) {

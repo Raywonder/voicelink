@@ -2034,6 +2034,47 @@ class VoiceLinkLocalServer {
         return room.users;
     }
 
+    serializeRoomUser(user, roomId = null) {
+        if (!user) return null;
+        const authInfo = user.authInfo || {};
+        return {
+            id: user.id,
+            userId: user.id,
+            odId: user.id,
+            name: user.name,
+            username: authInfo.username || user.username || user.name,
+            displayName: authInfo.displayName || authInfo.name || user.displayName || user.name,
+            email: authInfo.email || user.email || null,
+            role: authInfo.role || user.role || null,
+            authProvider: authInfo.authProvider || authInfo.provider || user.authProvider || null,
+            isAuthenticated: !!user.isAuthenticated,
+            joinedAt: user.joinedAt || null,
+            lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
+            muted: !!(user.audioSettings?.muted),
+            deafened: !!(user.audioSettings?.deafened),
+            speaking: !!user.isSpeaking,
+            isSpeaking: !!user.isSpeaking,
+            roomId: roomId || user.roomId || null,
+            activeRoomId: roomId || user.roomId || null,
+            presence: roomId || user.roomId ? 'active' : 'online',
+            status: roomId || user.roomId ? 'active' : 'online'
+        };
+    }
+
+    emitRoomUsersSnapshot(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+        const liveUsers = this.normalizeRoomUsers(roomId);
+        const serializedUsers = liveUsers.map(user => this.serializeRoomUser(user, roomId)).filter(Boolean);
+        const payload = {
+            roomId,
+            count: serializedUsers.length,
+            users: serializedUsers
+        };
+        this.io.to(roomId).emit('room-users', payload);
+        this.io.to(roomId).emit('room-user-count', payload);
+    }
+
     getConnectedUsersCount() {
         const connectedSockets = this.getConnectedSocketSet();
         let count = 0;
@@ -2435,6 +2476,7 @@ class VoiceLinkLocalServer {
                 name: room.name,
                 description: room.description || '',
                 users: this.normalizeRoomUsers(room.id).length,
+                userCount: this.normalizeRoomUsers(room.id).length,
                 maxUsers: room.maxUsers,
                 hasPassword: !!room.password,
                 visibility: room.visibility,
@@ -2444,6 +2486,14 @@ class VoiceLinkLocalServer {
                 isDefault: room.isDefault || false,
                 template: room.template || null,
                 serverSource: 'local',
+                creatorHandle: room.creatorHandle || null,
+                createdBy: room.createdBy || room.creatorHandle || null,
+                createdAt: room.createdAt || null,
+                updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
+                updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
+                previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
+                hostServerName: room.hostServerName || this.serverName || null,
+                hostServerOwner: room.hostServerOwner || null,
                 // Lock status
                 locked: room.locked || false,
                 lockedAt: room.lockedAt || null,
@@ -2547,9 +2597,13 @@ class VoiceLinkLocalServer {
                 privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
+                createdBy: creatorHandle || null,
                 isDefault: isDefault || false,
                 template: template || null,
                 createdAt: new Date(),
+                updatedAt: new Date(),
+                updatedBy: creatorHandle || null,
+                previousNames: [],
                 expiresAt,
                 audioSettings: {
                     spatialAudio: true,
@@ -3345,21 +3399,58 @@ class VoiceLinkLocalServer {
             const { roomId } = req.params;
             const updates = req.body;
             const room = this.rooms.get(roomId);
+            const actingUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
+            const requestedBy = String(
+                actingUser?.username
+                || actingUser?.displayName
+                || actingUser?.email
+                || updates.updatedBy
+                || updates.creatorHandle
+                || ''
+            ).trim();
 
             if (!room) {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
+            const normalizedPreviousNames = Array.isArray(room.previousNames)
+                ? room.previousNames.map((value) => String(value || '').trim()).filter(Boolean)
+                : [];
+            const proposedName = typeof updates.name === 'string' ? updates.name.trim() : '';
+            const currentName = String(room.name || '').trim();
+
             // Apply updates
-            if (updates.name) room.name = updates.name;
+            if (proposedName && proposedName !== currentName) {
+                const dedupedHistory = [
+                    currentName,
+                    ...normalizedPreviousNames.filter((value) => value.toLowerCase() !== currentName.toLowerCase())
+                ].filter(Boolean);
+                room.previousNames = Array.from(new Set(dedupedHistory)).slice(0, 5);
+                room.name = proposedName;
+            } else if (!Array.isArray(room.previousNames)) {
+                room.previousNames = normalizedPreviousNames;
+            }
+            if (updates.description !== undefined) room.description = String(updates.description || '');
             if (updates.maxUsers) room.maxUsers = updates.maxUsers;
             if (updates.visibility) room.visibility = updates.visibility;
+            if (updates.accessType) room.accessType = updates.accessType;
+            if (updates.visibleToGuests !== undefined) room.visibleToGuests = !!updates.visibleToGuests;
+            if (updates.allowEmbed !== undefined) room.allowEmbed = !!updates.allowEmbed;
+            if (updates.showInApp !== undefined) room.showInApp = !!updates.showInApp;
             if (updates.password !== undefined) room.password = updates.password || null;
             if (updates.isDefault !== undefined) room.isDefault = updates.isDefault;
+            if (updates.locked !== undefined) room.locked = !!updates.locked;
+            if (updates.enabled !== undefined) room.enabled = !!updates.enabled;
+            if (updates.hidden !== undefined) room.hidden = !!updates.hidden;
 
             room.lastUpdated = new Date();
+            room.updatedAt = room.lastUpdated;
+            if (requestedBy) {
+                room.updatedBy = requestedBy;
+            }
             this.rooms.set(roomId, room);
             this.federation.broadcastRoomChange('updated', room);
+            this.saveRoomsToDisk();
 
             res.json({ success: true, room });
         });
@@ -5434,44 +5525,85 @@ class VoiceLinkLocalServer {
 
         // Get current server configuration
         this.app.get('/api/config', (req, res) => {
-            const config = deployConfig.getConfig();
-            const sanitize = req.query.sanitize !== 'false';
-
-            if (sanitize) {
-                // Remove sensitive data
-                const safe = JSON.parse(JSON.stringify(config));
-                if (safe.security) {
-                    delete safe.security.sslKeyPath;
-                }
-                if (safe.mastodon?.instances) {
-                    safe.mastodon.instances = safe.mastodon.instances.map(i => ({
-                        ...i,
-                        accessToken: i.accessToken ? '***' : null
-                    }));
-                }
-                res.json(safe);
-            } else {
-                res.json(config);
-            }
+            const config = deployConfig.getConfig() || {};
+            const flattened = {
+                serverName: config.server?.name || 'VoiceLink',
+                serverDescription: config.server?.description || config.server?.tagline || '',
+                maxUsers: Number(config.server?.maxUsers || config.rooms?.maxUsers || 500),
+                maxRooms: Number(config.rooms?.maxRooms || config.server?.maxRooms || 100),
+                maxUsersPerRoom: Number(config.rooms?.maxUsersPerRoom || config.server?.maxUsersPerRoom || 50),
+                welcomeMessage: config.server?.welcomeMessage || null,
+                motd: config.server?.motd || null,
+                registrationEnabled: config.auth?.registrationEnabled ?? config.security?.registrationEnabled ?? true,
+                requireAuth: config.security?.requireAuth ?? config.features?.requireAuth ?? false,
+                allowGuests: config.security?.allowGuests ?? true,
+                maxGuestDuration: config.security?.maxGuestDuration ?? null,
+                enableRateLimiting: config.security?.enableRateLimiting ?? true,
+                backgroundStreams: config.backgroundStreams || null,
+                pushover: config.pushover || null
+            };
+            res.json(flattened);
         });
 
         // Update server configuration
         this.app.put('/api/config', async (req, res) => {
             try {
-                const updates = req.body;
-                const config = deployConfig.getConfig();
-
-                // Deep merge updates
-                for (const section in updates) {
-                    if (typeof updates[section] === 'object' && !Array.isArray(updates[section])) {
-                        deployConfig.updateSection(section, updates[section]);
-                    }
+                const updates = req.body || {};
+                if (typeof updates.serverName === 'string') {
+                    deployConfig.updateSection('server', {
+                        name: updates.serverName,
+                        description: updates.serverDescription || '',
+                        welcomeMessage: updates.welcomeMessage || null,
+                        motd: updates.motd || null,
+                        maxUsers: Number(updates.maxUsers) || 500,
+                        maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
+                    });
+                }
+                deployConfig.updateSection('rooms', {
+                    maxRooms: Number(updates.maxRooms) || 100,
+                    maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
+                });
+                deployConfig.updateSection('security', {
+                    requireAuth: !!updates.requireAuth,
+                    registrationEnabled: updates.registrationEnabled !== false,
+                    allowGuests: updates.allowGuests !== false,
+                    maxGuestDuration: updates.maxGuestDuration ?? null,
+                    enableRateLimiting: updates.enableRateLimiting !== false
+                });
+                if (updates.backgroundStreams && typeof updates.backgroundStreams === 'object') {
+                    deployConfig.updateSection('backgroundStreams', updates.backgroundStreams);
+                }
+                if (updates.pushover && typeof updates.pushover === 'object') {
+                    deployConfig.updateSection('pushover', updates.pushover);
                 }
 
                 await deployConfig.save();
                 res.json({ success: true, message: 'Configuration updated' });
             } catch (error) {
                 res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.get('/api/admin/logs', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const appRoot = path.join(__dirname, '../..');
+                const candidatePaths = [
+                    path.join(appRoot, 'logs', 'server.log'),
+                    path.join(appRoot, 'server.log'),
+                    path.join(appRoot, 'logs', 'combined.log')
+                ];
+                const existing = candidatePaths.find(p => fs.existsSync(p));
+                if (!existing) {
+                    return res.json({ success: true, source: null, lines: [] });
+                }
+                const text = fs.readFileSync(existing, 'utf8');
+                const lines = text.split(/\r?\n/).filter(Boolean).slice(-300);
+                res.json({ success: true, source: existing, lines });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
             }
         });
 
@@ -7695,6 +7827,46 @@ class VoiceLinkLocalServer {
             }
         });
 
+        this.app.get('/api/admin/api-sync', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const config = deployConfig.getConfig() || {};
+            res.json({
+                enabled: config.apiSync?.enabled !== false,
+                mode: config.apiSync?.mode || 'hybrid',
+                syncInterval: Number(config.apiSync?.syncInterval || 60),
+                autoSyncOnChange: config.apiSync?.autoSyncOnChange !== false,
+                whmcsEnabled: this.shouldDelegateWhmcsAuth(),
+                whmcsUrl: process.env.VOICELINK_WHMCS_AUTHORITY_URL || 'https://devine-creations.com',
+                whmcsApiIdentifier: config.whmcs?.apiIdentifier || null,
+                whmcsApiSecret: config.whmcs?.apiSecret || null
+            });
+        });
+
+        this.app.put('/api/admin/api-sync', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const body = req.body || {};
+                deployConfig.updateSection('apiSync', {
+                    enabled: body.enabled !== false,
+                    mode: body.mode || 'hybrid',
+                    syncInterval: Number(body.syncInterval) || 60,
+                    autoSyncOnChange: body.autoSyncOnChange !== false
+                });
+                deployConfig.updateSection('whmcs', {
+                    apiIdentifier: body.whmcsApiIdentifier || null,
+                    apiSecret: body.whmcsApiSecret || null
+                });
+                await deployConfig.save();
+                res.json({ success: true, message: 'API sync settings updated' });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         this.app.post('/api/admin/database/test', async (req, res) => {
             if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
@@ -9232,11 +9404,7 @@ class VoiceLinkLocalServer {
                             userId: socket.id,
                             userName: existingSession.name
                         });
-                        this.io.to(existingSession.roomId).emit('room-user-count', {
-                            roomId: existingSession.roomId,
-                            count: previousRoom.users.length,
-                            users: previousRoom.users.map(u => ({ id: u.id, name: u.name }))
-                        });
+                        this.emitRoomUsersSnapshot(existingSession.roomId);
                     }
                     socket.leave(existingSession.roomId);
                 }
@@ -9250,10 +9418,13 @@ class VoiceLinkLocalServer {
                     id: socket.id,
                     name: resolvedUserName || `User ${socket.id.slice(0, 8)}`,
                     joinedAt: new Date(),
+                    lastActiveAt: new Date(),
+                    isSpeaking: false,
                     isAuthenticated: isAuthenticated,
                     authInfo: authUser || null, // Mastodon user info if authenticated
                     audioSettings: {
                         muted: false,
+                        deafened: false,
                         volume: 1.0,
                         spatialPosition: { x: 0, y: 0, z: 0 },
                         outputDevice: 'default'
@@ -9284,12 +9455,7 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: this.normalizeRoomUsers(roomId).map(u => ({
-                        id: u.id,
-                        name: u.name,
-                        isAuthenticated: u.isAuthenticated || false,
-                        joinedAt: u.joinedAt
-                    })),
+                    users: this.normalizeRoomUsers(roomId).map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
                     userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false
@@ -9299,11 +9465,7 @@ class VoiceLinkLocalServer {
                 socket.to(roomId).emit('user-joined', user);
 
                 // Broadcast updated user count to all in room
-                this.io.to(roomId).emit('room-user-count', {
-                    roomId,
-                    count: this.normalizeRoomUsers(roomId).length,
-                    users: this.normalizeRoomUsers(roomId).map(u => ({ id: u.id, name: u.name }))
-                });
+                this.emitRoomUsersSnapshot(roomId);
 
                 console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
@@ -9362,12 +9524,32 @@ class VoiceLinkLocalServer {
                 const user = this.users.get(socket.id);
                 if (user) {
                     Object.assign(user.audioSettings, data);
+                    user.lastActiveAt = new Date();
 
                     socket.to(user.roomId).emit('user-audio-settings-changed', {
                         userId: socket.id,
                         settings: user.audioSettings
                     });
+                    this.emitRoomUsersSnapshot(user.roomId);
                 }
+            });
+
+            socket.on('audio-state', (data) => {
+                const user = this.users.get(socket.id);
+                if (!user) return;
+                user.audioSettings = user.audioSettings || {};
+                user.audioSettings.muted = !!data.muted;
+                user.audioSettings.deafened = !!data.deafened;
+                user.isSpeaking = false;
+                user.lastActiveAt = new Date();
+
+                this.io.to(user.roomId).emit('user-audio-state-changed', {
+                    userId: socket.id,
+                    muted: user.audioSettings.muted,
+                    deafened: user.audioSettings.deafened,
+                    speaking: user.isSpeaking
+                });
+                this.emitRoomUsersSnapshot(user.roomId);
             });
 
             // Chat messages
@@ -9542,7 +9724,9 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                const { audioData, timestamp, sampleRate } = data;
+                const { audioData, timestamp, sampleRate, channels } = data;
+                user.isSpeaking = !user.audioSettings?.muted;
+                user.lastActiveAt = new Date();
 
                 // Update stats
                 this.relayStats.packetsRelayed++;
@@ -9560,10 +9744,12 @@ class VoiceLinkLocalServer {
                                 userName: user.name,
                                 audioData: audioData,
                                 timestamp: timestamp,
-                                sampleRate: sampleRate
+                                sampleRate: sampleRate,
+                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2
                             });
                         }
                     });
+                    this.emitRoomUsersSnapshot(user.roomId);
                 }
             });
 
@@ -9604,12 +9790,7 @@ class VoiceLinkLocalServer {
                     const liveUsers = this.normalizeRoomUsers(roomId);
                     socket.emit('room-users', {
                         roomId,
-                        users: liveUsers.map(u => ({
-                            id: u.id,
-                            name: u.name,
-                            isAuthenticated: u.isAuthenticated || false,
-                            joinedAt: u.joinedAt
-                        })),
+                        users: liveUsers.map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
                         count: liveUsers.length
                     });
                 }
@@ -9633,11 +9814,7 @@ class VoiceLinkLocalServer {
                         });
 
                         // Broadcast updated user count
-                        this.io.to(user.roomId).emit('room-user-count', {
-                            roomId: user.roomId,
-                            count: liveUsers.length,
-                            users: liveUsers.map(u => ({ id: u.id, name: u.name }))
-                        });
+                        this.emitRoomUsersSnapshot(user.roomId);
 
                         console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
 
