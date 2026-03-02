@@ -5484,44 +5484,85 @@ class VoiceLinkLocalServer {
 
         // Get current server configuration
         this.app.get('/api/config', (req, res) => {
-            const config = deployConfig.getConfig();
-            const sanitize = req.query.sanitize !== 'false';
-
-            if (sanitize) {
-                // Remove sensitive data
-                const safe = JSON.parse(JSON.stringify(config));
-                if (safe.security) {
-                    delete safe.security.sslKeyPath;
-                }
-                if (safe.mastodon?.instances) {
-                    safe.mastodon.instances = safe.mastodon.instances.map(i => ({
-                        ...i,
-                        accessToken: i.accessToken ? '***' : null
-                    }));
-                }
-                res.json(safe);
-            } else {
-                res.json(config);
-            }
+            const config = deployConfig.getConfig() || {};
+            const flattened = {
+                serverName: config.server?.name || 'VoiceLink',
+                serverDescription: config.server?.description || config.server?.tagline || '',
+                maxUsers: Number(config.server?.maxUsers || config.rooms?.maxUsers || 500),
+                maxRooms: Number(config.rooms?.maxRooms || config.server?.maxRooms || 100),
+                maxUsersPerRoom: Number(config.rooms?.maxUsersPerRoom || config.server?.maxUsersPerRoom || 50),
+                welcomeMessage: config.server?.welcomeMessage || null,
+                motd: config.server?.motd || null,
+                registrationEnabled: config.auth?.registrationEnabled ?? config.security?.registrationEnabled ?? true,
+                requireAuth: config.security?.requireAuth ?? config.features?.requireAuth ?? false,
+                allowGuests: config.security?.allowGuests ?? true,
+                maxGuestDuration: config.security?.maxGuestDuration ?? null,
+                enableRateLimiting: config.security?.enableRateLimiting ?? true,
+                backgroundStreams: config.backgroundStreams || null,
+                pushover: config.pushover || null
+            };
+            res.json(flattened);
         });
 
         // Update server configuration
         this.app.put('/api/config', async (req, res) => {
             try {
-                const updates = req.body;
-                const config = deployConfig.getConfig();
-
-                // Deep merge updates
-                for (const section in updates) {
-                    if (typeof updates[section] === 'object' && !Array.isArray(updates[section])) {
-                        deployConfig.updateSection(section, updates[section]);
-                    }
+                const updates = req.body || {};
+                if (typeof updates.serverName === 'string') {
+                    deployConfig.updateSection('server', {
+                        name: updates.serverName,
+                        description: updates.serverDescription || '',
+                        welcomeMessage: updates.welcomeMessage || null,
+                        motd: updates.motd || null,
+                        maxUsers: Number(updates.maxUsers) || 500,
+                        maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
+                    });
+                }
+                deployConfig.updateSection('rooms', {
+                    maxRooms: Number(updates.maxRooms) || 100,
+                    maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
+                });
+                deployConfig.updateSection('security', {
+                    requireAuth: !!updates.requireAuth,
+                    registrationEnabled: updates.registrationEnabled !== false,
+                    allowGuests: updates.allowGuests !== false,
+                    maxGuestDuration: updates.maxGuestDuration ?? null,
+                    enableRateLimiting: updates.enableRateLimiting !== false
+                });
+                if (updates.backgroundStreams && typeof updates.backgroundStreams === 'object') {
+                    deployConfig.updateSection('backgroundStreams', updates.backgroundStreams);
+                }
+                if (updates.pushover && typeof updates.pushover === 'object') {
+                    deployConfig.updateSection('pushover', updates.pushover);
                 }
 
                 await deployConfig.save();
                 res.json({ success: true, message: 'Configuration updated' });
             } catch (error) {
                 res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.get('/api/admin/logs', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const appRoot = path.join(__dirname, '../..');
+                const candidatePaths = [
+                    path.join(appRoot, 'logs', 'server.log'),
+                    path.join(appRoot, 'server.log'),
+                    path.join(appRoot, 'logs', 'combined.log')
+                ];
+                const existing = candidatePaths.find(p => fs.existsSync(p));
+                if (!existing) {
+                    return res.json({ success: true, source: null, lines: [] });
+                }
+                const text = fs.readFileSync(existing, 'utf8');
+                const lines = text.split(/\r?\n/).filter(Boolean).slice(-300);
+                res.json({ success: true, source: existing, lines });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
             }
         });
 
@@ -7740,6 +7781,46 @@ class VoiceLinkLocalServer {
 
                 await deployConfig.save();
                 res.json({ success: true });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/admin/api-sync', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const config = deployConfig.getConfig() || {};
+            res.json({
+                enabled: config.apiSync?.enabled !== false,
+                mode: config.apiSync?.mode || 'hybrid',
+                syncInterval: Number(config.apiSync?.syncInterval || 60),
+                autoSyncOnChange: config.apiSync?.autoSyncOnChange !== false,
+                whmcsEnabled: this.shouldDelegateWhmcsAuth(),
+                whmcsUrl: process.env.VOICELINK_WHMCS_AUTHORITY_URL || 'https://devine-creations.com',
+                whmcsApiIdentifier: config.whmcs?.apiIdentifier || null,
+                whmcsApiSecret: config.whmcs?.apiSecret || null
+            });
+        });
+
+        this.app.put('/api/admin/api-sync', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const body = req.body || {};
+                deployConfig.updateSection('apiSync', {
+                    enabled: body.enabled !== false,
+                    mode: body.mode || 'hybrid',
+                    syncInterval: Number(body.syncInterval) || 60,
+                    autoSyncOnChange: body.autoSyncOnChange !== false
+                });
+                deployConfig.updateSection('whmcs', {
+                    apiIdentifier: body.whmcsApiIdentifier || null,
+                    apiSecret: body.whmcsApiSecret || null
+                });
+                await deployConfig.save();
+                res.json({ success: true, message: 'API sync settings updated' });
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
             }

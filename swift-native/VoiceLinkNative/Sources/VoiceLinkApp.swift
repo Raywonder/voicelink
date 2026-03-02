@@ -76,6 +76,22 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("j", modifiers: [.command, .shift])
 
                 Menu("Filter") {
+                    Menu("Sync") {
+                        ForEach(SyncMode.allCases) { mode in
+                            Button(action: { SettingsManager.shared.syncMode = mode }) {
+                                HStack {
+                                    if SettingsManager.shared.syncMode == mode {
+                                        Image(systemName: "checkmark")
+                                    }
+                                    Image(systemName: mode.icon)
+                                    Text(mode.displayName)
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
                     Button("Reset Filters") {
                         NotificationCenter.default.post(name: .roomFilterReset, object: nil)
                     }
@@ -2079,6 +2095,7 @@ struct MainMenuView: View {
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
     @State private var selectedServerFilter: String = "All Servers"
+    @State private var roomDomainFilter: String = ""
     @State private var selectedRoomDetails: Room?
     @State private var selectedRoomActionRoom: Room?
     @State private var showRoomActionMenuSheet = false
@@ -2156,6 +2173,10 @@ struct MainMenuView: View {
         if selectedServerFilter != "All Servers" {
             parts.append(selectedServerFilter)
         }
+        let trimmedDomain = roomDomainFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDomain.isEmpty {
+            parts.append("Domain: \(trimmedDomain)")
+        }
         if roomScopeFilter != .all {
             parts.append(roomScopeFilter.rawValue)
         }
@@ -2225,7 +2246,10 @@ struct MainMenuView: View {
 
     var filteredRooms: [Room] {
         sortedRooms.filter { room in
-            let matchesServer = selectedServerFilter == "All Servers" || serverLabel(for: room) == selectedServerFilter
+            let roomServerLabel = serverLabel(for: room)
+            let matchesServer = selectedServerFilter == "All Servers" || roomServerLabel == selectedServerFilter
+            let domainQuery = roomDomainFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let matchesDomain = domainQuery.isEmpty || roomServerLabel.lowercased().contains(domainQuery)
             let matchesScope: Bool
             switch roomScopeFilter {
             case .all:
@@ -2239,12 +2263,13 @@ struct MainMenuView: View {
             case .mediaActive:
                 matchesScope = appState.roomHasActiveMusic[room.id] == true
             }
-            return matchesServer && matchesScope
+            return matchesServer && matchesDomain && matchesScope
         }
     }
 
     private func resetRoomFilters() {
         selectedServerFilter = "All Servers"
+        roomDomainFilter = ""
         roomScopeFilter = .all
         roomSortOption = .activeFirst
         roomLayoutOption = .list
@@ -2384,32 +2409,12 @@ struct MainMenuView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-
-                Menu {
-                    ForEach(SyncMode.allCases) { mode in
-                        Button(action: { SettingsManager.shared.syncMode = mode }) {
-                            HStack {
-                                if SettingsManager.shared.syncMode == mode {
-                                    Image(systemName: "checkmark")
-                                }
-                                Image(systemName: mode.icon)
-                                Text(mode.displayName)
-                            }
-                        }
-                    }
-                } label: {
-                    Label("Sync: \(SettingsManager.shared.syncMode.displayName)", systemImage: SettingsManager.shared.syncMode.icon)
-                }
-                .menuStyle(.borderlessButton)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.08))
-                .cornerRadius(8)
             }
 
             HStack(alignment: .top, spacing: 16) {
                 summaryChip(title: "Rooms", value: "\(appState.rooms.count)")
                 summaryChip(title: "Layout", value: roomLayoutOption.rawValue)
+                summaryChip(title: "Sync", value: SettingsManager.shared.syncMode.displayName)
                 summaryChip(title: "Current Room", value: (appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")
                 summaryChip(title: "Audio", value: appState.serverManager.audioTransmissionStatus)
             }
@@ -2486,6 +2491,11 @@ struct MainMenuView: View {
                             .font(.caption2)
                             .foregroundColor(.gray)
                     }
+
+                    TextField("Filter by server domain", text: $roomDomainFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Filter rooms by server domain")
+                        .accessibilityHint("Type part or all of a server domain to show rooms hosted on matching servers.")
                 }
 
                 if let minimized = appState.minimizedRoom {
@@ -2747,8 +2757,8 @@ struct MainMenuView: View {
                     appState.currentScreen = .createRoom
                 }
 
-                ActionButton(title: "Join by Code", icon: "link.circle.fill", color: .green) {
-                    appState.currentScreen = .joinRoom
+                ActionButton(title: "Join or Search Rooms", icon: "link.circle.fill", color: .green) {
+                    appState.openJoinRoomPanel()
                 }
             }
             .padding(.horizontal, 40)

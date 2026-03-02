@@ -940,7 +940,7 @@ class ServerManager: ObservableObject {
     func deduplicateRooms(_ rooms: [ServerRoom]) -> [ServerRoom] {
         var deduped: [ServerRoom] = []
         var indexById: [String: Int] = [:]
-        var indexByName: [String: Int] = [:]
+        var indexBySourceAndName: [String: Int] = [:]
 
         for room in rooms {
             let idKey = room.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -948,13 +948,17 @@ class ServerManager: ObservableObject {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
                 .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            let sourceKey = (room.hostServerName ?? room.hostServerOwner ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let compositeKey = [sourceKey, nameKey].joined(separator: "::")
 
             if let idx = indexById[idKey], !idKey.isEmpty {
                 deduped[idx] = mergeRoomEntries(primary: deduped[idx], incoming: room)
                 continue
             }
 
-            if let idx = indexByName[nameKey], !nameKey.isEmpty {
+            if let idx = indexBySourceAndName[compositeKey], !nameKey.isEmpty {
                 deduped[idx] = mergeRoomEntries(primary: deduped[idx], incoming: room)
                 if !idKey.isEmpty { indexById[idKey] = idx }
                 continue
@@ -963,7 +967,7 @@ class ServerManager: ObservableObject {
             let nextIndex = deduped.count
             deduped.append(room)
             if !idKey.isEmpty { indexById[idKey] = nextIndex }
-            if !nameKey.isEmpty { indexByName[nameKey] = nextIndex }
+            if !nameKey.isEmpty { indexBySourceAndName[compositeKey] = nextIndex }
         }
 
         return deduped

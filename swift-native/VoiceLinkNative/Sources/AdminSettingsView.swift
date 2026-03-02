@@ -122,8 +122,9 @@ struct AdminSettingsView: View {
         .task {
             async let stats: Void = adminManager.fetchServerStats()
             async let config: Void = adminManager.fetchServerConfig()
+            async let advanced: Void = adminManager.fetchAdvancedServerSettings()
             async let modules: Void = adminManager.refreshModulesCenter()
-            _ = await (stats, config, modules)
+            _ = await (stats, config, advanced, modules)
         }
     }
 
@@ -189,6 +190,7 @@ struct AdminTabButton: View {
 // MARK: - Overview Section
 struct AdminOverviewSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var showLogsSheet = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -242,9 +244,13 @@ struct AdminOverviewSection: View {
                 }
 
                 AdminQuickAction(title: "Server Logs", icon: "doc.text") {
-                    adminManager.moduleActionMessage = "Server logs view is available in the Server Logs panel on web admin. Desktop log panel wiring is next."
+                    showLogsSheet = true
+                    Task { await adminManager.fetchServerLogs() }
                 }
             }
+        }
+        .sheet(isPresented: $showLogsSheet) {
+            AdminServerLogsSheet()
         }
     }
 
@@ -421,6 +427,52 @@ struct AdminOverviewSection: View {
             return String(format: "%.1f MB", bytes / 1_000_000)
         }
         return String(format: "%.0f KB", bytes / 1000)
+    }
+}
+
+struct AdminServerLogsSheet: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Server Logs")
+                        .font(.headline)
+                    Text(adminManager.serverLogSource ?? "No log source available")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                Spacer()
+                Button("Refresh") {
+                    Task { await adminManager.fetchServerLogs() }
+                }
+                .buttonStyle(.bordered)
+                Button("Close") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            if adminManager.serverLogLines.isEmpty {
+                Text("No logs available.")
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(adminManager.serverLogLines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 820, minHeight: 520)
+        .background(Color.black.opacity(0.94))
     }
 }
 
@@ -1041,143 +1093,46 @@ struct AdminRoomEditSheet: View {
 struct AdminConfigSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var editedConfig: ServerConfig?
+    @State private var editedAdvancedSettings: AdvancedServerSettings?
+    @State private var selectedSection: ConfigSection = .identity
     @State private var isSaving = false
+
+    enum ConfigSection: String, CaseIterable {
+        case identity = "Identity"
+        case access = "Access"
+        case database = "Database"
+        case notifications = "Notifications"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Use this tab to update the server identity and hard limits the desktop client relies on.",
+                steps: [
+                    "Set the server name and description shown across rooms and server status.",
+                    "Adjust maximum users, rooms, and users per room for this server.",
+                    "Save changes, then refresh the Overview tab to confirm the new values."
+                ],
+                docs: [
+                    AdminDocLink(title: "Server Config Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md"),
+                    AdminDocLink(title: "Admin UI Notes", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md")
+                ]
+            )
+
             if let config = editedConfig ?? adminManager.serverConfig {
-                Group {
-                    // Server Info
-                    SectionHeader(title: "Server Information")
+                VStack(alignment: .leading, spacing: 16) {
+                    configSectionPicker
 
-                    VStack(spacing: 12) {
-                        ConfigTextField(label: "Server Name", text: Binding(
-                            get: { editedConfig?.serverName ?? config.serverName },
-                            set: { editedConfig = (editedConfig ?? config).with(serverName: $0) }
-                        ))
-
-                        ConfigTextField(label: "Description", text: Binding(
-                            get: { editedConfig?.serverDescription ?? config.serverDescription },
-                            set: { editedConfig = (editedConfig ?? config).with(serverDescription: $0) }
-                        ))
-
-                        ConfigTextField(label: "Welcome Message", text: Binding(
-                            get: { editedConfig?.welcomeMessage ?? config.welcomeMessage ?? "" },
-                            set: { editedConfig = (editedConfig ?? config).with(welcomeMessage: $0.isEmpty ? nil : $0) }
-                        ))
-                    }
-
-                    // Limits
-                    SectionHeader(title: "Limits")
-
-                    HStack(spacing: 20) {
-                        ConfigNumberField(label: "Max Users", value: Binding(
-                            get: { editedConfig?.maxUsers ?? config.maxUsers },
-                            set: { editedConfig = (editedConfig ?? config).with(maxUsers: $0) }
-                        ))
-
-                        ConfigNumberField(label: "Max Rooms", value: Binding(
-                            get: { editedConfig?.maxRooms ?? config.maxRooms },
-                            set: { editedConfig = (editedConfig ?? config).with(maxRooms: $0) }
-                        ))
-
-                        ConfigNumberField(label: "Max Users/Room", value: Binding(
-                            get: { editedConfig?.maxUsersPerRoom ?? config.maxUsersPerRoom },
-                            set: { editedConfig = (editedConfig ?? config).with(maxUsersPerRoom: $0) }
-                        ))
-                    }
-
-                    // Security
-                    SectionHeader(title: "Security")
-
-                    VStack(spacing: 12) {
-                        ConfigToggle(label: "Registration Enabled", isOn: Binding(
-                            get: { editedConfig?.registrationEnabled ?? config.registrationEnabled },
-                            set: { editedConfig = (editedConfig ?? config).with(registrationEnabled: $0) }
-                        ))
-
-                        ConfigToggle(label: "Require Authentication", isOn: Binding(
-                            get: { editedConfig?.requireAuth ?? config.requireAuth },
-                            set: { editedConfig = (editedConfig ?? config).with(requireAuth: $0) }
-                        ))
-                    }
-
-                    // Pushover
-                    SectionHeader(title: "Pushover Notifications")
-                    ConfigToggle(label: "Enable Pushover", isOn: Binding(
-                        get: { editedConfig?.pushover?.enabled ?? config.pushover?.enabled ?? false },
-                        set: { value in
-                            var next = editedConfig ?? config
-                            var push = next.pushover ?? PushoverConfig()
-                            push.enabled = value
-                            next.pushover = push
-                            editedConfig = next
-                        }
-                    ))
-
-                    if editedConfig?.pushover?.enabled == true || (editedConfig == nil && config.pushover?.enabled == true) {
-                        VStack(spacing: 12) {
-                            ConfigSecureField(label: "App Token", text: Binding(
-                                get: { editedConfig?.pushover?.appToken ?? config.pushover?.appToken ?? "" },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.appToken = value.isEmpty ? nil : value
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                            ConfigSecureField(label: "User Key", text: Binding(
-                                get: { editedConfig?.pushover?.userKey ?? config.pushover?.userKey ?? "" },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.userKey = value.isEmpty ? nil : value
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                            ConfigTextField(label: "Sound", text: Binding(
-                                get: { editedConfig?.pushover?.sound ?? config.pushover?.sound ?? "pushover" },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.sound = value.isEmpty ? nil : value
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                            ConfigNumberField(label: "Priority (-2 to 2)", value: Binding(
-                                get: { editedConfig?.pushover?.priority ?? config.pushover?.priority ?? 0 },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.priority = min(max(value, -2), 2)
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                            ConfigToggle(label: "Notify on Room Events", isOn: Binding(
-                                get: { editedConfig?.pushover?.notifyOnRoomEvents ?? config.pushover?.notifyOnRoomEvents ?? true },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.notifyOnRoomEvents = value
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                            ConfigToggle(label: "Notify on User Events", isOn: Binding(
-                                get: { editedConfig?.pushover?.notifyOnUserEvents ?? config.pushover?.notifyOnUserEvents ?? true },
-                                set: { value in
-                                    var next = editedConfig ?? config
-                                    var push = next.pushover ?? PushoverConfig()
-                                    push.notifyOnUserEvents = value
-                                    next.pushover = push
-                                    editedConfig = next
-                                }
-                            ))
-                        }
+                    switch selectedSection {
+                    case .identity:
+                        identitySection(config: config)
+                    case .access:
+                        accessSection(config: config)
+                    case .database:
+                        databaseSection
+                    case .notifications:
+                        notificationsSection(config: config)
                     }
                 }
 
@@ -1185,9 +1140,10 @@ struct AdminConfigSection: View {
                 HStack {
                     Spacer()
 
-                    if editedConfig != nil {
+                    if editedConfig != nil || editedAdvancedSettings != nil {
                         Button("Discard Changes") {
                             editedConfig = nil
+                            editedAdvancedSettings = nil
                         }
                         .buttonStyle(.bordered)
                     }
@@ -1201,7 +1157,7 @@ struct AdminConfigSection: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(editedConfig == nil || isSaving)
+                    .disabled((editedConfig == nil && editedAdvancedSettings == nil) || isSaving)
                 }
                 .padding(.top)
             } else {
@@ -1210,23 +1166,330 @@ struct AdminConfigSection: View {
             }
         }
         .task {
-            if adminManager.serverConfig == nil && !adminManager.isLoading {
-                await adminManager.fetchServerConfig()
+            if (adminManager.serverConfig == nil || adminManager.advancedServerSettings == nil) && !adminManager.isLoading {
+                async let config: Void = adminManager.fetchServerConfig()
+                async let advanced: Void = adminManager.fetchAdvancedServerSettings()
+                _ = await (config, advanced)
+            }
+        }
+    }
+
+    private var configSectionPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Settings Sections")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            HStack(spacing: 8) {
+                ForEach(ConfigSection.allCases, id: \.self) { section in
+                    Button(action: { selectedSection = section }) {
+                        Text(section.rawValue)
+                            .font(.caption.weight(selectedSection == section ? .semibold : .regular))
+                            .foregroundColor(selectedSection == section ? .white : .gray)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(selectedSection == section ? Color.blue.opacity(0.35) : Color.white.opacity(0.06))
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.rawValue)
+                    .accessibilityValue(selectedSection == section ? "Selected" : "Not selected")
+                }
+            }
+        }
+    }
+
+    private func identitySection(config: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Server Information")
+
+            VStack(spacing: 12) {
+                ConfigTextField(label: "Server Name", text: Binding(
+                    get: { editedConfig?.serverName ?? config.serverName },
+                    set: { editedConfig = (editedConfig ?? config).with(serverName: $0) }
+                ))
+
+                ConfigTextField(label: "Description", text: Binding(
+                    get: { editedConfig?.serverDescription ?? config.serverDescription },
+                    set: { editedConfig = (editedConfig ?? config).with(serverDescription: $0) }
+                ))
+
+                ConfigTextField(label: "Welcome Message", text: Binding(
+                    get: { editedConfig?.welcomeMessage ?? config.welcomeMessage ?? "" },
+                    set: { editedConfig = (editedConfig ?? config).with(welcomeMessage: $0.isEmpty ? nil : $0) }
+                ))
+
+                ConfigTextField(label: "Message of the Day", text: Binding(
+                    get: { editedConfig?.motd ?? config.motd ?? "" },
+                    set: { editedConfig = (editedConfig ?? config).with(motd: $0.isEmpty ? nil : $0) }
+                ))
+            }
+
+            SectionHeader(title: "Limits")
+
+            HStack(spacing: 20) {
+                ConfigNumberField(label: "Max Users", value: Binding(
+                    get: { editedConfig?.maxUsers ?? config.maxUsers },
+                    set: { editedConfig = (editedConfig ?? config).with(maxUsers: $0) }
+                ))
+
+                ConfigNumberField(label: "Max Rooms", value: Binding(
+                    get: { editedConfig?.maxRooms ?? config.maxRooms },
+                    set: { editedConfig = (editedConfig ?? config).with(maxRooms: $0) }
+                ))
+
+                ConfigNumberField(label: "Max Users/Room", value: Binding(
+                    get: { editedConfig?.maxUsersPerRoom ?? config.maxUsersPerRoom },
+                    set: { editedConfig = (editedConfig ?? config).with(maxUsersPerRoom: $0) }
+                ))
+            }
+        }
+    }
+
+    private func accessSection(config: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Security and Access")
+
+            VStack(spacing: 12) {
+                ConfigToggle(label: "Registration Enabled", isOn: Binding(
+                    get: { editedConfig?.registrationEnabled ?? config.registrationEnabled },
+                    set: { editedConfig = (editedConfig ?? config).with(registrationEnabled: $0) }
+                ))
+
+                ConfigToggle(label: "Require Authentication", isOn: Binding(
+                    get: { editedConfig?.requireAuth ?? config.requireAuth },
+                    set: { editedConfig = (editedConfig ?? config).with(requireAuth: $0) }
+                ))
+
+                ConfigToggle(label: "Allow Guests", isOn: Binding(
+                    get: { editedConfig?.allowGuests ?? config.allowGuests },
+                    set: { editedConfig = (editedConfig ?? config).with(allowGuests: $0) }
+                ))
+
+                ConfigToggle(label: "Enable Rate Limiting", isOn: Binding(
+                    get: { editedConfig?.enableRateLimiting ?? config.enableRateLimiting },
+                    set: { editedConfig = (editedConfig ?? config).with(enableRateLimiting: $0) }
+                ))
+
+                ConfigNumberField(label: "Guest Session Limit (minutes, 0 = unlimited)", value: Binding(
+                    get: {
+                        let seconds = editedConfig?.maxGuestDuration ?? config.maxGuestDuration ?? 0
+                        return seconds > 0 ? max(1, seconds / 60) : 0
+                    },
+                    set: { minutes in
+                        let seconds = minutes > 0 ? minutes * 60 : nil
+                        editedConfig = (editedConfig ?? config).with(maxGuestDuration: seconds)
+                    }
+                ))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var databaseSection: some View {
+        if let settings = editedAdvancedSettings ?? adminManager.advancedServerSettings {
+            SectionHeader(title: "Database")
+
+            ConfigToggle(label: "Enable External Database", isOn: Binding(
+                get: { (editedAdvancedSettings ?? settings).database.enabled },
+                set: { value in
+                    var next = editedAdvancedSettings ?? settings
+                    next.database.enabled = value
+                    editedAdvancedSettings = next
+                }
+            ))
+
+            HStack(spacing: 12) {
+                Text("Provider")
+                    .foregroundColor(.white)
+                Picker("Provider", selection: Binding(
+                    get: { (editedAdvancedSettings ?? settings).database.provider },
+                    set: { value in
+                        var next = editedAdvancedSettings ?? settings
+                        next.database.provider = value
+                        editedAdvancedSettings = next
+                    }
+                )) {
+                    Text("SQLite").tag("sqlite")
+                    Text("PostgreSQL").tag("postgres")
+                    Text("MySQL").tag("mysql")
+                    Text("MariaDB").tag("mariadb")
+                }
+                .pickerStyle(.segmented)
+            }
+
+            let selectedProvider = (editedAdvancedSettings ?? settings).database.provider
+            if selectedProvider == "sqlite" {
+                ConfigTextField(label: "SQLite Path", text: Binding(
+                    get: { (editedAdvancedSettings ?? settings).database.sqlite.path },
+                    set: { value in
+                        var next = editedAdvancedSettings ?? settings
+                        next.database.sqlite.path = value
+                        editedAdvancedSettings = next
+                    }
+                ))
+            } else {
+                ConfigTextField(label: "Host", text: Binding(
+                    get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).host },
+                    set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.host = value } }
+                ))
+
+                HStack(spacing: 20) {
+                    ConfigNumberField(label: "Port", value: Binding(
+                        get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).port },
+                        set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.port = value } }
+                    ))
+                    ConfigTextField(label: "Database", text: Binding(
+                        get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).database },
+                        set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.database = value } }
+                    ))
+                }
+
+                HStack(spacing: 20) {
+                    ConfigTextField(label: "User", text: Binding(
+                        get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).user },
+                        set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.user = value } }
+                    ))
+                    ConfigSecureField(label: "Password", text: Binding(
+                        get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).password },
+                        set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.password = value } }
+                    ))
+                }
+
+                ConfigToggle(label: "Use SSL", isOn: Binding(
+                    get: { databaseNetworkConfig(from: editedAdvancedSettings ?? settings, provider: selectedProvider).ssl },
+                    set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.ssl = value } }
+                ))
+            }
+        }
+    }
+
+    private func notificationsSection(config: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Pushover Notifications")
+            ConfigToggle(label: "Enable Pushover", isOn: Binding(
+                get: { editedConfig?.pushover?.enabled ?? config.pushover?.enabled ?? false },
+                set: { value in
+                    var next = editedConfig ?? config
+                    var push = next.pushover ?? PushoverConfig()
+                    push.enabled = value
+                    next.pushover = push
+                    editedConfig = next
+                }
+            ))
+
+            if editedConfig?.pushover?.enabled == true || (editedConfig == nil && config.pushover?.enabled == true) {
+                VStack(spacing: 12) {
+                    ConfigSecureField(label: "App Token", text: Binding(
+                        get: { editedConfig?.pushover?.appToken ?? config.pushover?.appToken ?? "" },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.appToken = value.isEmpty ? nil : value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                    ConfigSecureField(label: "User Key", text: Binding(
+                        get: { editedConfig?.pushover?.userKey ?? config.pushover?.userKey ?? "" },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.userKey = value.isEmpty ? nil : value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                    ConfigTextField(label: "Sound", text: Binding(
+                        get: { editedConfig?.pushover?.sound ?? config.pushover?.sound ?? "pushover" },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.sound = value.isEmpty ? nil : value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                    ConfigNumberField(label: "Priority (-2 to 2)", value: Binding(
+                        get: { editedConfig?.pushover?.priority ?? config.pushover?.priority ?? 0 },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.priority = min(max(value, -2), 2)
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                    ConfigToggle(label: "Notify on Room Events", isOn: Binding(
+                        get: { editedConfig?.pushover?.notifyOnRoomEvents ?? config.pushover?.notifyOnRoomEvents ?? true },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.notifyOnRoomEvents = value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                    ConfigToggle(label: "Notify on User Events", isOn: Binding(
+                        get: { editedConfig?.pushover?.notifyOnUserEvents ?? config.pushover?.notifyOnUserEvents ?? true },
+                        set: { value in
+                            var next = editedConfig ?? config
+                            var push = next.pushover ?? PushoverConfig()
+                            push.notifyOnUserEvents = value
+                            next.pushover = push
+                            editedConfig = next
+                        }
+                    ))
+                }
             }
         }
     }
 
     private func saveConfig() {
-        guard let config = editedConfig else { return }
         isSaving = true
 
         Task {
-            let success = await adminManager.updateServerConfig(config)
+            var success = true
+            if let config = editedConfig {
+                success = await adminManager.updateServerConfig(config) && success
+            }
+            if let advanced = editedAdvancedSettings {
+                success = await adminManager.updateAdvancedServerSettings(advanced) && success
+            }
             isSaving = false
             if success {
                 editedConfig = nil
+                editedAdvancedSettings = nil
             }
         }
+    }
+
+    private func databaseNetworkConfig(from settings: AdvancedServerSettings, provider: String) -> DatabaseNetworkConfig {
+        switch provider {
+        case "postgres":
+            return settings.database.postgres
+        case "mysql":
+            return settings.database.mysql
+        case "mariadb":
+            return settings.database.mariadb
+        default:
+            return settings.database.postgres
+        }
+    }
+
+    private func updateDatabaseNetworkConfig(provider: String, mutate: (inout DatabaseNetworkConfig) -> Void) {
+        var next = editedAdvancedSettings ?? adminManager.advancedServerSettings ?? AdvancedServerSettings()
+        switch provider {
+        case "postgres":
+            mutate(&next.database.postgres)
+        case "mysql":
+            mutate(&next.database.mysql)
+        case "mariadb":
+            mutate(&next.database.mariadb)
+        default:
+            mutate(&next.database.postgres)
+        }
+        editedAdvancedSettings = next
     }
 }
 
@@ -1238,6 +1501,20 @@ struct AdminStreamsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Background streams let you keep radio or ambient audio available in selected rooms without manual playback each time.",
+                steps: [
+                    "Add a named stream and paste the direct stream URL, not the station web page.",
+                    "Set volume and auto-play for rooms that should start with media already active.",
+                    "Use hidden streams for admin-managed presets that should not appear in normal room browsing."
+                ],
+                docs: [
+                    AdminDocLink(title: "Background Streams Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/api-integration.md"),
+                    AdminDocLink(title: "Server Setup Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                ]
+            )
+
             HStack {
                 Text("Background Streams")
                     .font(.headline)
@@ -1347,6 +1624,20 @@ struct AdminAPISyncSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "API Sync connects this VoiceLink server to external control systems such as HubNode and WHMCS-backed services.",
+                steps: [
+                    "Enable only the integrations you actively use for this install.",
+                    "Set the upstream URLs and credentials, then save and refresh the tab.",
+                    "Use WHMCS fields for hosted account linking and license-aware server ownership tracking."
+                ],
+                docs: [
+                    AdminDocLink(title: "API Integration Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/api-integration.md"),
+                    AdminDocLink(title: "Distribution Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/distribution.md")
+                ]
+            )
+
             if var config = settings {
                 // HubNode API
                 SectionHeader(title: "HubNode API Sync")
@@ -1467,6 +1758,20 @@ struct AdminFederationSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Federation controls how this server exchanges room visibility and room state with other VoiceLink installs.",
+                steps: [
+                    "Enable federation only for servers you trust to exchange room data with.",
+                    "Add trusted servers you want to connect to regularly and block servers you never want linked.",
+                    "Use approval controls if room federation should require explicit review before being shared."
+                ],
+                docs: [
+                    AdminDocLink(title: "Federation Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
+                    AdminDocLink(title: "Server Install Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                ]
+            )
+
             if var config = settings {
                 // Enable Federation
                 ConfigToggle(label: "Enable Federation", isOn: Binding(
@@ -1656,6 +1961,20 @@ struct AdminModulesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Modules extend server features. Recommended modules should be installed first, then optional modules added as needed.",
+                steps: [
+                    "Refresh the catalog before making changes if module state looks stale.",
+                    "Install recommended modules first, then enable or disable optional modules to fit the server role.",
+                    "Use Update when a module is installed but needs its current config reapplied."
+                ],
+                docs: [
+                    AdminDocLink(title: "Module Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
+                    AdminDocLink(title: "Distribution Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/distribution.md")
+                ]
+            )
+
             HStack {
                 Text("Modules Center")
                     .font(.headline)
@@ -1800,6 +2119,20 @@ struct AdminSelfTestsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Self Tests verify the local app and server integration paths that VoiceLink depends on.",
+                steps: [
+                    "Run the tests after changing server config, media setup, or file transfer settings.",
+                    "Enable scheduled checks for ongoing installs that should alert when a dependency breaks.",
+                    "Review the recent run history to see which checks passed, warned, or failed."
+                ],
+                docs: [
+                    AdminDocLink(title: "Testing Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
+                    AdminDocLink(title: "Installation Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                ]
+            )
+
             Text("Built-in Self-Test Scheduler")
                 .font(.headline)
                 .foregroundColor(.white)
@@ -1991,6 +2324,60 @@ struct SectionHeader: View {
     }
 }
 
+struct AdminDocLink: Identifiable {
+    let id = UUID()
+    let title: String
+    let url: String
+}
+
+struct AdminHelpSection: View {
+    let title: String
+    let summary: String
+    let steps: [String]
+    let docs: [AdminDocLink]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundColor(.cyan)
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
+
+            Text(summary)
+                .font(.subheadline)
+                .foregroundColor(.gray)
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    Text("\(index + 1). \(step)")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+            }
+
+            if !docs.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(docs) { doc in
+                        Button(doc.title) {
+                            guard let url = URL(string: doc.url) else { return }
+                            NSWorkspace.shared.open(url)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+}
+
 struct ConfigTextField: View {
     let label: String
     @Binding var text: String
@@ -2051,7 +2438,8 @@ struct ConfigToggle: View {
 extension ServerConfig {
     func with(serverName: String? = nil, serverDescription: String? = nil, maxUsers: Int? = nil,
               maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, welcomeMessage: String?? = nil,
-              registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
+              motd: String?? = nil, registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
+              allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
               pushover: PushoverConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
@@ -2060,9 +2448,12 @@ extension ServerConfig {
             maxRooms: maxRooms ?? self.maxRooms,
             maxUsersPerRoom: maxUsersPerRoom ?? self.maxUsersPerRoom,
             welcomeMessage: welcomeMessage ?? self.welcomeMessage,
-            motd: self.motd,
+            motd: motd ?? self.motd,
             registrationEnabled: registrationEnabled ?? self.registrationEnabled,
             requireAuth: requireAuth ?? self.requireAuth,
+            allowGuests: allowGuests ?? self.allowGuests,
+            maxGuestDuration: maxGuestDuration ?? self.maxGuestDuration,
+            enableRateLimiting: enableRateLimiting ?? self.enableRateLimiting,
             backgroundStreams: self.backgroundStreams,
             pushover: pushover ?? self.pushover
         )

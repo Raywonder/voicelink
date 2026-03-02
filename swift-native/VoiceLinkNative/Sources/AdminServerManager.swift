@@ -9,10 +9,13 @@ class AdminServerManager: ObservableObject {
     @Published var isAdmin: Bool = false
     @Published var adminRole: AdminRole = .none
     @Published var serverConfig: ServerConfig?
+    @Published var advancedServerSettings: AdvancedServerSettings?
     @Published var connectedUsers: [AdminUserInfo] = []
     @Published var serverRooms: [AdminRoomInfo] = []
     @Published var serverStats: ServerStats?
     @Published var availableModules: [AdminModuleInfo] = []
+    @Published var serverLogLines: [String] = []
+    @Published var serverLogSource: String?
     @Published var moduleCategories: [String: String] = [:]
     @Published var modulesLoading: Bool = false
     @Published var moduleActionMessage: String?
@@ -137,6 +140,36 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func fetchAdvancedServerSettings() async {
+        guard canManageConfigEffective else { return }
+
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/settings") else {
+            error = "Invalid admin settings URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                error = "Failed to fetch advanced server settings"
+                return
+            }
+
+            let decoder = JSONDecoder()
+            advancedServerSettings = try decoder.decode(AdvancedServerSettings.self, from: data)
+        } catch {
+            self.error = "Failed to fetch advanced server settings: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Update Server Config
 
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
@@ -171,6 +204,42 @@ class AdminServerManager: ObservableObject {
             return true
         } catch {
             self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func updateAdvancedServerSettings(_ settings: AdvancedServerSettings) async -> Bool {
+        guard canManageConfigEffective else { return false }
+
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/settings") else {
+            error = "Invalid advanced settings URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let encoder = JSONEncoder()
+            request.httpBody = try encoder.encode(settings)
+
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                error = "Failed to update advanced server settings"
+                return false
+            }
+
+            advancedServerSettings = settings
+            return true
+        } catch {
+            self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
             return false
         }
     }
@@ -368,8 +437,12 @@ class AdminServerManager: ObservableObject {
             "description": room.description,
             "maxUsers": room.maxUsers,
             "visibility": room.visibility ?? (room.isPrivate ? "private" : "public"),
+            "accessType": room.accessType ?? (room.isPrivate ? "private" : "public"),
+            "roomType": room.accessType ?? (room.isPrivate ? "private" : "public"),
             "enabled": room.enabled ?? true,
-            "locked": room.locked ?? false
+            "locked": room.locked ?? false,
+            "hidden": room.hidden ?? false,
+            "isDefault": room.isDefault ?? false
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
@@ -416,6 +489,33 @@ class AdminServerManager: ObservableObject {
             serverStats = try decoder.decode(ServerStats.self, from: data)
         } catch {
             print("Failed to fetch stats: \(error)")
+        }
+    }
+
+    func fetchServerLogs() async {
+        guard canManageConfigEffective else { return }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/logs") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            serverLogSource = json["source"] as? String
+            serverLogLines = (json["lines"] as? [String]) ?? []
+        } catch {
+            self.error = "Failed to fetch server logs: \(error.localizedDescription)"
         }
     }
 
@@ -507,7 +607,7 @@ class AdminServerManager: ObservableObject {
     func fetchFederationSettings() async -> FederationSettings? {
         guard canManageConfigEffective else { return nil }
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/federation") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/federation/status") else {
             return nil
         }
 
@@ -524,8 +624,19 @@ class AdminServerManager: ObservableObject {
                 return nil
             }
 
-            let decoder = JSONDecoder()
-            return try decoder.decode(FederationSettings.self, from: data)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+
+            return FederationSettings(
+                enabled: json["enabled"] as? Bool ?? false,
+                allowIncoming: true,
+                allowOutgoing: true,
+                trustedServers: [],
+                blockedServers: [],
+                autoAcceptTrusted: false,
+                requireApproval: json["roomApprovalRequired"] as? Bool ?? false
+            )
         } catch {
             return nil
         }
@@ -534,7 +645,7 @@ class AdminServerManager: ObservableObject {
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/federation") else {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/federation/settings") else {
             return false
         }
 
@@ -546,8 +657,14 @@ class AdminServerManager: ObservableObject {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let encoder = JSONEncoder()
-        request.httpBody = try? encoder.encode(settings)
+        let payload: [String: Any] = [
+            "enabled": settings.enabled,
+            "mode": (settings.allowIncoming && settings.allowOutgoing) ? "mesh" : (settings.allowOutgoing ? "spoke" : "standalone"),
+            "globalFederation": settings.enabled,
+            "roomApprovalRequired": settings.requireApproval,
+            "trustedServers": settings.trustedServers
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -971,6 +1088,9 @@ struct ServerConfig: Codable {
     var motd: String?
     var registrationEnabled: Bool
     var requireAuth: Bool
+    var allowGuests: Bool
+    var maxGuestDuration: Int?
+    var enableRateLimiting: Bool
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
 
@@ -984,6 +1104,9 @@ struct ServerConfig: Codable {
         case motd
         case registrationEnabled
         case requireAuth
+        case allowGuests
+        case maxGuestDuration
+        case enableRateLimiting
         case backgroundStreams
         case pushover
     }
@@ -998,6 +1121,9 @@ struct ServerConfig: Codable {
         motd: String? = nil,
         registrationEnabled: Bool = true,
         requireAuth: Bool = false,
+        allowGuests: Bool = true,
+        maxGuestDuration: Int? = nil,
+        enableRateLimiting: Bool = true,
         backgroundStreams: BackgroundStreamsConfig? = nil,
         pushover: PushoverConfig? = nil
     ) {
@@ -1010,6 +1136,9 @@ struct ServerConfig: Codable {
         self.motd = motd
         self.registrationEnabled = registrationEnabled
         self.requireAuth = requireAuth
+        self.allowGuests = allowGuests
+        self.maxGuestDuration = maxGuestDuration
+        self.enableRateLimiting = enableRateLimiting
         self.backgroundStreams = backgroundStreams
         self.pushover = pushover
     }
@@ -1025,8 +1154,81 @@ struct ServerConfig: Codable {
         motd = try container.decodeIfPresent(String.self, forKey: .motd)
         registrationEnabled = try container.decodeIfPresent(Bool.self, forKey: .registrationEnabled) ?? true
         requireAuth = try container.decodeIfPresent(Bool.self, forKey: .requireAuth) ?? false
+        allowGuests = try container.decodeIfPresent(Bool.self, forKey: .allowGuests) ?? true
+        maxGuestDuration = try container.decodeIfPresent(Int.self, forKey: .maxGuestDuration)
+        enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
+    }
+}
+
+struct AdvancedServerSettings: Codable, Equatable {
+    var maxRooms: Int
+    var requireAuth: Bool
+    var database: DatabaseConfig
+
+    init(maxRooms: Int = 100, requireAuth: Bool = false, database: DatabaseConfig = DatabaseConfig()) {
+        self.maxRooms = maxRooms
+        self.requireAuth = requireAuth
+        self.database = database
+    }
+}
+
+struct DatabaseConfig: Codable, Equatable {
+    var enabled: Bool
+    var provider: String
+    var sqlite: DatabaseSQLiteConfig
+    var postgres: DatabaseNetworkConfig
+    var mysql: DatabaseNetworkConfig
+    var mariadb: DatabaseNetworkConfig
+
+    init(
+        enabled: Bool = false,
+        provider: String = "sqlite",
+        sqlite: DatabaseSQLiteConfig = DatabaseSQLiteConfig(),
+        postgres: DatabaseNetworkConfig = DatabaseNetworkConfig(port: 5432),
+        mysql: DatabaseNetworkConfig = DatabaseNetworkConfig(port: 3306),
+        mariadb: DatabaseNetworkConfig = DatabaseNetworkConfig(port: 3306)
+    ) {
+        self.enabled = enabled
+        self.provider = provider
+        self.sqlite = sqlite
+        self.postgres = postgres
+        self.mysql = mysql
+        self.mariadb = mariadb
+    }
+}
+
+struct DatabaseSQLiteConfig: Codable, Equatable {
+    var path: String
+
+    init(path: String = "./data/voicelink.db") {
+        self.path = path
+    }
+}
+
+struct DatabaseNetworkConfig: Codable, Equatable {
+    var host: String
+    var port: Int
+    var database: String
+    var user: String
+    var password: String
+    var ssl: Bool
+
+    init(
+        host: String = "127.0.0.1",
+        port: Int,
+        database: String = "voicelink",
+        user: String = "voicelink",
+        password: String = "",
+        ssl: Bool = false
+    ) {
+        self.host = host
+        self.port = port
+        self.database = database
+        self.user = user
+        self.password = password
+        self.ssl = ssl
     }
 }
 
