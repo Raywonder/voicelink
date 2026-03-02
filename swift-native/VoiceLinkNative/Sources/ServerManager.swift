@@ -1157,7 +1157,7 @@ class ServerManager: ObservableObject {
 
     // MARK: - Audio Transmission
 
-    private var audioTransmitEngine: AVAudioEngine?
+    private var audioTransmitCaptureToken: UUID?
     private var isTransmitting = false
 
     private func scheduleAudioTransmissionStart(for roomId: String) {
@@ -1230,17 +1230,17 @@ class ServerManager: ObservableObject {
             print("[Audio] Spatial audio engine start warning: \(error)")
         }
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let sampleRate = 48000.0
+        let channels: UInt32 = 1
 
         // Request relay mode from server
         socket?.emit("enable-audio-relay", [
-            "sampleRate": format.sampleRate,
-            "channels": format.channelCount
+            "sampleRate": sampleRate,
+            "channels": channels
         ])
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+        let selectedInput = SettingsManager.shared.inputDevice
+        audioTransmitCaptureToken = SelectedAudioInputCapture.shared.start(deviceName: selectedInput) { [weak self] buffer in
             guard let self = self, self.isTransmitting else { return }
 
             // Convert PCM buffer to Data
@@ -1255,26 +1255,16 @@ class ServerManager: ObservableObject {
             self.socket?.emit("audio-data", [
                 "audioData": base64Audio,
                 "timestamp": Date().timeIntervalSince1970,
-                "sampleRate": format.sampleRate
+                "sampleRate": buffer.format.sampleRate
             ])
         }
 
-        do {
-            try engine.start()
-            audioTransmitEngine = engine
-            isTransmitting = true
-            DispatchQueue.main.async {
-                self.isAudioTransmitting = true
-                self.audioTransmissionStatus = "Transmitting"
-            }
-            print("[Audio] Microphone capture started, transmitting to server")
-        } catch {
-            DispatchQueue.main.async {
-                self.isAudioTransmitting = false
-                self.audioTransmissionStatus = "Failed: \(error.localizedDescription)"
-            }
-            print("[Audio] Failed to start audio engine: \(error)")
+        isTransmitting = true
+        DispatchQueue.main.async {
+            self.isAudioTransmitting = true
+            self.audioTransmissionStatus = "Transmitting"
         }
+        print("[Audio] Microphone capture started, transmitting to server")
     }
 
     func stopAudioTransmission() {
@@ -1285,9 +1275,10 @@ class ServerManager: ObservableObject {
 
     private func stopAudioTransmissionNow() {
         if isTransmitting {
-            audioTransmitEngine?.inputNode.removeTap(onBus: 0)
-            audioTransmitEngine?.stop()
-            audioTransmitEngine = nil
+            if let token = audioTransmitCaptureToken {
+                SelectedAudioInputCapture.shared.stop(token: token)
+                audioTransmitCaptureToken = nil
+            }
             isTransmitting = false
         }
         DispatchQueue.main.async {

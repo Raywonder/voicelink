@@ -9,9 +9,11 @@ final class LocalMonitorManager: ObservableObject {
 
     private var engine = AVAudioEngine()
     private var monitorMixer = AVAudioMixerNode()
+    private var playerNode = AVAudioPlayerNode()
     private var isConfigured = false
     private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
     private var isTransitioning = false
+    private var captureToken: UUID?
 
     private init() {}
 
@@ -44,6 +46,7 @@ final class LocalMonitorManager: ObservableObject {
         engine.reset()
         engine = AVAudioEngine()
         monitorMixer = AVAudioMixerNode()
+        playerNode = AVAudioPlayerNode()
     }
 
     private func startMonitoring() {
@@ -52,33 +55,33 @@ final class LocalMonitorManager: ObservableObject {
         SettingsManager.shared.applySelectedAudioDevices()
         rebuildEngine()
 
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
-            print("[LocalMonitor] Input format unavailable")
-            return
-        }
         let selectedInput = SettingsManager.shared.inputDevice
         let selectedOutput = SettingsManager.shared.outputDevice
         let actualInput = defaultDeviceName(isInput: true)
         let actualOutput = defaultDeviceName(isInput: false)
         print("[LocalMonitor] Selected input=\(selectedInput) actual input=\(actualInput)")
         print("[LocalMonitor] Selected output=\(selectedOutput) actual output=\(actualOutput)")
-        print("[LocalMonitor] Input format sr=\(inputFormat.sampleRate) channels=\(inputFormat.channelCount)")
         print("[LocalMonitor] Output format sr=\(outputFormat.sampleRate) channels=\(outputFormat.channelCount)")
 
         do {
-            engine.disconnectNodeOutput(inputNode)
             engine.attach(monitorMixer)
-            engine.disconnectNodeOutput(engine.mainMixerNode)
+            engine.attach(playerNode)
             engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.outputVolume)
             monitorMixer.outputVolume = Float(SettingsManager.shared.inputVolume)
-            engine.connect(inputNode, to: monitorMixer, format: inputFormat)
-            engine.connect(monitorMixer, to: engine.mainMixerNode, format: inputFormat)
+            engine.connect(playerNode, to: monitorMixer, format: nil)
+            engine.connect(monitorMixer, to: engine.mainMixerNode, format: nil)
             engine.prepare()
             if !engine.isRunning {
                 try engine.start()
+            }
+            playerNode.play()
+            captureToken = SelectedAudioInputCapture.shared.start(deviceName: selectedInput) { [weak self] buffer in
+                guard let self else { return }
+                let copied = self.copyBuffer(buffer)
+                self.audioQueue.async {
+                    self.playerNode.scheduleBuffer(copied, completionHandler: nil)
+                }
             }
             DispatchQueue.main.async {
                 self.isMonitoring = true
@@ -87,7 +90,10 @@ final class LocalMonitorManager: ObservableObject {
         } catch {
             engine.stop()
             engine.reset()
-            engine.disconnectNodeOutput(inputNode)
+            if let captureToken {
+                SelectedAudioInputCapture.shared.stop(token: captureToken)
+                self.captureToken = nil
+            }
             DispatchQueue.main.async {
                 self.isMonitoring = false
             }
@@ -97,7 +103,11 @@ final class LocalMonitorManager: ObservableObject {
 
     private func stopMonitoring() {
         guard isMonitoring else { return }
-        engine.disconnectNodeOutput(engine.inputNode)
+        if let captureToken {
+            SelectedAudioInputCapture.shared.stop(token: captureToken)
+            self.captureToken = nil
+        }
+        playerNode.stop()
         engine.disconnectNodeOutput(monitorMixer)
         engine.stop()
         engine.reset()
@@ -105,6 +115,21 @@ final class LocalMonitorManager: ObservableObject {
             self.isMonitoring = false
         }
         print("[LocalMonitor] Monitoring stopped")
+    }
+
+    private func copyBuffer(_ source: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        let format = source.format
+        let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: source.frameLength) ?? source
+        copy.frameLength = source.frameLength
+        if let sourceData = source.floatChannelData,
+           let targetData = copy.floatChannelData {
+            let channels = Int(format.channelCount)
+            let frames = Int(source.frameLength)
+            for channel in 0..<channels {
+                memcpy(targetData[channel], sourceData[channel], frames * MemoryLayout<Float>.size)
+            }
+        }
+        return copy
     }
 
     private func defaultDeviceName(isInput: Bool) -> String {

@@ -4972,6 +4972,8 @@ enum FileReceiveMode: String, CaseIterable {
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
     private var isApplyingAudioDeviceSelection = false
+    private var audioDeviceRefreshTimer: Timer?
+    private var lastAudioDeviceSignature: String = ""
 
     enum CloseButtonBehavior: String, CaseIterable {
         case goToMainThenHide = "goToMainThenHide"
@@ -5064,6 +5066,11 @@ class SettingsManager: ObservableObject {
     init() {
         loadSettings()
         detectAudioDevices()
+        startAudioDeviceRefreshMonitoring()
+    }
+
+    deinit {
+        audioDeviceRefreshTimer?.invalidate()
     }
 
     func loadSettings() {
@@ -5344,6 +5351,9 @@ class SettingsManager: ObservableObject {
 
         let uniqueInput = Array(Set(inputDevices.filter { !$0.isEmpty }))
         let uniqueOutput = Array(Set(outputDevices.filter { !$0.isEmpty }))
+        let newSignature = (uniqueInput.sorted() + ["|"] + uniqueOutput.sorted()).joined(separator: "\n")
+        let didChange = newSignature != lastAudioDeviceSignature
+        lastAudioDeviceSignature = newSignature
 
         availableInputDevices = ["Default"] + uniqueInput.filter { $0 != "Default" }.sorted()
         availableOutputDevices = ["Default"] + uniqueOutput.filter { $0 != "Default" }.sorted()
@@ -5355,6 +5365,23 @@ class SettingsManager: ObservableObject {
         if !availableOutputDevices.contains(outputDevice) {
             outputDevice = "Default"
         }
+
+        if didChange {
+            print("[Settings] Audio device inventory changed. Inputs=\(availableInputDevices) Outputs=\(availableOutputDevices)")
+            applySelectedAudioDevices()
+        }
+    }
+
+    private func startAudioDeviceRefreshMonitoring() {
+        audioDeviceRefreshTimer?.invalidate()
+        audioDeviceRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.detectAudioDevices()
+            }
+        }
+        if let audioDeviceRefreshTimer {
+            RunLoop.main.add(audioDeviceRefreshTimer, forMode: .common)
+        }
     }
 
     func applySelectedAudioDevices() {
@@ -5362,18 +5389,70 @@ class SettingsManager: ObservableObject {
         isApplyingAudioDeviceSelection = true
         defer { isApplyingAudioDeviceSelection = false }
 
-        if inputDevice != "Default",
-           let inputId = getDeviceID(named: inputDevice, scope: kAudioDevicePropertyScopeInput) {
-            setSystemDefaultDevice(deviceId: inputId, isInput: true)
+        if inputDevice != "Default" {
+            let switched = setPreferredDevice(named: inputDevice, isInput: true)
+            if !switched {
+                print("[Settings] Failed to apply input device selection: \(inputDevice)")
+            }
+            let resolvedInput = currentDefaultDeviceName(isInput: true)
+            print("[Settings] Effective input device after apply: \(resolvedInput)")
         }
 
-        if outputDevice != "Default",
-           let outputId = getDeviceID(named: outputDevice, scope: kAudioDevicePropertyScopeOutput) {
-            setSystemDefaultDevice(deviceId: outputId, isInput: false)
+        if outputDevice != "Default" {
+            let switched = setPreferredDevice(named: outputDevice, isInput: false)
+            if !switched {
+                print("[Settings] Failed to apply output device selection: \(outputDevice)")
+            }
+            let resolvedOutput = currentDefaultDeviceName(isInput: false)
+            print("[Settings] Effective output device after apply: \(resolvedOutput)")
         }
     }
 
-    private func setSystemDefaultDevice(deviceId: AudioDeviceID, isInput: Bool) {
+    private func setPreferredDevice(named targetName: String, isInput: Bool) -> Bool {
+        if setDeviceViaSwitchAudioSource(named: targetName, isInput: isInput) {
+            return true
+        }
+        guard let deviceId = getDeviceID(named: targetName, scope: isInput ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput) else {
+            return false
+        }
+        return setSystemDefaultDevice(deviceId: deviceId, isInput: isInput)
+    }
+
+    private func setDeviceViaSwitchAudioSource(named targetName: String, isInput: Bool) -> Bool {
+        let candidates = [
+            "/usr/local/bin/SwitchAudioSource",
+            "/opt/homebrew/bin/SwitchAudioSource"
+        ]
+        guard let toolPath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            return false
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: toolPath)
+        process.arguments = ["-t", isInput ? "input" : "output", "-s", targetName]
+        let pipe = Pipe()
+        process.standardError = pipe
+        process.standardOutput = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            if process.terminationStatus == 0 {
+                print("[Settings] Applied \(isInput ? "input" : "output") device via SwitchAudioSource: \(targetName)")
+                return true
+            }
+            print("[Settings] SwitchAudioSource failed for \(isInput ? "input" : "output") \(targetName): \(text)")
+        } catch {
+            print("[Settings] SwitchAudioSource error for \(isInput ? "input" : "output") \(targetName): \(error)")
+        }
+
+        return false
+    }
+
+    @discardableResult
+    private func setSystemDefaultDevice(deviceId: AudioDeviceID, isInput: Bool) -> Bool {
         var mutableDeviceId = deviceId
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: isInput ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
@@ -5392,9 +5471,47 @@ class SettingsManager: ObservableObject {
 
         if status != noErr {
             print("[Settings] Failed to set \(isInput ? "input" : "output") default device. status=\(status)")
+            return false
         } else {
             print("[Settings] Applied \(isInput ? "input" : "output") device selection: \(deviceId)")
+            return true
         }
+    }
+
+    private func currentDefaultDeviceName(isInput: Bool) -> String {
+        let selector = isInput ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceId = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &size,
+            &deviceId
+        ) == noErr,
+        deviceId != 0 else {
+            return "Unavailable"
+        }
+
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var nameSize = UInt32(MemoryLayout<CFString?>.size)
+        var cfName: CFString?
+        guard AudioObjectGetPropertyData(deviceId, &nameAddress, 0, nil, &nameSize, &cfName) == noErr,
+              let name = cfName as String?,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Unavailable"
+        }
+        return name
     }
 
     private func getDeviceID(named targetName: String, scope: AudioObjectPropertyScope) -> AudioDeviceID? {
