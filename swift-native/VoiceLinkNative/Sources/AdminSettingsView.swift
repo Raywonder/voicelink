@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Admin Settings View
 struct AdminSettingsView: View {
@@ -1115,8 +1116,8 @@ struct AdminConfigSection: View {
                     "Save changes, then refresh the Overview tab to confirm the new values."
                 ],
                 docs: [
-                    AdminDocLink(title: "Server Config Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md"),
-                    AdminDocLink(title: "Admin UI Notes", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md")
+                    AdminDocLink(title: "Server Config Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/index.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Admin UI Notes", localRelativePath: "authenticated/index.html", webPath: "/docs/index.html", adminWebPath: "/docs/authenticated/index.html")
                 ]
             )
 
@@ -1222,6 +1223,28 @@ struct AdminConfigSection: View {
                 ConfigTextField(label: "Message of the Day", text: Binding(
                     get: { editedConfig?.motd ?? config.motd ?? "" },
                     set: { editedConfig = (editedConfig ?? config).with(motd: $0.isEmpty ? nil : $0) }
+                ))
+
+                SectionHeader(title: "Message Display")
+
+                ConfigToggle(label: "Enable Message of the Day", isOn: Binding(
+                    get: { editedConfig?.motdSettings.enabled ?? config.motdSettings.enabled },
+                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(enabled: $0)) }
+                ))
+
+                ConfigToggle(label: "Show Before Joining Rooms", isOn: Binding(
+                    get: { editedConfig?.motdSettings.showBeforeJoin ?? config.motdSettings.showBeforeJoin },
+                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showBeforeJoin: $0)) }
+                ))
+
+                ConfigToggle(label: "Show Inside Joined Rooms", isOn: Binding(
+                    get: { editedConfig?.motdSettings.showInRoom ?? config.motdSettings.showInRoom },
+                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showInRoom: $0)) }
+                ))
+
+                ConfigToggle(label: "Append MOTD to Welcome Message", isOn: Binding(
+                    get: { editedConfig?.motdSettings.appendToWelcomeMessage ?? config.motdSettings.appendToWelcomeMessage },
+                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(appendToWelcomeMessage: $0)) }
                 ))
             }
 
@@ -1510,8 +1533,8 @@ struct AdminStreamsSection: View {
                     "Use hidden streams for admin-managed presets that should not appear in normal room browsing."
                 ],
                 docs: [
-                    AdminDocLink(title: "Background Streams Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/api-integration.md"),
-                    AdminDocLink(title: "Server Setup Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                    AdminDocLink(title: "Background Streams Docs", localRelativePath: "room-management.html", webPath: "/docs/room-management.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Server Setup Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html")
                 ]
             )
 
@@ -1633,8 +1656,8 @@ struct AdminAPISyncSection: View {
                     "Use WHMCS fields for hosted account linking and license-aware server ownership tracking."
                 ],
                 docs: [
-                    AdminDocLink(title: "API Integration Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/api-integration.md"),
-                    AdminDocLink(title: "Distribution Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/distribution.md")
+                    AdminDocLink(title: "API Integration Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/authentication.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Distribution Docs", localRelativePath: "getting-started.html", webPath: "/docs/getting-started.html", adminWebPath: "/docs/authenticated/index.html")
                 ]
             )
 
@@ -1767,8 +1790,8 @@ struct AdminFederationSection: View {
                     "Use approval controls if room federation should require explicit review before being shared."
                 ],
                 docs: [
-                    AdminDocLink(title: "Federation Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
-                    AdminDocLink(title: "Server Install Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                    AdminDocLink(title: "Federation Docs", localRelativePath: "authenticated/index.html", webPath: "/docs/index.html", adminWebPath: "/docs/authenticated/index.html"),
+                    AdminDocLink(title: "Server Install Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html")
                 ]
             )
 
@@ -1970,8 +1993,8 @@ struct AdminModulesSection: View {
                     "Use Update when a module is installed but needs its current config reapplied."
                 ],
                 docs: [
-                    AdminDocLink(title: "Module Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
-                    AdminDocLink(title: "Distribution Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/distribution.md")
+                    AdminDocLink(title: "Module Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/index.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Distribution Docs", localRelativePath: "getting-started.html", webPath: "/docs/getting-started.html", adminWebPath: "/docs/authenticated/index.html")
                 ]
             )
 
@@ -2128,8 +2151,8 @@ struct AdminSelfTestsSection: View {
                     "Review the recent run history to see which checks passed, warned, or failed."
                 ],
                 docs: [
-                    AdminDocLink(title: "Testing Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/governance.md"),
-                    AdminDocLink(title: "Installation Docs", url: "https://github.com/Raywonder/voicelink/blob/publish-clean/docs/installation/HOST-LINUX-SERVER.md")
+                    AdminDocLink(title: "Testing Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/getting-started.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Installation Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/index.html")
                 ]
             )
 
@@ -2327,7 +2350,45 @@ struct SectionHeader: View {
 struct AdminDocLink: Identifiable {
     let id = UUID()
     let title: String
-    let url: String
+    let localRelativePath: String?
+    let webPath: String
+    let adminWebPath: String?
+
+    init(title: String, localRelativePath: String? = nil, webPath: String, adminWebPath: String? = nil) {
+        self.title = title
+        self.localRelativePath = localRelativePath
+        self.webPath = webPath
+        self.adminWebPath = adminWebPath
+    }
+}
+
+enum AdminDocsResolver {
+    private static let webBase = "https://voicelink.devinecreations.net"
+    private static let localDocRoots = [
+        "/Users/admin/DEV/APPS/voicelink-local/docs",
+        "/Users/admin/DEV/APPS/voicelink-local/swift-native/VoiceLinkNative/docs",
+        "/Users/admin/DEV/APPS/voicelink-local/source/docs",
+        "/Users/admin/DEV/APPS/voicelink-local/voicelink-app/docs"
+    ]
+
+    static func resolve(_ doc: AdminDocLink, isAdmin: Bool) -> URL? {
+        if let localRelativePath = doc.localRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localRelativePath.isEmpty {
+            for root in localDocRoots {
+                let candidate = URL(fileURLWithPath: root).appendingPathComponent(localRelativePath)
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+
+        let selectedPath = (isAdmin ? doc.adminWebPath : nil) ?? doc.webPath
+        return URL(string: webBase + normalizedPath(selectedPath))
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        path.hasPrefix("/") ? path : "/" + path
+    }
 }
 
 struct AdminHelpSection: View {
@@ -2335,6 +2396,7 @@ struct AdminHelpSection: View {
     let summary: String
     let steps: [String]
     let docs: [AdminDocLink]
+    @ObservedObject private var adminManager = AdminServerManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2362,7 +2424,7 @@ struct AdminHelpSection: View {
                 HStack(spacing: 10) {
                     ForEach(docs) { doc in
                         Button(doc.title) {
-                            guard let url = URL(string: doc.url) else { return }
+                            guard let url = AdminDocsResolver.resolve(doc, isAdmin: adminManager.adminRole.canManageConfig) else { return }
                             NSWorkspace.shared.open(url)
                         }
                         .buttonStyle(.bordered)
@@ -2438,7 +2500,8 @@ struct ConfigToggle: View {
 extension ServerConfig {
     func with(serverName: String? = nil, serverDescription: String? = nil, maxUsers: Int? = nil,
               maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, welcomeMessage: String?? = nil,
-              motd: String?? = nil, registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
+              motd: String?? = nil, motdSettings: MOTDSettings? = nil,
+              registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
               allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
               pushover: PushoverConfig?? = nil) -> ServerConfig {
         ServerConfig(
@@ -2449,6 +2512,7 @@ extension ServerConfig {
             maxUsersPerRoom: maxUsersPerRoom ?? self.maxUsersPerRoom,
             welcomeMessage: welcomeMessage ?? self.welcomeMessage,
             motd: motd ?? self.motd,
+            motdSettings: motdSettings ?? self.motdSettings,
             registrationEnabled: registrationEnabled ?? self.registrationEnabled,
             requireAuth: requireAuth ?? self.requireAuth,
             allowGuests: allowGuests ?? self.allowGuests,
@@ -2456,6 +2520,20 @@ extension ServerConfig {
             enableRateLimiting: enableRateLimiting ?? self.enableRateLimiting,
             backgroundStreams: self.backgroundStreams,
             pushover: pushover ?? self.pushover
+        )
+    }
+
+    func motdSettingsUpdating(
+        enabled: Bool? = nil,
+        showBeforeJoin: Bool? = nil,
+        showInRoom: Bool? = nil,
+        appendToWelcomeMessage: Bool? = nil
+    ) -> MOTDSettings {
+        MOTDSettings(
+            enabled: enabled ?? motdSettings.enabled,
+            showBeforeJoin: showBeforeJoin ?? motdSettings.showBeforeJoin,
+            showInRoom: showInRoom ?? motdSettings.showInRoom,
+            appendToWelcomeMessage: appendToWelcomeMessage ?? motdSettings.appendToWelcomeMessage
         )
     }
 }

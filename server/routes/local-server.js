@@ -62,6 +62,9 @@ class VoiceLinkLocalServer {
         this.rooms = new Map();
         this.users = new Map();
         this.audioRouting = new Map();
+        this.cachedMainServerRooms = [];
+        this.cachedMainServerRoomsFetchedAt = 0;
+        this.mainServerRoomFetchPromise = null;
         this.whmcsAuthSessions = new Map(); // token -> { user, expiresAt }
         this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
         this.socketSessions = new Map(); // socketId -> sessionInfo
@@ -1861,19 +1864,47 @@ class VoiceLinkLocalServer {
      * Fetch rooms from main signal server
      */
     async fetchMainServerRooms() {
-        // If this IS the main server, don't fetch from ourselves (circular dependency)
-        // Check if we're running on the main server domain
+        const config = deployConfig.getConfig() || {};
+        const configuredMainServer = process.env.MAIN_SERVER_URL
+            || config.federation?.hubUrl
+            || MAIN_SERVER_URL;
+        const configuredPublicUrl = process.env.PUBLIC_URL
+            || config.server?.publicUrl
+            || null;
+
+        const normalizeUrl = (value) => {
+            if (!value || typeof value !== 'string') return null;
+            try {
+                const parsed = new URL(value.includes('://') ? value : `https://${value}`);
+                return parsed.origin.toLowerCase();
+            } catch {
+                return value.trim().toLowerCase().replace(/\/+$/, '');
+            }
+        };
+
+        const currentOrigin = normalizeUrl(configuredPublicUrl);
+        const mainOrigin = normalizeUrl(configuredMainServer);
         const isMainServer = process.env.IS_MAIN_SERVER === 'true' ||
-                           process.env.MAIN_SERVER_URL === undefined ||
-                           MAIN_SERVER_URL.includes(process.env.DOMAIN || 'voicelink.devinecreations.net');
+            (!!currentOrigin && !!mainOrigin && currentOrigin === mainOrigin);
 
         if (isMainServer) {
             console.log('[LocalServer] Running as main server, skipping external room fetch');
             return [];
         }
 
-        return new Promise((resolve) => {
-            const url = `${MAIN_SERVER_URL}/api/rooms?source=app`;
+        const cacheIsFresh = Array.isArray(this.cachedMainServerRooms)
+            && this.cachedMainServerRooms.length > 0
+            && (Date.now() - this.cachedMainServerRoomsFetchedAt) < 15000;
+        if (cacheIsFresh) {
+            return this.cachedMainServerRooms;
+        }
+
+        if (this.mainServerRoomFetchPromise) {
+            return this.mainServerRoomFetchPromise;
+        }
+
+        this.mainServerRoomFetchPromise = new Promise((resolve) => {
+            const url = `${configuredMainServer}/api/rooms?source=app`;
             console.log('[LocalServer] Fetching rooms from main server:', url);
 
             https.get(url, { timeout: 5000 }, (response) => {
@@ -1883,20 +1914,28 @@ class VoiceLinkLocalServer {
                     try {
                         const rooms = JSON.parse(data);
                         console.log(`[LocalServer] Got ${rooms.length} rooms from main server`);
-                        resolve(rooms.map(r => ({ ...r, serverSource: 'main' })));
+                        const normalizedRooms = rooms.map(r => ({ ...r, serverSource: 'main' }));
+                        this.cachedMainServerRooms = normalizedRooms;
+                        this.cachedMainServerRoomsFetchedAt = Date.now();
+                        resolve(normalizedRooms);
                     } catch (e) {
                         console.error('[LocalServer] Failed to parse main server response:', e.message);
-                        resolve([]);
+                        resolve(this.cachedMainServerRooms || []);
                     }
+                    this.mainServerRoomFetchPromise = null;
                 });
             }).on('error', (err) => {
                 console.error('[LocalServer] Main server fetch error:', err.message);
-                resolve([]);
+                this.mainServerRoomFetchPromise = null;
+                resolve(this.cachedMainServerRooms || []);
             }).on('timeout', () => {
                 console.error('[LocalServer] Main server fetch timeout');
-                resolve([]);
+                this.mainServerRoomFetchPromise = null;
+                resolve(this.cachedMainServerRooms || []);
             });
         });
+
+        return this.mainServerRoomFetchPromise;
     }
 
     /**
@@ -5554,6 +5593,12 @@ class VoiceLinkLocalServer {
                 maxUsersPerRoom: Number(config.rooms?.maxUsersPerRoom || config.server?.maxUsersPerRoom || 50),
                 welcomeMessage: config.server?.welcomeMessage || null,
                 motd: config.server?.motd || null,
+                motdSettings: {
+                    enabled: config.server?.motdSettings?.enabled !== false,
+                    showBeforeJoin: config.server?.motdSettings?.showBeforeJoin !== false,
+                    showInRoom: config.server?.motdSettings?.showInRoom !== false,
+                    appendToWelcomeMessage: !!config.server?.motdSettings?.appendToWelcomeMessage
+                },
                 registrationEnabled: config.auth?.registrationEnabled ?? config.security?.registrationEnabled ?? true,
                 requireAuth: config.security?.requireAuth ?? config.features?.requireAuth ?? false,
                 allowGuests: config.security?.allowGuests ?? true,
@@ -5570,11 +5615,25 @@ class VoiceLinkLocalServer {
             try {
                 const updates = req.body || {};
                 if (typeof updates.serverName === 'string') {
+                    const motdSettings = updates.motdSettings && typeof updates.motdSettings === 'object'
+                        ? {
+                            enabled: updates.motdSettings.enabled !== false,
+                            showBeforeJoin: updates.motdSettings.showBeforeJoin !== false,
+                            showInRoom: updates.motdSettings.showInRoom !== false,
+                            appendToWelcomeMessage: !!updates.motdSettings.appendToWelcomeMessage
+                        }
+                        : (deployConfig.getConfig()?.server?.motdSettings || {
+                            enabled: true,
+                            showBeforeJoin: true,
+                            showInRoom: true,
+                            appendToWelcomeMessage: false
+                        });
                     deployConfig.updateSection('server', {
                         name: updates.serverName,
                         description: updates.serverDescription || '',
                         welcomeMessage: updates.welcomeMessage || null,
                         motd: updates.motd || null,
+                        motdSettings,
                         maxUsers: Number(updates.maxUsers) || 500,
                         maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
                     });

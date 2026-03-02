@@ -1094,6 +1094,7 @@ struct ServerConfig: Codable {
     var maxUsersPerRoom: Int
     var welcomeMessage: String?
     var motd: String?
+    var motdSettings: MOTDSettings
     var registrationEnabled: Bool
     var requireAuth: Bool
     var allowGuests: Bool
@@ -1110,6 +1111,7 @@ struct ServerConfig: Codable {
         case maxUsersPerRoom
         case welcomeMessage
         case motd
+        case motdSettings
         case registrationEnabled
         case requireAuth
         case allowGuests
@@ -1127,6 +1129,7 @@ struct ServerConfig: Codable {
         maxUsersPerRoom: Int = 50,
         welcomeMessage: String? = nil,
         motd: String? = nil,
+        motdSettings: MOTDSettings = MOTDSettings(),
         registrationEnabled: Bool = true,
         requireAuth: Bool = false,
         allowGuests: Bool = true,
@@ -1142,6 +1145,7 @@ struct ServerConfig: Codable {
         self.maxUsersPerRoom = maxUsersPerRoom
         self.welcomeMessage = welcomeMessage
         self.motd = motd
+        self.motdSettings = motdSettings
         self.registrationEnabled = registrationEnabled
         self.requireAuth = requireAuth
         self.allowGuests = allowGuests
@@ -1160,6 +1164,7 @@ struct ServerConfig: Codable {
         maxUsersPerRoom = try container.decodeIfPresent(Int.self, forKey: .maxUsersPerRoom) ?? 50
         welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
         motd = try container.decodeIfPresent(String.self, forKey: .motd)
+        motdSettings = try container.decodeIfPresent(MOTDSettings.self, forKey: .motdSettings) ?? MOTDSettings()
         registrationEnabled = try container.decodeIfPresent(Bool.self, forKey: .registrationEnabled) ?? true
         requireAuth = try container.decodeIfPresent(Bool.self, forKey: .requireAuth) ?? false
         allowGuests = try container.decodeIfPresent(Bool.self, forKey: .allowGuests) ?? true
@@ -1167,6 +1172,25 @@ struct ServerConfig: Codable {
         enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
+    }
+}
+
+struct MOTDSettings: Codable, Equatable {
+    var enabled: Bool
+    var showBeforeJoin: Bool
+    var showInRoom: Bool
+    var appendToWelcomeMessage: Bool
+
+    init(
+        enabled: Bool = true,
+        showBeforeJoin: Bool = true,
+        showInRoom: Bool = true,
+        appendToWelcomeMessage: Bool = false
+    ) {
+        self.enabled = enabled
+        self.showBeforeJoin = showBeforeJoin
+        self.showInRoom = showInRoom
+        self.appendToWelcomeMessage = appendToWelcomeMessage
     }
 }
 

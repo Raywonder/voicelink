@@ -20,6 +20,7 @@ class ServerManager: ObservableObject {
     @Published var inputMuted: Bool = false
     @Published var outputMuted: Bool = false
     @Published var activeRoomId: String?
+    @Published var serverConfig: ServerConfig?
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -266,6 +267,37 @@ class ServerManager: ObservableObject {
         }
     }
 
+    func fetchPublicServerConfig() async {
+        let decoder = JSONDecoder()
+
+        for base in APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL) {
+            guard let configURL = APIEndpointResolver.url(base: base, path: "/api/config") else { continue }
+
+            var request = URLRequest(url: configURL)
+            request.timeoutInterval = 4
+            request.httpMethod = "GET"
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    continue
+                }
+                let config = try decoder.decode(ServerConfig.self, from: data)
+                await MainActor.run {
+                    self.serverConfig = config
+                }
+                return
+            } catch {
+                continue
+            }
+        }
+
+        await MainActor.run {
+            self.serverConfig = nil
+        }
+    }
+
     private func scheduleDomainRecoveryIfNeeded() {
         stopDomainRecoveryTimer()
         guard useMainServer else { return }
@@ -311,6 +343,9 @@ class ServerManager: ObservableObject {
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self.scheduleDomainRecoveryIfNeeded()
+            Task {
+                await self.fetchPublicServerConfig()
+            }
             // Request room list after connecting
             self.getRooms()
         }
@@ -321,6 +356,7 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
+                self?.serverConfig = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self?.failPendingJoin(with: "Disconnected while joining room.")
