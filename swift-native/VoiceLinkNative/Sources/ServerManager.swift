@@ -22,6 +22,8 @@ class ServerManager: ObservableObject {
     @Published var activeRoomId: String?
     @Published var serverConfig: ServerConfig?
     @Published var publicFederationStatus: PublicFederationStatus?
+    @Published var currentRoomMedia: RoomMediaState?
+    @Published var isCurrentRoomMediaMuted: Bool = false
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -67,23 +69,46 @@ class ServerManager: ObservableObject {
             let isDirect = data["isDirect"] as? Bool ?? false
             let recipientId = data["recipientId"] as? String
             let replyToId = data["replyToId"] as? String
+            let type = data["type"] as? String ?? "text"
+            let attachmentId = data["attachmentId"] as? String
+            let attachmentName = data["attachmentName"] as? String
+            let attachmentURL = data["attachmentURL"] as? String
+            let attachmentCaption = data["attachmentCaption"] as? String
+            let attachmentExpiresAt = data["attachmentExpiresAt"]
+            let attachmentRemoved = data["attachmentRemoved"] as? Bool ?? false
 
             if isDirect, let recipient = recipientId {
                 // Direct message
                 var msgData: [String: Any] = [
                     "targetUserId": recipient,
-                    "message": content
+                    "message": content,
+                    "type": type,
+                    "attachmentRemoved": attachmentRemoved
                 ]
                 if let reply = replyToId {
                     msgData["replyTo"] = reply
                 }
+                if let attachmentId { msgData["attachmentId"] = attachmentId }
+                if let attachmentName { msgData["attachmentName"] = attachmentName }
+                if let attachmentURL { msgData["attachmentURL"] = attachmentURL }
+                if let attachmentCaption { msgData["attachmentCaption"] = attachmentCaption }
+                if let attachmentExpiresAt { msgData["attachmentExpiresAt"] = attachmentExpiresAt }
                 self?.socket?.emit("direct-message", msgData)
             } else {
                 // Room message
-                var msgData: [String: Any] = ["message": content]
+                var msgData: [String: Any] = [
+                    "message": content,
+                    "type": type,
+                    "attachmentRemoved": attachmentRemoved
+                ]
                 if let reply = replyToId {
                     msgData["replyTo"] = reply
                 }
+                if let attachmentId { msgData["attachmentId"] = attachmentId }
+                if let attachmentName { msgData["attachmentName"] = attachmentName }
+                if let attachmentURL { msgData["attachmentURL"] = attachmentURL }
+                if let attachmentCaption { msgData["attachmentCaption"] = attachmentCaption }
+                if let attachmentExpiresAt { msgData["attachmentExpiresAt"] = attachmentExpiresAt }
                 self?.socket?.emit("chat-message", msgData)
             }
         }
@@ -741,7 +766,13 @@ class ServerManager: ObservableObject {
                         "content": content,
                         "type": messageType,
                         "messageId": messageId,
-                        "timestamp": timestamp as Any
+                        "timestamp": timestamp as Any,
+                        "attachmentId": msgData["attachmentId"] as Any,
+                        "attachmentName": msgData["attachmentName"] as Any,
+                        "attachmentURL": (msgData["attachmentURL"] ?? msgData["attachmentUrl"]) as Any,
+                        "attachmentCaption": (msgData["attachmentCaption"] ?? msgData["caption"]) as Any,
+                        "attachmentExpiresAt": msgData["attachmentExpiresAt"] as Any,
+                        "attachmentRemoved": msgData["attachmentRemoved"] as Any
                     ]
                 )
             }
@@ -754,6 +785,9 @@ class ServerManager: ObservableObject {
                 let senderId = msgData["senderId"] as? String ?? ""
                 let senderName = msgData["senderName"] as? String ?? "Unknown"
                 let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+                let messageType = msgData["type"] as? String ?? "text"
+                let messageId = msgData["messageId"] as? String ?? msgData["id"] as? String ?? ""
+                let timestamp = msgData["timestamp"] ?? msgData["createdAt"] ?? msgData["sentAt"]
 
                 NotificationCenter.default.post(
                     name: .incomingDirectMessage,
@@ -761,7 +795,16 @@ class ServerManager: ObservableObject {
                     userInfo: [
                         "senderId": senderId,
                         "senderName": senderName,
-                        "content": content
+                        "content": content,
+                        "type": messageType,
+                        "messageId": messageId,
+                        "timestamp": timestamp as Any,
+                        "attachmentId": msgData["attachmentId"] as Any,
+                        "attachmentName": msgData["attachmentName"] as Any,
+                        "attachmentURL": (msgData["attachmentURL"] ?? msgData["attachmentUrl"]) as Any,
+                        "attachmentCaption": (msgData["attachmentCaption"] ?? msgData["caption"]) as Any,
+                        "attachmentExpiresAt": msgData["attachmentExpiresAt"] as Any,
+                        "attachmentRemoved": msgData["attachmentRemoved"] as Any
                     ]
                 )
             }
@@ -896,6 +939,7 @@ class ServerManager: ObservableObject {
               let sampleRate = audioInfo["sampleRate"] as? Double else {
             return
         }
+        let channels = max(1, audioInfo["channels"] as? Int ?? 1)
 
         incomingAudioQueue.async {
             let audioData: Data?
@@ -912,7 +956,8 @@ class ServerManager: ObservableObject {
                 from: userId,
                 data: audioBuffer,
                 timestamp: timestamp,
-                sampleRate: sampleRate
+                sampleRate: sampleRate,
+                channels: channels
             )
         }
     }
@@ -1141,12 +1186,16 @@ class ServerManager: ObservableObject {
             self.currentRoomUsers = []
             self.activeRoomId = nil
         }
+        NotificationCenter.default.post(name: .roomLeft, object: nil)
     }
 
     private func fetchActiveRoomStream(for roomId: String) {
         roomStreamDidStopExplicitly = false
         guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
+            DispatchQueue.main.async {
+                self.currentRoomMedia = nil
+            }
             startDefaultRoomStreamIfNeeded()
             return
         }
@@ -1154,20 +1203,44 @@ class ServerManager: ObservableObject {
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let self else { return }
             guard let data else {
+                DispatchQueue.main.async {
+                    self.currentRoomMedia = nil
+                }
                 self.startDefaultRoomStreamIfNeeded()
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                DispatchQueue.main.async {
+                    self.currentRoomMedia = nil
+                }
                 self.startDefaultRoomStreamIfNeeded()
                 return
             }
             let isActive = json["active"] as? Bool ?? false
             guard isActive, let streamUrl = json["streamUrl"] as? String else {
+                DispatchQueue.main.async {
+                    self.currentRoomMedia = nil
+                }
                 self.startDefaultRoomStreamIfNeeded()
                 return
             }
+            let mediaState = RoomMediaState(
+                active: isActive,
+                title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                streamURL: streamUrl,
+                type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                volume: json["volume"] as? Int
+            )
+            DispatchQueue.main.async {
+                self.currentRoomMedia = mediaState
+            }
             self.startRoomStreamPlayback(from: streamUrl)
         }.resume()
+    }
+
+    func refreshCurrentRoomMedia() {
+        guard let roomId = activeRoomId, !roomId.isEmpty else { return }
+        fetchActiveRoomStream(for: roomId)
     }
 
     private func startRoomStreamPlayback(from rawURL: String) {
@@ -1175,6 +1248,7 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
                 player.volume = self.roomStreamDefaultVolume
+                player.isMuted = self.isCurrentRoomMediaMuted
                 player.play()
                 self.ensureRoomStreamKeepAlive()
                 return
@@ -1198,10 +1272,12 @@ class ServerManager: ObservableObject {
             if let player = self.roomStreamPlayer {
                 player.replaceCurrentItem(with: item)
                 player.volume = self.roomStreamDefaultVolume
+                player.isMuted = self.isCurrentRoomMediaMuted
                 player.play()
             } else {
                 let player = AVPlayer(playerItem: item)
                 player.volume = self.roomStreamDefaultVolume
+                player.isMuted = self.isCurrentRoomMediaMuted
                 self.roomStreamPlayer = player
                 player.play()
             }
@@ -1222,6 +1298,7 @@ class ServerManager: ObservableObject {
             guard !self.roomStreamDidStopExplicitly else { return }
             guard let player = self.roomStreamPlayer else { return }
             player.volume = self.roomStreamDefaultVolume
+            player.isMuted = self.isCurrentRoomMediaMuted
             if player.currentItem == nil, let current = self.currentRoomStreamURL {
                 self.startRoomStreamPlayback(from: current.absoluteString)
                 return
@@ -1246,7 +1323,19 @@ class ServerManager: ObservableObject {
             self.roomStreamPlayer?.pause()
             self.roomStreamPlayer?.replaceCurrentItem(with: nil)
             self.currentRoomStreamURL = nil
+            self.currentRoomMedia = nil
         }
+    }
+
+    func setCurrentRoomMediaMuted(_ muted: Bool) {
+        DispatchQueue.main.async {
+            self.isCurrentRoomMediaMuted = muted
+            self.roomStreamPlayer?.isMuted = muted
+        }
+    }
+
+    func toggleCurrentRoomMediaMuted() {
+        setCurrentRoomMediaMuted(!isCurrentRoomMediaMuted)
     }
 
     func sendAudioState(isMuted: Bool, isDeafened: Bool) {
@@ -1616,6 +1705,14 @@ struct ServerRoom: Identifiable {
     }
 }
 
+struct RoomMediaState: Equatable {
+    let active: Bool
+    let title: String?
+    let streamURL: String
+    let type: String?
+    let volume: Int?
+}
+
 struct PublicFederationStatus: Equatable {
     let enabled: Bool
     let allowIncoming: Bool
@@ -1640,6 +1737,9 @@ struct RoomUser: Identifiable {
     let authProvider: String?
     let email: String?
     let serverTitle: String?
+    let isBot: Bool
+    let hasAudioControls: Bool
+    let statusMessage: String?
     let joinedAt: Date?
     let lastActiveAt: Date?
     let avatarURL: URL?
@@ -1677,6 +1777,11 @@ struct RoomUser: Identifiable {
             ?? dict["serverName"] as? String
             ?? dict["serverDisplayName"] as? String
             ?? dict["instanceName"] as? String
+        self.isBot = dict["isBot"] as? Bool ?? false
+        self.hasAudioControls = dict["hasAudioControls"] as? Bool ?? !(dict["isBot"] as? Bool ?? false)
+        self.statusMessage = dict["statusMessage"] as? String
+            ?? dict["botStatus"] as? String
+            ?? dict["statusText"] as? String
         self.joinedAt = RoomUser.parseDate(
             dict["joinedAt"] ?? dict["joined"] ?? dict["joinedAtUtc"] ?? dict["joinTime"]
         )
