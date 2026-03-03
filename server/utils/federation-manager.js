@@ -342,13 +342,25 @@ class FederationManager {
 
         // Federation status
         app.get('/api/federation/status', (req, res) => {
+            const config = this.server?.deployConfig?.get?.('federation') || null;
             res.json({
                 serverId: this.serverId,
                 mode: this.mode,
                 modeSource: this.modeSource,
                 peerServers: this.peerServers,
                 masterServer: this.masterServerUrl,
-                roomCount: this.server.rooms.size
+                roomCount: this.server.rooms.size,
+                enabled: config?.enabled ?? (this.mode !== 'standalone'),
+                globalFederation: config?.globalFederation !== false,
+                allowIncoming: config?.allowIncoming !== false,
+                allowOutgoing: config?.allowOutgoing !== false,
+                trustedServers: config?.trustedServers || this.peerServers || [],
+                roomApprovalRequired: config?.roomApprovalRequired || false,
+                approvalHoldTime: config?.approvalHoldTime || 3600000,
+                maintenanceModeEnabled: config?.maintenanceModeEnabled || false,
+                autoHandoffEnabled: config?.autoHandoffEnabled || false,
+                handoffTargetServer: config?.handoffTargetServer || null,
+                connectedServers: this.getConnectedServers().length
             });
         });
     }
