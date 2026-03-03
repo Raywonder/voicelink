@@ -1387,11 +1387,347 @@ class VoiceLinkLocalServer {
         return result;
     }
 
-    startMigrationRoomTransfer({ sourceRoomId, targetRoomId, targetServerUrl = '' } = {}) {
+    normalizeFederationServerUrl(serverUrl = '') {
+        const value = String(serverUrl || '').trim();
+        if (!value) return '';
+        try {
+            const parsed = new URL(value);
+            return parsed.origin.replace(/\/+$/, '');
+        } catch (error) {
+            return value.replace(/\/+$/, '');
+        }
+    }
+
+    getLocalServerOrigins() {
+        const config = deployConfig.getConfig?.() || {};
+        const candidates = [
+            process.env.VOICELINK_PUBLIC_URL,
+            process.env.PUBLIC_URL,
+            process.env.VOICELINK_WHMCS_AUTHORITY_URL,
+            config?.server?.publicUrl,
+            config?.server?.url,
+            config?.server?.domain && `https://${config.server.domain}`,
+            'http://127.0.0.1:3010',
+            'http://127.0.0.1:3110',
+            'http://localhost:3010',
+            'http://localhost:3110'
+        ].filter(Boolean);
+        return Array.from(new Set(candidates.map((candidate) => this.normalizeFederationServerUrl(candidate)).filter(Boolean)));
+    }
+
+    isTrustedFederationPeer(serverUrl = '') {
+        const normalized = this.normalizeFederationServerUrl(serverUrl);
+        if (!normalized) return false;
+        const trustedServers = deployConfig.get('federation', 'trustedServers') || [];
+        return trustedServers
+            .map((entry) => this.normalizeFederationServerUrl(entry))
+            .filter(Boolean)
+            .includes(normalized);
+    }
+
+    buildRoomStatePayload(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+        return {
+            id: room.id,
+            name: room.name,
+            description: room.description || '',
+            users: this.normalizeRoomUsers(roomId).map((user) => this.serializeRoomUser(user, roomId)).filter(Boolean),
+            userCount: this.normalizeRoomUsers(roomId).length,
+            maxUsers: room.maxUsers || 50,
+            locked: room.locked || false
+        };
+    }
+
+    ensureTransferTargetRoom({
+        sourceRoom,
+        targetRoomId,
+        targetRoomName = '',
+        incomingUserCount = 0,
+        hostedBy = '',
+        targetServerUrl = ''
+    } = {}) {
+        if (!sourceRoom) {
+            throw new Error('Source room not found');
+        }
+
+        const roomId = String(targetRoomId || '').trim() || sourceRoom.id;
+        const resolvedName = String(targetRoomName || '').trim() || String(sourceRoom.name || '').trim() || `Room ${roomId.slice(0, 8)}`;
+        let room = this.rooms.get(roomId);
+        const existingUsers = room ? this.getLiveRoomUsers(roomId).length : 0;
+        const requiredCapacity = Math.max(
+            Number(sourceRoom.maxUsers || 50),
+            existingUsers + Math.max(0, Number(incomingUserCount || 0))
+        );
+
+        let created = false;
+        let expanded = false;
+        let previousMaxUsers = room ? Number(room.maxUsers || 50) : null;
+
+        if (!room) {
+            room = {
+                id: roomId,
+                name: resolvedName,
+                description: sourceRoom.description || '',
+                password: sourceRoom.password || null,
+                hasPassword: !!sourceRoom.password,
+                maxUsers: requiredCapacity,
+                users: [],
+                visibility: sourceRoom.visibility || 'public',
+                visibleToGuests: sourceRoom.visibleToGuests !== false,
+                accessType: sourceRoom.accessType || 'hybrid',
+                allowEmbed: sourceRoom.allowEmbed !== false,
+                showInApp: sourceRoom.showInApp !== false,
+                privacyLevel: sourceRoom.privacyLevel || sourceRoom.visibility || 'public',
+                encrypted: !!sourceRoom.encrypted,
+                creatorHandle: sourceRoom.creatorHandle || null,
+                createdBy: sourceRoom.createdBy || sourceRoom.creatorHandle || 'system_migration',
+                isDefault: !!sourceRoom.isDefault,
+                template: sourceRoom.template || null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                updatedBy: 'system_migration',
+                previousNames: Array.isArray(sourceRoom.previousNames) ? [...sourceRoom.previousNames] : [],
+                audioSettings: sourceRoom.audioSettings || {
+                    spatialAudio: true,
+                    quality: 'high',
+                    effects: []
+                },
+                locked: !!sourceRoom.locked,
+                lockedAt: sourceRoom.lockedAt || null,
+                lockedBy: sourceRoom.lockedBy || null,
+                autoLock: sourceRoom.autoLock || null,
+                autoLockScheduled: null,
+                autoplayMusic: !!sourceRoom.autoplayMusic,
+                autoplayPlaylist: sourceRoom.autoplayPlaylist || null,
+                jellyfinAccess: sourceRoom.jellyfinAccess || {
+                    enabled: true,
+                    adminCanAccessAll: true,
+                    allowRoomOwnerUploads: true,
+                    allowAuthenticatedUploads: false,
+                    allowedServerIds: [],
+                    allowedLibraryIdsByServer: {},
+                    roomUserPermissions: {}
+                },
+                migrationMetadata: {
+                    hostedBy: hostedBy || targetServerUrl || null,
+                    lastTransferPreparedAt: new Date().toISOString(),
+                    sourceRoomId: sourceRoom.id
+                }
+            };
+            this.rooms.set(roomId, room);
+            created = true;
+        }
+
+        if (resolvedName && room.name !== resolvedName) {
+            room.name = resolvedName;
+        }
+
+        if (!room.description && sourceRoom.description) {
+            room.description = sourceRoom.description;
+        }
+
+        if (!room.migrationMetadata) {
+            room.migrationMetadata = {};
+        }
+        room.migrationMetadata.hostedBy = hostedBy || targetServerUrl || room.migrationMetadata.hostedBy || null;
+        room.migrationMetadata.lastTransferPreparedAt = new Date().toISOString();
+        room.migrationMetadata.sourceRoomId = sourceRoom.id;
+
+        if (requiredCapacity > Number(room.maxUsers || 50)) {
+            if (!room.migrationMetadata.originalMaxUsers) {
+                room.migrationMetadata.originalMaxUsers = Number(room.maxUsers || 50);
+            }
+            previousMaxUsers = Number(room.maxUsers || 50);
+            room.maxUsers = requiredCapacity;
+            expanded = true;
+        }
+
+        room.updatedAt = new Date();
+        room.updatedBy = 'system_migration';
+        this.rooms.set(roomId, room);
+        this.saveRoomsToDisk();
+        this.federation.broadcastRoomChange(created ? 'created' : 'updated', room);
+
+        return {
+            room,
+            created,
+            expanded,
+            previousMaxUsers,
+            requiredCapacity
+        };
+    }
+
+    async notifyAdminRoomTransfer({
+        sourceRoom,
+        targetRoom,
+        targetServerUrl = '',
+        incomingUserCount = 0,
+        expanded = false,
+        previousMaxUsers = null,
+        requiredCapacity = null
+    } = {}) {
+        const targetLabel = targetServerUrl || targetRoom?.name || 'target room';
+        const lines = [
+            `Room transfer prepared for ${sourceRoom?.name || sourceRoom?.id || 'room'}.`,
+            `Target: ${targetRoom?.name || targetRoom?.id || 'unknown'}${targetServerUrl ? ` on ${targetServerUrl}` : ''}.`,
+            `Incoming users: ${incomingUserCount}.`
+        ];
+        if (expanded) {
+            lines.push(`Capacity auto-expanded from ${previousMaxUsers ?? 'unknown'} to ${requiredCapacity ?? targetRoom?.maxUsers ?? 'unknown'}.`);
+        }
+
+        return this.sendPushoverNotification({
+            title: 'VoiceLink Room Transfer',
+            message: lines.join('\n'),
+            url: targetServerUrl || '',
+            urlTitle: targetLabel
+        });
+    }
+
+    async prepareRemoteTransferRoom({
+        sourceRoom,
+        sourceServerUrl = '',
+        targetRoomId,
+        targetRoomName = '',
+        targetServerUrl,
+        incomingUserCount = 0
+    } = {}) {
+        const normalizedTarget = this.normalizeFederationServerUrl(targetServerUrl);
+        if (!normalizedTarget) {
+            throw new Error('Target server URL is required');
+        }
+        if (!this.isTrustedFederationPeer(normalizedTarget)) {
+            throw new Error('Target server is not in trusted federation peers');
+        }
+
+        const response = await fetch(`${normalizedTarget}/api/federation/prepare-transfer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sourceServerUrl: sourceServerUrl || this.getLocalServerOrigins()[0] || '',
+                sourceRoom: {
+                    id: sourceRoom.id,
+                    name: sourceRoom.name,
+                    description: sourceRoom.description || '',
+                    maxUsers: Number(sourceRoom.maxUsers || 50),
+                    visibility: sourceRoom.visibility || 'public',
+                    accessType: sourceRoom.accessType || 'hybrid',
+                    allowEmbed: sourceRoom.allowEmbed !== false,
+                    showInApp: sourceRoom.showInApp !== false,
+                    visibleToGuests: sourceRoom.visibleToGuests !== false,
+                    creatorHandle: sourceRoom.creatorHandle || null,
+                    createdBy: sourceRoom.createdBy || null,
+                    template: sourceRoom.template || null
+                },
+                targetRoomId,
+                targetRoomName,
+                incomingUserCount: Number(incomingUserCount || 0)
+            })
+        });
+
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.success === false) {
+            throw new Error(body.error || `Remote room preparation failed (${response.status})`);
+        }
+        return body;
+    }
+
+    executeLocalMigrationTransfer(session) {
+        const sourceRoom = this.rooms.get(session.sourceRoomId);
+        const targetRoom = this.rooms.get(session.targetRoomId);
+        if (!sourceRoom || !targetRoom) {
+            throw new Error('Source or target room not found');
+        }
+
+        const movingUsers = this.getLiveRoomUsers(session.sourceRoomId);
+        const movedUsers = [];
+
+        sourceRoom.users = (sourceRoom.users || []).filter((entry) => !movingUsers.some((user) => user.id === entry.id));
+        targetRoom.users = (targetRoom.users || []).filter((entry) => !movingUsers.some((user) => user.id === entry.id));
+
+        for (const user of movingUsers) {
+            const socket = this.io?.sockets?.sockets?.get(user.id);
+            if (!socket) continue;
+
+            socket.leave(session.sourceRoomId);
+            socket.join(session.targetRoomId);
+
+            const movedUser = {
+                ...user,
+                roomId: session.targetRoomId,
+                lastActiveAt: new Date()
+            };
+            this.users.set(user.id, movedUser);
+            targetRoom.users.push(movedUser);
+            movedUsers.push(movedUser);
+        }
+
+        this.rooms.set(session.sourceRoomId, sourceRoom);
+        this.rooms.set(session.targetRoomId, targetRoom);
+
+        const targetState = this.buildRoomStatePayload(session.targetRoomId);
+        for (const movedUser of movedUsers) {
+            this.io.to(movedUser.id).emit('joined-room', {
+                room: targetState,
+                user: movedUser
+            });
+        }
+
+        this.io.to(session.sourceRoomId).emit('escort-moving', {
+            escortId: session.id,
+            targetRoomId: session.targetRoomId,
+            playSound: 'whoosh_leave',
+            message: `Moving to ${targetRoom.name}...`
+        });
+        this.io.to(session.targetRoomId).emit('escort-arriving', {
+            escortId: session.id,
+            fromRoom: session.sourceRoomId,
+            leaderName: session.leaderName,
+            count: movedUsers.length,
+            playSound: 'whoosh_arrive'
+        });
+
+        this.emitRoomUsersSnapshot(session.sourceRoomId);
+        this.emitRoomUsersSnapshot(session.targetRoomId);
+        this.saveRoomsToDisk();
+
+        return {
+            movedUsers: movedUsers.length,
+            targetRoomId: session.targetRoomId
+        };
+    }
+
+    async startMigrationRoomTransfer({ sourceRoomId, targetRoomId, targetServerUrl = '', targetRoomName = '' } = {}) {
         this.ensureEscortSessionsStore();
         const sourceRoom = this.rooms.get(sourceRoomId);
         if (!sourceRoom) {
             throw new Error('Source room not found');
+        }
+
+        const incomingUsers = this.getLiveRoomUsers(sourceRoomId);
+        const normalizedTargetServerUrl = this.normalizeFederationServerUrl(targetServerUrl);
+        const localOrigins = this.getLocalServerOrigins();
+        const isLocalTransfer = !normalizedTargetServerUrl || localOrigins.includes(normalizedTargetServerUrl);
+
+        let prepareResult = null;
+        if (isLocalTransfer) {
+            prepareResult = this.ensureTransferTargetRoom({
+                sourceRoom,
+                targetRoomId,
+                targetRoomName,
+                incomingUserCount: incomingUsers.length,
+                hostedBy: localOrigins[0] || null
+            });
+        } else {
+            prepareResult = await this.prepareRemoteTransferRoom({
+                sourceRoom,
+                sourceServerUrl: localOrigins[0] || '',
+                targetRoomId,
+                targetRoomName,
+                targetServerUrl: normalizedTargetServerUrl,
+                incomingUserCount: incomingUsers.length
+            });
         }
 
         const escortId = `escort_migration_${uuidv4().slice(0, 8)}`;
@@ -1401,14 +1737,27 @@ class VoiceLinkLocalServer {
             leaderName: 'Server Migration',
             sourceRoomId,
             targetRoomId,
-            targetServerUrl: targetServerUrl || null,
-            followers: [],
-            status: 'active',
+            targetServerUrl: normalizedTargetServerUrl || null,
+            followers: incomingUsers.map((user) => user.id),
+            status: isLocalTransfer ? 'moving' : 'active',
             migrationMode: true,
+            localTransfer: isLocalTransfer,
+            incomingUserCount: incomingUsers.length,
+            prepareResult,
             createdAt: new Date(),
             expiresAt: new Date(Date.now() + 10 * 60 * 1000)
         };
         this.escortSessions.set(escortId, session);
+
+        void this.notifyAdminRoomTransfer({
+            sourceRoom,
+            targetRoom: prepareResult?.room || prepareResult?.targetRoom || null,
+            targetServerUrl: normalizedTargetServerUrl,
+            incomingUserCount: incomingUsers.length,
+            expanded: !!prepareResult?.expanded,
+            previousMaxUsers: prepareResult?.previousMaxUsers ?? null,
+            requiredCapacity: prepareResult?.requiredCapacity ?? prepareResult?.room?.maxUsers ?? null
+        });
 
         this.io.to(sourceRoomId).emit('escort-started', {
             escortId,
@@ -1416,10 +1765,20 @@ class VoiceLinkLocalServer {
             targetRoomId,
             targetServerUrl: session.targetServerUrl,
             migrationMode: true,
-            message: targetServerUrl
-                ? `Server migration in progress. Follow to move to ${targetRoomId} on ${targetServerUrl}`
-                : `Server migration in progress. Follow to move to ${targetRoomId}.`
+            message: normalizedTargetServerUrl
+                ? `Server migration in progress. Follow to move to ${targetRoomId} on ${normalizedTargetServerUrl}`
+                : `Server migration in progress. Follow to move to ${targetRoomId}.`,
+            incomingUserCount: incomingUsers.length,
+            capacityExpanded: !!prepareResult?.expanded
         });
+
+        if (isLocalTransfer) {
+            const transferResult = this.executeLocalMigrationTransfer(session);
+            session.status = 'completed';
+            session.completedAt = new Date();
+            session.transferResult = transferResult;
+        }
+
         return session;
     }
 
@@ -5890,6 +6249,63 @@ class VoiceLinkLocalServer {
             }
         });
 
+        this.app.post('/api/federation/prepare-transfer', (req, res) => {
+            try {
+                const sourceServerUrl = this.normalizeFederationServerUrl(req.body?.sourceServerUrl || '');
+                if (!this.isAdminRequest(req) && !this.isTrustedFederationPeer(sourceServerUrl)) {
+                    return res.status(403).json({ success: false, error: 'Trusted federation peer or admin access required' });
+                }
+
+                const sourceRoom = req.body?.sourceRoom;
+                const targetRoomId = String(req.body?.targetRoomId || '').trim();
+                const targetRoomName = String(req.body?.targetRoomName || '').trim();
+                const incomingUserCount = Number(req.body?.incomingUserCount || 0);
+
+                if (!sourceRoom || typeof sourceRoom !== 'object') {
+                    return res.status(400).json({ success: false, error: 'sourceRoom is required' });
+                }
+                if (!targetRoomId) {
+                    return res.status(400).json({ success: false, error: 'targetRoomId is required' });
+                }
+
+                const prepared = this.ensureTransferTargetRoom({
+                    sourceRoom,
+                    targetRoomId,
+                    targetRoomName,
+                    incomingUserCount,
+                    hostedBy: sourceServerUrl || null,
+                    targetServerUrl: this.getLocalServerOrigins()[0] || ''
+                });
+
+                void this.notifyAdminRoomTransfer({
+                    sourceRoom,
+                    targetRoom: prepared.room,
+                    targetServerUrl: this.getLocalServerOrigins()[0] || '',
+                    incomingUserCount,
+                    expanded: prepared.expanded,
+                    previousMaxUsers: prepared.previousMaxUsers,
+                    requiredCapacity: prepared.requiredCapacity
+                });
+
+                res.json({
+                    success: true,
+                    targetRoom: {
+                        id: prepared.room.id,
+                        name: prepared.room.name,
+                        maxUsers: prepared.room.maxUsers,
+                        visibility: prepared.room.visibility,
+                        accessType: prepared.room.accessType
+                    },
+                    created: prepared.created,
+                    expanded: prepared.expanded,
+                    previousMaxUsers: prepared.previousMaxUsers,
+                    requiredCapacity: prepared.requiredCapacity
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         // Set room federation status (per-room control)
         this.app.put('/api/rooms/:roomId/federation', (req, res) => {
             const room = this.rooms.get(req.params.roomId);
@@ -7071,7 +7487,7 @@ class VoiceLinkLocalServer {
                     const sourceRoomId = String(req.body?.sourceRoomId || '').trim();
                     const targetRoomId = String(req.body?.targetRoomId || '').trim();
                     if (sourceRoomId && targetRoomId) {
-                        roomTransfer = this.startMigrationRoomTransfer({
+                        roomTransfer = await this.startMigrationRoomTransfer({
                             sourceRoomId,
                             targetRoomId,
                             targetServerUrl
@@ -7121,7 +7537,7 @@ class VoiceLinkLocalServer {
         });
 
         // Admin: direct hook into Escort Me room-to-room transfer flow.
-        this.app.post('/api/admin/migration/room-transfer', (req, res) => {
+        this.app.post('/api/admin/migration/room-transfer', async (req, res) => {
             try {
                 if (!this.isAdminRequest(req)) {
                     return res.status(403).json({ success: false, error: 'Admin access required' });
@@ -7133,10 +7549,11 @@ class VoiceLinkLocalServer {
                     return res.status(400).json({ success: false, error: 'sourceRoomId and targetRoomId are required' });
                 }
 
-                const session = this.startMigrationRoomTransfer({
+                const session = await this.startMigrationRoomTransfer({
                     sourceRoomId,
                     targetRoomId,
-                    targetServerUrl
+                    targetServerUrl,
+                    targetRoomName: String(req.body?.targetRoomName || '').trim()
                 });
                 res.json({ success: true, session });
             } catch (error) {

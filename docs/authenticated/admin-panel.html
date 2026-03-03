@@ -36,6 +36,10 @@
         <li>Use the main server or community VPS as the handoff target only when both sides are healthy and federation is already configured.</li>
         <li>Set the recommended client prompt mode to control whether users are prompted every time, only once, automatically follow a saved action, or follow the server recommendation by default.</li>
         <li>A user’s explicit client-side choice always overrides the server recommendation. The server recommendation is the default, not a forced policy.</li>
+        <li>When the destination room already exists, VoiceLink should reuse that room instead of creating a duplicate. Users are moved into the existing room.</li>
+        <li>If the destination room does not have enough capacity for incoming users, VoiceLink temporarily expands the room limit so the transfer completes without dropping participants.</li>
+        <li>When capacity is auto-expanded during a transfer, admins should receive a notification and can later keep or revert the raised limit after the room empties.</li>
+        <li>Prepare the target server before taking the source server down. The handoff should leave the target room ready to accept reconnecting clients immediately.</li>
       </ul>
     </section>
 
