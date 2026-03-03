@@ -704,6 +704,33 @@ class AppState: ObservableObject {
         let recordedAt: Date
     }
 
+    struct PendingRoomDraft: Equatable {
+        var name: String
+        var description: String
+        var isPrivate: Bool
+        var roomType: String
+        var maxUsers: Int
+        var inviteOnly: Bool
+        var hostingPreference: RoomHostingPreference
+    }
+
+    struct HandoffOffer: Identifiable, Equatable {
+        let id: String
+        let targetServerURL: String
+        let room: Room?
+        let effectiveMode: HandoffPromptMode
+        let sourceServerURL: String
+
+        var targetHostLabel: String {
+            URL(string: targetServerURL)?.host ?? targetServerURL
+        }
+    }
+
+    enum HandoffDecision: String {
+        case accept
+        case decline
+    }
+
     @Published var currentScreen: Screen = .mainMenu {
         didSet {
             if currentScreen != oldValue {
@@ -727,9 +754,15 @@ class AppState: ObservableObject {
     @Published var pendingJoinRoomId: String?
     @Published var roomToRestoreAfterAdminClose: Room?
     @Published var recentRooms: [RecentRoomEntry] = []
+    @Published var pendingRoomDraft: PendingRoomDraft?
+    @Published var activeHandoffOffer: HandoffOffer?
     private var previousScreen: Screen = .mainMenu
     private let recentRoomsKey = "voicelink.recentRooms"
     private let maxRecentRooms = 10
+    private let handoffSavedDecisionKey = "voicelink.handoffSavedDecision"
+    private var lastHandoffOfferId: String?
+    private var pendingHandoffRoom: Room?
+    private var pendingHandoffTargetURL: String?
 
     let serverManager = ServerManager.shared
     let licensing = LicensingManager.shared
@@ -785,6 +818,7 @@ class AppState: ObservableObject {
         setupAdminObservers()
         initializeLicensing()
         setupURLObservers()
+        setupHandoffObservers()
         refreshAdminCapabilities()
     }
 
@@ -1021,6 +1055,7 @@ class AppState: ObservableObject {
             .sink { [weak self] mappedRooms in
                 self?.rooms = mappedRooms
                 self?.refreshRoomMediaStatuses(for: mappedRooms)
+                self?.attemptPendingHandoffJoin()
             }
             .store(in: &cancellables)
 
@@ -1070,6 +1105,7 @@ class AppState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] _ in
                 self?.refreshAdminCapabilities()
+                self?.attemptPendingHandoffJoin()
             }
             .store(in: &cancellables)
 
@@ -1111,6 +1147,159 @@ class AppState: ObservableObject {
         NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
             self?.currentScreen = .mainMenu
         }
+    }
+
+    private func setupHandoffObservers() {
+        serverManager.$publicFederationStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.evaluateMaintenanceHandoff(using: status)
+            }
+            .store(in: &cancellables)
+
+        serverManager.$serverConfig
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.evaluateMaintenanceHandoff(using: self?.serverManager.publicFederationStatus)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func evaluateMaintenanceHandoff(using status: PublicFederationStatus?) {
+        guard isConnected,
+              let status,
+              status.enabled,
+              status.maintenanceModeEnabled,
+              status.autoHandoffEnabled,
+              let target = status.handoffTargetServer?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !target.isEmpty else {
+            activeHandoffOffer = nil
+            lastHandoffOfferId = nil
+            return
+        }
+
+        let sourceBase = APIEndpointResolver.normalize(serverManager.baseURL ?? ServerManager.mainServer)
+        let targetBase = APIEndpointResolver.normalize(target)
+        guard sourceBase != targetBase else { return }
+
+        let effectiveMode = SettingsManager.shared.effectiveHandoffPromptMode(
+            serverDefault: serverManager.serverConfig?.handoffPromptMode
+        )
+        let offer = HandoffOffer(
+            id: "\(sourceBase)->\(targetBase)",
+            targetServerURL: targetBase,
+            room: currentRoom ?? minimizedRoom,
+            effectiveMode: effectiveMode,
+            sourceServerURL: sourceBase
+        )
+
+        switch effectiveMode {
+        case .askAlways:
+            if activeHandoffOffer?.id != offer.id && lastHandoffOfferId != offer.id {
+                activeHandoffOffer = offer
+            }
+        case .askOnce, .autoUseSavedChoice:
+            if let saved = savedHandoffDecision() {
+                applyHandoffDecision(saved, for: offer, rememberChoice: effectiveMode == .autoUseSavedChoice || effectiveMode == .askOnce)
+            } else if lastHandoffOfferId != offer.id {
+                activeHandoffOffer = offer
+            }
+        case .serverRecommended:
+            if activeHandoffOffer?.id != offer.id {
+                activeHandoffOffer = offer
+            }
+        }
+    }
+
+    private func savedHandoffDecision() -> HandoffDecision? {
+        guard let raw = UserDefaults.standard.string(forKey: handoffSavedDecisionKey) else { return nil }
+        return HandoffDecision(rawValue: raw)
+    }
+
+    private func saveHandoffDecision(_ decision: HandoffDecision?) {
+        if let decision {
+            UserDefaults.standard.set(decision.rawValue, forKey: handoffSavedDecisionKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: handoffSavedDecisionKey)
+        }
+    }
+
+    func respondToActiveHandoff(accept: Bool) {
+        guard let offer = activeHandoffOffer else { return }
+        let shouldRemember = offer.effectiveMode == .askOnce || offer.effectiveMode == .autoUseSavedChoice
+        applyHandoffDecision(accept ? .accept : .decline, for: offer, rememberChoice: shouldRemember)
+    }
+
+    private func applyHandoffDecision(_ decision: HandoffDecision, for offer: HandoffOffer, rememberChoice: Bool) {
+        activeHandoffOffer = nil
+        lastHandoffOfferId = offer.id
+        if rememberChoice {
+            saveHandoffDecision(decision)
+        }
+
+        switch decision {
+        case .accept:
+            performMaintenanceHandoff(to: offer.targetServerURL, room: offer.room)
+        case .decline:
+            errorMessage = "Stayed on the current server. Maintenance handoff was declined."
+        }
+    }
+
+    private func performMaintenanceHandoff(to targetServerURL: String, room: Room?) {
+        pendingHandoffTargetURL = APIEndpointResolver.normalize(targetServerURL)
+        pendingHandoffRoom = room
+        let targetHost = URL(string: targetServerURL)?.host ?? targetServerURL
+
+        if let room {
+            errorMessage = "Moving \(room.name) to \(targetHost)..."
+        } else {
+            errorMessage = "Connecting to \(targetHost)..."
+        }
+
+        currentRoom = nil
+        minimizedRoom = nil
+        pendingJoinRoomId = nil
+        serverManager.connectToURL(targetServerURL)
+    }
+
+    private func attemptPendingHandoffJoin() {
+        guard isConnected,
+              let targetURL = pendingHandoffTargetURL,
+              let currentBase = serverManager.baseURL,
+              APIEndpointResolver.normalize(currentBase) == targetURL else {
+            return
+        }
+
+        let targetHost = URL(string: targetURL)?.host ?? targetURL
+        guard let room = pendingHandoffRoom else {
+            pendingHandoffTargetURL = nil
+            return
+        }
+
+        if let match = rooms.first(where: {
+            $0.id == room.id || $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(room.name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        }) {
+            pendingHandoffRoom = nil
+            pendingHandoffTargetURL = nil
+            joinOrShowRoom(match)
+            errorMessage = "Connected to \(targetHost) and rejoined \(match.name)."
+            return
+        }
+
+        pendingRoomDraft = PendingRoomDraft(
+            name: room.name,
+            description: room.description,
+            isPrivate: room.isPrivate,
+            roomType: room.roomType ?? (room.isPrivate ? "private" : "standard"),
+            maxUsers: room.maxUsers,
+            inviteOnly: false,
+            hostingPreference: .currentServer
+        )
+        pendingCreateRoomName = room.name
+        pendingHandoffRoom = nil
+        pendingHandoffTargetURL = nil
+        currentScreen = .createRoom
+        errorMessage = "Room \(room.name) is not on \(targetHost) yet. Review the prefilled room settings and create it to continue the handoff."
     }
 
     private func setupRoomActionObservers() {
@@ -2062,6 +2251,33 @@ struct ContentView: View {
             }
             .frame(minWidth: 760, minHeight: 520)
         }
+        .alert(
+            "Maintenance Handoff Available",
+            isPresented: Binding(
+                get: { appState.activeHandoffOffer != nil },
+                set: { newValue in
+                    if !newValue {
+                        appState.activeHandoffOffer = nil
+                    }
+                }
+            ),
+            actions: {
+                Button("Move to Recommended Server") {
+                    appState.respondToActiveHandoff(accept: true)
+                }
+                Button("Stay Here", role: .cancel) {
+                    appState.respondToActiveHandoff(accept: false)
+                }
+            },
+            message: {
+                if let offer = appState.activeHandoffOffer {
+                    let roomText = offer.room?.name ?? "your current session"
+                    Text("This server is asking to hand off \(roomText) to \(offer.targetHostLabel). Your current client preference is \(offer.effectiveMode.displayName).")
+                } else {
+                    Text("A maintenance handoff is available.")
+                }
+            }
+        )
     }
 }
 
@@ -3870,6 +4086,7 @@ struct CreateRoomView: View {
                     )
                     // Go back to main menu - room will appear in list
                     appState.pendingCreateRoomName = ""
+                    appState.pendingRoomDraft = nil
                     appState.currentScreen = .mainMenu
                 }
                 .buttonStyle(.borderedProminent)
@@ -3877,6 +4094,7 @@ struct CreateRoomView: View {
 
                 Button("Cancel") {
                     appState.pendingCreateRoomName = ""
+                    appState.pendingRoomDraft = nil
                     appState.currentScreen = .mainMenu
                 }
                 .buttonStyle(.bordered)
@@ -3889,8 +4107,16 @@ struct CreateRoomView: View {
             }
         }
         .onAppear {
-            if roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !appState.pendingCreateRoomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let draft = appState.pendingRoomDraft {
+                roomName = draft.name
+                roomDescription = draft.description
+                isPrivate = draft.isPrivate
+                roomType = draft.roomType
+                maxUsers = draft.maxUsers
+                inviteOnly = draft.inviteOnly
+                hostingPreference = draft.hostingPreference
+            } else if roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !appState.pendingCreateRoomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 roomName = appState.pendingCreateRoomName
             }
         }

@@ -21,6 +21,7 @@ class ServerManager: ObservableObject {
     @Published var outputMuted: Bool = false
     @Published var activeRoomId: String?
     @Published var serverConfig: ServerConfig?
+    @Published var publicFederationStatus: PublicFederationStatus?
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -29,6 +30,7 @@ class ServerManager: ObservableObject {
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
     private var domainRecoveryTimer: Timer?
+    private var federationStatusTimer: Timer?
     private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
     private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInitiated)
     private var pendingAudioStartWorkItem: DispatchWorkItem?
@@ -159,10 +161,12 @@ class ServerManager: ObservableObject {
     func disconnect() {
         socket?.disconnect()
         stopDomainRecoveryTimer()
+        stopFederationStatusTimer()
         DispatchQueue.main.async {
             self.isConnected = false
             self.serverStatus = "Disconnected"
             self.connectedServer = ""
+            self.publicFederationStatus = nil
             NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
         }
     }
@@ -298,6 +302,60 @@ class ServerManager: ObservableObject {
         }
     }
 
+    func fetchPublicFederationStatus() async {
+        for base in APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL) {
+            guard let statusURL = APIEndpointResolver.url(base: base, path: "/api/federation/status") else { continue }
+
+            var request = URLRequest(url: statusURL)
+            request.timeoutInterval = 4
+            request.httpMethod = "GET"
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode),
+                      let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                let connectedServerCount: Int = {
+                    if let value = json["connectedServers"] as? Int {
+                        return value
+                    }
+                    if let array = json["connectedServers"] as? [[String: Any]] {
+                        return array.count
+                    }
+                    if let array = json["connectedServers"] as? [Any] {
+                        return array.count
+                    }
+                    return 0
+                }()
+
+                let status = PublicFederationStatus(
+                    enabled: json["enabled"] as? Bool ?? false,
+                    allowIncoming: json["allowIncoming"] as? Bool ?? true,
+                    allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
+                    trustedServers: json["trustedServers"] as? [String] ?? [],
+                    maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
+                    autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
+                    handoffTargetServer: json["handoffTargetServer"] as? String,
+                    connectedServerCount: connectedServerCount
+                )
+
+                await MainActor.run {
+                    self.publicFederationStatus = status
+                }
+                return
+            } catch {
+                continue
+            }
+        }
+
+        await MainActor.run {
+            self.publicFederationStatus = nil
+        }
+    }
+
     private func scheduleDomainRecoveryIfNeeded() {
         stopDomainRecoveryTimer()
         guard useMainServer else { return }
@@ -326,6 +384,24 @@ class ServerManager: ObservableObject {
         domainRecoveryTimer = nil
     }
 
+    private func startFederationStatusTimer() {
+        stopFederationStatusTimer()
+        federationStatusTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            guard let self = self, self.isConnected else { return }
+            Task {
+                await self.fetchPublicFederationStatus()
+            }
+        }
+        if let federationStatusTimer {
+            RunLoop.main.add(federationStatusTimer, forMode: .common)
+        }
+    }
+
+    private func stopFederationStatusTimer() {
+        federationStatusTimer?.invalidate()
+        federationStatusTimer = nil
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
@@ -343,8 +419,10 @@ class ServerManager: ObservableObject {
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self.scheduleDomainRecoveryIfNeeded()
+            self.startFederationStatusTimer()
             Task {
                 await self.fetchPublicServerConfig()
+                await self.fetchPublicFederationStatus()
             }
             // Request room list after connecting
             self.getRooms()
@@ -357,6 +435,7 @@ class ServerManager: ObservableObject {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
                 self?.serverConfig = nil
+                self?.publicFederationStatus = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self?.failPendingJoin(with: "Disconnected while joining room.")
@@ -1535,6 +1614,17 @@ struct ServerRoom: Identifiable {
             ?? stringValue(dict["ownerUsername"])
             ?? stringValue(dict["createdBy"])
     }
+}
+
+struct PublicFederationStatus: Equatable {
+    let enabled: Bool
+    let allowIncoming: Bool
+    let allowOutgoing: Bool
+    let trustedServers: [String]
+    let maintenanceModeEnabled: Bool
+    let autoHandoffEnabled: Bool
+    let handoffTargetServer: String?
+    let connectedServerCount: Int
 }
 
 struct RoomUser: Identifiable {
