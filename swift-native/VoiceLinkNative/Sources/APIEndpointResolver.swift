@@ -4,10 +4,14 @@ enum APIEndpointResolver {
     static let canonicalMainBase = "https://voicelink.devinecreations.net"
     static let communityNode2Base = "https://node2.voicelink.devinecreations.net"
     static let localBase = "http://localhost:4004"
+    static let canonicalMainDirectAPIBase = "http://64.20.46.178:3010"
+    static let communityNode2DirectAPIBase = "http://208.73.204.162:3010"
 
     // Ordered fallback list for production API/domain outages.
     private static let mainFallbackBases = [
-        communityNode2Base
+        canonicalMainDirectAPIBase,
+        communityNode2Base,
+        communityNode2DirectAPIBase
     ]
 
     static func normalize(_ base: String) -> String {
