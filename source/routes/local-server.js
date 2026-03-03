@@ -1398,6 +1398,20 @@ class VoiceLinkLocalServer {
         }
     }
 
+    extractFederationServerHost(serverUrl = '') {
+        const value = String(serverUrl || '').trim();
+        if (!value) return '';
+        try {
+            return new URL(value).hostname.toLowerCase();
+        } catch (error) {
+            return value
+                .replace(/^https?:\/\//i, '')
+                .replace(/\/.*$/, '')
+                .replace(/:\d+$/, '')
+                .toLowerCase();
+        }
+    }
+
     getLocalServerOrigins() {
         const config = deployConfig.getConfig?.() || {};
         const candidates = [
@@ -1417,12 +1431,15 @@ class VoiceLinkLocalServer {
 
     isTrustedFederationPeer(serverUrl = '') {
         const normalized = this.normalizeFederationServerUrl(serverUrl);
+        const host = this.extractFederationServerHost(serverUrl);
         if (!normalized) return false;
         const trustedServers = deployConfig.get('federation', 'trustedServers') || [];
-        return trustedServers
-            .map((entry) => this.normalizeFederationServerUrl(entry))
-            .filter(Boolean)
-            .includes(normalized);
+        return trustedServers.some((entry) => {
+            const trustedNormalized = this.normalizeFederationServerUrl(entry);
+            const trustedHost = this.extractFederationServerHost(entry);
+            return (trustedNormalized && trustedNormalized === normalized)
+                || (trustedHost && host && trustedHost === host);
+        });
     }
 
     buildRoomStatePayload(roomId) {
