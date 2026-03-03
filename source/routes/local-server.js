@@ -506,6 +506,17 @@ class VoiceLinkLocalServer {
     deriveWhmcsEntitlements(client, services = []) {
         const defaults = deployConfig.get('whmcs')?.entitlements || {};
         const optionMap = this.extractServiceOptions(services);
+        const ownedDomains = Array.from(new Set(
+            services
+                .flatMap((service) => ([
+                    service?.domain,
+                    service?.customfields?.domain,
+                    service?.customfields?.subdomain
+                ]))
+                .filter(Boolean)
+                .map((value) => String(value).trim().toLowerCase())
+                .filter(Boolean)
+        ));
         const catalogText = services
             .flatMap((service) => ([
                 service?.name,
@@ -558,6 +569,13 @@ class VoiceLinkLocalServer {
             || 'member';
         const normalizedServerOwnerLicense = serverOwnerLicense === null ? (defaults.serverOwnerLicense ?? hasServerOwnerProduct) : !!serverOwnerLicense;
         const normalizedHostingLinked = hostedControlPanel === null ? (defaults.hostingControlPanelLinked ?? hasHostingProduct) : !!hostedControlPanel;
+        const inferredBillingModel = /(lifetime|perpetual)/.test(joinedCatalog)
+            ? 'lifetime'
+            : /(yearly|annual)/.test(joinedCatalog)
+                ? 'yearly'
+                : /(monthly|quarterly|weekly|subscription|recurring)/.test(joinedCatalog)
+                    ? 'subscription'
+                    : (defaults.billingModel || 'manual');
         const hostingRoles = Array.isArray(hostedControlPanelRoles)
             ? hostedControlPanelRoles
             : String(hostedControlPanelRoles || '')
@@ -602,7 +620,12 @@ class VoiceLinkLocalServer {
             },
             allowMultiDeviceSettings: allowMultiDeviceSettings === null ? (defaults.allowMultiDeviceSettings ?? true) : !!allowMultiDeviceSettings,
             allowDeviceList: allowDeviceList === null ? (defaults.allowDeviceList ?? true) : !!allowDeviceList,
-            requiresIapApple: requiresIapApple === null ? (defaults.requiresIapApple ?? false) : !!requiresIapApple
+            requiresIapApple: requiresIapApple === null ? (defaults.requiresIapApple ?? false) : !!requiresIapApple,
+            billingModel: inferredBillingModel,
+            allowsLicenseTransfer: inferredBillingModel === 'lifetime',
+            requiresManualTransferApproval: inferredBillingModel !== 'lifetime',
+            transferCooldownDays: inferredBillingModel === 'lifetime' ? 30 : 0,
+            ownedDomains
         };
     }
 
@@ -2489,6 +2512,10 @@ class VoiceLinkLocalServer {
     serializeRoomUser(user, roomId = null) {
         if (!user) return null;
         const authInfo = user.authInfo || {};
+        const isAuthenticated = !!user.isAuthenticated;
+        const isBot = !!user.isBot;
+        const resolvedRole = authInfo.role || user.role || (isBot ? 'bot' : isAuthenticated ? null : 'visitor');
+        const resolvedAuthProvider = authInfo.authProvider || authInfo.provider || user.authProvider || (isBot ? 'internal_bot' : isAuthenticated ? null : 'visitor');
         return {
             id: user.id,
             userId: user.id,
@@ -2497,10 +2524,12 @@ class VoiceLinkLocalServer {
             username: authInfo.username || user.username || user.name,
             displayName: authInfo.displayName || authInfo.name || user.displayName || user.name,
             email: authInfo.email || user.email || null,
-            role: authInfo.role || user.role || null,
-            authProvider: authInfo.authProvider || authInfo.provider || user.authProvider || null,
-            isAuthenticated: !!user.isAuthenticated,
-            isBot: !!user.isBot,
+            role: resolvedRole,
+            authProvider: resolvedAuthProvider,
+            isAuthenticated,
+            isBot,
+            hasAudioControls: user.isBot ? !!user.hasAudioControls : true,
+            statusMessage: user.statusMessage || (user.isBot ? 'Use /bot help or @VoiceLink Bot to interact.' : null),
             joinedAt: user.joinedAt || null,
             lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
             muted: !!(user.audioSettings?.muted),
@@ -2512,6 +2541,316 @@ class VoiceLinkLocalServer {
             presence: roomId || user.roomId ? 'active' : 'online',
             status: roomId || user.roomId ? 'active' : 'online'
         };
+    }
+
+    getMessageSettingsConfig() {
+        const config = deployConfig.getConfig() || {};
+        const messageSettings = config.messageSettings || {};
+        return {
+            keepRoomMessages: messageSettings.keepRoomMessages !== false,
+            keepDirectMessages: messageSettings.keepDirectMessages !== false,
+            initialLoadCount: Math.min(100, Math.max(1, Number(messageSettings.initialLoadCount || 20))),
+            scrollbackLimit: Math.min(5000, Math.max(20, Number(messageSettings.scrollbackLimit || 5000))),
+            roomMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.roomMessageCap || 1000))),
+            directMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.directMessageCap || 500))),
+            guestRetentionHours: Math.min(24 * 30, Math.max(1, Number(messageSettings.guestRetentionHours || 24))),
+            authenticatedRetentionDays: Math.min(3650, Math.max(1, Number(messageSettings.authenticatedRetentionDays || 30))),
+            deleteRoomMessagesWhenEmpty: !!messageSettings.deleteRoomMessagesWhenEmpty,
+            keepAttachmentMessages: messageSettings.keepAttachmentMessages !== false,
+            botMemoryMessageLimit: Math.min(5000, Math.max(0, Number(messageSettings.botMemoryMessageLimit || 250))),
+            botMemoryDays: Math.min(3650, Math.max(1, Number(messageSettings.botMemoryDays || 30)))
+        };
+    }
+
+    getConfiguredBackgroundStreamForRoom(room = {}) {
+        const backgroundConfig = deployConfig.get('backgroundStreams') || {};
+        if (backgroundConfig.enabled === false) return null;
+        const streams = Array.isArray(backgroundConfig.streams) ? backgroundConfig.streams : [];
+        const roomId = String(room.id || '').trim();
+        const roomName = String(room.name || '').trim();
+
+        const wildcardToRegex = (pattern = '') => new RegExp(`^${String(pattern)
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*')}$`, 'i');
+
+        for (const stream of streams) {
+            if (!stream || stream.autoPlay === false) continue;
+            const explicitRooms = Array.isArray(stream.rooms) ? stream.rooms.map((value) => String(value).trim()) : [];
+            const patterns = Array.isArray(stream.roomPatterns) ? stream.roomPatterns : [];
+            const matchesRoom = roomId && explicitRooms.includes(roomId);
+            const matchesPattern = roomName && patterns.some((pattern) => {
+                try {
+                    return wildcardToRegex(pattern).test(roomName);
+                } catch {
+                    return false;
+                }
+            });
+            if (!matchesRoom && !matchesPattern) continue;
+
+            const streamUrl = String(stream.streamUrl || stream.url || '').trim();
+            if (!streamUrl) continue;
+            return {
+                id: String(stream.id || '').trim() || `background:${roomId || roomName}`,
+                name: String(stream.name || 'Background Stream').trim() || 'Background Stream',
+                streamUrl,
+                volume: Number.isFinite(Number(stream.volume)) ? Number(stream.volume) : (Number.isFinite(Number(backgroundConfig.defaultVolume)) ? Number(backgroundConfig.defaultVolume) : null),
+                hidden: !!stream.hidden
+            };
+        }
+
+        return null;
+    }
+
+    getMessageExpiryMs(isAuthenticated) {
+        const settings = this.getMessageSettingsConfig();
+        if (isAuthenticated) {
+            return settings.authenticatedRetentionDays * 24 * 60 * 60 * 1000;
+        }
+        return settings.guestRetentionHours * 60 * 60 * 1000;
+    }
+
+    isTextLikeAttachment(message = {}) {
+        const name = String(message.attachmentName || '').trim().toLowerCase();
+        if (!name) return false;
+        const textExtensions = [
+            '.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log',
+            '.js', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css',
+            '.xml', '.yaml', '.yml', '.ini', '.cfg'
+        ];
+        return textExtensions.some(ext => name.endsWith(ext));
+    }
+
+    async fetchAttachmentTextPreview(message = {}, maxChars = 700) {
+        const attachmentURL = String(message.attachmentURL || '').trim();
+        if (!attachmentURL || !/^https?:\/\//i.test(attachmentURL)) {
+            return null;
+        }
+
+        const timeout = this.withTimeoutSignal(6000);
+        try {
+            const response = await fetch(attachmentURL, {
+                method: 'GET',
+                signal: timeout.signal
+            });
+            if (!response.ok) {
+                return null;
+            }
+            const text = await response.text();
+            const normalized = String(text || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            if (!normalized) {
+                return null;
+            }
+            return normalized.slice(0, maxChars);
+        } catch (_error) {
+            return null;
+        } finally {
+            timeout.clear();
+        }
+    }
+
+    async buildBotAttachmentReply(user, message) {
+        const attachmentName = String(message.attachmentName || 'attachment').trim();
+        const caption = String(message.attachmentCaption || '').trim();
+
+        if (!attachmentName && !message.attachmentURL) {
+            return null;
+        }
+
+        const looksLikeFolderShare = /^\d+\s+files?$/i.test(attachmentName) || attachmentName.toLowerCase().includes('folder');
+        if (looksLikeFolderShare) {
+            return `${user.name || 'You'} shared ${attachmentName}. I can acknowledge multi-file shares here; deeper per-file processing can be enabled through the room bot modules.`;
+        }
+
+        if (this.isTextLikeAttachment(message)) {
+            const preview = await this.fetchAttachmentTextPreview(message);
+            if (preview) {
+                const previewSummary = preview.length >= 700 ? `${preview}...` : preview;
+                return `I inspected ${attachmentName}. Preview:\n${previewSummary}`;
+            }
+            return `I detected a text attachment named ${attachmentName}, but I could not read it from the shared link right now.`;
+        }
+
+        if (caption) {
+            return `I received ${attachmentName}. Caption: ${caption}`;
+        }
+
+        return `I received ${attachmentName}. This room bot can acknowledge the file, but deeper processing for that file type is not enabled yet.`;
+    }
+
+    extractURLsFromText(text = '') {
+        const value = String(text || '');
+        const matches = value.match(/\bhttps?:\/\/[^\s<>"']+/gi) || [];
+        return Array.from(new Set(matches.map(url => url.trim())));
+    }
+
+    async validateMessageURL(rawURL) {
+        const value = String(rawURL || '').trim();
+        if (!value) {
+            return { valid: false, reason: 'empty link' };
+        }
+
+        let parsed;
+        try {
+            parsed = new URL(value);
+        } catch {
+            return { valid: false, reason: 'invalid URL format' };
+        }
+
+        if (!/^https?:$/i.test(parsed.protocol)) {
+            return { valid: false, reason: 'unsupported URL scheme' };
+        }
+
+        const hostname = String(parsed.hostname || '').toLowerCase();
+        if (!hostname) {
+            return { valid: false, reason: 'missing hostname' };
+        }
+
+        if (hostname === 'localhost' || hostname.endsWith('.local')) {
+            return { valid: false, reason: 'local-only address' };
+        }
+
+        const timeout = this.withTimeoutSignal(5000);
+        try {
+            let response = await fetch(parsed.toString(), {
+                method: 'HEAD',
+                redirect: 'follow',
+                signal: timeout.signal
+            });
+
+            if (response.status === 405 || response.status === 501) {
+                timeout.clear();
+                const retryTimeout = this.withTimeoutSignal(5000);
+                try {
+                    response = await fetch(parsed.toString(), {
+                        method: 'GET',
+                        redirect: 'follow',
+                        signal: retryTimeout.signal,
+                        headers: {
+                            Range: 'bytes=0-1024'
+                        }
+                    });
+                } finally {
+                    retryTimeout.clear();
+                }
+            }
+
+            if (!response.ok) {
+                return { valid: false, reason: `remote server returned ${response.status}` };
+            }
+
+            return { valid: true, normalizedURL: response.url || parsed.toString() };
+        } catch (error) {
+            const message = String(error?.name || error?.message || '').toLowerCase();
+            if (message.includes('abort') || message.includes('timeout')) {
+                return { valid: false, reason: 'request timed out' };
+            }
+            return { valid: false, reason: 'remote server could not be reached' };
+        } finally {
+            timeout.clear();
+        }
+    }
+
+    async sanitizeMessageLinks(message = {}, context = {}) {
+        const originalContent = String(message.message || message.content || '').trim();
+        const urls = this.extractURLsFromText(originalContent);
+        if (!urls.length) {
+            return { message, notice: null };
+        }
+
+        let sanitizedContent = originalContent;
+        const invalidLinks = [];
+
+        for (const url of urls) {
+            const validation = await this.validateMessageURL(url);
+            if (!validation.valid) {
+                invalidLinks.push({ url, reason: validation.reason });
+                sanitizedContent = sanitizedContent.split(url).join('[link removed]');
+            }
+        }
+
+        if (!invalidLinks.length) {
+            return { message, notice: null };
+        }
+
+        sanitizedContent = sanitizedContent.replace(/\s{2,}/g, ' ').trim();
+        if (!sanitizedContent || sanitizedContent === '[link removed]') {
+            sanitizedContent = '[link removed: invalid or unreachable]';
+        }
+
+        const updatedMessage = {
+            ...message,
+            message: sanitizedContent,
+            content: sanitizedContent
+        };
+
+        const firstInvalid = invalidLinks[0];
+        const actorName = context.actorName || message.userName || message.senderName || 'A user';
+        const scopeLabel = context.roomName || context.channelName || 'this conversation';
+        const notice = {
+            id: uuidv4(),
+            userId: context.noticeUserId || 'system',
+            senderId: context.noticeUserId || 'system',
+            userName: context.noticeUserName || 'System',
+            senderName: context.noticeUserName || 'System',
+            message: `${actorName}'s link was removed in ${scopeLabel}: ${firstInvalid.reason}.`,
+            content: `${actorName}'s link was removed in ${scopeLabel}: ${firstInvalid.reason}.`,
+            timestamp: new Date(),
+            isAuthenticated: true,
+            type: 'system',
+            reactions: []
+        };
+
+        return { message: updatedMessage, notice };
+    }
+
+    async buildBotTextReply(user, roomId, source = '') {
+        const room = this.rooms.get(roomId);
+        const users = this.normalizeRoomUsers(roomId);
+        const config = deployConfig.getConfig() || {};
+        const motd = typeof config.server?.motd === 'string' ? config.server.motd.trim() : '';
+        const lowered = String(source || '').trim().toLowerCase();
+
+        if (!lowered || lowered === 'hi' || lowered === 'hello' || lowered === 'hey') {
+            return `Hi ${user.name || 'there'}. Try /bot help for commands, ask for room status, or send me a text file to inspect.`;
+        }
+        if (lowered.includes('help')) {
+            return 'Commands: /me action, /bot help, /bot status, /bot users, /bot motd, /bot server.';
+        }
+        if (lowered.includes('status')) {
+            return `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}.`;
+        }
+        if (lowered.includes('users') || lowered.includes('who')) {
+            const names = users.map(entry => entry.displayName || entry.username || entry.name).slice(0, 10);
+            return names.length ? `In room: ${names.join(', ')}.` : 'No users are currently in this room.';
+        }
+        if (lowered.includes('motd')) {
+            return motd ? `Message of the day: ${motd}` : 'No message of the day is currently configured.';
+        }
+        if (lowered.includes('server')) {
+            return `${config.server?.name || 'VoiceLink'} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
+        }
+
+        return `Hi ${user.name || 'there'}. I can help with room status, users, the message of the day, or basic server details. Try /bot help.`;
+    }
+
+    trimMessagesToCap(messages, cap) {
+        while (messages.length > cap) {
+            const removableIndex = messages.findIndex(msg => !(msg.attachmentURL || msg.attachmentName));
+            if (removableIndex === -1) {
+                messages.shift();
+            } else {
+                messages.splice(removableIndex, 1);
+            }
+        }
+    }
+
+    cleanupRoomMessagesIfEmpty(roomId) {
+        const settings = this.getMessageSettingsConfig();
+        if (!settings.deleteRoomMessagesWhenEmpty) return;
+        this.roomMessages.delete(roomId);
     }
 
     emitRoomUsersSnapshot(roomId) {
@@ -2924,34 +3263,46 @@ class VoiceLinkLocalServer {
                 });
             }
 
-            const localRoomList = localRooms.map(room => ({
-                id: room.id,
-                name: room.name,
-                description: room.description || '',
-                users: this.normalizeRoomUsers(room.id).length,
-                userCount: this.normalizeRoomUsers(room.id).length,
-                maxUsers: room.maxUsers,
-                hasPassword: !!room.password,
-                visibility: room.visibility,
-                accessType: room.accessType,
-                allowEmbed: room.allowEmbed,
-                visibleToGuests: room.visibleToGuests,
-                isDefault: room.isDefault || false,
-                template: room.template || null,
-                serverSource: 'local',
-                creatorHandle: room.creatorHandle || null,
-                createdBy: room.createdBy || room.creatorHandle || null,
-                createdAt: room.createdAt || null,
-                updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
-                updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
-                previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
-                hostServerName: room.hostServerName || this.serverName || null,
-                hostServerOwner: room.hostServerOwner || null,
-                // Lock status
-                locked: room.locked || false,
-                lockedAt: room.lockedAt || null,
-                canJoin: !room.locked
-            }));
+            const localRoomList = localRooms.map(room => {
+                const configuredBackgroundStream = this.getConfiguredBackgroundStreamForRoom(room);
+                return {
+                    ...(configuredBackgroundStream ? {
+                        backgroundStream: configuredBackgroundStream.streamUrl,
+                        streamVolume: configuredBackgroundStream.volume,
+                        nowPlaying: {
+                            playing: true,
+                            title: configuredBackgroundStream.name,
+                            source: 'background_stream'
+                        }
+                    } : {}),
+                    id: room.id,
+                    name: room.name,
+                    description: room.description || '',
+                    users: this.normalizeRoomUsers(room.id).length,
+                    userCount: this.normalizeRoomUsers(room.id).length,
+                    maxUsers: room.maxUsers,
+                    hasPassword: !!room.password,
+                    visibility: room.visibility,
+                    accessType: room.accessType,
+                    allowEmbed: room.allowEmbed,
+                    visibleToGuests: room.visibleToGuests,
+                    isDefault: room.isDefault || false,
+                    template: room.template || null,
+                    serverSource: 'local',
+                    creatorHandle: room.creatorHandle || null,
+                    createdBy: room.createdBy || room.creatorHandle || null,
+                    createdAt: room.createdAt || null,
+                    updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
+                    updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
+                    previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
+                    hostServerName: room.hostServerName || this.serverName || null,
+                    hostServerOwner: room.hostServerOwner || null,
+                    // Lock status
+                    locked: room.locked || false,
+                    lockedAt: room.lockedAt || null,
+                    canJoin: !room.locked
+                };
+            });
 
             // Merge: main server rooms first, then local rooms (avoiding duplicates)
             const mainRoomIds = new Set(mainServerRooms.map(r => r.id));
@@ -3275,7 +3626,8 @@ class VoiceLinkLocalServer {
         // Get room message history
         this.app.get('/api/rooms/:roomId/messages', (req, res) => {
             const { roomId } = req.params;
-            const { limit = 50, before } = req.query;
+            const defaultLimit = this.getMessageSettingsConfig().initialLoadCount;
+            const { limit = defaultLimit, before } = req.query;
 
             const messages = this.getRoomMessages(roomId, parseInt(limit), before);
             res.json({
@@ -3289,7 +3641,8 @@ class VoiceLinkLocalServer {
         // Get direct message history between two users
         this.app.get('/api/messages/dm/:userId1/:userId2', (req, res) => {
             const { userId1, userId2 } = req.params;
-            const { limit = 50, before } = req.query;
+            const defaultLimit = this.getMessageSettingsConfig().initialLoadCount;
+            const { limit = defaultLimit, before } = req.query;
 
             const messages = this.getDirectMessages(userId1, userId2, parseInt(limit), before);
             res.json({
@@ -4330,11 +4683,13 @@ class VoiceLinkLocalServer {
             const installSlots = existing?.installSlots ?? 1;
             const serverSlots = existing?.serverSlots ?? (normalizedRole === 'owner' || normalizedRole === 'admin' ? 1 : 0);
             const serverOwnerLicense = existing?.serverOwnerLicense ?? (normalizedRole === 'owner' || normalizedRole === 'admin');
+            const billingModel = existing?.billingModel || 'manual';
             return {
                 deviceTier,
                 maxDevices,
                 installSlots,
                 serverSlots,
+                billingModel,
                 licenseTier: existing?.licenseTier || (normalizedRole === 'owner' ? 'owner' : normalizedRole === 'admin' ? 'admin' : normalizedRole === 'staff' ? 'staff' : 'member'),
                 serverOwnerLicense,
                 hostingControlPanelLinked: existing?.hostingControlPanelLinked === true,
@@ -4354,7 +4709,12 @@ class VoiceLinkLocalServer {
                 },
                 allowMultiDeviceSettings: existing?.allowMultiDeviceSettings !== false,
                 allowDeviceList: existing?.allowDeviceList !== false,
-                requiresIapApple: existing?.requiresIapApple === true
+                requiresIapApple: existing?.requiresIapApple === true,
+                allowsLicenseTransfer: existing?.allowsLicenseTransfer === true,
+                requiresManualTransferApproval: existing?.requiresManualTransferApproval === true,
+                transferCooldownDays: Number.isFinite(existing?.transferCooldownDays) ? Number(existing.transferCooldownDays) : 30,
+                purchaseSources: Array.isArray(existing?.purchaseSources) ? existing.purchaseSources : [],
+                appStore: existing?.appStore || null
             };
         };
         const issueLocalAuthToken = (userId) => {
@@ -4734,6 +5094,1076 @@ class VoiceLinkLocalServer {
             this.ownerSetupTokens.delete(token);
             persistLocalAuthUsers();
             return res.json({ success: true, user: publicLocalUser(user) });
+        });
+
+        const licensingStatePath = path.join(__dirname, '../../data/licensing-state.json');
+        this.licensingState = this.licensingState || { licenses: {} };
+        if (!this.licensingLoaded) {
+            this.licensingLoaded = true;
+            try {
+                if (fs.existsSync(licensingStatePath)) {
+                    const parsed = JSON.parse(fs.readFileSync(licensingStatePath, 'utf8') || '{}');
+                    this.licensingState = {
+                        licenses: parsed.licenses && typeof parsed.licenses === 'object' ? parsed.licenses : {}
+                    };
+                }
+            } catch (error) {
+                console.error('[Licensing] Failed loading licensing state:', error.message);
+            }
+        }
+
+        const persistLicensingState = () => {
+            try {
+                fs.writeFileSync(licensingStatePath, JSON.stringify(this.licensingState, null, 2));
+            } catch (error) {
+                console.error('[Licensing] Failed persisting licensing state:', error.message);
+            }
+        };
+
+        const licensingConfig = () => {
+            const cfg = deployConfig.get('licensing') || {};
+            return {
+                registrationDelayMinutes: Number.isFinite(cfg.registrationDelayMinutes) ? Number(cfg.registrationDelayMinutes) : 15,
+                defaultMaxDevices: Number.isFinite(cfg.defaultMaxDevices) ? Number(cfg.defaultMaxDevices) : 3,
+                defaultInstallSlots: Number.isFinite(cfg.defaultInstallSlots) ? Number(cfg.defaultInstallSlots) : 1,
+                defaultServerSlots: Number.isFinite(cfg.defaultServerSlots) ? Number(cfg.defaultServerSlots) : 0,
+                autoRemoveOldestDeviceOnOverflow: cfg.autoRemoveOldestDeviceOnOverflow !== false,
+                machineHistoryRetentionDays: Math.min(3650, Math.max(30, Number(cfg.machineHistoryRetentionDays || 90)))
+            };
+        };
+
+        const makeLicenseKey = () => `VL-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+
+        const normalizeLicenseIdentityKey = ({ email = '', username = '', authProvider = '', id = '' } = {}) => {
+            const normalizedEmail = normalizeEmail(email);
+            if (normalizedEmail) return `email:${normalizedEmail}`;
+            const normalizedUsername = normalizeUsername(username);
+            if (normalizedUsername && authProvider) return `${String(authProvider).trim().toLowerCase()}:${normalizedUsername}`;
+            if (normalizedUsername) return `username:${normalizedUsername}`;
+            if (id) return `id:${String(id).trim().toLowerCase()}`;
+            return '';
+        };
+
+        const normalizeBoundDomain = (value = '') => String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/^https?:\/\//, '')
+            .replace(/\/.*$/, '')
+            .replace(/:\d+$/, '')
+            .replace(/\.$/, '');
+
+        const normalizeBoundIp = (value = '') => String(value || '')
+            .trim()
+            .replace(/^\[|\]$/g, '');
+
+        const extractDomainFromUrl = (value = '') => {
+            try {
+                const candidate = String(value || '').trim();
+                if (!candidate) return '';
+                const url = new URL(candidate.includes('://') ? candidate : `https://${candidate}`);
+                return normalizeBoundDomain(url.hostname);
+            } catch {
+                return '';
+            }
+        };
+
+        const mergeBoundDomainsIntoRecord = (record = {}, incoming = []) => {
+            const current = Array.isArray(record.boundDomains) ? record.boundDomains : [];
+            const merged = new Map();
+            [...current, ...incoming].forEach((entry = {}) => {
+                const domain = normalizeBoundDomain(entry.domain || entry.hostname || '');
+                if (!domain) return;
+                const existing = merged.get(domain) || {};
+                merged.set(domain, {
+                    domain,
+                    type: entry.type || existing.type || (domain.split('.').length > 2 ? 'subdomain' : 'domain'),
+                    source: entry.source || existing.source || 'manual',
+                    status: entry.status || existing.status || 'active',
+                    linkedAt: existing.linkedAt || entry.linkedAt || new Date().toISOString(),
+                    lastSeen: entry.lastSeen || existing.lastSeen || new Date().toISOString(),
+                    serverId: entry.serverId || existing.serverId || null,
+                    nodeId: entry.nodeId || existing.nodeId || null,
+                    nodeUrl: entry.nodeUrl || existing.nodeUrl || null,
+                    ipAddress: entry.ipAddress || existing.ipAddress || null,
+                    installType: entry.installType || existing.installType || 'server'
+                });
+            });
+            record.boundDomains = Array.from(merged.values());
+        };
+
+        const mergeInstallEndpointsIntoRecord = (record = {}, incoming = []) => {
+            const current = Array.isArray(record.installEndpoints) ? record.installEndpoints : [];
+            const merged = new Map();
+            [...current, ...incoming].forEach((entry = {}) => {
+                const key = [
+                    String(entry.serverId || '').trim(),
+                    String(entry.nodeId || '').trim(),
+                    normalizeBoundDomain(entry.domain || ''),
+                    normalizeBoundIp(entry.ipAddress || ''),
+                    String(entry.nodeUrl || '').trim()
+                ].join('|');
+                if (!key.replace(/\|/g, '')) return;
+                merged.set(key, {
+                    serverId: entry.serverId || null,
+                    nodeId: entry.nodeId || null,
+                    nodeUrl: entry.nodeUrl || null,
+                    domain: normalizeBoundDomain(entry.domain || ''),
+                    ipAddress: normalizeBoundIp(entry.ipAddress || ''),
+                    privateIpAddress: normalizeBoundIp(entry.privateIpAddress || ''),
+                    installType: entry.installType || 'server',
+                    selfHosted: entry.selfHosted !== false,
+                    federationEligible: entry.federationEligible !== false,
+                    moduleRepoAccess: entry.moduleRepoAccess !== false,
+                    linkedAt: entry.linkedAt || new Date().toISOString(),
+                    lastSeen: entry.lastSeen || new Date().toISOString()
+                });
+            });
+            record.installEndpoints = Array.from(merged.values());
+        };
+
+        const publicLicenseRecord = (record = {}, installContext = {}) => {
+            const cfg = licensingConfig();
+            const devices = (Array.isArray(record.devices) ? record.devices : []).map((device = {}) => ({
+                id: device.id || device.uuid || null,
+                uuid: device.uuid || device.id || null,
+                name: device.name || 'Desktop Client',
+                platform: device.platform || 'unknown',
+                osVersion: device.osVersion || null,
+                model: device.model || null,
+                authProvider: device.authProvider || null,
+                authMethod: device.authMethod || null,
+                linkedAt: device.linkedAt || null,
+                lastSeen: device.lastSeen || null
+            }));
+            const serverInstalls = Array.isArray(record.serverInstalls) ? record.serverInstalls : [];
+            const maxDevices = Number.isFinite(record.maxDevices) ? Number(record.maxDevices) : cfg.defaultMaxDevices;
+            const installSlots = Number.isFinite(record.installSlots) ? Number(record.installSlots) : cfg.defaultInstallSlots;
+            const serverSlots = Number.isFinite(record.serverSlots) ? Number(record.serverSlots) : cfg.defaultServerSlots;
+            const pendingUntil = record.pendingUntil || null;
+            const pendingMs = pendingUntil ? Math.max(0, new Date(pendingUntil).getTime() - Date.now()) : 0;
+            pruneMachineHistory(record);
+            return {
+                licenseKey: record.licenseKey || null,
+                status: pendingMs > 0 ? 'pending' : 'licensed',
+                pendingUntil,
+                remainingMinutes: pendingMs > 0 ? Math.ceil(pendingMs / 60000) : 0,
+                remainingMs: pendingMs,
+                activatedDevices: devices.length,
+                maxDevices,
+                remainingSlots: maxDevices === null ? null : Math.max(0, maxDevices - devices.length),
+                installSlots,
+                serverSlots,
+                devices,
+                recentMachines: record.machineHistory || [],
+                linkedServers: serverInstalls,
+                boundDomains: Array.isArray(record.boundDomains) ? record.boundDomains : [],
+                installEndpoints: Array.isArray(record.installEndpoints) ? record.installEndpoints : [],
+                owners: Array.isArray(record.owners) ? record.owners : [],
+                coOwners: Array.isArray(record.coOwners) ? record.coOwners : [],
+                entitlements: record.entitlements || {},
+                primaryEmail: record.primaryEmail || null,
+                ownershipPolicy: record.ownershipPolicy || null,
+                lastEvictedDevice: record.lastEvictedDevice || null,
+                activationState: installContext.identityKey && (record.owners || []).concat(record.coOwners || []).some((entry) => entry.identityKey === installContext.identityKey)
+                    ? 'authorized'
+                    : 'licensed'
+            };
+        };
+
+        const findLicenseRecordByKey = (licenseKey = '') => {
+            const target = String(licenseKey || '').trim();
+            if (!target) return null;
+            return Object.values(this.licensingState.licenses || {}).find((record) => record?.licenseKey === target) || null;
+        };
+
+        const findLicenseRecordByIdentityKey = (identityKey = '') => {
+            const target = String(identityKey || '').trim();
+            if (!target) return null;
+            return this.licensingState.licenses[target] || null;
+        };
+
+        const principalMatchesLicense = (record = {}, principal = {}) => {
+            const principalEmail = normalizeEmail(principal.email || '');
+            const principalIdentityKey = String(principal.identityKey || '').trim();
+            const ownershipEntries = []
+                .concat(Array.isArray(record.owners) ? record.owners : [])
+                .concat(Array.isArray(record.coOwners) ? record.coOwners : []);
+
+            if (principalIdentityKey && ownershipEntries.some((entry) => entry.identityKey === principalIdentityKey)) {
+                return true;
+            }
+            if (principalEmail && ownershipEntries.some((entry) => normalizeEmail(entry.email || '') === principalEmail)) {
+                return true;
+            }
+            return false;
+        };
+
+        const enforceLicensePrincipalAccess = (record = {}, principal = {}) => {
+            const canonicalEmail = normalizeEmail(record.primaryEmail || '');
+            const principalEmail = normalizeEmail(principal.email || '');
+            if (!canonicalEmail) return { allowed: true };
+            if (!principalEmail) {
+                return { allowed: false, error: 'Canonical account email required for this license' };
+            }
+            if (canonicalEmail === principalEmail || principalMatchesLicense(record, principal)) {
+                return { allowed: true };
+            }
+            return { allowed: false, error: 'This license belongs to a different account email' };
+        };
+
+        const findLicenseRecordByNode = (serverId = '', nodeId = '') => {
+            const cleanServerId = String(serverId || '').trim();
+            const cleanNodeId = String(nodeId || '').trim();
+            if (!cleanServerId || !cleanNodeId) return null;
+            return Object.values(this.licensingState.licenses || {}).find((record) =>
+                (record.nodeRegistrations || {})[cleanServerId]?.nodeId === cleanNodeId
+            ) || null;
+        };
+
+        const selectOldestDeviceForEviction = (devices = []) => {
+            if (!Array.isArray(devices) || devices.length === 0) return null;
+            return [...devices].sort((a = {}, b = {}) => {
+                const aTime = new Date(a.lastSeen || a.linkedAt || 0).getTime() || 0;
+                const bTime = new Date(b.lastSeen || b.linkedAt || 0).getTime() || 0;
+                return aTime - bTime;
+            })[0] || null;
+        };
+
+        const ensureInstallSlotAvailable = (record, incomingUuid = '') => {
+            const cfg = licensingConfig();
+            record.devices = Array.isArray(record.devices) ? record.devices : [];
+            const maxDevices = record.maxDevices ?? cfg.defaultMaxDevices;
+            if (maxDevices === null || maxDevices <= 0) {
+                return { evictedDevice: null };
+            }
+
+            const existing = record.devices.find((device) => device.uuid === incomingUuid || device.id === incomingUuid);
+            if (existing || record.devices.length < maxDevices) {
+                return { evictedDevice: null };
+            }
+
+            if (!cfg.autoRemoveOldestDeviceOnOverflow) {
+                return { error: 'Device limit reached', evictedDevice: null };
+            }
+
+            const evictedDevice = selectOldestDeviceForEviction(record.devices);
+            if (!evictedDevice) {
+                return { error: 'Device limit reached', evictedDevice: null };
+            }
+
+            record.devices = record.devices.filter((device) => device.uuid !== evictedDevice.uuid && device.id !== evictedDevice.id);
+            record.lastEvictedDevice = {
+                id: evictedDevice.id || evictedDevice.uuid || null,
+                uuid: evictedDevice.uuid || evictedDevice.id || null,
+                name: evictedDevice.name || 'Desktop Client',
+                platform: evictedDevice.platform || 'unknown',
+                osVersion: evictedDevice.osVersion || null,
+                evictedAt: new Date().toISOString(),
+                reason: 'install_limit_reached'
+            };
+            return { evictedDevice: record.lastEvictedDevice };
+        };
+
+        const pruneMachineHistory = (record) => {
+            const retentionMs = licensingConfig().machineHistoryRetentionDays * 24 * 60 * 60 * 1000;
+            const cutoff = Date.now() - retentionMs;
+            record.machineHistory = (Array.isArray(record.machineHistory) ? record.machineHistory : []).filter((entry = {}) => {
+                const seenAt = new Date(entry.lastSeen || entry.firstSeen || 0).getTime() || 0;
+                return seenAt >= cutoff;
+            });
+        };
+
+        const rememberMachine = (record, machine = {}, state = 'seen') => {
+            record.machineHistory = Array.isArray(record.machineHistory) ? record.machineHistory : [];
+            const uuid = String(machine.uuid || machine.id || '').trim();
+            if (!uuid) return null;
+            const nowIso = new Date().toISOString();
+            const existing = record.machineHistory.find((entry) => entry.uuid === uuid || entry.id === uuid);
+            if (existing) {
+                existing.name = machine.name || existing.name || 'Desktop Client';
+                existing.platform = machine.platform || existing.platform || 'unknown';
+                existing.osVersion = machine.osVersion || existing.osVersion || null;
+                existing.model = machine.model || existing.model || null;
+                existing.authProvider = machine.authProvider || existing.authProvider || null;
+                existing.authMethod = machine.authMethod || existing.authMethod || null;
+                existing.lastSeen = nowIso;
+                existing.state = state || existing.state || 'seen';
+                if (state === 'active') {
+                    existing.lastActivatedAt = nowIso;
+                }
+                pruneMachineHistory(record);
+                return existing;
+            }
+            const historyEntry = {
+                id: uuid,
+                uuid,
+                name: machine.name || 'Desktop Client',
+                platform: machine.platform || 'unknown',
+                osVersion: machine.osVersion || null,
+                model: machine.model || null,
+                authProvider: machine.authProvider || null,
+                authMethod: machine.authMethod || null,
+                firstSeen: nowIso,
+                lastSeen: nowIso,
+                lastActivatedAt: state === 'active' ? nowIso : null,
+                state
+            };
+            record.machineHistory.push(historyEntry);
+            pruneMachineHistory(record);
+            return historyEntry;
+        };
+
+        const notifyLicenseInstallEvent = async ({
+            principal = {},
+            record = {},
+            device = {},
+            action = 'installed',
+            evictedDevice = null
+        } = {}) => {
+            const recipient = normalizeEmail(principal.email);
+            const deviceName = String(device.name || 'Desktop Client').trim() || 'Desktop Client';
+            const platform = String(device.platform || 'unknown').trim() || 'unknown';
+            const osVersion = String(device.osVersion || '').trim();
+            const title = action === 'evicted'
+                ? 'VoiceLink install replaced'
+                : 'VoiceLink install activated';
+            const summary = action === 'evicted'
+                ? `A new VoiceLink install on ${deviceName} (${platform}${osVersion ? ` ${osVersion}` : ''}) replaced your oldest active install.`
+                : `VoiceLink was activated on ${deviceName} (${platform}${osVersion ? ` ${osVersion}` : ''}).`;
+            const evictionText = evictedDevice
+                ? `\n\nRemoved oldest install: ${evictedDevice.name || 'Desktop Client'} (${evictedDevice.platform || 'unknown'}${evictedDevice.osVersion ? ` ${evictedDevice.osVersion}` : ''})`
+                : '';
+            const statusUrl = `${MAIN_SERVER_URL}/downloads.html`;
+
+            if (recipient && this.mailer) {
+                try {
+                    await this.mailer.sendMail({
+                        from: this.emailFrom || 'services@devine-creations.com',
+                        to: recipient,
+                        subject: title,
+                        text: `${summary}${evictionText}\n\nLicense: ${record.licenseKey || 'Pending'}\nActive installs: ${(record.devices || []).length}\n\nStatus: ${statusUrl}`,
+                        html: `
+                            <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 20px;">
+                                <h2 style="color: #2563eb;">${title}</h2>
+                                <p>${summary}</p>
+                                ${evictedDevice ? `<p><strong>Removed oldest install:</strong> ${evictedDevice.name || 'Desktop Client'} (${evictedDevice.platform || 'unknown'}${evictedDevice.osVersion ? ` ${evictedDevice.osVersion}` : ''})</p>` : ''}
+                                <p><strong>License:</strong> ${record.licenseKey || 'Pending'}</p>
+                                <p><strong>Active installs:</strong> ${(record.devices || []).length}</p>
+                                <p><a href="${statusUrl}">Manage VoiceLink</a></p>
+                            </div>
+                        `
+                    });
+                } catch (error) {
+                    console.warn('[Licensing] Failed to send install notification email:', error.message);
+                }
+            }
+
+            if (this.pushoverConfig?.active && this.pushoverConfig?.appToken && this.pushoverConfig?.userKey) {
+                try {
+                    await this.sendPushoverNotification({
+                        title,
+                        message: `${summary}${evictedDevice ? ` Removed: ${evictedDevice.name || 'Desktop Client'}.` : ''}`,
+                        url: statusUrl,
+                        urlTitle: 'Manage VoiceLink'
+                    });
+                } catch (error) {
+                    console.warn('[Licensing] Failed to send install Pushover notification:', error.message);
+                }
+            }
+        };
+
+        const buildNormalizedLicenseIdentity = async (req, payload = {}) => {
+            const authUser = this.getAnyAuthUserFromRequest(req);
+            const identity = String(payload.identity || payload.email || payload.username || req.headers['x-user-email'] || '').trim();
+            const principal = {
+                id: String(authUser?.id || payload.id || '').trim(),
+                email: normalizeEmail(authUser?.email || payload.email || req.headers['x-user-email'] || ''),
+                username: normalizeUsername(authUser?.username || payload.username || identity),
+                displayName: String(authUser?.displayName || payload.displayName || identity || '').trim() || null,
+                role: normalizeUserRole(authUser?.role || payload.role || 'user'),
+                authProvider: String(authUser?.authProvider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
+                entitlements: authUser?.entitlements || payload.entitlements || null
+            };
+
+            if (!principal.email && identity) {
+                const localUser = findLocalUserByIdentity(identity);
+                if (localUser) {
+                    principal.id = principal.id || localUser.id;
+                    principal.email = principal.email || normalizeEmail(localUser.email);
+                    principal.username = principal.username || normalizeUsername(localUser.username);
+                    principal.role = normalizeUserRole(localUser.role || principal.role);
+                    principal.authProvider = String(localUser.authProvider || principal.authProvider || 'local').trim().toLowerCase();
+                    principal.entitlements = principal.entitlements || localUser.entitlements || null;
+                }
+            }
+
+            if (!principal.email && identity) {
+                const whmcsIdentity = this.resolveWhmcsIdentity(identity);
+                principal.email = principal.email || normalizeEmail(whmcsIdentity.email);
+                principal.username = principal.username || normalizeUsername(whmcsIdentity.username);
+            }
+
+            principal.identityKey = normalizeLicenseIdentityKey(principal);
+            return principal;
+        };
+
+        const resolveLicenseEntitlements = async (principal = {}) => {
+            const defaults = buildDefaultEntitlements(principal.role || 'user');
+            const current = principal.entitlements || {};
+            const appStoreEntitlements = current?.appStore?.entitlements || current?.iosPurchases?.entitlements || {};
+            const purchaseSources = new Set([
+                ...(Array.isArray(defaults.purchaseSources) ? defaults.purchaseSources : []),
+                ...(Array.isArray(current.purchaseSources) ? current.purchaseSources : []),
+                ...(current?.appStore ? ['app_store'] : []),
+                ...(current?.iosPurchases ? ['ios_app_store'] : [])
+            ]);
+
+            if (principal.email) {
+                try {
+                    const clientResponse = await this.whmcsRequest('GetClientsDetails', { email: principal.email });
+                    const clientDetails = clientResponse.client || clientResponse.clientdetails || null;
+                    if (clientDetails) {
+                        let services = [];
+                        try {
+                            const servicesResponse = await this.whmcsRequest('GetClientsProducts', { clientid: clientDetails.id });
+                            services = servicesResponse.products?.product || [];
+                        } catch (error) {
+                            console.warn('[Licensing] WHMCS product lookup failed:', error.message);
+                        }
+                        return {
+                            ...defaults,
+                            ...this.deriveWhmcsEntitlements(clientDetails, services),
+                            ...appStoreEntitlements,
+                            ...current
+                        };
+                    }
+                } catch (error) {
+                    // Keep generic defaults for non-WHMCS identities.
+                }
+            }
+
+            return {
+                ...defaults,
+                ...appStoreEntitlements,
+                ...current,
+                purchaseSources: Array.from(purchaseSources)
+            };
+        };
+
+        const ensureLicenseRecordForPrincipal = async (principal = {}, options = {}) => {
+            if (!principal.identityKey) return null;
+            const cfg = licensingConfig();
+            const now = new Date();
+            let record = findLicenseRecordByIdentityKey(principal.identityKey);
+            const entitlements = await resolveLicenseEntitlements(principal);
+
+            if (!record) {
+                const installSlots = Number.isFinite(entitlements.installSlots) ? Number(entitlements.installSlots) : cfg.defaultInstallSlots;
+                const serverSlots = Number.isFinite(entitlements.serverSlots) ? Number(entitlements.serverSlots) : cfg.defaultServerSlots;
+                const maxDevices = Number.isFinite(entitlements.maxDevices) ? Number(entitlements.maxDevices) : cfg.defaultMaxDevices;
+                record = {
+                    identityKey: principal.identityKey,
+                    licenseKey: makeLicenseKey(),
+                    primaryEmail: principal.email || null,
+                    createdAt: now.toISOString(),
+                    updatedAt: now.toISOString(),
+                    pendingUntil: new Date(now.getTime() + cfg.registrationDelayMinutes * 60 * 1000).toISOString(),
+                    owners: [{
+                        identityKey: principal.identityKey,
+                        id: principal.id || null,
+                        email: principal.email || null,
+                        username: principal.username || null,
+                        displayName: principal.displayName || null,
+                        role: principal.role || 'user',
+                        authProvider: principal.authProvider || 'local'
+                    }],
+                    coOwners: [],
+                    devices: [],
+                    machineHistory: [],
+                    serverInstalls: [],
+                    boundDomains: [],
+                    installEndpoints: [],
+                    nodeRegistrations: {},
+                    entitlements,
+                    ownershipPolicy: {
+                        billingModel: entitlements.billingModel || 'manual',
+                        allowsTransfer: entitlements.allowsLicenseTransfer === true,
+                        requiresManualTransferApproval: entitlements.requiresManualTransferApproval === true,
+                        transferCooldownDays: Number.isFinite(entitlements.transferCooldownDays) ? Number(entitlements.transferCooldownDays) : 30
+                    },
+                    maxDevices,
+                    installSlots,
+                    serverSlots
+                };
+                this.licensingState.licenses[principal.identityKey] = record;
+            } else {
+                record.updatedAt = now.toISOString();
+                if (!record.primaryEmail && principal.email) record.primaryEmail = principal.email;
+                record.entitlements = { ...(record.entitlements || {}), ...entitlements };
+                record.ownershipPolicy = {
+                    ...(record.ownershipPolicy || {}),
+                    billingModel: entitlements.billingModel || record.ownershipPolicy?.billingModel || 'manual',
+                    allowsTransfer: entitlements.allowsLicenseTransfer === true,
+                    requiresManualTransferApproval: entitlements.requiresManualTransferApproval === true,
+                    transferCooldownDays: Number.isFinite(entitlements.transferCooldownDays) ? Number(entitlements.transferCooldownDays) : (record.ownershipPolicy?.transferCooldownDays ?? 30)
+                };
+                if (Number.isFinite(entitlements.maxDevices)) record.maxDevices = Number(entitlements.maxDevices);
+                if (Number.isFinite(entitlements.installSlots)) record.installSlots = Number(entitlements.installSlots);
+                if (Number.isFinite(entitlements.serverSlots)) record.serverSlots = Number(entitlements.serverSlots);
+                if (Array.isArray(entitlements.ownedDomains) && entitlements.ownedDomains.length) {
+                    mergeBoundDomainsIntoRecord(record, entitlements.ownedDomains.map((domain) => ({
+                        domain,
+                        source: 'whmcs',
+                        installType: 'server'
+                    })));
+                }
+                record.owners = Array.isArray(record.owners) ? record.owners : [];
+                if (!record.owners.some((entry) => entry.identityKey === principal.identityKey)) {
+                    record.owners.push({
+                        identityKey: principal.identityKey,
+                        id: principal.id || null,
+                        email: principal.email || null,
+                        username: principal.username || null,
+                        displayName: principal.displayName || null,
+                        role: principal.role || 'user',
+                        authProvider: principal.authProvider || 'local'
+                    });
+                }
+            }
+
+            if (options.serverId && options.nodeId) {
+                const cleanServerId = String(options.serverId).trim();
+                const normalizedNodeUrl = String(options.nodeUrl || '').trim() || null;
+                const explicitDomain = normalizeBoundDomain(options.domain || '');
+                const inferredDomain = extractDomainFromUrl(normalizedNodeUrl || '');
+                const boundDomain = explicitDomain || inferredDomain;
+                const publicIpAddress = normalizeBoundIp(options.ipAddress || '');
+                const privateIpAddress = normalizeBoundIp(options.privateIpAddress || '');
+                record.nodeRegistrations = record.nodeRegistrations || {};
+                record.nodeRegistrations[cleanServerId] = {
+                    nodeId: String(options.nodeId).trim(),
+                    nodeUrl: normalizedNodeUrl,
+                    installType: options.installType || 'desktop',
+                    registeredAt: record.nodeRegistrations[cleanServerId]?.registeredAt || now.toISOString(),
+                    lastSeen: now.toISOString()
+                };
+
+                if (boundDomain) {
+                    mergeBoundDomainsIntoRecord(record, [{
+                        domain: boundDomain,
+                        source: options.domainSource || 'install',
+                        serverId: cleanServerId,
+                        nodeId: String(options.nodeId).trim(),
+                        nodeUrl: normalizedNodeUrl,
+                        ipAddress: publicIpAddress || null,
+                        installType: options.installType || 'server',
+                        lastSeen: now.toISOString()
+                    }]);
+                }
+                mergeInstallEndpointsIntoRecord(record, [{
+                    serverId: cleanServerId,
+                    nodeId: String(options.nodeId).trim(),
+                    nodeUrl: normalizedNodeUrl,
+                    domain: boundDomain || '',
+                    ipAddress: publicIpAddress || '',
+                    privateIpAddress,
+                    installType: options.installType || 'server',
+                    selfHosted: options.selfHosted !== false,
+                    federationEligible: options.federationEligible !== false,
+                    moduleRepoAccess: options.moduleRepoAccess !== false,
+                    lastSeen: now.toISOString()
+                }]);
+
+                if ((options.installType || 'desktop') === 'server') {
+                    record.serverInstalls = Array.isArray(record.serverInstalls) ? record.serverInstalls : [];
+                    const existingServer = record.serverInstalls.find((entry) => entry.serverId === cleanServerId);
+                    if (existingServer) {
+                        existingServer.nodeId = String(options.nodeId).trim();
+                        existingServer.nodeUrl = String(options.nodeUrl || '').trim() || existingServer.nodeUrl || null;
+                        existingServer.lastSeen = now.toISOString();
+                    } else {
+                        record.serverInstalls.push({
+                            id: uuidv4(),
+                            serverId: cleanServerId,
+                            nodeId: String(options.nodeId).trim(),
+                            nodeUrl: String(options.nodeUrl || '').trim() || null,
+                            linkedAt: now.toISOString(),
+                            lastSeen: now.toISOString()
+                        });
+                    }
+                }
+            }
+
+            persistLicensingState();
+            return record;
+        };
+
+        this.app.post('/api/licensing/register', async (req, res) => {
+            const serverId = String(req.body?.serverId || '').trim();
+            const nodeId = String(req.body?.nodeId || '').trim();
+            const nodeUrl = String(req.body?.nodeUrl || '').trim();
+            const installType = String(req.body?.installType || '').trim().toLowerCase() === 'server' ? 'server' : 'desktop';
+
+            if (!serverId || !nodeId) {
+                return res.status(400).json({ status: 'error', error: 'serverId and nodeId are required' });
+            }
+
+            const principal = await buildNormalizedLicenseIdentity(req, {
+                identity: req.body?.identity || req.body?.email || req.body?.username || req.body?.userEmail || '',
+                email: req.body?.email || req.body?.userEmail || '',
+                username: req.body?.username || '',
+                authProvider: req.body?.authProvider || ''
+            });
+
+            if (!principal.identityKey) {
+                return res.status(401).json({ status: 'error', error: 'Authenticated or identifiable user required for licensing' });
+            }
+
+            const existingByNode = findLicenseRecordByNode(serverId, nodeId);
+            const record = existingByNode || await ensureLicenseRecordForPrincipal(principal, {
+                serverId,
+                nodeId,
+                nodeUrl,
+                domain: req.body?.domain || '',
+                domainSource: req.body?.domainSource || '',
+                ipAddress: req.body?.ipAddress || '',
+                privateIpAddress: req.body?.privateIpAddress || '',
+                selfHosted: req.body?.selfHosted !== false,
+                federationEligible: req.body?.federationEligible !== false,
+                moduleRepoAccess: req.body?.moduleRepoAccess !== false,
+                installType
+            });
+            if (!record) {
+                return res.status(500).json({ status: 'error', error: 'Unable to create license record' });
+            }
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ status: 'error', error: accessCheck.error });
+            }
+
+            if (!existingByNode && installType !== 'server') {
+                record.devices = Array.isArray(record.devices) ? record.devices : [];
+                const uuid = String(req.body?.deviceInfo?.uuid || '').trim();
+                const machineInfo = {
+                    id: uuid,
+                    uuid,
+                    name: String(req.body?.deviceInfo?.name || 'Desktop Client').trim() || 'Desktop Client',
+                    platform: String(req.body?.deviceInfo?.platform || 'unknown').trim() || 'unknown',
+                    osVersion: String(req.body?.deviceInfo?.osVersion || '').trim() || null,
+                    model: String(req.body?.deviceInfo?.model || '').trim() || null,
+                    authProvider: principal.authProvider || null,
+                    authMethod: req.body?.authMethod || req.headers['x-auth-method'] || null
+                };
+                if (uuid) {
+                    rememberMachine(record, machineInfo, record.devices.some((device) => device.uuid === uuid || device.id === uuid) ? 'active' : 'pending_activation');
+                }
+                if (uuid && !record.devices.some((device) => device.uuid === uuid || device.id === uuid)) {
+                    record.pendingActivationDevice = machineInfo;
+                }
+            }
+
+            persistLicensingState();
+            const pendingMs = record.pendingUntil ? Math.max(0, new Date(record.pendingUntil).getTime() - Date.now()) : 0;
+            return res.json({
+                ...publicLicenseRecord(record, principal),
+                status: pendingMs > 0 ? 'pending' : 'already_licensed',
+                activationRequired: installType !== 'server' && !!record.pendingActivationDevice,
+                serverId,
+                nodeId
+            });
+        });
+
+        this.app.get('/api/licensing/status/:serverId/:nodeId', async (req, res) => {
+            const record = findLicenseRecordByNode(req.params.serverId, req.params.nodeId);
+            if (!record) {
+                return res.json({ status: 'not_registered' });
+            }
+            return res.json(publicLicenseRecord(record));
+        });
+
+        this.app.get('/api/licensing/me', async (req, res) => {
+            const principal = await buildNormalizedLicenseIdentity(req, {});
+            if (!principal.identityKey) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const record = findLicenseRecordByIdentityKey(principal.identityKey)
+                || await ensureLicenseRecordForPrincipal(principal, {});
+            if (!record) {
+                return res.status(500).json({ success: false, error: 'Unable to create license record' });
+            }
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+            return res.json({ success: true, ...publicLicenseRecord(record, principal) });
+        });
+
+        this.app.post('/api/licensing/sync-entitlements', async (req, res) => {
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            if (!principal.identityKey) {
+                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            }
+
+            const record = await ensureLicenseRecordForPrincipal(principal, {});
+            if (!record) {
+                return res.status(500).json({ success: false, error: 'Unable to create license record' });
+            }
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+
+            const source = String(req.body?.source || req.body?.provider || '').trim().toLowerCase() || 'manual';
+            const entitlements = req.body?.entitlements && typeof req.body.entitlements === 'object' ? req.body.entitlements : {};
+            const appStorePayload = req.body?.appStore && typeof req.body.appStore === 'object' ? req.body.appStore : null;
+
+            record.entitlements = {
+                ...(record.entitlements || {}),
+                ...entitlements
+            };
+
+            if (source === 'app_store' || source === 'ios_app_store' || appStorePayload) {
+                record.entitlements.appStore = {
+                    ...(record.entitlements.appStore || {}),
+                    ...(appStorePayload || {}),
+                    source,
+                    syncedAt: new Date().toISOString()
+                };
+            }
+
+            const mergedEntitlements = await resolveLicenseEntitlements({
+                ...principal,
+                entitlements: record.entitlements
+            });
+            record.entitlements = mergedEntitlements;
+            if (Number.isFinite(mergedEntitlements.maxDevices)) record.maxDevices = Number(mergedEntitlements.maxDevices);
+            if (Number.isFinite(mergedEntitlements.installSlots)) record.installSlots = Number(mergedEntitlements.installSlots);
+            if (Number.isFinite(mergedEntitlements.serverSlots)) record.serverSlots = Number(mergedEntitlements.serverSlots);
+            record.updatedAt = new Date().toISOString();
+            persistLicensingState();
+
+            return res.json({ success: true, source, ...publicLicenseRecord(record, principal) });
+        });
+
+        this.app.post('/api/licensing/validate', async (req, res) => {
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const uuid = String(req.body?.deviceInfo?.uuid || '').trim();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ valid: false, error: 'License not found' });
+            }
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ valid: false, error: accessCheck.error });
+            }
+            const pendingMs = record.pendingUntil ? Math.max(0, new Date(record.pendingUntil).getTime() - Date.now()) : 0;
+            if (pendingMs > 0) {
+                return res.json({ valid: false, status: 'pending', remainingMinutes: Math.ceil(pendingMs / 60000), remainingMs: pendingMs });
+            }
+
+            const device = uuid ? (record.devices || []).find((entry) => entry.uuid === uuid || entry.id === uuid) : null;
+            if (!device) {
+                return res.json({
+                    valid: false,
+                    deviceActivated: false,
+                    activationRequired: true,
+                    activatedDevices: (record.devices || []).length,
+                    maxDevices: record.maxDevices ?? licensingConfig().defaultMaxDevices,
+                    remainingSlots: record.maxDevices === null ? null : Math.max(0, (record.maxDevices ?? licensingConfig().defaultMaxDevices) - (record.devices || []).length),
+                    message: 'Device not activated'
+                });
+            }
+            device.lastSeen = new Date().toISOString();
+            persistLicensingState();
+            return res.json({ valid: true, deviceActivated: true, ...publicLicenseRecord(record) });
+        });
+
+        this.app.post('/api/licensing/activate', async (req, res) => {
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const uuid = String(req.body?.deviceInfo?.uuid || '').trim();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License not found' });
+            }
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+            if (!uuid) {
+                return res.status(400).json({ success: false, error: 'Device UUID required' });
+            }
+
+            const pendingMs = record.pendingUntil ? Math.max(0, new Date(record.pendingUntil).getTime() - Date.now()) : 0;
+            if (pendingMs > 0) {
+                return res.status(409).json({ success: false, error: 'License pending activation', remainingMinutes: Math.ceil(pendingMs / 60000) });
+            }
+
+            record.devices = Array.isArray(record.devices) ? record.devices : [];
+            const existing = record.devices.find((entry) => entry.uuid === uuid || entry.id === uuid);
+            if (!existing) {
+                const slotResult = ensureInstallSlotAvailable(record, uuid);
+                if (slotResult.error) {
+                    return res.status(409).json({ success: false, error: slotResult.error, ...publicLicenseRecord(record) });
+                }
+                const newDevice = {
+                    id: uuid,
+                    uuid,
+                    name: String(req.body?.deviceInfo?.name || 'Desktop Client').trim() || 'Desktop Client',
+                    platform: String(req.body?.deviceInfo?.platform || 'unknown').trim() || 'unknown',
+                    osVersion: String(req.body?.deviceInfo?.osVersion || '').trim() || null,
+                    model: String(req.body?.deviceInfo?.model || '').trim() || null,
+                    authProvider: req.body?.authProvider || req.headers['x-auth-provider'] || null,
+                    authMethod: req.body?.authMethod || req.headers['x-auth-method'] || null,
+                    linkedAt: new Date().toISOString(),
+                    lastSeen: new Date().toISOString()
+                };
+                record.devices.push(newDevice);
+                const principal = await buildNormalizedLicenseIdentity(req, {});
+                rememberMachine(record, newDevice, 'active');
+                record.pendingActivationDevice = null;
+                void notifyLicenseInstallEvent({
+                    principal,
+                    record,
+                    device: newDevice,
+                    action: 'installed',
+                    evictedDevice: slotResult.evictedDevice || null
+                });
+            } else {
+                existing.lastSeen = new Date().toISOString();
+                existing.platform = String(req.body?.deviceInfo?.platform || existing.platform || 'unknown').trim() || 'unknown';
+                existing.osVersion = String(req.body?.deviceInfo?.osVersion || existing.osVersion || '').trim() || null;
+                existing.model = String(req.body?.deviceInfo?.model || existing.model || '').trim() || null;
+                rememberMachine(record, existing, 'active');
+            }
+            record.updatedAt = new Date().toISOString();
+            persistLicensingState();
+            return res.json({ success: true, ...publicLicenseRecord(record) });
+        });
+
+        this.app.post('/api/licensing/deactivate', async (req, res) => {
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const deviceId = String(req.body?.deviceId || '').trim();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License not found' });
+            }
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+            record.devices = (record.devices || []).filter((entry) => entry.id !== deviceId && entry.uuid !== deviceId);
+            if (Array.isArray(record.machineHistory)) {
+                const machine = record.machineHistory.find((entry) => entry.id === deviceId || entry.uuid === deviceId);
+                if (machine) {
+                    machine.state = 'deactivated';
+                    machine.lastSeen = new Date().toISOString();
+                }
+            }
+            record.updatedAt = new Date().toISOString();
+            persistLicensingState();
+            return res.json({ success: true, ...publicLicenseRecord(record) });
+        });
+
+        this.app.post('/api/licensing/heartbeat', async (req, res) => {
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const uuid = String(req.body?.deviceInfo?.uuid || '').trim();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License not found' });
+            }
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+            const device = (record.devices || []).find((entry) => entry.uuid === uuid || entry.id === uuid);
+            if (device) device.lastSeen = new Date().toISOString();
+            record.updatedAt = new Date().toISOString();
+            persistLicensingState();
+            return res.json({ success: true });
+        });
+
+        this.app.post('/api/licensing/ownership/share', async (req, res) => {
+            if (!this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin authentication required' });
+            }
+
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const targetIdentity = String(req.body?.identity || req.body?.email || req.body?.username || '').trim();
+            const access = String(req.body?.access || 'co-owner').trim().toLowerCase();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License not found' });
+            }
+
+            const principal = await buildNormalizedLicenseIdentity(req, {
+                identity: targetIdentity,
+                email: req.body?.email || '',
+                username: req.body?.username || '',
+                authProvider: req.body?.authProvider || 'shared'
+            });
+            if (!principal.identityKey) {
+                return res.status(400).json({ success: false, error: 'Target identity required' });
+            }
+
+            const bucket = access === 'owner' ? 'owners' : 'coOwners';
+            record[bucket] = Array.isArray(record[bucket]) ? record[bucket] : [];
+            if (!record[bucket].some((entry) => entry.identityKey === principal.identityKey)) {
+                record[bucket].push({
+                    identityKey: principal.identityKey,
+                    id: principal.id || null,
+                    email: principal.email || null,
+                    username: principal.username || null,
+                    displayName: principal.displayName || null,
+                    role: access === 'owner' ? 'owner' : 'co-owner',
+                    authProvider: principal.authProvider || 'shared'
+                });
+            }
+            record.updatedAt = new Date().toISOString();
+            persistLicensingState();
+            return res.json({ success: true, ...publicLicenseRecord(record) });
+        });
+
+        this.app.post('/api/licensing/ownership/transfer', async (req, res) => {
+            const actor = await buildNormalizedLicenseIdentity(req, {});
+            const licenseKey = String(req.body?.licenseKey || '').trim();
+            const record = findLicenseRecordByKey(licenseKey);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License not found' });
+            }
+
+            const actorAccess = enforceLicensePrincipalAccess(record, actor);
+            const actorIsAdmin = this.isLocalAdminRequest(req);
+            if (!actorIsAdmin && (!actorAccess.allowed || !principalMatchesLicense(record, actor))) {
+                return res.status(403).json({ success: false, error: 'Current owner or admin required' });
+            }
+
+            const policy = record.ownershipPolicy || {};
+            if (policy.requiresManualTransferApproval || policy.allowsTransfer !== true) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'This license cannot be automatically transferred',
+                    ownershipPolicy: policy
+                });
+            }
+
+            const targetPrincipal = await buildNormalizedLicenseIdentity(req, {
+                identity: req.body?.identity || req.body?.email || req.body?.username || '',
+                email: req.body?.email || '',
+                username: req.body?.username || '',
+                authProvider: req.body?.authProvider || ''
+            });
+            if (!targetPrincipal.identityKey || !targetPrincipal.email) {
+                return res.status(400).json({ success: false, error: 'Target account email required for transfer' });
+            }
+
+            const cooldownDays = Number.isFinite(policy.transferCooldownDays) ? Number(policy.transferCooldownDays) : 30;
+            const lastTransferAt = record.lastTransferAt ? new Date(record.lastTransferAt).getTime() : 0;
+            if (cooldownDays > 0 && lastTransferAt > 0) {
+                const nextAllowedAt = lastTransferAt + (cooldownDays * 24 * 60 * 60 * 1000);
+                if (Date.now() < nextAllowedAt) {
+                    return res.status(409).json({
+                        success: false,
+                        error: 'Transfer cooldown is still active',
+                        nextAllowedAt: new Date(nextAllowedAt).toISOString()
+                    });
+                }
+            }
+
+            const oldIdentityKey = record.identityKey;
+            record.primaryEmail = targetPrincipal.email;
+            record.identityKey = targetPrincipal.identityKey;
+            record.owners = [{
+                identityKey: targetPrincipal.identityKey,
+                id: targetPrincipal.id || null,
+                email: targetPrincipal.email || null,
+                username: targetPrincipal.username || null,
+                displayName: targetPrincipal.displayName || null,
+                role: 'owner',
+                authProvider: targetPrincipal.authProvider || 'local'
+            }];
+            record.coOwners = [];
+            record.lastTransferAt = new Date().toISOString();
+            record.updatedAt = record.lastTransferAt;
+            if (oldIdentityKey && this.licensingState.licenses[oldIdentityKey]) {
+                delete this.licensingState.licenses[oldIdentityKey];
+            }
+            this.licensingState.licenses[targetPrincipal.identityKey] = record;
+            persistLicensingState();
+            return res.json({ success: true, ...publicLicenseRecord(record, targetPrincipal) });
+        });
+
+        this.app.post('/api/licensing/domains/bind', async (req, res) => {
+            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            if (!principal.identityKey) {
+                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            }
+
+            const record = findLicenseRecordByIdentityKey(principal.identityKey)
+                || await ensureLicenseRecordForPrincipal(principal, {});
+            if (!record) {
+                return res.status(500).json({ success: false, error: 'Unable to create license record' });
+            }
+
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+
+            const domains = []
+                .concat(req.body?.domain || [])
+                .concat(req.body?.domains || [])
+                .flatMap((value) => Array.isArray(value) ? value : [value])
+                .map((value) => normalizeBoundDomain(value))
+                .filter(Boolean);
+
+            if (!domains.length) {
+                return res.status(400).json({ success: false, error: 'At least one domain or subdomain is required' });
+            }
+
+            const serverId = String(req.body?.serverId || '').trim() || null;
+            const nodeId = String(req.body?.nodeId || '').trim() || null;
+            const nodeUrl = String(req.body?.nodeUrl || '').trim() || null;
+            const ipAddress = normalizeBoundIp(req.body?.ipAddress || '');
+            const privateIpAddress = normalizeBoundIp(req.body?.privateIpAddress || '');
+            const installType = String(req.body?.installType || 'server').trim().toLowerCase() === 'desktop' ? 'desktop' : 'server';
+            const source = String(req.body?.source || 'manual').trim().toLowerCase() || 'manual';
+            const selfHosted = req.body?.selfHosted !== false;
+            const federationEligible = req.body?.federationEligible !== false;
+            const moduleRepoAccess = req.body?.moduleRepoAccess !== false;
+            const nowIso = new Date().toISOString();
+
+            mergeBoundDomainsIntoRecord(record, domains.map((domain) => ({
+                domain,
+                source,
+                serverId,
+                nodeId,
+                nodeUrl,
+                ipAddress: ipAddress || null,
+                installType,
+                lastSeen: nowIso
+            })));
+
+            mergeInstallEndpointsIntoRecord(record, [{
+                serverId,
+                nodeId,
+                nodeUrl,
+                domain: domains[0] || '',
+                ipAddress,
+                privateIpAddress,
+                installType,
+                selfHosted,
+                federationEligible,
+                moduleRepoAccess,
+                lastSeen: nowIso
+            }]);
+
+            record.updatedAt = nowIso;
+            persistLicensingState();
+            return res.json({ success: true, ...publicLicenseRecord(record, principal) });
         });
 
         this.app.post('/api/admin/invites', async (req, res) => {
@@ -5759,6 +7189,19 @@ class VoiceLinkLocalServer {
         this.app.get('/api/jellyfin/room-stream/:roomId', (req, res) => {
             const stream = this.roomMediaStreams.get(req.params.roomId);
             if (!stream) {
+                const room = this.rooms.get(req.params.roomId);
+                const configuredBackgroundStream = room ? this.getConfiguredBackgroundStreamForRoom(room) : null;
+                if (configuredBackgroundStream) {
+                    return res.json({
+                        active: true,
+                        type: 'audio',
+                        streamUrl: configuredBackgroundStream.streamUrl,
+                        startedAt: null,
+                        startedBy: 'background-stream',
+                        title: configuredBackgroundStream.name,
+                        volume: configuredBackgroundStream.volume
+                    });
+                }
                 return res.json({ active: false });
             }
 
@@ -6000,7 +7443,8 @@ class VoiceLinkLocalServer {
                 maxGuestDuration: config.security?.maxGuestDuration ?? null,
                 enableRateLimiting: config.security?.enableRateLimiting ?? true,
                 backgroundStreams: config.backgroundStreams || null,
-                pushover: config.pushover || null
+                pushover: config.pushover || null,
+                messageSettings: this.getMessageSettingsConfig()
             };
             res.json(flattened);
         });
@@ -6051,6 +7495,12 @@ class VoiceLinkLocalServer {
                 if (updates.pushover && typeof updates.pushover === 'object') {
                     deployConfig.updateSection('pushover', updates.pushover);
                 }
+                if (updates.messageSettings && typeof updates.messageSettings === 'object') {
+                    deployConfig.updateSection('messageSettings', {
+                        ...this.getMessageSettingsConfig(),
+                        ...updates.messageSettings
+                    });
+                }
 
                 await deployConfig.save();
                 res.json({ success: true, message: 'Configuration updated' });
@@ -6080,6 +7530,140 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
             }
+        });
+
+        this.app.post('/api/admin/background-streams/probe', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            const rawInput = String(req.body?.input || '').trim();
+            if (!rawInput) {
+                return res.status(400).json({ success: false, error: 'input is required' });
+            }
+
+            const normalizeProbeBase = (value) => {
+                const candidate = value.includes('://') ? value : `https://${value}`;
+                try {
+                    const url = new URL(candidate);
+                    url.hash = '';
+                    url.search = '';
+                    if (!url.pathname || url.pathname === '/') {
+                        url.pathname = '';
+                    } else {
+                        url.pathname = url.pathname.replace(/\/+$/, '');
+                    }
+                    return url.toString().replace(/\/$/, '');
+                } catch {
+                    return null;
+                }
+            };
+
+            const buildCandidates = (value) => {
+                const normalized = normalizeProbeBase(value);
+                if (!normalized) return [];
+                const baseUrl = new URL(normalized);
+                const pathname = baseUrl.pathname || '';
+                const directBase = `${baseUrl.protocol}//${baseUrl.host}${pathname}`.replace(/\/$/, '');
+                const candidates = new Set([directBase]);
+
+                if (!baseUrl.port && !pathname) {
+                    ['http://', 'https://'].forEach((protocol) => {
+                        ['8000', '8080'].forEach((port) => {
+                            candidates.add(`${protocol}${baseUrl.hostname}:${port}`);
+                        });
+                    });
+                }
+
+                return Array.from(candidates);
+            };
+
+            const parseStatusJson = async (url) => {
+                const response = await fetch(url, { method: 'GET' });
+                if (!response.ok) return [];
+                const payload = await response.json();
+                const source = payload?.icestats?.source;
+                const sources = Array.isArray(source) ? source : (source ? [source] : []);
+                return sources.map((entry, index) => ({
+                    id: `${url}#${index}`,
+                    name: String(entry?.server_name || entry?.listenurl || entry?.stream || `Stream ${index + 1}`),
+                    streamUrl: String(entry?.listenurl || '').trim() || url.replace(/\/status-json\.xsl$/, '/'),
+                    type: 'icecast',
+                    genre: entry?.genre || null,
+                    bitrate: Number.isFinite(Number(entry?.bitrate)) ? Number(entry.bitrate) : null,
+                    listeners: Number.isFinite(Number(entry?.listeners)) ? Number(entry.listeners) : null,
+                    title: entry?.title || entry?.server_description || null,
+                    artist: null,
+                    sourceUrl: url
+                })).filter((entry) => entry.streamUrl);
+            };
+
+            const parseShoutcastStats = async (url, base) => {
+                const response = await fetch(url, { method: 'GET' });
+                if (!response.ok) return [];
+                const text = await response.text();
+                const body = text.replace(/<[^>]+>/g, '').trim();
+                const segments = body.split(',').map((part) => part.trim()).filter(Boolean);
+                if (segments.length < 7) return [];
+                return [{
+                    id: `${url}#0`,
+                    name: segments[6] || new URL(base).host,
+                    streamUrl: `${base.replace(/\/$/, '')}/;`,
+                    type: 'shoutcast',
+                    genre: null,
+                    bitrate: Number.isFinite(Number(segments[5])) ? Number(segments[5]) : null,
+                    listeners: Number.isFinite(Number(segments[0])) ? Number(segments[0]) : null,
+                    title: segments[6] || null,
+                    artist: null,
+                    sourceUrl: url
+                }];
+            };
+
+            const seen = new Set();
+            const streams = [];
+
+            for (const base of buildCandidates(rawInput)) {
+                const probes = [
+                    { url: `${base}/status-json.xsl`, parse: parseStatusJson },
+                    { url: `${base}/7.html`, parse: (url) => parseShoutcastStats(url, base) }
+                ];
+
+                for (const probe of probes) {
+                    try {
+                        const results = await probe.parse(probe.url);
+                        for (const result of results) {
+                            const key = `${result.streamUrl}|${result.name}`;
+                            if (seen.has(key)) continue;
+                            seen.add(key);
+                            streams.push(result);
+                        }
+                    } catch (_error) {
+                        continue;
+                    }
+                }
+
+                if (!streams.length && /^https?:\/\//i.test(base)) {
+                    const host = new URL(base).host;
+                    const key = `${base}|${host}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        streams.push({
+                            id: `${base}#direct`,
+                            name: host,
+                            streamUrl: base,
+                            type: 'direct',
+                            genre: null,
+                            bitrate: null,
+                            listeners: null,
+                            title: null,
+                            artist: null,
+                            sourceUrl: base
+                        });
+                    }
+                }
+            }
+
+            res.json({ success: true, streams });
         });
 
         // Get specific config section
@@ -7742,9 +9326,13 @@ class VoiceLinkLocalServer {
                 const bundle = await this.modules.deploymentManager.buildDeploymentBundle(packageOptions);
                 const uploadResult = await this.modules.deploymentManager.uploadBundle(bundle.zipPath, target);
                 let bootstrapResult = null;
+                let restartResult = null;
 
                 if (bootstrap) {
                     bootstrapResult = await this.modules.deploymentManager.bootstrapRemoteInstall(target, bundle.deployConfig);
+                    if (target.restartAfterBootstrap === true) {
+                        restartResult = await this.modules.deploymentManager.triggerRemoteRestart(target);
+                    }
                 }
 
                 res.json({
@@ -7752,7 +9340,8 @@ class VoiceLinkLocalServer {
                     bundleId: bundle.bundleId,
                     bundleName: bundle.zipName,
                     upload: uploadResult,
-                    bootstrap: bootstrapResult
+                    bootstrap: bootstrapResult,
+                    restart: restartResult
                 });
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
@@ -8447,6 +10036,7 @@ class VoiceLinkLocalServer {
             res.json({
                 maxRooms: config.rooms?.maxRooms ?? 100,
                 requireAuth: config.security?.requireAuth ?? false,
+                messageSettings: this.getMessageSettingsConfig(),
                 database
             });
         });
@@ -8458,6 +10048,9 @@ class VoiceLinkLocalServer {
             try {
                 const maxRooms = Number(req.body?.maxRooms);
                 const requireAuth = !!req.body?.requireAuth;
+                const incomingMessageSettings = req.body?.messageSettings && typeof req.body.messageSettings === 'object'
+                    ? req.body.messageSettings
+                    : null;
                 const incomingDatabase = req.body?.database && typeof req.body.database === 'object'
                     ? req.body.database
                     : null;
@@ -8466,6 +10059,12 @@ class VoiceLinkLocalServer {
                     deployConfig.updateSection('rooms', { maxRooms });
                 }
                 deployConfig.updateSection('security', { requireAuth });
+                if (incomingMessageSettings) {
+                    deployConfig.updateSection('messageSettings', {
+                        ...this.getMessageSettingsConfig(),
+                        ...incomingMessageSettings
+                    });
+                }
 
                 if (incomingDatabase) {
                     const current = deployConfig.get('database') || {};
@@ -10094,6 +11693,10 @@ class VoiceLinkLocalServer {
                 room.users = (room.users || []).filter(u => u.id !== socket.id);
                 room.users.push(user);
 
+                const wasRecentUser = Array.isArray(room.recentUsers)
+                    ? room.recentUsers.some((entry) => (entry?.name || '').trim().toLowerCase() === (user.name || '').trim().toLowerCase())
+                    : false;
+
                 // Track recent users (keep last 10)
                 if (!room.recentUsers) room.recentUsers = [];
                 const recentEntry = { name: user.name, joinedAt: user.joinedAt };
@@ -10111,6 +11714,7 @@ class VoiceLinkLocalServer {
                 socket.join(roomId);
 
                 // Send full room state including all users to the joining user
+                const configuredBackgroundStream = this.getConfiguredBackgroundStreamForRoom(room);
                 const roomState = {
                     id: room.id,
                     name: room.name,
@@ -10118,7 +11722,14 @@ class VoiceLinkLocalServer {
                     users: this.normalizeRoomUsers(roomId).map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
                     userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
-                    locked: room.locked || false
+                    locked: room.locked || false,
+                    backgroundStream: configuredBackgroundStream?.streamUrl || null,
+                    streamVolume: configuredBackgroundStream?.volume ?? null,
+                    nowPlaying: configuredBackgroundStream ? {
+                        playing: true,
+                        title: configuredBackgroundStream.name,
+                        source: 'background_stream'
+                    } : null
                 };
 
                 socket.emit('joined-room', { room: roomState, user });
@@ -10126,6 +11737,25 @@ class VoiceLinkLocalServer {
 
                 // Broadcast updated user count to all in room
                 this.emitRoomUsersSnapshot(roomId);
+
+                const botReply = wasRecentUser
+                    ? `Welcome back, ${user.name}. You're back in ${room.name}.`
+                    : `Welcome to ${room.name}, ${user.name}. Ask @VoiceLink Bot or use /bot help if you need anything.`;
+                const botMessage = {
+                    id: uuidv4(),
+                    userId: `bot:${roomId}`,
+                    userName: 'VoiceLink Bot',
+                    message: botReply,
+                    timestamp: new Date(),
+                    isAuthenticated: true,
+                    isBot: true,
+                    authProvider: 'voicelink_bot',
+                    reactions: []
+                };
+                this.storeRoomMessage(roomId, botMessage);
+                setTimeout(() => {
+                    this.io.to(roomId).emit('chat-message', botMessage);
+                }, 150);
 
                 console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
             });
@@ -10213,7 +11843,7 @@ class VoiceLinkLocalServer {
             });
 
             // Chat messages
-            socket.on('chat-message', (data) => {
+            socket.on('chat-message', async (data) => {
                 const user = this.users.get(socket.id);
                 if (user) {
                     const message = {
@@ -10221,18 +11851,37 @@ class VoiceLinkLocalServer {
                         userId: socket.id,
                         userName: user.name,
                         message: data.message,
+                        content: data.message,
                         timestamp: new Date(),
                         isAuthenticated: user.isAuthenticated || false,
+                        type: data.type || 'text',
                         replyTo: data.replyTo || null,
+                        attachmentId: data.attachmentId || null,
+                        attachmentName: data.attachmentName || null,
+                        attachmentURL: data.attachmentURL || data.attachmentUrl || null,
+                        attachmentCaption: data.attachmentCaption || data.caption || null,
+                        attachmentExpiresAt: data.attachmentExpiresAt || null,
+                        attachmentRemoved: !!data.attachmentRemoved,
                         reactions: []
                     };
 
+                    const room = this.rooms.get(user.roomId);
+                    const sanitizedResult = await this.sanitizeMessageLinks(message, {
+                        actorName: user.name,
+                        roomName: room?.name || 'this room'
+                    });
+                    const sanitizedMessage = sanitizedResult.message;
+
                     // Store message in room history
-                    this.storeRoomMessage(user.roomId, message);
+                    this.storeRoomMessage(user.roomId, sanitizedMessage);
 
-                    this.io.to(user.roomId).emit('chat-message', message);
+                    this.io.to(user.roomId).emit('chat-message', sanitizedMessage);
+                    if (sanitizedResult.notice) {
+                        this.storeRoomMessage(user.roomId, sanitizedResult.notice);
+                        this.io.to(user.roomId).emit('chat-message', sanitizedResult.notice);
+                    }
 
-                    const source = (data.message || '').trim();
+                    const source = (sanitizedMessage.message || '').trim();
                     const lowered = source.toLowerCase();
                     const addressedToBot =
                         lowered.startsWith('/bot') ||
@@ -10241,23 +11890,12 @@ class VoiceLinkLocalServer {
                         lowered.includes('voicelink bot');
 
                     if (addressedToBot) {
-                        const room = this.rooms.get(user.roomId);
-                        const users = this.normalizeRoomUsers(user.roomId);
-                        const config = deployConfig.getConfig() || {};
-                        const motd = typeof config.server?.motd === 'string' ? config.server.motd.trim() : '';
-                        let reply = `Hi ${user.name || 'there'}. Try /bot help.`;
-
-                        if (lowered.includes('help')) {
-                            reply = 'Commands: /me action, /bot help, /bot status, /bot users, /bot motd, /bot server.';
-                        } else if (lowered.includes('status')) {
-                            reply = `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}.`;
-                        } else if (lowered.includes('users') || lowered.includes('who')) {
-                            const names = users.map(entry => entry.displayName || entry.username || entry.name).slice(0, 10);
-                            reply = names.length ? `In room: ${names.join(', ')}.` : 'No users are currently in this room.';
-                        } else if (lowered.includes('motd')) {
-                            reply = motd ? `Message of the day: ${motd}` : 'No message of the day is currently configured.';
-                        } else if (lowered.includes('server')) {
-                            reply = `${config.server?.name || 'VoiceLink'} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
+                        let reply = await this.buildBotTextReply(user, user.roomId, source);
+                        const attachmentReply = sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL
+                            ? await this.buildBotAttachmentReply(user, sanitizedMessage)
+                            : null;
+                        if (attachmentReply) {
+                            reply = attachmentReply;
                         }
 
                         const botMessage = {
@@ -10281,30 +11919,83 @@ class VoiceLinkLocalServer {
             });
 
             // Direct messages (DMs)
-            socket.on('direct-message', (data) => {
+            socket.on('direct-message', async (data) => {
                 const user = this.users.get(socket.id);
                 const { targetUserId, message: msgContent, replyTo } = data;
 
                 if (user && targetUserId) {
-                    const message = {
+                    const outboundMessage = {
                         id: uuidv4(),
                         senderId: socket.id,
                         senderName: user.name,
                         receiverId: targetUserId,
                         message: msgContent,
+                        content: msgContent,
                         timestamp: new Date(),
                         isAuthenticated: user.isAuthenticated || false,
+                        type: data.type || 'text',
                         replyTo: replyTo || null,
+                        attachmentId: data.attachmentId || null,
+                        attachmentName: data.attachmentName || null,
+                        attachmentURL: data.attachmentURL || data.attachmentUrl || null,
+                        attachmentCaption: data.attachmentCaption || data.caption || null,
+                        attachmentExpiresAt: data.attachmentExpiresAt || null,
+                        attachmentRemoved: !!data.attachmentRemoved,
                         reactions: [],
                         read: false
                     };
+
+                    const dmTargetLabel = targetUserId.startsWith('bot:') ? 'VoiceLink Bot' : 'this conversation';
+                    const sanitizedResult = await this.sanitizeMessageLinks(outboundMessage, {
+                        actorName: user.name,
+                        roomName: dmTargetLabel
+                    });
+                    const message = sanitizedResult.message;
 
                     // Store DM
                     this.storeDirectMessage(socket.id, targetUserId, message);
 
                     // Send to both sender and receiver
                     socket.emit('direct-message', message);
-                    this.io.to(targetUserId).emit('direct-message', message);
+                    if (sanitizedResult.notice) {
+                        this.storeDirectMessage(socket.id, targetUserId, sanitizedResult.notice);
+                        socket.emit('direct-message', sanitizedResult.notice);
+                    }
+
+                    if (targetUserId.startsWith('bot:')) {
+                        const roomId = targetUserId.slice(4);
+                        let reply = await this.buildBotTextReply(user, roomId, msgContent);
+                        const attachmentReply = message.attachmentName || message.attachmentURL
+                            ? await this.buildBotAttachmentReply(user, message)
+                            : null;
+                        if (attachmentReply) {
+                            reply = attachmentReply;
+                        }
+
+                        const botReply = {
+                            id: uuidv4(),
+                            senderId: targetUserId,
+                            senderName: 'VoiceLink Bot',
+                            receiverId: socket.id,
+                            message: reply,
+                            content: reply,
+                            timestamp: new Date(),
+                            isAuthenticated: true,
+                            isBot: true,
+                            authProvider: 'voicelink_bot',
+                            type: 'text',
+                            replyTo: message.id,
+                            reactions: [],
+                            read: false
+                        };
+                        this.storeDirectMessage(targetUserId, socket.id, botReply);
+                        socket.emit('direct-message', botReply);
+                    } else {
+                        this.io.to(targetUserId).emit('direct-message', message);
+                        if (sanitizedResult.notice) {
+                            this.io.to(targetUserId).emit('direct-message', sanitizedResult.notice);
+                        }
+                    }
                 }
             });
 
@@ -10519,10 +12210,14 @@ class VoiceLinkLocalServer {
                             userName: userName
                         });
 
-                        // Broadcast updated user count
-                        this.emitRoomUsersSnapshot(user.roomId);
+                    // Broadcast updated user count
+                    this.emitRoomUsersSnapshot(user.roomId);
 
                         console.log(`User ${userName} left room ${room.name} (${liveUsers.length} users remain)`);
+
+                        if (liveUsers.length === 0) {
+                            this.cleanupRoomMessagesIfEmpty(user.roomId);
+                        }
 
                         // Clean up empty rooms (but keep default rooms)
                         if (liveUsers.length === 0 && !room.isDefault) {
@@ -10555,26 +12250,17 @@ class VoiceLinkLocalServer {
      * Messages from guests expire after 24 hours
      */
     storeRoomMessage(roomId, message) {
+        const settings = this.getMessageSettingsConfig();
+        if (!settings.keepRoomMessages) {
+            return;
+        }
         if (!this.roomMessages.has(roomId)) {
             this.roomMessages.set(roomId, []);
         }
 
         const messages = this.roomMessages.get(roomId);
         messages.push(message);
-
-        // Keep max 1000 messages per room in memory
-        if (messages.length > 1000) {
-            // Remove oldest messages, but prioritize keeping authenticated user messages
-            const authenticated = messages.filter(m => m.isAuthenticated);
-            const guest = messages.filter(m => !m.isAuthenticated);
-
-            // Remove oldest guest messages first
-            while (messages.length > 1000 && guest.length > 0) {
-                const oldest = guest.shift();
-                const idx = messages.findIndex(m => m.id === oldest.id);
-                if (idx !== -1) messages.splice(idx, 1);
-            }
-        }
+        this.trimMessagesToCap(messages, settings.roomMessageCap);
     }
 
     /**
@@ -10582,6 +12268,10 @@ class VoiceLinkLocalServer {
      * Uses sorted user IDs as key for consistent lookup
      */
     storeDirectMessage(senderId, receiverId, message) {
+        const settings = this.getMessageSettingsConfig();
+        if (!settings.keepDirectMessages) {
+            return;
+        }
         const dmKey = [senderId, receiverId].sort().join('_');
 
         if (!this.directMessages.has(dmKey)) {
@@ -10590,18 +12280,24 @@ class VoiceLinkLocalServer {
 
         const messages = this.directMessages.get(dmKey);
         messages.push(message);
-
-        // Keep max 500 messages per DM conversation
-        if (messages.length > 500) {
-            messages.shift();
-        }
+        this.trimMessagesToCap(messages, settings.directMessageCap);
     }
 
     /**
      * Get room messages with optional pagination
      */
     getRoomMessages(roomId, limit = 50, before = null) {
-        const messages = this.roomMessages.get(roomId) || [];
+        const settings = this.getMessageSettingsConfig();
+        const requestedLimit = Math.min(settings.scrollbackLimit, Math.max(1, Number(limit || settings.initialLoadCount)));
+        const retentionMs = this.getMessageExpiryMs(true);
+        const guestRetentionMs = this.getMessageExpiryMs(false);
+        const now = Date.now();
+        const messages = (this.roomMessages.get(roomId) || []).filter(message => {
+            const timestamp = new Date(message.timestamp).getTime();
+            if (!Number.isFinite(timestamp)) return true;
+            const expiryMs = message.isAuthenticated ? retentionMs : guestRetentionMs;
+            return (now - timestamp) < expiryMs;
+        });
 
         let filtered = messages;
         if (before) {
@@ -10611,16 +12307,25 @@ class VoiceLinkLocalServer {
             }
         }
 
-        // Return most recent messages
-        return filtered.slice(-limit);
+        return filtered.slice(-requestedLimit);
     }
 
     /**
      * Get direct messages between two users
      */
     getDirectMessages(userId1, userId2, limit = 50, before = null) {
+        const settings = this.getMessageSettingsConfig();
+        const requestedLimit = Math.min(settings.scrollbackLimit, Math.max(1, Number(limit || settings.initialLoadCount)));
         const dmKey = [userId1, userId2].sort().join('_');
-        const messages = this.directMessages.get(dmKey) || [];
+        const retentionMs = this.getMessageExpiryMs(true);
+        const guestRetentionMs = this.getMessageExpiryMs(false);
+        const now = Date.now();
+        const messages = (this.directMessages.get(dmKey) || []).filter(message => {
+            const timestamp = new Date(message.timestamp).getTime();
+            if (!Number.isFinite(timestamp)) return true;
+            const expiryMs = message.isAuthenticated ? retentionMs : guestRetentionMs;
+            return (now - timestamp) < expiryMs;
+        });
 
         let filtered = messages;
         if (before) {
@@ -10630,7 +12335,7 @@ class VoiceLinkLocalServer {
             }
         }
 
-        return filtered.slice(-limit);
+        return filtered.slice(-requestedLimit);
     }
 
     /**
@@ -10681,6 +12386,7 @@ class VoiceLinkLocalServer {
      * Remove guest messages older than 24 hours
      */
     cleanupGuestMessages() {
+        const settings = this.getMessageSettingsConfig();
         const now = Date.now();
         let removedCount = 0;
 
@@ -10688,11 +12394,12 @@ class VoiceLinkLocalServer {
         for (const [roomId, messages] of this.roomMessages.entries()) {
             const originalLength = messages.length;
             const filtered = messages.filter(msg => {
-                // Keep authenticated user messages forever
-                if (msg.isAuthenticated) return true;
-                // Remove guest messages older than 24 hours
                 const msgTime = new Date(msg.timestamp).getTime();
-                return (now - msgTime) < this.GUEST_MESSAGE_EXPIRY;
+                if (!Number.isFinite(msgTime)) return true;
+                const expiryMs = msg.isAuthenticated
+                    ? settings.authenticatedRetentionDays * 24 * 60 * 60 * 1000
+                    : settings.guestRetentionHours * 60 * 60 * 1000;
+                return (now - msgTime) < expiryMs;
             });
 
             if (filtered.length !== originalLength) {
@@ -10705,9 +12412,12 @@ class VoiceLinkLocalServer {
         for (const [dmKey, messages] of this.directMessages.entries()) {
             const originalLength = messages.length;
             const filtered = messages.filter(msg => {
-                if (msg.isAuthenticated) return true;
                 const msgTime = new Date(msg.timestamp).getTime();
-                return (now - msgTime) < this.GUEST_MESSAGE_EXPIRY;
+                if (!Number.isFinite(msgTime)) return true;
+                const expiryMs = msg.isAuthenticated
+                    ? settings.authenticatedRetentionDays * 24 * 60 * 60 * 1000
+                    : settings.guestRetentionHours * 60 * 60 * 1000;
+                return (now - msgTime) < expiryMs;
             });
 
             if (filtered.length !== originalLength) {

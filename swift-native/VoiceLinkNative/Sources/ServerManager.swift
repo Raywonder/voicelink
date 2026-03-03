@@ -44,7 +44,7 @@ class ServerManager: ObservableObject {
     private var roomStreamKeepAliveTimer: Timer?
     private var roomStreamEndObserver: NSObjectProtocol?
     private let defaultRoomStreamURLString = "https://chrismixradio.com"
-    private let roomStreamDefaultVolume: Float = 0.12
+    private let roomStreamDefaultVolume: Float = 0.4
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -1248,7 +1248,7 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
                 player.volume = self.roomStreamDefaultVolume
-                player.isMuted = self.isCurrentRoomMediaMuted
+                player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
                 player.play()
                 self.ensureRoomStreamKeepAlive()
                 return
@@ -1272,12 +1272,13 @@ class ServerManager: ObservableObject {
             if let player = self.roomStreamPlayer {
                 player.replaceCurrentItem(with: item)
                 player.volume = self.roomStreamDefaultVolume
-                player.isMuted = self.isCurrentRoomMediaMuted
+                player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
                 player.play()
             } else {
                 let player = AVPlayer(playerItem: item)
+                player.automaticallyWaitsToMinimizeStalling = false
                 player.volume = self.roomStreamDefaultVolume
-                player.isMuted = self.isCurrentRoomMediaMuted
+                player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
                 self.roomStreamPlayer = player
                 player.play()
             }
@@ -1298,7 +1299,7 @@ class ServerManager: ObservableObject {
             guard !self.roomStreamDidStopExplicitly else { return }
             guard let player = self.roomStreamPlayer else { return }
             player.volume = self.roomStreamDefaultVolume
-            player.isMuted = self.isCurrentRoomMediaMuted
+            player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
             if player.currentItem == nil, let current = self.currentRoomStreamURL {
                 self.startRoomStreamPlayback(from: current.absoluteString)
                 return
@@ -1330,7 +1331,7 @@ class ServerManager: ObservableObject {
     func setCurrentRoomMediaMuted(_ muted: Bool) {
         DispatchQueue.main.async {
             self.isCurrentRoomMediaMuted = muted
-            self.roomStreamPlayer?.isMuted = muted
+            self.roomStreamPlayer?.isMuted = muted || self.outputMuted
         }
     }
 
@@ -1342,6 +1343,7 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.inputMuted = isMuted
             self.outputMuted = isDeafened
+            self.roomStreamPlayer?.isMuted = self.isCurrentRoomMediaMuted || isDeafened
         }
         LocalMonitorManager.shared.setInputMuted(isMuted)
 

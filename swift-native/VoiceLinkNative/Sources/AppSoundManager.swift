@@ -646,13 +646,20 @@ class AppSoundManager: ObservableObject {
         return downloaded
     }
 
-    @discardableResult
-    func playRandomStartupIntro() -> Bool {
-        guard startupIntroEnabled, !startupIntroPlayed else { return false }
+    private func preferredStartupWelcomeURL() -> URL? {
         if !isInitialized {
             preloadSounds()
         }
-        guard let introURL = pickRandomStartupIntroURL() else {
+        if let connectedURL = resolveMappedSoundURL(for: .connected) {
+            return connectedURL
+        }
+        return pickRandomStartupIntroURL()
+    }
+
+    @discardableResult
+    func playRandomStartupIntro() -> Bool {
+        guard startupIntroEnabled, !startupIntroPlayed else { return false }
+        guard let introURL = preferredStartupWelcomeURL() else {
             print("AppSoundManager: No startup intro candidate found")
             return false
         }
@@ -674,15 +681,17 @@ class AppSoundManager: ObservableObject {
 
     func playStartupWelcomeIfNeeded() {
         guard startupIntroEnabled, !startupIntroPlayed else { return }
-        if playRandomStartupIntro() { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            guard self.startupIntroEnabled, !self.startupIntroPlayed else { return }
+            if self.playRandomStartupIntro() { return }
 
-        // Avoid default macOS fallback tones on launch; if the sound is missing,
-        // fetch in background and notify users non-blockingly.
-        if hasPlayableVariant(for: .connected) {
-            playSound(.connected, force: true, allowSystemFallback: false)
-            startupIntroPlayed = true
-        } else {
-            queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
+            if self.hasPlayableVariant(for: .connected) {
+                self.playSound(.connected, force: true, allowSystemFallback: false)
+                self.startupIntroPlayed = true
+            } else {
+                self.queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
+            }
         }
     }
 
