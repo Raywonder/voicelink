@@ -1778,19 +1778,20 @@ struct AdminFederationSection: View {
     @State private var newTrustedServer = ""
     @State private var newBlockedServer = ""
     @State private var isSaving = false
+    private let managedPeers = SettingsManager.managedFederationServers
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             AdminHelpSection(
                 title: "Quick Help",
-                summary: "Federation controls how this server exchanges room visibility and room state with other VoiceLink installs.",
+                summary: "Federation controls how this server exchanges room visibility, room state, and maintenance handoff behavior with other VoiceLink installs.",
                 steps: [
-                    "Enable federation only for servers you trust to exchange room data with.",
-                    "Add trusted servers you want to connect to regularly and block servers you never want linked.",
-                    "Use approval controls if room federation should require explicit review before being shared."
+                    "Only server owners and authorized admins should change default peer settings. Members and guests should never use this screen to override server policy.",
+                    "Keep the Main VoiceLink and Community VPS peers enabled if they are part of your managed cluster. Toggle them off only during troubleshooting or planned isolation.",
+                    "Use maintenance handoff when this server is going down for work. That lets active rooms and users move to an online trusted server instead of being dropped."
                 ],
                 docs: [
-                    AdminDocLink(title: "Federation Docs", localRelativePath: "authenticated/index.html", webPath: "/docs/index.html", adminWebPath: "/docs/authenticated/index.html"),
+                    AdminDocLink(title: "Admin Federation Guide", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/authenticated/admin-panel.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
                     AdminDocLink(title: "Server Install Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html")
                 ]
             )
@@ -1830,6 +1831,86 @@ struct AdminFederationSection: View {
                         get: { config.autoAcceptTrusted },
                         set: { config.autoAcceptTrusted = $0; settings = config }
                     ))
+
+                    SectionHeader(title: "Managed Default Peers")
+
+                    Text("These peers are supplied by the VoiceLink API and represent the managed cluster. Admins can enable or disable federation with them here, but members cannot edit or rename them from client preferences.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    ForEach(managedPeers) { peer in
+                        let isEnabled = config.trustedServers.contains(peer.url)
+                        HStack(alignment: .top, spacing: 10) {
+                            Toggle("", isOn: Binding(
+                                get: { isEnabled },
+                                set: { enabled in
+                                    if enabled {
+                                        if !config.trustedServers.contains(peer.url) {
+                                            config.trustedServers.append(peer.url)
+                                        }
+                                    } else {
+                                        config.trustedServers.removeAll { $0 == peer.url }
+                                    }
+                                    settings = config
+                                }
+                            ))
+                            .toggleStyle(.switch)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(peer.name)
+                                        .foregroundColor(.white)
+                                    Text("Default")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.2))
+                                        .cornerRadius(6)
+                                }
+                                Text(peer.url)
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text(peer.description)
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+
+                            Spacer()
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    SectionHeader(title: "Maintenance Handoff")
+
+                    Text("Use these options when this server is being restarted, updated, or migrated. Auto-handoff should point at a trusted online peer so rooms and users can be moved without disconnecting them.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    ConfigToggle(label: "Maintenance Mode", isOn: Binding(
+                        get: { config.maintenanceModeEnabled },
+                        set: { config.maintenanceModeEnabled = $0; settings = config }
+                    ))
+
+                    ConfigToggle(label: "Auto-handoff active rooms and users", isOn: Binding(
+                        get: { config.autoHandoffEnabled },
+                        set: { config.autoHandoffEnabled = $0; settings = config }
+                    ))
+
+                    Picker("Handoff Target", selection: Binding(
+                        get: { config.handoffTargetServer ?? "" },
+                        set: { config.handoffTargetServer = $0.isEmpty ? nil : $0; settings = config }
+                    )) {
+                        Text("No automatic target").tag("")
+                        ForEach(managedPeers) { peer in
+                            Text(peer.name).tag(peer.url)
+                        }
+                        ForEach(config.trustedServers.filter { trusted in
+                            !managedPeers.contains(where: { $0.url == trusted })
+                        }, id: \.self) { trusted in
+                            Text(trusted).tag(trusted)
+                        }
+                    }
+                    .pickerStyle(.menu)
 
                     // Trusted servers
                     SectionHeader(title: "Trusted Servers")

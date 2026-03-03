@@ -3736,6 +3736,7 @@ struct CreateRoomView: View {
     @State private var inviteOnly: Bool = false
     @State private var enableMediaAutoPlay: Bool = true
     @State private var moderationNotes = ""
+    @State private var hostingPreference: RoomHostingPreference = .currentServer
 
     private var isLoggedIn: Bool {
         authManager.authState == .authenticated && authManager.currentUser != nil
@@ -3779,6 +3780,19 @@ struct CreateRoomView: View {
                 }
 
                 if isLoggedIn {
+                    Picker("Host Server", selection: $hostingPreference) {
+                        ForEach(RoomHostingPreference.allCases) { preference in
+                            Text(preference.displayName).tag(preference)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 350)
+
+                    Text(hostingPreference.description)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .frame(width: 350, alignment: .leading)
+
                     Picker("Room Type", selection: $roomType) {
                         Text("Standard").tag("standard")
                         Text("Private").tag("private")
@@ -3834,7 +3848,8 @@ struct CreateRoomView: View {
                         "maxUsers": effectiveMaxUsers,
                         "roomType": effectiveRoomType,
                         "inviteOnly": effectiveInviteOnly,
-                        "mediaAutoPlay": effectiveMediaAutoPlay
+                        "mediaAutoPlay": effectiveMediaAutoPlay,
+                        "hostingPreference": hostingPreference.rawValue
                     ]
                     if isLoggedIn, let currentUser = authManager.currentUser {
                         metadata["createdBy"] = currentUser.username
@@ -3850,6 +3865,7 @@ struct CreateRoomView: View {
                         description: roomDescription,
                         isPrivate: effectivePrivate,
                         password: effectivePrivate ? password : nil,
+                        preferredServerBase: hostingPreference.preferredServerBase,
                         metadata: metadata
                     )
                     // Go back to main menu - room will appear in list
@@ -3884,6 +3900,7 @@ struct CreateRoomView: View {
 struct JoinRoomView: View {
     @EnvironmentObject var appState: AppState
     @State private var roomCode = ""
+    @State private var showCreatePrompt = false
 
     private var query: String {
         roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3916,12 +3933,12 @@ struct JoinRoomView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 520)
                 .onSubmit {
-                    _ = appState.joinRoomByCodeOrName(roomCode)
+                    showCreatePrompt = !appState.joinRoomByCodeOrName(roomCode)
                 }
 
             HStack(spacing: 10) {
                 Button("Join Match") {
-                    _ = appState.joinRoomByCodeOrName(roomCode)
+                    showCreatePrompt = !appState.joinRoomByCodeOrName(roomCode)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(query.isEmpty)
@@ -3994,6 +4011,16 @@ struct JoinRoomView: View {
             if roomCode.isEmpty, let focused = appState.focusedRoomForQuickJoin() {
                 roomCode = focused.name
             }
+        }
+        .alert("Room Not Found", isPresented: $showCreatePrompt) {
+            Button("Create Room") {
+                let name = query.isEmpty ? "New Room" : query
+                appState.pendingCreateRoomName = name
+                appState.currentScreen = .createRoom
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The room \"\(query)\" does not exist. Would you like to create it?")
         }
     }
 }
@@ -5094,6 +5121,50 @@ struct ManagedFederationServer: Codable, Identifiable, Equatable {
     }
 }
 
+enum RoomHostingPreference: String, CaseIterable, Identifiable {
+    case currentServer = "currentServer"
+    case primaryServer = "primaryServer"
+    case communityVPS = "communityVPS"
+    case favoriteServer = "favoriteServer"
+    case mostUsedServer = "mostUsedServer"
+    case randomFederated = "randomFederated"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .currentServer: return "Current Server"
+        case .primaryServer: return "Main Server"
+        case .communityVPS: return "Community VPS"
+        case .favoriteServer: return "Favorite Server"
+        case .mostUsedServer: return "Most Used Server"
+        case .randomFederated: return "Random Online Server"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .currentServer: return "Create on the server you are currently connected to."
+        case .primaryServer: return "Prefer the main VoiceLink server."
+        case .communityVPS: return "Prefer the synced community VPS."
+        case .favoriteServer: return "Use your preferred linked server when available."
+        case .mostUsedServer: return "Use the server you join most often."
+        case .randomFederated: return "Let the backend choose a healthy federated server."
+        }
+    }
+
+    var preferredServerBase: String? {
+        switch self {
+        case .currentServer, .favoriteServer, .mostUsedServer, .randomFederated:
+            return nil
+        case .primaryServer:
+            return APIEndpointResolver.canonicalMainBase
+        case .communityVPS:
+            return APIEndpointResolver.communityNode2Base
+        }
+    }
+}
+
 struct CustomFederationServer: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
@@ -5159,7 +5230,6 @@ class SettingsManager: ObservableObject {
     @Published var showPrivateMemberRooms: Bool = true
     @Published var showFederatedRooms: Bool = true
     @Published var showLocalOnlyRooms: Bool = true
-    @Published var managedFederationVisibility: [String: Bool] = [:]
     @Published var customFederationServers: [CustomFederationServer] = []
 
     // Connection Settings
@@ -5247,7 +5317,6 @@ class SettingsManager: ObservableObject {
         showPrivateMemberRooms = UserDefaults.standard.object(forKey: "showPrivateMemberRooms") as? Bool ?? true
         showFederatedRooms = UserDefaults.standard.object(forKey: "showFederatedRooms") as? Bool ?? true
         showLocalOnlyRooms = UserDefaults.standard.object(forKey: "showLocalOnlyRooms") as? Bool ?? true
-        managedFederationVisibility = UserDefaults.standard.dictionary(forKey: "managedFederationVisibility") as? [String: Bool] ?? [:]
         if let data = UserDefaults.standard.data(forKey: "customFederationServers"),
            let decoded = try? JSONDecoder().decode([CustomFederationServer].self, from: data) {
             customFederationServers = decoded
@@ -5369,7 +5438,6 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(showPrivateMemberRooms, forKey: "showPrivateMemberRooms")
         UserDefaults.standard.set(showFederatedRooms, forKey: "showFederatedRooms")
         UserDefaults.standard.set(showLocalOnlyRooms, forKey: "showLocalOnlyRooms")
-        UserDefaults.standard.set(managedFederationVisibility, forKey: "managedFederationVisibility")
         if let customData = try? JSONEncoder().encode(customFederationServers) {
             UserDefaults.standard.set(customData, forKey: "customFederationServers")
         }
@@ -5420,15 +5488,6 @@ class SettingsManager: ObservableObject {
         applySelectedAudioDevices()
     }
 
-    func managedFederationEnabled(_ server: ManagedFederationServer) -> Bool {
-        managedFederationVisibility[server.id] ?? true
-    }
-
-    func setManagedFederationEnabled(_ enabled: Bool, for server: ManagedFederationServer) {
-        managedFederationVisibility[server.id] = enabled
-        saveSettings()
-    }
-
     func addCustomFederationServer(name: String, url: String) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5457,8 +5516,8 @@ class SettingsManager: ObservableObject {
         let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedHost.isEmpty else { return true }
 
-        if let managed = Self.managedFederationServers.first(where: { normalizedHost.contains($0.host) || $0.host.contains(normalizedHost) }) {
-            return managedFederationEnabled(managed)
+        if Self.managedFederationServers.contains(where: { normalizedHost.contains($0.host) || $0.host.contains(normalizedHost) }) {
+            return true
         }
 
         if let custom = customFederationServers.first(where: { normalizedHost.contains($0.host) || $0.host.contains(normalizedHost) }) {
@@ -6460,39 +6519,6 @@ struct SettingsView: View {
             Toggle("Show private rooms I'm a member of", isOn: $settings.showPrivateMemberRooms)
             Toggle("Show federated rooms", isOn: $settings.showFederatedRooms)
             Toggle("Show local-only rooms", isOn: $settings.showLocalOnlyRooms)
-        }
-
-        SettingsSection(title: "Federated Servers") {
-            Text("Main-managed defaults stay listed here for visibility control. Turning them off only hides their rooms in this desktop client. It does not rewrite server-side federation settings.")
-                .font(.caption)
-                .foregroundColor(.gray)
-
-            ForEach(SettingsManager.managedFederationServers) { server in
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle(isOn: Binding(
-                        get: { settings.managedFederationEnabled(server) },
-                        set: { settings.setManagedFederationEnabled($0, for: server) }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(server.name)
-                                Text("Default")
-                                    .font(.caption2)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.22))
-                                    .cornerRadius(6)
-                            }
-                            Text(server.url)
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text(server.description)
-                                .font(.caption2)
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
-            }
         }
 
         CustomFederationServersSection(settings: settings)

@@ -843,6 +843,7 @@ class ServerManager: ObservableObject {
         description: String,
         isPrivate: Bool,
         password: String? = nil,
+        preferredServerBase: String? = nil,
         metadata: [String: Any]? = nil
     ) {
         var roomData: [String: Any] = [
@@ -852,6 +853,9 @@ class ServerManager: ObservableObject {
         ]
         if let password = password {
             roomData["password"] = password
+        }
+        if let preferredServerBase, !preferredServerBase.isEmpty {
+            roomData["preferredServerBase"] = preferredServerBase
         }
         if let metadata {
             for (key, value) in metadata {

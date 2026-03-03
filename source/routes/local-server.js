@@ -5837,8 +5837,14 @@ class VoiceLinkLocalServer {
                 enabled: config?.enabled || false,
                 mode: config?.mode || 'standalone',
                 globalFederation: config?.globalFederation !== false, // default true
+                allowIncoming: config?.allowIncoming !== false,
+                allowOutgoing: config?.allowOutgoing !== false,
+                trustedServers: config?.trustedServers || [],
                 roomApprovalRequired: config?.roomApprovalRequired || false,
                 approvalHoldTime: config?.approvalHoldTime || 3600000, // 1 hour default
+                maintenanceModeEnabled: config?.maintenanceModeEnabled || false,
+                autoHandoffEnabled: config?.autoHandoffEnabled || false,
+                handoffTargetServer: config?.handoffTargetServer || null,
                 pendingApprovals: this.roomApprovalQueue.size,
                 connectedServers: this.federation.getConnectedServers().length
             });
@@ -5851,18 +5857,28 @@ class VoiceLinkLocalServer {
                     enabled,
                     mode,
                     globalFederation,
+                    allowIncoming,
+                    allowOutgoing,
                     roomApprovalRequired,
                     approvalHoldTime,
-                    trustedServers
+                    trustedServers,
+                    maintenanceModeEnabled,
+                    autoHandoffEnabled,
+                    handoffTargetServer
                 } = req.body;
 
                 deployConfig.updateSection('federation', {
                     enabled: enabled !== undefined ? enabled : deployConfig.get('federation', 'enabled'),
                     mode: mode || deployConfig.get('federation', 'mode'),
                     globalFederation: globalFederation !== undefined ? globalFederation : true,
+                    allowIncoming: allowIncoming !== undefined ? allowIncoming : deployConfig.get('federation', 'allowIncoming'),
+                    allowOutgoing: allowOutgoing !== undefined ? allowOutgoing : deployConfig.get('federation', 'allowOutgoing'),
                     roomApprovalRequired: roomApprovalRequired || false,
                     approvalHoldTime: approvalHoldTime || 3600000,
-                    trustedServers: trustedServers || deployConfig.get('federation', 'trustedServers')
+                    trustedServers: trustedServers || deployConfig.get('federation', 'trustedServers'),
+                    maintenanceModeEnabled: maintenanceModeEnabled !== undefined ? maintenanceModeEnabled : deployConfig.get('federation', 'maintenanceModeEnabled'),
+                    autoHandoffEnabled: autoHandoffEnabled !== undefined ? autoHandoffEnabled : deployConfig.get('federation', 'autoHandoffEnabled'),
+                    handoffTargetServer: handoffTargetServer !== undefined ? handoffTargetServer : deployConfig.get('federation', 'handoffTargetServer')
                 });
 
                 await deployConfig.save();

@@ -638,12 +638,15 @@ class AdminServerManager: ObservableObject {
 
             return FederationSettings(
                 enabled: json["enabled"] as? Bool ?? false,
-                allowIncoming: true,
-                allowOutgoing: true,
-                trustedServers: [],
+                allowIncoming: json["allowIncoming"] as? Bool ?? true,
+                allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
+                trustedServers: json["trustedServers"] as? [String] ?? [],
                 blockedServers: [],
                 autoAcceptTrusted: false,
-                requireApproval: json["roomApprovalRequired"] as? Bool ?? false
+                requireApproval: json["roomApprovalRequired"] as? Bool ?? false,
+                maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
+                autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
+                handoffTargetServer: json["handoffTargetServer"] as? String
             )
         } catch {
             return nil
@@ -670,7 +673,12 @@ class AdminServerManager: ObservableObject {
             "mode": (settings.allowIncoming && settings.allowOutgoing) ? "mesh" : (settings.allowOutgoing ? "spoke" : "standalone"),
             "globalFederation": settings.enabled,
             "roomApprovalRequired": settings.requireApproval,
-            "trustedServers": settings.trustedServers
+            "trustedServers": settings.trustedServers,
+            "allowIncoming": settings.allowIncoming,
+            "allowOutgoing": settings.allowOutgoing,
+            "maintenanceModeEnabled": settings.maintenanceModeEnabled,
+            "autoHandoffEnabled": settings.autoHandoffEnabled,
+            "handoffTargetServer": settings.handoffTargetServer as Any
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
@@ -1482,6 +1490,9 @@ struct FederationSettings: Codable {
     var blockedServers: [String]
     var autoAcceptTrusted: Bool
     var requireApproval: Bool
+    var maintenanceModeEnabled: Bool
+    var autoHandoffEnabled: Bool
+    var handoffTargetServer: String?
 }
 
 struct AdminModuleInfo: Identifiable, Hashable {

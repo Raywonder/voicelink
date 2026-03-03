@@ -20,6 +20,24 @@
     </section>
 
     <section>
+      <h2>Federation and Default Peer Control</h2>
+      <ul>
+        <li>Default peer servers such as the main VoiceLink host and the community VPS are managed by the server API and should only be toggled by authorized admins.</li>
+        <li>Members can filter what they see locally, but they should not be allowed to rewrite default server federation policy from client preferences.</li>
+        <li>Use trusted servers for permanent peers and blocked servers for installs that must never exchange room or room-state data with this server.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Maintenance Handoff</h2>
+      <ul>
+        <li>Enable Maintenance Mode before restart, migration, or emergency repair when you want to keep users from being dropped.</li>
+        <li>Auto-handoff should target a trusted, online VoiceLink peer that already shares synchronized room data with this server.</li>
+        <li>Use the main server or community VPS as the handoff target only when both sides are healthy and federation is already configured.</li>
+      </ul>
+    </section>
+
+    <section>
       <h2>Moderation Controls</h2>
       <ul>
         <li>User moderation: kick, ban, mute policy, room access enforcement.</li>
@@ -40,7 +58,7 @@
       <ul>
         <li>Keep macOS package filename stable as <code>VoiceLinkMacOS.zip</code>.</li>
         <li>Refresh checksum on every new build, even when version remains <code>1.0</code>.</li>
-        <li>Fallback to IP endpoints if domain fails, then auto-return to domain when healthy.</li>
+        <li>Fallback to backend IP endpoints only when domain resolution fails, then auto-return to domain-based endpoints when healthy.</li>
       </ul>
     </section>
 
