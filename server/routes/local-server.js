@@ -5599,6 +5599,7 @@ class VoiceLinkLocalServer {
                     showInRoom: config.server?.motdSettings?.showInRoom !== false,
                     appendToWelcomeMessage: !!config.server?.motdSettings?.appendToWelcomeMessage
                 },
+                handoffPromptMode: config.server?.handoffPromptMode || 'serverRecommended',
                 registrationEnabled: config.auth?.registrationEnabled ?? config.security?.registrationEnabled ?? true,
                 requireAuth: config.security?.requireAuth ?? config.features?.requireAuth ?? false,
                 allowGuests: config.security?.allowGuests ?? true,
@@ -5634,6 +5635,7 @@ class VoiceLinkLocalServer {
                         welcomeMessage: updates.welcomeMessage || null,
                         motd: updates.motd || null,
                         motdSettings,
+                        handoffPromptMode: typeof updates.handoffPromptMode === 'string' ? updates.handoffPromptMode : (deployConfig.getConfig()?.server?.handoffPromptMode || 'serverRecommended'),
                         maxUsers: Number(updates.maxUsers) || 500,
                         maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
                     });

@@ -1108,6 +1108,7 @@ struct ServerConfig: Codable {
     var allowGuests: Bool
     var maxGuestDuration: Int?
     var enableRateLimiting: Bool
+    var handoffPromptMode: String
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
 
@@ -1125,6 +1126,7 @@ struct ServerConfig: Codable {
         case allowGuests
         case maxGuestDuration
         case enableRateLimiting
+        case handoffPromptMode
         case backgroundStreams
         case pushover
     }
@@ -1143,6 +1145,7 @@ struct ServerConfig: Codable {
         allowGuests: Bool = true,
         maxGuestDuration: Int? = nil,
         enableRateLimiting: Bool = true,
+        handoffPromptMode: String = "serverRecommended",
         backgroundStreams: BackgroundStreamsConfig? = nil,
         pushover: PushoverConfig? = nil
     ) {
@@ -1159,6 +1162,7 @@ struct ServerConfig: Codable {
         self.allowGuests = allowGuests
         self.maxGuestDuration = maxGuestDuration
         self.enableRateLimiting = enableRateLimiting
+        self.handoffPromptMode = handoffPromptMode
         self.backgroundStreams = backgroundStreams
         self.pushover = pushover
     }
@@ -1178,6 +1182,7 @@ struct ServerConfig: Codable {
         allowGuests = try container.decodeIfPresent(Bool.self, forKey: .allowGuests) ?? true
         maxGuestDuration = try container.decodeIfPresent(Int.self, forKey: .maxGuestDuration)
         enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
+        handoffPromptMode = try container.decodeIfPresent(String.self, forKey: .handoffPromptMode) ?? "serverRecommended"
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
     }

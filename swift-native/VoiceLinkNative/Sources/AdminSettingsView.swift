@@ -1246,6 +1246,26 @@ struct AdminConfigSection: View {
                     get: { editedConfig?.motdSettings.appendToWelcomeMessage ?? config.motdSettings.appendToWelcomeMessage },
                     set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(appendToWelcomeMessage: $0)) }
                 ))
+
+                SectionHeader(title: "Maintenance Handoff Defaults")
+
+                Text("This sets the server-recommended behavior for users when maintenance or failover handoff is offered. A user's explicit client choice still overrides this default.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                Picker("Recommended Client Prompt Mode", selection: Binding(
+                    get: { editedConfig?.handoffPromptMode ?? config.handoffPromptMode },
+                    set: { editedConfig = (editedConfig ?? config).with(handoffPromptMode: $0) }
+                )) {
+                    ForEach(HandoffPromptMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(HandoffPromptMode(rawValue: editedConfig?.handoffPromptMode ?? config.handoffPromptMode)?.description ?? HandoffPromptMode.serverRecommended.description)
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
 
             SectionHeader(title: "Limits")
@@ -2584,6 +2604,7 @@ extension ServerConfig {
               motd: String?? = nil, motdSettings: MOTDSettings? = nil,
               registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
               allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
+              handoffPromptMode: String? = nil,
               pushover: PushoverConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
@@ -2599,6 +2620,7 @@ extension ServerConfig {
             allowGuests: allowGuests ?? self.allowGuests,
             maxGuestDuration: maxGuestDuration ?? self.maxGuestDuration,
             enableRateLimiting: enableRateLimiting ?? self.enableRateLimiting,
+            handoffPromptMode: handoffPromptMode ?? self.handoffPromptMode,
             backgroundStreams: self.backgroundStreams,
             pushover: pushover ?? self.pushover
         )

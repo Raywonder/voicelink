@@ -5165,6 +5165,33 @@ enum RoomHostingPreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum HandoffPromptMode: String, CaseIterable, Identifiable {
+    case askAlways = "askAlways"
+    case askOnce = "askOnce"
+    case autoUseSavedChoice = "autoUseSavedChoice"
+    case serverRecommended = "serverRecommended"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .askAlways: return "Ask Every Time"
+        case .askOnce: return "Ask Once"
+        case .autoUseSavedChoice: return "Auto-use Saved Choice"
+        case .serverRecommended: return "Use Server Recommendation"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .askAlways: return "Always ask before moving you to another server during maintenance or failover."
+        case .askOnce: return "Ask once, then remember the action you choose until you change it."
+        case .autoUseSavedChoice: return "Automatically use the action you previously chose."
+        case .serverRecommended: return "Use the server owner's default handoff recommendation unless you override it."
+        }
+    }
+}
+
 struct CustomFederationServer: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
@@ -5231,6 +5258,7 @@ class SettingsManager: ObservableObject {
     @Published var showFederatedRooms: Bool = true
     @Published var showLocalOnlyRooms: Bool = true
     @Published var customFederationServers: [CustomFederationServer] = []
+    @Published var handoffPromptMode: HandoffPromptMode = .serverRecommended
 
     // Connection Settings
     @Published var autoConnect: Bool = true
@@ -5317,6 +5345,12 @@ class SettingsManager: ObservableObject {
         showPrivateMemberRooms = UserDefaults.standard.object(forKey: "showPrivateMemberRooms") as? Bool ?? true
         showFederatedRooms = UserDefaults.standard.object(forKey: "showFederatedRooms") as? Bool ?? true
         showLocalOnlyRooms = UserDefaults.standard.object(forKey: "showLocalOnlyRooms") as? Bool ?? true
+        if let stored = UserDefaults.standard.string(forKey: "handoffPromptMode"),
+           let parsed = HandoffPromptMode(rawValue: stored) {
+            handoffPromptMode = parsed
+        } else {
+            handoffPromptMode = .serverRecommended
+        }
         if let data = UserDefaults.standard.data(forKey: "customFederationServers"),
            let decoded = try? JSONDecoder().decode([CustomFederationServer].self, from: data) {
             customFederationServers = decoded
@@ -5438,6 +5472,7 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(showPrivateMemberRooms, forKey: "showPrivateMemberRooms")
         UserDefaults.standard.set(showFederatedRooms, forKey: "showFederatedRooms")
         UserDefaults.standard.set(showLocalOnlyRooms, forKey: "showLocalOnlyRooms")
+        UserDefaults.standard.set(handoffPromptMode.rawValue, forKey: "handoffPromptMode")
         if let customData = try? JSONEncoder().encode(customFederationServers) {
             UserDefaults.standard.set(customData, forKey: "customFederationServers")
         }
@@ -5529,6 +5564,17 @@ class SettingsManager: ObservableObject {
 
     func roomPreviewOverride(for roomId: String) -> Bool? {
         roomPreviewPolicyByRoom[roomId]
+    }
+
+    func effectiveHandoffPromptMode(serverDefault: String?) -> HandoffPromptMode {
+        if handoffPromptMode != .serverRecommended {
+            return handoffPromptMode
+        }
+        guard let serverDefault,
+              let parsed = HandoffPromptMode(rawValue: serverDefault) else {
+            return .askAlways
+        }
+        return parsed
     }
 
     func setRoomPreviewOverride(roomId: String, enabled: Bool?) {
@@ -6592,6 +6638,19 @@ extension SettingsView {
             Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
             Toggle("Play sound when user joins", isOn: $settings.notifyOnJoin)
             Toggle("Play sound when user leaves", isOn: $settings.notifyOnLeave)
+        }
+
+        SettingsSection(title: "Maintenance and Failover Handoff") {
+            Picker("When a server asks to hand off rooms or users", selection: $settings.handoffPromptMode) {
+                ForEach(HandoffPromptMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+
+            Text(settings.handoffPromptMode.description)
+                .font(.caption)
+                .foregroundColor(.gray)
         }
 
         SettingsSection(title: "Desktop Notifications") {
