@@ -21,6 +21,7 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
+const { DeploymentManagerModule } = require('../modules/deployment-manager');
 const JellyfinServiceManager = require('../utils/jellyfin-service-manager');
 const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
@@ -121,10 +122,11 @@ class VoiceLinkLocalServer {
             vmManager: null,
             whmcsIntegration: null,
             mediaRooms: null,
-            updater: null
+            updater: null,
+            deploymentManager: null
         };
-        this.initializeModules();
         this.initializeMailer();
+        this.initializeModules();
 
         this.setupMiddleware();
         this.setupRoutes();
@@ -902,7 +904,7 @@ class VoiceLinkLocalServer {
             this.modules.twoFactorAuth = new TwoFactorAuthModule({
                 config,
                 dataDir: path.join(__dirname, '../../data/2fa'),
-                emailTransport: null // Set up email transport if configured
+                emailTransport: this.mailer
             });
             console.log('[Modules] 2FA module initialized');
         }
@@ -914,7 +916,7 @@ class VoiceLinkLocalServer {
                 config,
                 dataDir: path.join(__dirname, '../../data/support'),
                 io: this.io,
-                emailTransport: null
+                emailTransport: this.mailer
             });
             console.log('[Modules] Support System module initialized');
         }
@@ -966,6 +968,22 @@ class VoiceLinkLocalServer {
             console.log('[Modules] Updater module initialized');
         } catch (e) {
             console.error('[Modules] Failed to initialize Updater:', e.message);
+        }
+
+        if (this.moduleRegistry.isModuleEnabled('deployment-manager')) {
+            try {
+                this.modules.deploymentManager = new DeploymentManagerModule({
+                    config: this.moduleRegistry.getModule('deployment-manager')?.config || {},
+                    dataDir: path.join(__dirname, '../../data/deployment-manager'),
+                    deployConfig,
+                    server: this,
+                    mailer: this.mailer,
+                    emailFrom: this.emailFrom
+                });
+                console.log('[Modules] Deployment Manager module initialized');
+            } catch (e) {
+                console.error('[Modules] Failed to initialize Deployment Manager:', e.message);
+            }
         }
 
         // Initialize Internal Scheduler module (always enabled - core feature)
@@ -7625,6 +7643,8 @@ class VoiceLinkLocalServer {
                     this.modules.twoFactorAuth = null;
                 } else if (req.params.moduleId === 'support-system') {
                     this.modules.supportSystem = null;
+                } else if (req.params.moduleId === 'deployment-manager') {
+                    this.modules.deploymentManager = null;
                 }
             }
             res.json(result);
@@ -7651,6 +7671,115 @@ class VoiceLinkLocalServer {
                 this.initializeModules();
             }
             res.json(result);
+        });
+
+        // ============================================
+        // DEPLOYMENT MANAGER MODULE API
+        // ============================================
+
+        const requireDeploymentManager = (req, res, next) => {
+            if (!this.modules.deploymentManager) {
+                return res.status(503).json({ error: 'Deployment Manager module not installed or enabled' });
+            }
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+            next();
+        };
+
+        this.app.get('/api/modules/deployment-manager/status', requireDeploymentManager, (req, res) => {
+            res.json(this.modules.deploymentManager.getStatus());
+        });
+
+        this.app.get('/api/modules/deployment-manager/transports', requireDeploymentManager, (req, res) => {
+            res.json({ transports: this.modules.deploymentManager.getSupportedTransports() });
+        });
+
+        this.app.post('/api/modules/deployment-manager/package', requireDeploymentManager, async (req, res) => {
+            try {
+                const {
+                    preset,
+                    sanitize = true,
+                    ownerEmail,
+                    targetLabel,
+                    targetServerUrl,
+                    linkedToMain = true,
+                    trustedServers = [],
+                    extraConfig = {}
+                } = req.body || {};
+
+                const bundle = await this.modules.deploymentManager.buildDeploymentBundle({
+                    preset,
+                    sanitize,
+                    ownerEmail,
+                    targetLabel,
+                    targetServerUrl,
+                    linkedToMain,
+                    trustedServers,
+                    extraConfig
+                });
+
+                res.json({
+                    success: true,
+                    bundleId: bundle.bundleId,
+                    bundleName: bundle.zipName,
+                    zipPath: bundle.zipPath,
+                    manifest: bundle.manifest
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/deployment-manager/deploy', requireDeploymentManager, async (req, res) => {
+            try {
+                const {
+                    packageOptions = {},
+                    target = {},
+                    bootstrap = false
+                } = req.body || {};
+
+                const bundle = await this.modules.deploymentManager.buildDeploymentBundle(packageOptions);
+                const uploadResult = await this.modules.deploymentManager.uploadBundle(bundle.zipPath, target);
+                let bootstrapResult = null;
+
+                if (bootstrap) {
+                    bootstrapResult = await this.modules.deploymentManager.bootstrapRemoteInstall(target, bundle.deployConfig);
+                }
+
+                res.json({
+                    success: true,
+                    bundleId: bundle.bundleId,
+                    bundleName: bundle.zipName,
+                    upload: uploadResult,
+                    bootstrap: bootstrapResult
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/deployment-manager/email-owner', requireDeploymentManager, async (req, res) => {
+            try {
+                const {
+                    recipient,
+                    subject,
+                    bundleName,
+                    remoteUrl,
+                    apiBaseUrl
+                } = req.body || {};
+
+                const result = await this.modules.deploymentManager.emailDeploymentDetails({
+                    recipient,
+                    subject,
+                    bundleName,
+                    remoteUrl,
+                    apiBaseUrl
+                });
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
         });
 
         // ============================================

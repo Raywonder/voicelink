@@ -24,6 +24,10 @@ const CORE_MODULE_IDS = new Set([
     'internal-scheduler'
 ]);
 
+const DEFAULT_INSTALL_MODULE_IDS = new Set([
+    'deployment-manager'
+]);
+
 // Available modules registry
 const AVAILABLE_MODULES = {
     'two-factor-auth': {
@@ -386,6 +390,36 @@ const AVAILABLE_MODULES = {
         }
     },
 
+    'deployment-manager': {
+        id: 'deployment-manager',
+        name: 'Deployment Manager',
+        description: 'Deploy fresh VoiceLink installs or update existing ones over SFTP, SMB, HTTP, or HTTPS and bootstrap API/federation settings',
+        version: '1.0.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Build deployment bundles from live server config',
+            'Upload bundles by SFTP, SMB, HTTP, or HTTPS',
+            'Bootstrap existing VoiceLink installs through the remote API',
+            'Email owners with deployment and getting-started details',
+            'Keep linked server API and federation settings aligned'
+        ],
+        defaultConfig: {
+            enabled: true,
+            allowFreshInstallBundles: true,
+            allowExistingInstallBootstrap: true,
+            defaultTransports: ['sftp', 'smb', 'http', 'https'],
+            emailOwner: {
+                enabled: true,
+                includeGettingStarted: true
+            }
+        }
+    },
+
     'media-rooms': {
         id: 'media-rooms',
         name: 'Media Rooms',
@@ -460,6 +494,7 @@ class ModuleRegistry {
         this.modulesConfigFile = path.join(this.configDir, 'modules.json');
         this.installedModules = this.loadInstalledModules();
         this.ensureCoreModulesRegistered();
+        this.ensureDefaultModulesInstalled();
     }
 
     loadInstalledModules() {
@@ -520,6 +555,27 @@ class ModuleRegistry {
                 this.installedModules.installOrder.unshift(moduleId);
                 changed = true;
             }
+        }
+
+        if (changed) {
+            this.saveInstalledModules();
+        }
+    }
+
+    ensureDefaultModulesInstalled() {
+        let changed = false;
+
+        for (const moduleId of DEFAULT_INSTALL_MODULE_IDS) {
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module) continue;
+            if (this.installedModules.installed[moduleId]) continue;
+
+            this.installedModules.installed[moduleId] = {
+                installedAt: new Date().toISOString(),
+                config: { ...module.defaultConfig }
+            };
+            this.installedModules.installOrder.push(moduleId);
+            changed = true;
         }
 
         if (changed) {
