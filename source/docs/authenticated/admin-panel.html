@@ -69,6 +69,17 @@
     </section>
 
     <section>
+      <h2>Deployment Manager Module</h2>
+      <ul>
+        <li>Deployment Manager is a built-in module intended for server owners and authorized admins only.</li>
+        <li>Use it to generate a fresh VoiceLink deployment bundle, upload it by SFTP, SMB, HTTP, or HTTPS, and bootstrap an existing remote VoiceLink install through its API when available.</li>
+        <li>Fresh install bundles should be uploaded to the target server and extracted there so <code>deploy.json</code> can be loaded by the new install.</li>
+        <li>Existing install updates can use the remote API bootstrap path so server config, federation peers, and API defaults stay aligned with the main server.</li>
+        <li>Owner notification email should include upload destination, API bootstrap target, and getting-started instructions for the receiving server owner.</li>
+      </ul>
+    </section>
+
+    <section>
       <h2>Log Collection</h2>
       <ul>
         <li>Enable Send Logs in Advanced settings for support diagnostics.</li>
