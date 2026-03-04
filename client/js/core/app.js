@@ -5,6 +5,7 @@
 
 class VoiceLinkApp {
     constructor() {
+        this.browserAccessOpen = false;
         this.socket = null;
         this.audioEngine = null;
         this.spatialAudio = null;
@@ -1416,6 +1417,10 @@ class VoiceLinkApp {
         });
 
         document.getElementById('startup-guest-btn')?.addEventListener('click', () => {
+            if (!this.browserAccessOpen) {
+                alert('Browser room access is temporarily closed. Please use the desktop app for VoiceLink access right now.');
+                return;
+            }
             this.showScreen('main-menu');
         });
 

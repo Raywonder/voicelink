@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 
@@ -20,9 +21,12 @@ class DeploymentManagerModule {
         if (!fs.existsSync(this.dataDir)) {
             fs.mkdirSync(this.dataDir, { recursive: true });
         }
+
+        this.watchdogStateFile = path.join(this.dataDir, 'watchdog-state.json');
     }
 
     getStatus() {
+        const watchdog = this.getWatchdogStatus();
         return {
             enabled: this.config.enabled !== false,
             supportsFreshInstall: true,
@@ -30,8 +34,245 @@ class DeploymentManagerModule {
             supportsRemoteBootstrap: true,
             supportedTransports: this.getSupportedTransports(),
             mailConfigured: !!this.mailer,
-            defaultOwnerEmailTemplateEnabled: this.config.emailOwner?.enabled !== false
+            defaultOwnerEmailTemplateEnabled: this.config.emailOwner?.enabled !== false,
+            watchdog
         };
+    }
+
+    loadWatchdogState() {
+        try {
+            if (fs.existsSync(this.watchdogStateFile)) {
+                const parsed = JSON.parse(fs.readFileSync(this.watchdogStateFile, 'utf8'));
+                if (parsed && typeof parsed === 'object') {
+                    return parsed;
+                }
+            }
+        } catch (error) {
+            return { error: error.message };
+        }
+        return {};
+    }
+
+    saveWatchdogState(state) {
+        fs.writeFileSync(this.watchdogStateFile, JSON.stringify(state, null, 2), 'utf8');
+    }
+
+    getWatchdogConfig() {
+        return {
+            enabled: this.config.watchdog?.enabled === true,
+            intervalMinutes: Number(this.config.watchdog?.intervalMinutes || 5),
+            adminEmails: Array.isArray(this.config.watchdog?.adminEmails) ? this.config.watchdog.adminEmails : [],
+            notifications: {
+                email: this.config.watchdog?.notifications?.email !== false,
+                pushover: this.config.watchdog?.notifications?.pushover === true
+            },
+            targets: Array.isArray(this.config.watchdog?.targets) ? this.config.watchdog.targets : []
+        };
+    }
+
+    getWatchdogStatus() {
+        const config = this.getWatchdogConfig();
+        const state = this.loadWatchdogState();
+        return {
+            ...config,
+            lastRunAt: state.lastRunAt || null,
+            lastSummary: state.lastSummary || null,
+            lastResults: Array.isArray(state.lastResults) ? state.lastResults : []
+        };
+    }
+
+    async runWatchdogChecks(options = {}) {
+        const config = this.getWatchdogConfig();
+        const targets = Array.isArray(options.targets) && options.targets.length ? options.targets : config.targets;
+        const results = [];
+
+        for (const target of targets) {
+            results.push(await this.runWatchdogTarget(target));
+        }
+
+        const failed = results.filter((result) => result.ok === false);
+        const summary = {
+            ok: failed.length === 0,
+            total: results.length,
+            failed: failed.length,
+            healthy: results.length - failed.length
+        };
+
+        const state = {
+            lastRunAt: new Date().toISOString(),
+            lastSummary: summary,
+            lastResults: results
+        };
+        this.saveWatchdogState(state);
+
+        if (failed.length) {
+            await this.notifyWatchdogFailures(failed, config).catch(() => null);
+        }
+
+        return {
+            success: true,
+            summary,
+            results
+        };
+    }
+
+    async runWatchdogTarget(target = {}) {
+        const type = String(target.type || 'http').trim().toLowerCase();
+        const label = String(target.label || target.url || target.host || target.name || 'Unnamed target');
+        try {
+            if (type === 'tcp') {
+                return await this.runTcpTarget(label, target);
+            }
+            return await this.runHttpTarget(label, target);
+        } catch (error) {
+            const recovery = await this.tryWatchdogRecovery(target, error.message).catch((recoveryError) => ({
+                attempted: true,
+                success: false,
+                error: recoveryError.message
+            }));
+            return {
+                ok: false,
+                type,
+                label,
+                checkedAt: new Date().toISOString(),
+                error: error.message,
+                recovery
+            };
+        }
+    }
+
+    async runHttpTarget(label, target = {}) {
+        const url = String(target.url || '').trim();
+        if (!url) {
+            throw new Error('Missing watchdog target URL');
+        }
+        const response = await this.httpProbe(url, Number(target.timeoutMs || 5000));
+        if (!response.ok) {
+            throw new Error(`HTTP probe failed (${response.status || 'error'})`);
+        }
+        return {
+            ok: true,
+            type: 'http',
+            label,
+            checkedAt: new Date().toISOString(),
+            status: response.status,
+            url
+        };
+    }
+
+    async runTcpTarget(label, target = {}) {
+        const host = String(target.host || '').trim();
+        const port = Number(target.port || 0);
+        if (!host || !port) {
+            throw new Error('Missing TCP host or port');
+        }
+        await this.tcpProbe(host, port, Number(target.timeoutMs || 5000));
+        return {
+            ok: true,
+            type: 'tcp',
+            label,
+            checkedAt: new Date().toISOString(),
+            host,
+            port
+        };
+    }
+
+    httpProbe(url, timeoutMs = 5000) {
+        return new Promise((resolve) => {
+            const parsed = new URL(url);
+            const client = parsed.protocol === 'https:' ? https : http;
+            const req = client.request({
+                hostname: parsed.hostname,
+                port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+                path: `${parsed.pathname}${parsed.search}`,
+                method: 'GET',
+                timeout: timeoutMs
+            }, (res) => {
+                res.resume();
+                resolve({
+                    ok: res.statusCode >= 200 && res.statusCode < 400,
+                    status: res.statusCode
+                });
+            });
+            req.on('timeout', () => {
+                req.destroy(new Error('Probe timeout'));
+            });
+            req.on('error', (error) => resolve({ ok: false, error: error.message }));
+            req.end();
+        });
+    }
+
+    tcpProbe(host, port, timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            const socket = net.createConnection({ host, port });
+            const done = (error) => {
+                socket.removeAllListeners();
+                socket.destroy();
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve();
+            };
+            socket.setTimeout(timeoutMs);
+            socket.once('connect', () => done());
+            socket.once('timeout', () => done(new Error('TCP probe timeout')));
+            socket.once('error', done);
+        });
+    }
+
+    async tryWatchdogRecovery(target = {}, reason = '') {
+        const recovery = target.recovery || {};
+        if (!recovery.enabled) {
+            return { attempted: false };
+        }
+
+        const result = {
+            attempted: true,
+            action: recovery.action || null,
+            reason
+        };
+
+        if (recovery.action === 'restart-url' && recovery.url) {
+            const response = await this.jsonRequest(String(recovery.url), {
+                method: String(recovery.method || 'POST').toUpperCase(),
+                body: recovery.body || {},
+                headers: this.buildBootstrapHeaders(recovery)
+            });
+            result.success = true;
+            result.response = response;
+            return result;
+        }
+
+        result.success = false;
+        result.error = 'Unsupported recovery action';
+        return result;
+    }
+
+    async notifyWatchdogFailures(failures = [], config = this.getWatchdogConfig()) {
+        if (!failures.length || !this.mailer || config.notifications?.email === false) {
+            return { success: false, skipped: true };
+        }
+
+        const recipients = Array.isArray(config.adminEmails) ? config.adminEmails.filter(Boolean) : [];
+        if (!recipients.length) {
+            return { success: false, skipped: true };
+        }
+
+        const body = [
+            'VoiceLink watchdog detected failed targets.',
+            '',
+            ...failures.map((failure) => `- ${failure.label}: ${failure.error || 'failed'}`)
+        ].join('\n');
+
+        await this.mailer.sendMail({
+            from: this.emailFrom,
+            to: recipients.join(','),
+            subject: 'VoiceLink Watchdog Alert',
+            text: body
+        });
+
+        return { success: true };
     }
 
     getSupportedTransports() {
@@ -245,6 +486,24 @@ class DeploymentManagerModule {
             configImport: configResult,
             federationSync: federationResult
         };
+    }
+
+    async triggerRemoteRestart(target = {}) {
+        const restartUrl = String(target.restartUrl || '').trim();
+        if (!restartUrl) {
+            return { success: false, skipped: true, reason: 'No restartUrl provided' };
+        }
+
+        try {
+            const response = await this.jsonRequest(restartUrl, {
+                method: String(target.restartMethod || 'POST').toUpperCase(),
+                body: target.restartBody || {},
+                headers: this.buildBootstrapHeaders(target)
+            });
+            return { success: true, response };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
     }
 
     buildBootstrapHeaders(target = {}) {

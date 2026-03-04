@@ -439,7 +439,17 @@ const AVAILABLE_MODULES = {
             'Room media coordination'
         ],
         defaultConfig: {
-            enabled: true
+            enabled: true,
+            watchdog: {
+                enabled: false,
+                intervalMinutes: 5,
+                adminEmails: [],
+                targets: [],
+                notifications: {
+                    email: true,
+                    pushover: false
+                }
+            }
         }
     },
 

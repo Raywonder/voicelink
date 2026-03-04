@@ -2543,23 +2543,44 @@ class VoiceLinkLocalServer {
         };
     }
 
-    getMessageSettingsConfig() {
-        const config = deployConfig.getConfig() || {};
-        const messageSettings = config.messageSettings || {};
-        return {
-            keepRoomMessages: messageSettings.keepRoomMessages !== false,
-            keepDirectMessages: messageSettings.keepDirectMessages !== false,
-            initialLoadCount: Math.min(100, Math.max(1, Number(messageSettings.initialLoadCount || 20))),
-            scrollbackLimit: Math.min(5000, Math.max(20, Number(messageSettings.scrollbackLimit || 5000))),
-            roomMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.roomMessageCap || 1000))),
-            directMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.directMessageCap || 500))),
-            guestRetentionHours: Math.min(24 * 30, Math.max(1, Number(messageSettings.guestRetentionHours || 24))),
-            authenticatedRetentionDays: Math.min(3650, Math.max(1, Number(messageSettings.authenticatedRetentionDays || 30))),
-            deleteRoomMessagesWhenEmpty: !!messageSettings.deleteRoomMessagesWhenEmpty,
-            keepAttachmentMessages: messageSettings.keepAttachmentMessages !== false,
-            botMemoryMessageLimit: Math.min(5000, Math.max(0, Number(messageSettings.botMemoryMessageLimit || 250))),
-            botMemoryDays: Math.min(3650, Math.max(1, Number(messageSettings.botMemoryDays || 30)))
+    canUserModerateRoom(user, room = null) {
+        if (!user) return false;
+        const authInfo = user.authInfo || {};
+        const role = this.normalizeUserRole(authInfo.role || user.role);
+        if (role === 'owner' || role === 'admin' || role === 'staff') return true;
+        if (!room) return false;
+        const createdBy = String(room.createdBy || '').trim().toLowerCase();
+        const userEmail = String(authInfo.email || user.email || '').trim().toLowerCase();
+        const userName = String(authInfo.username || user.username || user.name || '').trim().toLowerCase();
+        return !!createdBy && (createdBy === userEmail || createdBy === userName);
+    }
+
+    emitRoomJoinRequest(roomId, requestEntry) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+        const moderators = this.getLiveRoomUsers(roomId).filter((user) => this.canUserModerateRoom(user, room));
+        const payload = {
+            roomId,
+            roomName: room.name,
+            requestId: requestEntry.id,
+            requesterName: requestEntry.userName,
+            requesterId: requestEntry.userId,
+            requestedAt: requestEntry.requestedAt
         };
+
+        for (const moderator of moderators) {
+            if (moderator.id) {
+                this.io.to(moderator.id).emit('room-join-request', payload);
+            }
+        }
+
+        this.io.emit('admin-notification', {
+            type: 'room_join_request',
+            title: `Join request for ${room.name}`,
+            message: `${requestEntry.userName} requested access to locked room ${room.name}.`,
+            roomId,
+            requestId: requestEntry.id
+        });
     }
 
     getConfiguredBackgroundStreamForRoom(room = {}) {
@@ -2599,6 +2620,25 @@ class VoiceLinkLocalServer {
         }
 
         return null;
+    }
+
+    getMessageSettingsConfig() {
+        const config = deployConfig.getConfig() || {};
+        const messageSettings = config.messageSettings || {};
+        return {
+            keepRoomMessages: messageSettings.keepRoomMessages !== false,
+            keepDirectMessages: messageSettings.keepDirectMessages !== false,
+            initialLoadCount: Math.min(100, Math.max(1, Number(messageSettings.initialLoadCount || 20))),
+            scrollbackLimit: Math.min(5000, Math.max(20, Number(messageSettings.scrollbackLimit || 5000))),
+            roomMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.roomMessageCap || 1000))),
+            directMessageCap: Math.min(5000, Math.max(20, Number(messageSettings.directMessageCap || 500))),
+            guestRetentionHours: Math.min(24 * 30, Math.max(1, Number(messageSettings.guestRetentionHours || 24))),
+            authenticatedRetentionDays: Math.min(3650, Math.max(1, Number(messageSettings.authenticatedRetentionDays || 30))),
+            deleteRoomMessagesWhenEmpty: !!messageSettings.deleteRoomMessagesWhenEmpty,
+            keepAttachmentMessages: messageSettings.keepAttachmentMessages !== false,
+            botMemoryMessageLimit: Math.min(5000, Math.max(0, Number(messageSettings.botMemoryMessageLimit || 250))),
+            botMemoryDays: Math.min(3650, Math.max(1, Number(messageSettings.botMemoryDays || 30)))
+        };
     }
 
     getMessageExpiryMs(isAuthenticated) {
@@ -2712,6 +2752,35 @@ class VoiceLinkLocalServer {
             return { valid: false, reason: 'local-only address' };
         }
 
+        const isPrivateIPAddress = (host) => {
+            const family = net.isIP(host);
+            if (!family) {
+                return false;
+            }
+
+            if (family === 4) {
+                const parts = host.split('.').map(part => Number(part));
+                const [a, b] = parts;
+                if (a === 10 || a === 127 || a === 0) return true;
+                if (a === 169 && b === 254) return true;
+                if (a === 172 && b >= 16 && b <= 31) return true;
+                if (a === 192 && b === 168) return true;
+                if (a >= 224) return true;
+                return false;
+            }
+
+            const lowered = host.toLowerCase();
+            return lowered === '::1'
+                || lowered.startsWith('fc')
+                || lowered.startsWith('fd')
+                || lowered.startsWith('fe80:')
+                || lowered.startsWith('::ffff:127.');
+        };
+
+        if (isPrivateIPAddress(hostname)) {
+            return { valid: false, reason: 'private or loopback address' };
+        }
+
         const timeout = this.withTimeoutSignal(5000);
         try {
             let response = await fetch(parsed.toString(), {
@@ -2738,6 +2807,13 @@ class VoiceLinkLocalServer {
             }
 
             if (!response.ok) {
+                if (response.status >= 500 || response.status === 429) {
+                    return {
+                        valid: true,
+                        normalizedURL: parsed.toString(),
+                        validationDeferred: true
+                    };
+                }
                 return { valid: false, reason: `remote server returned ${response.status}` };
             }
 
@@ -2745,9 +2821,17 @@ class VoiceLinkLocalServer {
         } catch (error) {
             const message = String(error?.name || error?.message || '').toLowerCase();
             if (message.includes('abort') || message.includes('timeout')) {
-                return { valid: false, reason: 'request timed out' };
+                return {
+                    valid: true,
+                    normalizedURL: parsed.toString(),
+                    validationDeferred: true
+                };
             }
-            return { valid: false, reason: 'remote server could not be reached' };
+            return {
+                valid: true,
+                normalizedURL: parsed.toString(),
+                validationDeferred: true
+            };
         } finally {
             timeout.clear();
         }
@@ -2806,6 +2890,50 @@ class VoiceLinkLocalServer {
         return { message: updatedMessage, notice };
     }
 
+    findConnectedUserByName(query = '') {
+        const needle = String(query || '').trim().toLowerCase();
+        if (!needle) return null;
+        for (const user of this.users.values()) {
+            const candidates = [
+                user.name,
+                user.username,
+                user.displayName,
+                user.authInfo?.username,
+                user.authInfo?.displayName,
+                user.authInfo?.email
+            ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+            if (candidates.some((value) => value === needle || value.includes(needle) || needle.includes(value))) {
+                return user;
+            }
+        }
+        return null;
+    }
+
+    describeConnectedUserLocation(query = '') {
+        const user = this.findConnectedUserByName(query);
+        if (!user) return null;
+        if (user.roomId) {
+            const room = this.rooms.get(user.roomId);
+            return `${user.name || user.username || 'That user'} is in ${room?.name || 'a room'}.`;
+        }
+        return `${user.name || user.username || 'That user'} is online and browsing outside of a room.`;
+    }
+
+    describeCurrentRoomMedia(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+        const configuredBackgroundStream = this.getConfiguredBackgroundStreamForRoom(room);
+        if (configuredBackgroundStream?.streamUrl) {
+            return `${room.name} is playing ${configuredBackgroundStream.name || 'a background stream'} from ${configuredBackgroundStream.streamUrl}.`;
+        }
+        const mediaRooms = this.modules?.mediaRooms;
+        const active = mediaRooms?.getRoomPlaybackState ? mediaRooms.getRoomPlaybackState(roomId) : null;
+        if (active?.title || active?.streamUrl) {
+            return `${room.name} is playing ${active.title || 'media'}${active.streamUrl ? ` from ${active.streamUrl}` : ''}.`;
+        }
+        return `${room.name} does not have active room media right now.`;
+    }
+
     async buildBotTextReply(user, roomId, source = '') {
         const room = this.rooms.get(roomId);
         const users = this.normalizeRoomUsers(roomId);
@@ -2817,17 +2945,40 @@ class VoiceLinkLocalServer {
             return `Hi ${user.name || 'there'}. Try /bot help for commands, ask for room status, or send me a text file to inspect.`;
         }
         if (lowered.includes('help')) {
-            return 'Commands: /me action, /bot help, /bot status, /bot users, /bot motd, /bot server.';
+            return 'Commands: /me action, /bot help, /vb help, /bot status, /vb status, /bot users, /bot motd, /bot server.';
         }
         if (lowered.includes('status')) {
             return `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}.`;
         }
         if (lowered.includes('users') || lowered.includes('who')) {
+            if (lowered.includes('where is ') || lowered.startsWith('where ')) {
+                const query = lowered
+                    .replace('/vb', '')
+                    .replace('/bot', '')
+                    .replace('/voicebot', '')
+                    .replace('@voicelink bot', '')
+                    .replace('where is', '')
+                    .replace('where', '')
+                    .trim();
+                const locationReply = this.describeConnectedUserLocation(query);
+                if (locationReply) {
+                    return locationReply;
+                }
+            }
             const names = users.map(entry => entry.displayName || entry.username || entry.name).slice(0, 10);
             return names.length ? `In room: ${names.join(', ')}.` : 'No users are currently in this room.';
         }
+        if (lowered.includes('playing') || lowered.includes('media') || lowered.includes('music') || lowered.includes('stream') || lowered.includes('song')) {
+            return this.describeCurrentRoomMedia(roomId);
+        }
         if (lowered.includes('motd')) {
             return motd ? `Message of the day: ${motd}` : 'No message of the day is currently configured.';
+        }
+        if (lowered.includes('admin') || lowered.includes('manage')) {
+            if (user?.authInfo?.role === 'admin' || user?.authInfo?.role === 'owner' || user?.isAuthenticated) {
+                return 'I can explain safe admin actions and, when server policy allows it, help with room status, media status, moderation prompts, and guided management steps.';
+            }
+            return 'Admin actions are only available to authorized administrators and moderators.';
         }
         if (lowered.includes('server')) {
             return `${config.server?.name || 'VoiceLink'} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
@@ -9279,6 +9430,19 @@ class VoiceLinkLocalServer {
             res.json({ transports: this.modules.deploymentManager.getSupportedTransports() });
         });
 
+        this.app.get('/api/modules/deployment-manager/watchdog', requireDeploymentManager, (req, res) => {
+            res.json(this.modules.deploymentManager.getWatchdogStatus());
+        });
+
+        this.app.post('/api/modules/deployment-manager/watchdog/run', requireDeploymentManager, async (req, res) => {
+            try {
+                const result = await this.modules.deploymentManager.runWatchdogChecks(req.body || {});
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         this.app.post('/api/modules/deployment-manager/package', requireDeploymentManager, async (req, res) => {
             try {
                 const {
@@ -11646,6 +11810,28 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
+                if (room.locked) {
+                    const requesterAuth = this.authenticatedUsers.get(socket.id) || null;
+                    const requestEntry = {
+                        id: uuidv4(),
+                        userId: socket.id,
+                        userName: resolvedUserName || requesterAuth?.displayName || requesterAuth?.username || `User ${socket.id.slice(0, 8)}`,
+                        requestedAt: new Date(),
+                        authInfo: requesterAuth
+                    };
+                    room.pendingJoinRequests = Array.isArray(room.pendingJoinRequests) ? room.pendingJoinRequests : [];
+                    room.pendingJoinRequests = room.pendingJoinRequests.filter((entry) => entry.userId !== socket.id);
+                    room.pendingJoinRequests.unshift(requestEntry);
+                    this.emitRoomJoinRequest(roomId, requestEntry);
+                    socket.emit('join-room-error', {
+                        message: 'Room is locked. Your join request has been sent to the room administrators.',
+                        roomLocked: true,
+                        requestPending: true,
+                        requestId: requestEntry.id
+                    });
+                    return;
+                }
+
                 this.normalizeRoomUsers(roomId);
 
                 if (room.users.length >= room.maxUsers) {
@@ -11758,6 +11944,35 @@ class VoiceLinkLocalServer {
                 }, 150);
 
                 console.log(`User ${user.name} joined room ${room.name} (${this.normalizeRoomUsers(roomId).length} users now)`);
+            });
+
+            socket.on('room-join-request-response', (data = {}) => {
+                const moderator = this.users.get(socket.id);
+                const { roomId, requestId, action } = data;
+                const room = this.rooms.get(roomId);
+                if (!moderator || !room || !requestId) return;
+                if (!this.canUserModerateRoom(moderator, room)) return;
+
+                room.pendingJoinRequests = Array.isArray(room.pendingJoinRequests) ? room.pendingJoinRequests : [];
+                const requestIndex = room.pendingJoinRequests.findIndex((entry) => entry.id === requestId);
+                if (requestIndex === -1) return;
+
+                const requestEntry = room.pendingJoinRequests[requestIndex];
+                room.pendingJoinRequests.splice(requestIndex, 1);
+
+                if (action === 'approve') {
+                    this.io.to(requestEntry.userId).emit('room-join-request-approved', {
+                        roomId,
+                        roomName: room.name,
+                        approvedBy: moderator.name || moderator.username || 'Moderator'
+                    });
+                } else if (action === 'decline') {
+                    this.io.to(requestEntry.userId).emit('room-join-request-declined', {
+                        roomId,
+                        roomName: room.name,
+                        declinedBy: moderator.name || moderator.username || 'Moderator'
+                    });
+                }
             });
 
             // Handle WebRTC signaling
@@ -11885,6 +12100,8 @@ class VoiceLinkLocalServer {
                     const lowered = source.toLowerCase();
                     const addressedToBot =
                         lowered.startsWith('/bot') ||
+                        lowered.startsWith('/vb') ||
+                        lowered.startsWith('/voicebot') ||
                         lowered.startsWith('@voicelink bot') ||
                         lowered.includes('@voicelink bot') ||
                         lowered.includes('voicelink bot');
