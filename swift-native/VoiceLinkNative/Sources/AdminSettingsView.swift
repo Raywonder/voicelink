@@ -124,6 +124,9 @@ struct AdminSettingsView: View {
             )
         )
         .task {
+            if !canAccessTab(selectedTab) {
+                selectedTab = .overview
+            }
             async let stats: Void = adminManager.fetchServerStats()
             async let config: Void = adminManager.fetchServerConfig()
             async let advanced: Void = adminManager.fetchAdvancedServerSettings()
@@ -588,6 +591,9 @@ struct AdminUsersSection: View {
     @State private var selectedUser: AdminUserInfo?
     @State private var showKickAlert = false
     @State private var showBanAlert = false
+    @State private var showGrantModeratorAlert = false
+    @State private var showGrantAdminAlert = false
+    @State private var showRevokeRoleAlert = false
     @State private var kickReason = ""
     @State private var banReason = ""
     @State private var banDuration = 24
@@ -623,6 +629,12 @@ struct AdminUsersSection: View {
                             showKickAlert = true
                         case .ban:
                             showBanAlert = true
+                        case .grantModerator:
+                            showGrantModeratorAlert = true
+                        case .grantAdmin:
+                            showGrantAdminAlert = true
+                        case .revokeRole:
+                            showRevokeRoleAlert = true
                         }
                     }
                 }
@@ -656,6 +668,64 @@ struct AdminUsersSection: View {
                 }
             }
         }
+        .alert("Grant Moderator Access", isPresented: $showGrantModeratorAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Grant Moderator") {
+                if let user = selectedUser {
+                    Task {
+                        _ = await adminManager.updateUserRole(
+                            user.id,
+                            role: "moderator",
+                            accountId: user.accountId,
+                            email: user.email,
+                            username: user.username,
+                            displayName: user.displayName
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                }
+            }
+        } message: {
+            Text("Grant moderator access to this user across the servers you own and keep it synced on connected endpoints.")
+        }
+        .alert("Grant Admin Access", isPresented: $showGrantAdminAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Grant Admin") {
+                if let user = selectedUser {
+                    Task {
+                        _ = await adminManager.updateUserRole(
+                            user.id,
+                            role: "admin",
+                            accountId: user.accountId,
+                            email: user.email,
+                            username: user.username,
+                            displayName: user.displayName
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                }
+            }
+        } message: {
+            Text("Grant server administration access to this user across the servers you own.")
+        }
+        .alert("Revoke Elevated Access", isPresented: $showRevokeRoleAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Revoke", role: .destructive) {
+                if let user = selectedUser {
+                    Task {
+                        _ = await adminManager.revokeUserRole(
+                            user.id,
+                            accountId: user.accountId,
+                            email: user.email,
+                            username: user.username
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                }
+            }
+        } message: {
+            Text("Remove moderator or admin access for this user and return them to normal member access.")
+        }
     }
 }
 
@@ -665,7 +735,7 @@ struct UserAdminRow: View {
     let onAction: (UserAction) -> Void
 
     enum UserAction {
-        case kick, ban
+        case kick, ban, grantModerator, grantAdmin, revokeRole
     }
 
     var body: some View {
@@ -715,6 +785,17 @@ struct UserAdminRow: View {
                 Button(action: { onAction(.kick) }) {
                     Label("Kick", systemImage: "person.badge.minus")
                 }
+                Divider()
+                Button(action: { onAction(.grantModerator) }) {
+                    Label("Grant Moderator", systemImage: "person.badge.shield.checkmark")
+                }
+                Button(action: { onAction(.grantAdmin) }) {
+                    Label("Grant Admin", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                Button(action: { onAction(.revokeRole) }) {
+                    Label("Revoke Elevated Access", systemImage: "person.crop.circle.badge.minus")
+                }
+                Divider()
                 Button(role: .destructive, action: { onAction(.ban) }) {
                     Label("Ban", systemImage: "hand.raised.slash")
                 }
@@ -2012,16 +2093,17 @@ struct AdminAPISyncSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var settings: APISyncSettings?
     @State private var isSaving = false
+    private let syncModes = ["standalone", "hybrid", "hub", "federated"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             AdminHelpSection(
                 title: "Quick Help",
-                summary: "API Sync connects this VoiceLink server to external control systems such as HubNode and WHMCS-backed services.",
+                summary: "API Sync controls whether this install follows the main VoiceLink API, runs standalone, or participates in a hybrid/federated sync model with external systems such as WHMCS.",
                 steps: [
-                    "Enable only the integrations you actively use for this install.",
-                    "Set the upstream URLs and credentials, then save and refresh the tab.",
-                    "Use WHMCS fields for hosted account linking and license-aware server ownership tracking."
+                    "Enable API Sync only if this server should exchange config, entitlements, or ownership data with another VoiceLink authority or portal.",
+                    "Choose the mode that matches the install: standalone for isolated servers, hybrid for managed installs, or federated when multiple peers are trusted.",
+                    "Use WHMCS fields only when this install should honor hosted account, licensing, or ownership data from your portal."
                 ],
                 docs: [
                     AdminDocLink(title: "API Integration Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/authentication.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
@@ -2030,75 +2112,82 @@ struct AdminAPISyncSection: View {
             )
 
             if var config = settings {
-                // HubNode API
-                SectionHeader(title: "HubNode API Sync")
+                SectionHeader(title: "VoiceLink API Sync")
 
-                ConfigToggle(label: "Enable HubNode Sync", isOn: Binding(
-                    get: { config.hubNodeEnabled },
-                    set: { config.hubNodeEnabled = $0; settings = config }
-                ))
+                ConfigToggle(
+                    label: "Enable API Sync",
+                    helpText: "Turn this on when the server should stay linked to a main VoiceLink authority, hosted portal, or managed federation setup.",
+                    isOn: Binding(
+                        get: { config.enabled },
+                        set: { config.enabled = $0; settings = config }
+                    )
+                )
 
-                if config.hubNodeEnabled {
-                    ConfigTextField(label: "HubNode URL", text: Binding(
-                        get: { config.hubNodeUrl ?? "" },
-                        set: { config.hubNodeUrl = $0.isEmpty ? nil : $0; settings = config }
-                    ))
-
-                    ConfigSecureField(label: "API Key", text: Binding(
-                        get: { config.hubNodeApiKey ?? "" },
-                        set: { config.hubNodeApiKey = $0.isEmpty ? nil : $0; settings = config }
-                    ))
+                Picker("Sync Mode", selection: Binding(
+                    get: { config.mode },
+                    set: { config.mode = $0; settings = config }
+                )) {
+                    ForEach(syncModes, id: \.self) { mode in
+                        Text(mode.capitalized).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
 
-                // API Monitor
-                SectionHeader(title: "API Monitor")
+                Text("`Standalone` keeps the server self-contained. `Hybrid` keeps it linked to the main VoiceLink API. `Hub` is for central-control installs. `Federated` is for trusted peer clusters.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
 
-                ConfigToggle(label: "Enable API Monitor", isOn: Binding(
-                    get: { config.apiMonitorEnabled },
-                    set: { config.apiMonitorEnabled = $0; settings = config }
-                ))
-
-                if config.apiMonitorEnabled {
-                    ConfigTextField(label: "Monitor Endpoint", text: Binding(
-                        get: { config.apiMonitorEndpoint ?? "" },
-                        set: { config.apiMonitorEndpoint = $0.isEmpty ? nil : $0; settings = config }
-                    ))
-                }
-
-                // WHMCS Integration
                 SectionHeader(title: "WHMCS Integration")
 
-                ConfigToggle(label: "Enable WHMCS", isOn: Binding(
+                ConfigToggle(label: "Enable WHMCS", helpText: "Use the hosted client portal as an entitlement and ownership source for this server install.", isOn: Binding(
                     get: { config.whmcsEnabled },
                     set: { config.whmcsEnabled = $0; settings = config }
                 ))
 
                 if config.whmcsEnabled {
-                    ConfigTextField(label: "WHMCS URL", text: Binding(
-                        get: { config.whmcsUrl ?? "" },
-                        set: { config.whmcsUrl = $0.isEmpty ? nil : $0; settings = config }
-                    ))
+                    ConfigTextField(
+                        label: "WHMCS URL",
+                        placeholder: "https://devine-creations.com",
+                        helpText: "Enter the base client portal URL this server should use for WHMCS-backed account and licensing checks.",
+                        text: Binding(
+                            get: { config.whmcsUrl ?? "" },
+                            set: { config.whmcsUrl = $0.isEmpty ? nil : $0; settings = config }
+                        )
+                    )
 
-                    ConfigTextField(label: "API Identifier", text: Binding(
-                        get: { config.whmcsApiIdentifier ?? "" },
-                        set: { config.whmcsApiIdentifier = $0.isEmpty ? nil : $0; settings = config }
-                    ))
+                    ConfigTextField(
+                        label: "API Identifier",
+                        placeholder: "WHMCS API identifier",
+                        helpText: "Use the WHMCS API identifier for the portal account that should authorize server-side license and ownership checks.",
+                        text: Binding(
+                            get: { config.whmcsApiIdentifier ?? "" },
+                            set: { config.whmcsApiIdentifier = $0.isEmpty ? nil : $0; settings = config }
+                        )
+                    )
 
-                    ConfigSecureField(label: "API Secret", text: Binding(
-                        get: { config.whmcsApiSecret ?? "" },
-                        set: { config.whmcsApiSecret = $0.isEmpty ? nil : $0; settings = config }
-                    ))
+                    ConfigSecureField(
+                        label: "API Secret",
+                        placeholder: "WHMCS API secret",
+                        helpText: "Paste the matching WHMCS API secret. It stays masked in the client UI.",
+                        text: Binding(
+                            get: { config.whmcsApiSecret ?? "" },
+                            set: { config.whmcsApiSecret = $0.isEmpty ? nil : $0; settings = config }
+                        )
+                    )
                 }
 
-                // Sync Settings
                 SectionHeader(title: "Sync Settings")
 
-                ConfigNumberField(label: "Sync Interval (seconds)", value: Binding(
-                    get: { config.syncInterval },
-                    set: { config.syncInterval = $0; settings = config }
-                ))
+                ConfigNumberField(
+                    label: "Sync Interval (seconds)",
+                    helpText: "How often this server should refresh linked API state in the background.",
+                    value: Binding(
+                        get: { config.syncInterval },
+                        set: { config.syncInterval = $0; settings = config }
+                    )
+                )
 
-                ConfigToggle(label: "Auto-sync on Changes", isOn: Binding(
+                ConfigToggle(label: "Auto-sync on Changes", helpText: "Immediately push changes when config, room ownership, or linked license state changes.", isOn: Binding(
                     get: { config.autoSyncOnChange },
                     set: { config.autoSyncOnChange = $0; settings = config }
                 ))
@@ -3324,6 +3413,8 @@ struct AdminHelpSection: View {
 
 struct ConfigTextField: View {
     let label: String
+    var placeholder: String = ""
+    var helpText: String? = nil
     @Binding var text: String
 
     var body: some View {
@@ -3331,14 +3422,21 @@ struct ConfigTextField: View {
             Text(label)
                 .font(.caption)
                 .foregroundColor(.gray)
-            TextField("", text: $text)
+            TextField(placeholder, text: $text)
                 .textFieldStyle(.roundedBorder)
+            if let helpText, !helpText.isEmpty {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
         }
     }
 }
 
 struct ConfigSecureField: View {
     let label: String
+    var placeholder: String = ""
+    var helpText: String? = nil
     @Binding var text: String
 
     var body: some View {
@@ -3346,14 +3444,20 @@ struct ConfigSecureField: View {
             Text(label)
                 .font(.caption)
                 .foregroundColor(.gray)
-            SecureField("", text: $text)
+            SecureField(placeholder, text: $text)
                 .textFieldStyle(.roundedBorder)
+            if let helpText, !helpText.isEmpty {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
         }
     }
 }
 
 struct ConfigNumberField: View {
     let label: String
+    var helpText: String? = nil
     @Binding var value: Int
 
     var body: some View {
@@ -3364,17 +3468,32 @@ struct ConfigNumberField: View {
             TextField("", value: $value, format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 100)
+            if let helpText, !helpText.isEmpty {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
 
 struct ConfigToggle: View {
     let label: String
+    var helpText: String? = nil
     @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(label, isOn: $isOn)
-            .foregroundColor(.white)
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(label, isOn: $isOn)
+                .foregroundColor(.white)
+            if let helpText, !helpText.isEmpty {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

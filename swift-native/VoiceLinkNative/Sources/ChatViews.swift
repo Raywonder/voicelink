@@ -466,6 +466,7 @@ struct UserRow: View {
     @ObservedObject private var audioControl = UserAudioControlManager.shared
     @ObservedObject private var monitor = LocalMonitorManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var adminManager = AdminServerManager.shared
     @State private var shareInProgress = false
 
     private var resolvedVolume: Double {
@@ -499,6 +500,10 @@ struct UserRow: View {
         let rawStatus = roomUser?.status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !rawStatus.isEmpty else { return nil }
         return rawStatus
+    }
+
+    private var canManageServerUser: Bool {
+        !isCurrentUser && (adminManager.isAdmin || adminManager.adminRole.canManageUsers)
     }
 
     var body: some View {
@@ -580,6 +585,65 @@ struct UserRow: View {
                     showProfileSheet = true
                 }) {
                     Label("View Profile", systemImage: "person.circle")
+                }
+
+                if canManageServerUser {
+                    Divider()
+
+                    Button(action: {
+                        Task {
+                            _ = await adminManager.updateUserRole(
+                                userId,
+                                role: "moderator",
+                                accountId: roomUser?.id,
+                                email: roomUser?.email,
+                                username: roomUser?.username,
+                                displayName: roomUser?.displayName
+                            )
+                            await adminManager.fetchConnectedUsers()
+                        }
+                    }) {
+                        Label("Grant Moderator", systemImage: "person.badge.shield.checkmark")
+                    }
+
+                    Button(action: {
+                        Task {
+                            _ = await adminManager.updateUserRole(
+                                userId,
+                                role: "admin",
+                                accountId: roomUser?.id,
+                                email: roomUser?.email,
+                                username: roomUser?.username,
+                                displayName: roomUser?.displayName
+                            )
+                            await adminManager.fetchConnectedUsers()
+                        }
+                    }) {
+                        Label("Grant Admin", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+
+                    Button(action: {
+                        Task {
+                            _ = await adminManager.revokeUserRole(
+                                userId,
+                                accountId: roomUser?.id,
+                                email: roomUser?.email,
+                                username: roomUser?.username
+                            )
+                            await adminManager.fetchConnectedUsers()
+                        }
+                    }) {
+                        Label("Revoke Elevated Access", systemImage: "person.crop.circle.badge.minus")
+                    }
+
+                    Button(role: .destructive, action: {
+                        Task {
+                            _ = await adminManager.kickUser(userId, reason: "Removed by room administrator")
+                            await adminManager.fetchConnectedUsers()
+                        }
+                    }) {
+                        Label("Kick From Room", systemImage: "person.badge.minus")
+                    }
                 }
             }
 
@@ -736,7 +800,50 @@ struct UserRow: View {
                             showMonitoringWarning = true
                         }
                     }
-                }
+                },
+                onGrantModerator: canManageServerUser ? {
+                    Task {
+                        _ = await adminManager.updateUserRole(
+                            userId,
+                            role: "moderator",
+                            accountId: roomUser?.id,
+                            email: roomUser?.email,
+                            username: roomUser?.username,
+                            displayName: roomUser?.displayName
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                } : nil,
+                onGrantAdmin: canManageServerUser ? {
+                    Task {
+                        _ = await adminManager.updateUserRole(
+                            userId,
+                            role: "admin",
+                            accountId: roomUser?.id,
+                            email: roomUser?.email,
+                            username: roomUser?.username,
+                            displayName: roomUser?.displayName
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                } : nil,
+                onRevokeElevatedAccess: canManageServerUser ? {
+                    Task {
+                        _ = await adminManager.revokeUserRole(
+                            userId,
+                            accountId: roomUser?.id,
+                            email: roomUser?.email,
+                            username: roomUser?.username
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                } : nil,
+                onKickFromRoom: canManageServerUser ? {
+                    Task {
+                        _ = await adminManager.kickUser(userId, reason: "Removed by room administrator")
+                        await adminManager.fetchConnectedUsers()
+                    }
+                } : nil
             )
         }
         .sheet(isPresented: $showShareFileSheet, onDismiss: resetShareDraft) {

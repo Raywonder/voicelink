@@ -109,6 +109,7 @@ class VoiceLinkLocalServer {
         this.roomMessages = new Map();
         // Key: `${senderId}_${receiverId}` (sorted), Value: array of DMs
         this.directMessages = new Map();
+        this.serverStartedAt = Date.now();
         // Guest message expiry (24 hours in milliseconds)
         this.GUEST_MESSAGE_EXPIRY = 24 * 60 * 60 * 1000;
         // Start guest message cleanup interval (run every hour)
@@ -340,6 +341,26 @@ class VoiceLinkLocalServer {
             user.isModerator = true;
         }
 
+        const username = String(user.username || '').trim().toLowerCase();
+        const localOverrideUser = Array.from(this.localAuthUsers?.values?.() || []).find((entry) => {
+            const entryEmail = String(entry?.email || '').trim().toLowerCase();
+            const entryUsername = String(entry?.username || '').trim().toLowerCase();
+            return (!!email && entryEmail === email) || (!!username && entryUsername === username);
+        });
+        if (localOverrideUser) {
+            const localRole = this.normalizeUserRole(localOverrideUser.role);
+            if (this.roleRank(localRole) >= this.roleRank(user.role)) {
+                user.role = localRole;
+                user.permissions = Array.from(new Set([
+                    ...(user.permissions || []),
+                    ...this.buildPermissionsForRole(localRole),
+                    ...(Array.isArray(localOverrideUser.permissions) ? localOverrideUser.permissions : [])
+                ]));
+                user.isAdmin = localRole === 'owner' || localRole === 'admin';
+                user.isModerator = user.isAdmin || localRole === 'staff';
+            }
+        }
+
         return user;
     }
 
@@ -477,6 +498,19 @@ class VoiceLinkLocalServer {
         if (normalizedRole === 'admin') return ['admin', 'staff', 'client'];
         if (normalizedRole === 'staff') return ['staff', 'client'];
         return ['client'];
+    }
+
+    roleRank(role) {
+        const normalizedRole = this.normalizeUserRole(role);
+        if (normalizedRole === 'owner') return 3;
+        if (normalizedRole === 'admin') return 2;
+        if (normalizedRole === 'staff') return 1;
+        return 0;
+    }
+
+    clientFacingRole(role) {
+        const normalizedRole = this.normalizeUserRole(role);
+        return normalizedRole === 'staff' ? 'moderator' : normalizedRole;
     }
 
     extractServiceOptions(services = []) {
@@ -10186,6 +10220,344 @@ class VoiceLinkLocalServer {
             }
         });
 
+        const sharedSecretHeader = 'x-voicelink-shared-secret';
+        const configuredAdminSharedSecret = String(
+            process.env.VOICELINK_AUTH_SHARED_SECRET
+            || process.env.VOICELINK_AUTHORITY_SHARED_SECRET
+            || ''
+        ).trim();
+        const hasSharedSecretAccess = (req) => {
+            if (!configuredAdminSharedSecret) return false;
+            return String(req.get(sharedSecretHeader) || '').trim() === configuredAdminSharedSecret;
+        };
+        const getAdminRequestUser = (req) => this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
+        const getAdminRequestRole = (req) => this.normalizeUserRole(getAdminRequestUser(req)?.role || 'user');
+        const hasUserModerationAccess = (req) => {
+            if (hasSharedSecretAccess(req)) return true;
+            const role = getAdminRequestRole(req);
+            return role === 'owner' || role === 'admin' || role === 'staff';
+        };
+        const hasRoleAssignmentAccess = (req) => {
+            if (hasSharedSecretAccess(req)) return true;
+            const role = getAdminRequestRole(req);
+            return role === 'owner' || role === 'admin';
+        };
+        const localRoleValue = (role) => this.normalizeUserRole(role) === 'staff' ? 'staff' : this.normalizeUserRole(role);
+        const buildIdentityMatchers = (identity = {}) => {
+            const socketId = String(identity.socketId || identity.userId || '').trim();
+            const accountId = String(identity.accountId || identity.id || '').trim().toLowerCase();
+            const email = normalizeEmail(identity.email);
+            const username = normalizeUsername(identity.username || identity.displayName || identity.name || '');
+            return { socketId, accountId, email, username };
+        };
+        const resolveManagedIdentity = (payload = {}) => {
+            const socketId = String(payload.socketId || payload.userId || payload.id || '').trim();
+            const session = socketId ? (this.socketSessions.get(socketId) || null) : null;
+            const authUser = socketId ? (this.authenticatedUsers.get(socketId) || null) : null;
+            const liveUser = socketId ? (this.users.get(socketId) || null) : null;
+            return {
+                socketId: socketId || null,
+                accountId: String(payload.accountId || authUser?.id || session?.userId || '').trim() || null,
+                email: normalizeEmail(payload.email || authUser?.email || liveUser?.authInfo?.email || liveUser?.email || ''),
+                username: normalizeUsername(payload.username || authUser?.username || liveUser?.authInfo?.username || liveUser?.username || liveUser?.name || ''),
+                displayName: String(payload.displayName || authUser?.displayName || authUser?.name || liveUser?.authInfo?.displayName || liveUser?.displayName || liveUser?.name || '').trim() || null,
+                authProvider: String(payload.authProvider || authUser?.authProvider || liveUser?.authInfo?.authProvider || liveUser?.authProvider || '').trim() || null
+            };
+        };
+        const upsertManagedRoleRecord = (identity, role) => {
+            const normalizedRole = localRoleValue(role);
+            if (!identity?.email && !identity?.username) {
+                throw new Error('Target email or username is required');
+            }
+            let user = (identity.email && findLocalUserByIdentity(identity.email))
+                || (identity.username && findLocalUserByIdentity(identity.username))
+                || null;
+            if (!user) {
+                user = {
+                    id: `managed_${uuidv4()}`,
+                    username: identity.username || (identity.email ? identity.email.split('@')[0] : `user_${Date.now()}`),
+                    displayName: identity.displayName || identity.username || identity.email || 'Managed User',
+                    email: identity.email || '',
+                    role: normalizedRole,
+                    permissions: buildPermissionsForRole(normalizedRole),
+                    entitlements: buildDefaultEntitlements(normalizedRole),
+                    managedRoleOverride: true,
+                    isVerified: false,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+            } else {
+                user.username = identity.username || user.username;
+                user.displayName = identity.displayName || user.displayName || user.username;
+                user.email = identity.email || user.email || '';
+                user.role = normalizedRole;
+                user.permissions = buildPermissionsForRole(normalizedRole);
+                user.entitlements = buildDefaultEntitlements(normalizedRole, user.entitlements);
+                user.managedRoleOverride = true;
+                user.updatedAt = new Date().toISOString();
+            }
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            return user;
+        };
+        const removeManagedRoleOverride = (identity) => {
+            const user = (identity.email && findLocalUserByIdentity(identity.email))
+                || (identity.username && findLocalUserByIdentity(identity.username))
+                || null;
+            if (!user) return null;
+            user.role = 'user';
+            user.permissions = buildPermissionsForRole('user');
+            user.entitlements = buildDefaultEntitlements('user', user.entitlements);
+            user.managedRoleOverride = false;
+            user.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+            return user;
+        };
+        const applyLiveRoleUpdate = (identity, role = null) => {
+            const matchers = buildIdentityMatchers(identity);
+            const nextRole = role ? localRoleValue(role) : null;
+            const affectedRooms = new Set();
+            for (const [socketId, authUser] of this.authenticatedUsers.entries()) {
+                const authEmail = normalizeEmail(authUser?.email);
+                const authUsername = normalizeUsername(authUser?.username || authUser?.displayName || '');
+                const authAccountId = String(authUser?.id || this.socketSessions.get(socketId)?.userId || '').trim().toLowerCase();
+                const matched = (!!matchers.accountId && authAccountId === matchers.accountId)
+                    || (!!matchers.email && authEmail === matchers.email)
+                    || (!!matchers.username && authUsername === matchers.username)
+                    || (!!matchers.socketId && socketId === matchers.socketId);
+                if (!matched) continue;
+                if (nextRole) {
+                    authUser.role = nextRole;
+                    authUser.permissions = this.buildPermissionsForRole(nextRole);
+                    authUser.isAdmin = nextRole === 'owner' || nextRole === 'admin';
+                    authUser.isModerator = authUser.isAdmin || nextRole === 'staff';
+                    this.authenticatedUsers.set(socketId, authUser);
+                    this.io.to(socketId).emit('role-updated', {
+                        role: this.clientFacingRole(nextRole),
+                        permissions: authUser.permissions
+                    });
+                } else {
+                    authUser.role = 'user';
+                    authUser.permissions = this.buildPermissionsForRole('user');
+                    authUser.isAdmin = false;
+                    authUser.isModerator = false;
+                    this.authenticatedUsers.set(socketId, authUser);
+                    this.io.to(socketId).emit('role-updated', {
+                        role: 'user',
+                        permissions: authUser.permissions
+                    });
+                }
+                const liveUser = this.users.get(socketId);
+                if (liveUser) {
+                    liveUser.authInfo = {
+                        ...(liveUser.authInfo || {}),
+                        role: nextRole || 'user',
+                        permissions: nextRole ? this.buildPermissionsForRole(nextRole) : this.buildPermissionsForRole('user')
+                    };
+                    liveUser.role = nextRole || 'user';
+                    this.users.set(socketId, liveUser);
+                    if (liveUser.roomId) affectedRooms.add(liveUser.roomId);
+                }
+            }
+            for (const roomId of affectedRooms) {
+                this.emitRoomUsersSnapshot(roomId);
+            }
+        };
+        const serializeAdminConnectedUser = (socketId) => {
+            const session = this.socketSessions.get(socketId) || {};
+            const liveUser = this.users.get(socketId) || null;
+            const authUser = this.authenticatedUsers.get(socketId) || null;
+            const role = this.clientFacingRole(authUser?.role || liveUser?.authInfo?.role || liveUser?.role || (authUser ? 'user' : 'visitor'));
+            const roomName = liveUser?.roomId ? (this.rooms.get(liveUser.roomId)?.name || null) : null;
+            return {
+                id: socketId,
+                odId: String(authUser?.id || session.userId || socketId),
+                accountId: String(authUser?.id || session.userId || '') || null,
+                username: authUser?.username || liveUser?.authInfo?.username || liveUser?.username || liveUser?.name || `user-${socketId.slice(0, 8)}`,
+                displayName: authUser?.displayName || authUser?.name || liveUser?.authInfo?.displayName || liveUser?.displayName || liveUser?.name || null,
+                currentRoom: roomName,
+                connectedAt: session.connectedAt || liveUser?.joinedAt || null,
+                role,
+                isMuted: !!(liveUser?.audioSettings?.muted),
+                isDeafened: !!(liveUser?.audioSettings?.deafened),
+                ipAddress: session.ip || null,
+                authMethod: authUser?.authMethod || liveUser?.authInfo?.authMethod || null,
+                email: authUser?.email || liveUser?.authInfo?.email || liveUser?.email || null
+            };
+        };
+        const getTrustedRoleSyncTargets = () => {
+            const configured = deployConfig.get('federation')?.trustedServers;
+            if (!Array.isArray(configured)) return [];
+            return Array.from(new Set(configured
+                .map((value) => String(value || '').trim())
+                .filter(Boolean)
+                .map((value) => value.startsWith('http://') || value.startsWith('https://') ? value : `https://${value}`)
+                .map((value) => value.replace(/\/+$/, ''))));
+        };
+        const propagateRoleChangeToPeers = async (method, payload) => {
+            if (!configuredAdminSharedSecret) return;
+            const targets = getTrustedRoleSyncTargets();
+            if (!targets.length) return;
+            await Promise.allSettled(targets.map(async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/api/admin/users/sync-role`, {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [sharedSecretHeader]: configuredAdminSharedSecret
+                    },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    throw new Error(`Role sync failed for ${baseUrl} (${response.status})`);
+                }
+            }));
+        };
+        const ejectUserFromRoom = (socketId, reason = 'Removed from room by moderator') => {
+            const liveUser = this.users.get(socketId);
+            const roomId = liveUser?.roomId;
+            if (!roomId) return false;
+            const room = this.rooms.get(roomId);
+            if (!room) return false;
+            room.users = (room.users || []).filter((entry) => entry.id !== socketId);
+            this.users.set(socketId, { ...liveUser, roomId: null });
+            const targetSocket = this.io.sockets.sockets.get(socketId);
+            if (targetSocket) {
+                targetSocket.leave(roomId);
+                targetSocket.emit('kicked-from-room', {
+                    roomId,
+                    roomName: room.name,
+                    reason
+                });
+            }
+            this.io.to(roomId).emit('user-left', {
+                userId: socketId,
+                userName: liveUser?.name || liveUser?.authInfo?.displayName || liveUser?.authInfo?.username || 'User'
+            });
+            this.emitRoomUsersSnapshot(roomId);
+            return true;
+        };
+
+        this.app.get('/api/admin/users', (req, res) => {
+            if (!hasUserModerationAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Moderator or admin access required' });
+            }
+            const socketIds = new Set([
+                ...this.socketSessions.keys(),
+                ...this.users.keys(),
+                ...this.authenticatedUsers.keys()
+            ]);
+            const connectedUsers = Array.from(socketIds).map(serializeAdminConnectedUser);
+            return res.json(connectedUsers);
+        });
+
+        this.app.post('/api/admin/users/:userId/kick', (req, res) => {
+            if (!hasUserModerationAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Moderator or admin access required' });
+            }
+            const userId = String(req.params.userId || '').trim();
+            if (!userId) {
+                return res.status(400).json({ success: false, error: 'User ID is required' });
+            }
+            const reason = String(req.body?.reason || 'Removed from room by moderator').trim();
+            const ok = ejectUserFromRoom(userId, reason);
+            if (!ok) {
+                return res.status(404).json({ success: false, error: 'User is not currently in a room' });
+            }
+            return res.json({ success: true });
+        });
+
+        this.app.post('/api/admin/users/:userId/role', async (req, res) => {
+            if (!hasRoleAssignmentAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const requestedRole = String(req.body?.role || '').trim().toLowerCase();
+            const normalizedRole = localRoleValue(requestedRole);
+            if (!['admin', 'staff'].includes(normalizedRole)) {
+                return res.status(400).json({ success: false, error: 'Role must be admin or moderator' });
+            }
+            const identity = resolveManagedIdentity({ ...req.body, userId: req.params.userId });
+            if (!identity.email && !identity.username && !identity.accountId) {
+                return res.status(400).json({ success: false, error: 'Target user identity is required' });
+            }
+            const savedUser = upsertManagedRoleRecord(identity, normalizedRole);
+            applyLiveRoleUpdate(identity, normalizedRole);
+            if (req.body?.propagate !== false) {
+                await propagateRoleChangeToPeers('POST', {
+                    email: identity.email || null,
+                    username: identity.username || null,
+                    accountId: identity.accountId || null,
+                    displayName: identity.displayName || null,
+                    role: normalizedRole
+                });
+            }
+            return res.json({
+                success: true,
+                role: this.clientFacingRole(normalizedRole),
+                user: publicLocalUser(savedUser)
+            });
+        });
+
+        this.app.delete('/api/admin/users/:userId/role', async (req, res) => {
+            if (!hasRoleAssignmentAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const identity = resolveManagedIdentity({
+                userId: req.params.userId,
+                email: req.body?.email || req.query?.email,
+                username: req.body?.username || req.query?.username,
+                accountId: req.body?.accountId || req.query?.accountId
+            });
+            if (!identity.email && !identity.username && !identity.accountId) {
+                return res.status(400).json({ success: false, error: 'Target user identity is required' });
+            }
+            const savedUser = removeManagedRoleOverride(identity);
+            applyLiveRoleUpdate(identity, null);
+            if (req.body?.propagate !== false) {
+                await propagateRoleChangeToPeers('DELETE', {
+                    email: identity.email || null,
+                    username: identity.username || null,
+                    accountId: identity.accountId || null
+                });
+            }
+            return res.json({
+                success: true,
+                role: 'user',
+                user: savedUser ? publicLocalUser(savedUser) : null
+            });
+        });
+
+        this.app.post('/api/admin/users/sync-role', (req, res) => {
+            if (!hasSharedSecretAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Shared-secret access required' });
+            }
+            const requestedRole = String(req.body?.role || '').trim().toLowerCase();
+            const normalizedRole = localRoleValue(requestedRole);
+            if (!['admin', 'staff'].includes(normalizedRole)) {
+                return res.status(400).json({ success: false, error: 'Role must be admin or moderator' });
+            }
+            const identity = resolveManagedIdentity(req.body || {});
+            if (!identity.email && !identity.username && !identity.accountId) {
+                return res.status(400).json({ success: false, error: 'Target identity is required' });
+            }
+            upsertManagedRoleRecord(identity, normalizedRole);
+            applyLiveRoleUpdate(identity, normalizedRole);
+            return res.json({ success: true, role: this.clientFacingRole(normalizedRole) });
+        });
+
+        this.app.delete('/api/admin/users/sync-role', (req, res) => {
+            if (!hasSharedSecretAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Shared-secret access required' });
+            }
+            const identity = resolveManagedIdentity(req.body || req.query || {});
+            if (!identity.email && !identity.username && !identity.accountId) {
+                return res.status(400).json({ success: false, error: 'Target identity is required' });
+            }
+            removeManagedRoleOverride(identity);
+            applyLiveRoleUpdate(identity, null);
+            return res.json({ success: true, role: 'user' });
+        });
+
         // Admin settings (server + database)
         this.app.get('/api/admin/settings', (req, res) => {
             if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
@@ -10202,6 +10574,70 @@ class VoiceLinkLocalServer {
                 requireAuth: config.security?.requireAuth ?? false,
                 messageSettings: this.getMessageSettingsConfig(),
                 database
+            });
+        });
+
+        this.app.get('/api/admin/stats', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            const roomSnapshot = this.getRoomMonitorSnapshot();
+            const totalUsers = this.getConnectedUsersCount();
+            const activeUsers = roomSnapshot.reduce((sum, room) => sum + room.userCount, 0);
+            const totalRooms = this.rooms.size;
+            const activeRooms = roomSnapshot.filter(room => room.userCount > 0).length;
+            const uptime = Math.max(0, Math.floor((Date.now() - this.serverStartedAt) / 1000));
+            const peakUsers = roomSnapshot.reduce((peak, room) => {
+                const roomPeak = Number(room.peakUsers || room.userCount || 0);
+                return Math.max(peak, roomPeak);
+            }, totalUsers);
+
+            const now = Date.now();
+            const recentMessageWindowMs = 5 * 60 * 1000;
+            let recentMessages = 0;
+            for (const messages of this.roomMessages.values()) {
+                for (const message of messages || []) {
+                    const ts = new Date(
+                        message?.timestamp ||
+                        message?.createdAt ||
+                        message?.sentAt ||
+                        message?.time ||
+                        0
+                    ).getTime();
+                    if (Number.isFinite(ts) && ts > 0 && now - ts <= recentMessageWindowMs) {
+                        recentMessages++;
+                    }
+                }
+            }
+            for (const messages of this.directMessages.values()) {
+                for (const message of messages || []) {
+                    const ts = new Date(
+                        message?.timestamp ||
+                        message?.createdAt ||
+                        message?.sentAt ||
+                        message?.time ||
+                        0
+                    ).getTime();
+                    if (Number.isFinite(ts) && ts > 0 && now - ts <= recentMessageWindowMs) {
+                        recentMessages++;
+                    }
+                }
+            }
+
+            const minutes = recentMessageWindowMs / 60000;
+            const messagesPerMinute = Number((recentMessages / minutes).toFixed(2));
+            const bandwidthUsage = Number((this.relayStats.bytesRelayed / (1024 * 1024)).toFixed(2));
+
+            res.json({
+                totalUsers,
+                activeUsers,
+                totalRooms,
+                activeRooms,
+                uptime,
+                peakUsers,
+                messagesPerMinute,
+                bandwidthUsage
             });
         });
 

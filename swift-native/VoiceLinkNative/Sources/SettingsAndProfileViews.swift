@@ -18,9 +18,14 @@ struct UserProfileSheet: View {
     let onToggleMute: () -> Void
     let onToggleSolo: () -> Void
     let onToggleMonitor: () -> Void
+    let onGrantModerator: (() -> Void)?
+    let onGrantAdmin: (() -> Void)?
+    let onRevokeElevatedAccess: (() -> Void)?
+    let onKickFromRoom: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var adminManager = AdminServerManager.shared
 
     private var authenticatedUser: AuthenticatedUser? {
         isCurrentUser ? authManager.currentUser : nil
@@ -71,6 +76,10 @@ struct UserProfileSheet: View {
         let source = effectiveDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !source.isEmpty else { return "?" }
         return String(source.prefix(1)).uppercased()
+    }
+
+    private var canManageThisUser: Bool {
+        !isCurrentUser && (adminManager.isAdmin || adminManager.adminRole.canManageUsers)
     }
 
     var body: some View {
@@ -164,6 +173,35 @@ struct UserProfileSheet: View {
                             }
                             Button(isSoloed ? "Unsolo User" : "Solo User") {
                                 onToggleSolo()
+                            }
+                        }
+                    }
+
+                    if canManageThisUser {
+                        Divider()
+                        HStack(spacing: 10) {
+                            if let onGrantModerator {
+                                Button("Grant Moderator") {
+                                    onGrantModerator()
+                                }
+                            }
+                            if let onGrantAdmin {
+                                Button("Grant Admin") {
+                                    onGrantAdmin()
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 10) {
+                            if let onRevokeElevatedAccess {
+                                Button("Revoke Elevated Access", role: .destructive) {
+                                    onRevokeElevatedAccess()
+                                }
+                            }
+                            if let onKickFromRoom {
+                                Button("Kick From Room", role: .destructive) {
+                                    onKickFromRoom()
+                                }
                             }
                         }
                     }
@@ -2456,9 +2494,12 @@ struct AccountManagementPanel: View {
 
     private var currentUser: AuthenticatedUser? { authManager.currentUser }
 
-    private var isAdminAccount: Bool {
-        let role = currentUser?.role?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return role == "admin" || role == "owner" || adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner
+    private var canOpenServerAdministration: Bool {
+        adminManager.isAdmin || adminManager.adminRole.canManageUsers || adminManager.adminRole.canManageRooms || adminManager.adminRole.canManageConfig
+    }
+
+    private var canOpenAdminDocs: Bool {
+        adminManager.isAdmin || adminManager.adminRole.canManageConfig
     }
 
     private var effectiveRoleLabel: String {
@@ -2516,7 +2557,7 @@ struct AccountManagementPanel: View {
                                 .buttonStyle(.borderedProminent)
                             }
 
-                            if isAdminAccount {
+                            if canOpenServerAdministration {
                                 Button("Open Server Administration") {
                                     appState.currentScreen = .admin
                                 }
@@ -2525,7 +2566,7 @@ struct AccountManagementPanel: View {
                         }
 
                         HStack(spacing: 10) {
-                            if isAdminAccount {
+                            if canOpenAdminDocs {
                                 Button("Open Admin Docs") {
                                     if let url = URL(string: "https://voicelink.devinecreations.net/admin/docs/") {
                                         NSWorkspace.shared.open(url)
@@ -2576,7 +2617,7 @@ struct AccountManagementPanel: View {
     private func primaryActionTitle(for user: AuthenticatedUser) -> String {
         switch user.authMethod {
         case .whmcs:
-            return isAdminAccount ? "Open WHMCS Admin" : "Open Client Portal"
+            return canOpenAdminDocs ? "Open WHMCS Admin" : "Open Client Portal"
         case .mastodon:
             return "Open Mastodon Profile"
         case .email, .adminInvite:
@@ -2589,14 +2630,14 @@ struct AccountManagementPanel: View {
     private func providerURL(for user: AuthenticatedUser) -> URL? {
         switch user.authMethod {
         case .whmcs:
-            return URL(string: isAdminAccount ? "https://devine-creations.com/admin/" : "https://devine-creations.com/clientarea.php")
+            return URL(string: canOpenAdminDocs ? "https://devine-creations.com/admin/" : "https://devine-creations.com/clientarea.php")
         case .mastodon:
             guard let instance = user.mastodonInstance?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !instance.isEmpty else { return nil }
             let handle = user.username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? user.username
             return URL(string: "https://\(instance)/@\(handle)")
         case .email, .adminInvite:
-            return isAdminAccount ? nil : URL(string: "https://voicelink.devinecreations.net/account")
+            return canOpenAdminDocs ? nil : URL(string: "https://voicelink.devinecreations.net/account")
         case .pairingCode:
             return URL(string: "https://voicelink.devinecreations.net/account")
         }

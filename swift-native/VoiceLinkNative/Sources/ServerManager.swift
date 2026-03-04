@@ -689,6 +689,17 @@ class ServerManager: ObservableObject {
             }
         }
 
+        socket.on("kicked-from-room") { [weak self] data, ack in
+            let payload = data.first as? [String: Any]
+            let message = (payload?["reason"] as? String)
+                ?? (payload?["message"] as? String)
+                ?? "You were removed from the room."
+            DispatchQueue.main.async {
+                self?.errorMessage = message
+            }
+            self?.handleForcedRoomExit()
+        }
+
         // Server push events for sync
         socket.on("sync-push") { data, ack in
             if let pushData = data[0] as? [String: Any] {
@@ -1227,11 +1238,16 @@ class ServerManager: ObservableObject {
         pendingAudioStartWorkItem?.cancel()
         pendingAudioStartWorkItem = nil
         socket?.emit("leave-room")
+        handleForcedRoomExit()
+    }
+
+    private func handleForcedRoomExit() {
         stopAudioTransmission()
         stopRoomStreamPlayback(explicit: true)
         DispatchQueue.main.async {
             self.currentRoomUsers = []
             self.activeRoomId = nil
+            self.audioTransmissionStatus = self.inputMuted ? "Input muted" : "Stopped"
         }
         NotificationCenter.default.post(name: .roomLeft, object: nil)
     }

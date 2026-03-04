@@ -106,6 +106,7 @@ class AdminServerManager: ObservableObject {
 
         let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
 
         for base in candidates {
             guard let url = APIEndpointResolver.url(base: base, path: "/api/config") else {
@@ -146,30 +147,42 @@ class AdminServerManager: ObservableObject {
     func fetchAdvancedServerSettings() async {
         guard canManageConfigEffective else { return }
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/settings") else {
-            error = "Invalid admin settings URL"
-            return
-        }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
 
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to fetch advanced server settings"
-                return
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/settings") else {
+                continue
             }
 
-            let decoder = JSONDecoder()
-            advancedServerSettings = try decoder.decode(AdvancedServerSettings.self, from: data)
-        } catch {
-            self.error = "Failed to fetch advanced server settings: \(error.localizedDescription)"
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    continue
+                }
+                if httpResponse.statusCode == 200 {
+                    advancedServerSettings = try decoder.decode(AdvancedServerSettings.self, from: data)
+                    currentServerURL = base
+                    error = nil
+                    return
+                }
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    error = "Advanced settings access denied (\(httpResponse.statusCode))."
+                }
+            } catch {
+                self.error = "Failed to fetch advanced server settings: \(error.localizedDescription)"
+            }
+        }
+
+        if advancedServerSettings == nil {
+            error = error ?? "Failed to fetch advanced server settings"
         }
     }
 
@@ -251,29 +264,34 @@ class AdminServerManager: ObservableObject {
 
     func fetchConnectedUsers() async {
         guard canManageUsersEffective else { return }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users") else {
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/users") else {
+                continue
             }
 
-            let decoder = JSONDecoder()
-            connectedUsers = try decoder.decode([AdminUserInfo].self, from: data)
-        } catch {
-            print("Failed to fetch users: \(error)")
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                connectedUsers = try decoder.decode([AdminUserInfo].self, from: data)
+                currentServerURL = base
+                return
+            } catch {
+                continue
+            }
         }
     }
 
@@ -324,6 +342,80 @@ class AdminServerManager: ObservableObject {
         if let duration = duration {
             body["duration"] = duration
         }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    func updateUserRole(
+        _ userId: String,
+        role: String,
+        accountId: String? = nil,
+        email: String? = nil,
+        username: String? = nil,
+        displayName: String? = nil
+    ) async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users/\(userId)/role") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        let body: [String: Any] = [
+            "role": role,
+            "accountId": accountId ?? "",
+            "email": email ?? "",
+            "username": username ?? "",
+            "displayName": displayName ?? ""
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    func revokeUserRole(
+        _ userId: String,
+        accountId: String? = nil,
+        email: String? = nil,
+        username: String? = nil
+    ) async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users/\(userId)/role") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        let body: [String: Any] = [
+            "accountId": accountId ?? "",
+            "email": email ?? "",
+            "username": username ?? ""
+        ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         do {
@@ -607,28 +699,35 @@ class AdminServerManager: ObservableObject {
     func fetchAPISyncSettings() async -> APISyncSettings? {
         guard canManageConfigEffective else { return nil }
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/api-sync") else {
-            return nil
-        }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
 
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return nil
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/api-sync") else {
+                continue
             }
 
-            let decoder = JSONDecoder()
-            return try decoder.decode(APISyncSettings.self, from: data)
-        } catch {
-            return nil
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    continue
+                }
+                if httpResponse.statusCode == 200 {
+                    currentServerURL = base
+                    return try decoder.decode(APISyncSettings.self, from: data)
+                }
+            } catch {
+                continue
+            }
         }
+
+        return nil
     }
 
     func updateAPISyncSettings(_ settings: APISyncSettings) async -> Bool {
@@ -662,43 +761,50 @@ class AdminServerManager: ObservableObject {
     func fetchFederationSettings() async -> FederationSettings? {
         guard canManageConfigEffective else { return nil }
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/federation/status") else {
-            return nil
-        }
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
 
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 6
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                return nil
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/federation/status") else {
+                continue
             }
 
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return nil
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
-            return FederationSettings(
-                enabled: json["enabled"] as? Bool ?? false,
-                allowIncoming: json["allowIncoming"] as? Bool ?? true,
-                allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
-                trustedServers: json["trustedServers"] as? [String] ?? [],
-                blockedServers: [],
-                autoAcceptTrusted: false,
-                requireApproval: json["roomApprovalRequired"] as? Bool ?? false,
-                maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
-                autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
-                handoffTargetServer: json["handoffTargetServer"] as? String
-            )
-        } catch {
-            return nil
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                currentServerURL = base
+                return FederationSettings(
+                    enabled: json["enabled"] as? Bool ?? false,
+                    allowIncoming: json["allowIncoming"] as? Bool ?? true,
+                    allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
+                    trustedServers: json["trustedServers"] as? [String] ?? [],
+                    blockedServers: [],
+                    autoAcceptTrusted: false,
+                    requireApproval: json["roomApprovalRequired"] as? Bool ?? false,
+                    maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
+                    autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
+                    handoffTargetServer: json["handoffTargetServer"] as? String
+                )
+            } catch {
+                continue
+            }
         }
+
+        return nil
     }
 
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
@@ -1661,6 +1767,7 @@ struct BackgroundStreamConfig: Codable, Identifiable {
 struct AdminUserInfo: Codable, Identifiable {
     let id: String
     let odId: String
+    let accountId: String?
     let username: String
     let displayName: String?
     let currentRoom: String?
@@ -1670,6 +1777,7 @@ struct AdminUserInfo: Codable, Identifiable {
     var isDeafened: Bool
     let ipAddress: String?
     let authMethod: String?
+    let email: String?
 }
 
 struct AdminRoomInfo: Codable, Identifiable {
@@ -1836,17 +1944,57 @@ struct ServerStats: Codable {
 }
 
 struct APISyncSettings: Codable {
-    var hubNodeEnabled: Bool
-    var hubNodeUrl: String?
-    var hubNodeApiKey: String?
-    var apiMonitorEnabled: Bool
-    var apiMonitorEndpoint: String?
+    var enabled: Bool
+    var mode: String
     var syncInterval: Int
     var autoSyncOnChange: Bool
     var whmcsEnabled: Bool
     var whmcsUrl: String?
     var whmcsApiIdentifier: String?
     var whmcsApiSecret: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case mode
+        case syncInterval
+        case autoSyncOnChange
+        case whmcsEnabled
+        case whmcsUrl
+        case whmcsApiIdentifier
+        case whmcsApiSecret
+    }
+
+    init(
+        enabled: Bool = true,
+        mode: String = "hybrid",
+        syncInterval: Int = 60,
+        autoSyncOnChange: Bool = true,
+        whmcsEnabled: Bool = false,
+        whmcsUrl: String? = nil,
+        whmcsApiIdentifier: String? = nil,
+        whmcsApiSecret: String? = nil
+    ) {
+        self.enabled = enabled
+        self.mode = mode
+        self.syncInterval = syncInterval
+        self.autoSyncOnChange = autoSyncOnChange
+        self.whmcsEnabled = whmcsEnabled
+        self.whmcsUrl = whmcsUrl
+        self.whmcsApiIdentifier = whmcsApiIdentifier
+        self.whmcsApiSecret = whmcsApiSecret
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        mode = try container.decodeIfPresent(String.self, forKey: .mode) ?? "hybrid"
+        syncInterval = try container.decodeIfPresent(Int.self, forKey: .syncInterval) ?? 60
+        autoSyncOnChange = try container.decodeIfPresent(Bool.self, forKey: .autoSyncOnChange) ?? true
+        whmcsEnabled = try container.decodeIfPresent(Bool.self, forKey: .whmcsEnabled) ?? false
+        whmcsUrl = try container.decodeIfPresent(String.self, forKey: .whmcsUrl)
+        whmcsApiIdentifier = try container.decodeIfPresent(String.self, forKey: .whmcsApiIdentifier)
+        whmcsApiSecret = try container.decodeIfPresent(String.self, forKey: .whmcsApiSecret)
+    }
 }
 
 struct FederationSettings: Codable {
