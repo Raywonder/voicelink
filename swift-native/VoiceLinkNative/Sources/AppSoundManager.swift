@@ -650,9 +650,11 @@ class AppSoundManager: ObservableObject {
         if !isInitialized {
             preloadSounds()
         }
-        if let connectedURL = resolveMappedSoundURL(for: .connected) {
-            return connectedURL
+
+        if let explicitWelcome = pickExplicitStartupWelcomeURL() {
+            return explicitWelcome
         }
+
         return pickRandomStartupIntroURL()
     }
 
@@ -690,13 +692,68 @@ class AppSoundManager: ObservableObject {
             guard self.startupIntroEnabled, !self.startupIntroPlayed else { return }
             if self.playRandomStartupIntro() { return }
 
+            if let fallbackWelcome = self.pickExplicitStartupWelcomeURL(),
+               self.cachePlayableStartupIntro(from: fallbackWelcome) {
+                return
+            }
+
             if self.hasPlayableVariant(for: .connected) {
                 self.playSound(.connected, force: true, allowSystemFallback: true)
                 self.startupIntroPlayed = self.isSoundPlaying(.connected)
-            } else {
-                self.queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
             }
         }
+    }
+
+    private func cachePlayableStartupIntro(from url: URL) -> Bool {
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.volume = volume
+            player.currentTime = 0
+            player.prepareToPlay()
+            let didStart = player.play()
+            guard didStart else { return false }
+            startupIntroPlayer = player
+            startupIntroPlayed = true
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func pickExplicitStartupWelcomeURL() -> URL? {
+        let preferredBaseNames = [
+            "connected",
+            "reconnected",
+            "user-join",
+            "doorbell-ding-dong-type-single"
+        ]
+        let allowedExtensions: Set<String> = ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"]
+
+        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            let rootEntries = entries.filter { url in
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { return false }
+                return allowedExtensions.contains(url.pathExtension.lowercased())
+            }
+
+            for preferredBase in preferredBaseNames {
+                if let match = rootEntries.first(where: {
+                    $0.deletingPathExtension().lastPathComponent.lowercased() == preferredBase
+                }) {
+                    return match
+                }
+            }
+        }
+
+        return nil
     }
 
     private func pickRandomStartupIntroURL() -> URL? {
@@ -717,14 +774,10 @@ class AppSoundManager: ObservableObject {
                     guard exts.contains(ext) else { continue }
                     rootLevelCandidates.append(url)
                     let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") || base == "connected" {
+                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
                         explicit.append(url)
                     }
                 }
-            }
-
-            if let preferred = explicit.first(where: { $0.deletingPathExtension().lastPathComponent.lowercased() == "connected" }) {
-                return preferred
             }
 
             if let explicitIntro = explicit.randomElement() {
@@ -746,14 +799,10 @@ class AppSoundManager: ObservableObject {
                     let ext = url.pathExtension.lowercased()
                     guard exts.contains(ext) else { continue }
                     let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") || base == "connected" {
+                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
                         explicit.append(url)
                     }
                 }
-            }
-
-            if let preferred = explicit.first(where: { $0.deletingPathExtension().lastPathComponent.lowercased() == "connected" }) {
-                return preferred
             }
 
             if let match = explicit.randomElement() {

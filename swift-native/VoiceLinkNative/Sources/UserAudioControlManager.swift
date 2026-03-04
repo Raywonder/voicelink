@@ -8,6 +8,7 @@ class UserAudioControlManager: ObservableObject {
 
     // Per-user audio settings
     @Published var userVolumes: [String: Float] = [:]      // userId -> volume (0.0 to 2.0, 1.0 = normal)
+    @Published var userPan: [String: Float] = [:]          // userId -> pan (-1.0 left to 1.0 right, 0 centered)
     @Published var userMuted: [String: Bool] = [:]         // userId -> isMuted
     @Published var userSolo: [String: Bool] = [:]          // userId -> isSolo
     @Published var focusedUserId: String?                   // Currently focused user for keyboard control
@@ -68,6 +69,29 @@ class UserAudioControlManager: ObservableObject {
     /// Reset volume to default
     func resetVolume(for userId: String) {
         setVolume(for: userId, volume: defaultUserVolume)
+    }
+
+    /// Get pan for a user (-1.0 left to 1.0 right, 0 centered)
+    func getPan(for userId: String) -> Float {
+        userPan[userId] ?? 0.0
+    }
+
+    /// Set pan for a user
+    func setPan(for userId: String, pan: Float) {
+        let clampedPan = max(-1.0, min(1.0, pan))
+        userPan[userId] = clampedPan
+
+        NotificationCenter.default.post(
+            name: .userPanChanged,
+            object: nil,
+            userInfo: ["userId": userId, "pan": clampedPan]
+        )
+
+        saveSettings()
+    }
+
+    func resetPan(for userId: String) {
+        setPan(for: userId, pan: 0.0)
     }
 
     // MARK: - Mute Control
@@ -233,14 +257,6 @@ class UserAudioControlManager: ObservableObject {
                     }
                 }
 
-            case 48: // Tab - focus next/previous user
-                if hasShift {
-                    self.focusPreviousUser()
-                } else {
-                    self.focusNextUser()
-                }
-                return nil
-
             case 46: // M key
                 if hasCmd {
                     // Cmd+M = Toggle mute focused user
@@ -318,6 +334,11 @@ class UserAudioControlManager: ObservableObject {
         if let muteData = UserDefaults.standard.dictionary(forKey: "userMuted") as? [String: Bool] {
             userMuted = muteData
         }
+        if let panData = UserDefaults.standard.dictionary(forKey: "userPan") as? [String: Float] {
+            userPan = panData
+        } else if let panData = UserDefaults.standard.dictionary(forKey: "userPan") as? [String: Double] {
+            userPan = panData.mapValues(Float.init)
+        }
         if let soloData = UserDefaults.standard.dictionary(forKey: "userSolo") as? [String: Bool] {
             userSolo = soloData
         }
@@ -335,6 +356,7 @@ class UserAudioControlManager: ObservableObject {
 
     private func saveSettings() {
         UserDefaults.standard.set(userVolumes, forKey: "userVolumes")
+        UserDefaults.standard.set(userPan, forKey: "userPan")
         UserDefaults.standard.set(userMuted, forKey: "userMuted")
         UserDefaults.standard.set(userSolo, forKey: "userSolo")
         UserDefaults.standard.set(masterVolume, forKey: "masterVolume")
@@ -345,6 +367,7 @@ class UserAudioControlManager: ObservableObject {
 
     func cleanup() {
         userVolumes.removeAll()
+        userPan.removeAll()
         userMuted.removeAll()
         userSolo.removeAll()
         focusedUserId = nil
@@ -355,6 +378,7 @@ class UserAudioControlManager: ObservableObject {
 
 extension Notification.Name {
     static let userVolumeChanged = Notification.Name("userVolumeChanged")
+    static let userPanChanged = Notification.Name("userPanChanged")
     static let userMuteChanged = Notification.Name("userMuteChanged")
     static let userSoloChanged = Notification.Name("userSoloChanged")
 }
@@ -369,6 +393,10 @@ struct UserVolumeSlider: View {
 
     var volume: Float {
         audioControl.getVolume(for: userId)
+    }
+
+    var pan: Float {
+        audioControl.getPan(for: userId)
     }
 
     var isMuted: Bool {
@@ -413,6 +441,24 @@ struct UserVolumeSlider: View {
                 .foregroundColor(.gray)
                 .frame(width: 45, alignment: .trailing)
 
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Pan")
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                Slider(
+                    value: Binding(
+                        get: { Double(pan) },
+                        set: { audioControl.setPan(for: userId, pan: Float($0)) }
+                    ),
+                    in: -1...1,
+                    step: 0.05
+                )
+                .frame(width: 90)
+                Text(panLabel)
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+            }
+
             // Volume buttons
             HStack(spacing: 4) {
                 Button(action: { audioControl.decreaseVolume(for: userId) }) {
@@ -437,8 +483,20 @@ struct UserVolumeSlider: View {
             audioControl.setFocusedUser(userId)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(username), volume \(Int(volume * 100)) percent, \(isMuted ? "muted" : "unmuted")")
+        .accessibilityLabel("\(username), volume \(Int(volume * 100)) percent, pan \(panAccessibilityLabel), \(isMuted ? "muted" : "unmuted")")
         .accessibilityHint("Tap to focus. Use Option+Up/Down to adjust volume, Option+M to mute")
+    }
+
+    private var panLabel: String {
+        let percent = Int(abs(pan) * 100)
+        if percent == 0 { return "Center" }
+        return pan < 0 ? "\(percent)L" : "\(percent)R"
+    }
+
+    private var panAccessibilityLabel: String {
+        let percent = Int(abs(pan) * 100)
+        if percent == 0 { return "centered stereo" }
+        return pan < 0 ? "\(percent) percent left" : "\(percent) percent right"
     }
 }
 
@@ -538,6 +596,10 @@ struct InlineUserVolumeControl: View {
         audioControl.getVolume(for: userId)
     }
 
+    var pan: Float {
+        audioControl.getPan(for: userId)
+    }
+
     var isMuted: Bool {
         audioControl.isMuted(userId)
     }
@@ -566,6 +628,11 @@ struct InlineUserVolumeControl: View {
             .frame(width: 30, height: 4)
             .cornerRadius(2)
             .opacity(isMuted ? 0.3 : 1.0)
+
+            Text(panLabel)
+                .font(.caption2)
+                .foregroundColor(.gray)
+                .frame(width: 28, alignment: .trailing)
         }
     }
 
@@ -574,5 +641,11 @@ struct InlineUserVolumeControl: View {
         if volume > 1.0 { return .orange }
         if volume < 0.3 { return .yellow }
         return .green
+    }
+
+    private var panLabel: String {
+        let percent = Int(abs(pan) * 100)
+        if percent == 0 { return "C" }
+        return pan < 0 ? "\(percent)L" : "\(percent)R"
     }
 }
