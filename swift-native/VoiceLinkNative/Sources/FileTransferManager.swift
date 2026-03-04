@@ -408,6 +408,65 @@ class FileTransferManager: ObservableObject {
         }
     }
 
+    /// Show file picker for one or more files
+    func showFilePicker(allowsMultipleSelection: Bool, completion: @escaping ([URL]) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = allowsMultipleSelection
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.data, .image, .audio, .movie, .pdf, .text, .archive]
+
+        panel.begin { response in
+            if response == .OK {
+                completion(panel.urls)
+            } else {
+                completion([])
+            }
+        }
+    }
+
+    func createZipArchive(for fileURLs: [URL], archiveName: String? = nil) throws -> URL {
+        guard !fileURLs.isEmpty else {
+            throw NSError(domain: "FileTransfer", code: 1001, userInfo: [NSLocalizedDescriptionKey: "No files selected"])
+        }
+        if fileURLs.count == 1 {
+            return fileURLs[0]
+        }
+
+        let fileManager = FileManager.default
+        let tempRoot = fileManager.temporaryDirectory.appendingPathComponent("VoiceLinkShare-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+
+        for url in fileURLs {
+            let destination = tempRoot.appendingPathComponent(url.lastPathComponent)
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.copyItem(at: url, to: destination)
+        }
+
+        let baseName = archiveName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? archiveName!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "VoiceLink-Shared-Files-\(Int(Date().timeIntervalSince1970))"
+        let zipURL = fileManager.temporaryDirectory.appendingPathComponent("\(baseName).zip")
+        if fileManager.fileExists(atPath: zipURL.path) {
+            try fileManager.removeItem(at: zipURL)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", "--sequesterRsrc", "--keepParent", tempRoot.path, zipURL.path]
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 || !fileManager.fileExists(atPath: zipURL.path) {
+            throw NSError(domain: "FileTransfer", code: 1002, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive"])
+        }
+
+        return zipURL
+    }
+
     /// Save file to downloads
     func saveToDownloads(_ transfer: FileTransfer) {
         guard let sourceURL = transfer.localURL else { return }

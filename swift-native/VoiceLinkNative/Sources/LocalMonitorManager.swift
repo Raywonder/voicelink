@@ -14,8 +14,9 @@ final class LocalMonitorManager: ObservableObject {
     private let audioQueue = DispatchQueue(label: "voicelink.local-monitor", qos: .userInitiated)
     private var isTransitioning = false
     private var captureToken: UUID?
-    private var sampleBuffer: [Float] = []
-    private let maxBufferedSamples = 48_000 * 8
+    private var sampleBuffer: [[Float]] = []
+    private var bufferedFrameCount = 0
+    private let maxBufferedFrames = 48_000 * 8
     private var inputMuted = false
 
     private init() {}
@@ -68,6 +69,7 @@ final class LocalMonitorManager: ObservableObject {
         monitorMixer = AVAudioMixerNode()
         sourceNode = nil
         sampleBuffer.removeAll(keepingCapacity: true)
+        bufferedFrameCount = 0
     }
 
     private func startMonitoring() {
@@ -140,6 +142,7 @@ final class LocalMonitorManager: ObservableObject {
         engine.reset()
         sourceNode = nil
         sampleBuffer.removeAll(keepingCapacity: true)
+        bufferedFrameCount = 0
         DispatchQueue.main.async {
             self.isMonitoring = false
         }
@@ -156,21 +159,20 @@ final class LocalMonitorManager: ObservableObject {
         let frames = Int(source.frameLength)
         guard frames > 0 else { return }
         let channelCount = Int(max(source.format.channelCount, 1))
-        let currentCount = sampleBuffer.count
-        sampleBuffer.reserveCapacity(currentCount + frames)
-        if channelCount == 1 {
-            sampleBuffer.append(contentsOf: UnsafeBufferPointer(start: sourceData[0], count: frames))
-        } else {
-            for frame in 0..<frames {
-                var mixed: Float = 0
-                for channel in 0..<channelCount {
-                    mixed += sourceData[channel][frame]
-                }
-                sampleBuffer.append(mixed / Float(channelCount))
-            }
+        if sampleBuffer.count != channelCount {
+            sampleBuffer = Array(repeating: [], count: channelCount)
+            bufferedFrameCount = 0
         }
-        if sampleBuffer.count > maxBufferedSamples {
-            sampleBuffer.removeFirst(sampleBuffer.count - maxBufferedSamples)
+        for channel in 0..<channelCount {
+            sampleBuffer[channel].append(contentsOf: UnsafeBufferPointer(start: sourceData[channel], count: frames))
+        }
+        bufferedFrameCount += frames
+        if bufferedFrameCount > maxBufferedFrames {
+            let overflow = bufferedFrameCount - maxBufferedFrames
+            for channel in 0..<sampleBuffer.count {
+                sampleBuffer[channel].removeFirst(min(overflow, sampleBuffer[channel].count))
+            }
+            bufferedFrameCount = maxBufferedFrames
         }
     }
 
@@ -178,14 +180,15 @@ final class LocalMonitorManager: ObservableObject {
         let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
         let framesRequested = Int(frameCount)
         guard framesRequested > 0 else { return noErr }
-        let framesAvailable = min(framesRequested, sampleBuffer.count)
+        let framesAvailable = min(framesRequested, bufferedFrameCount)
 
         for bufferIndex in 0..<ablPointer.count {
             let audioBuffer = ablPointer[bufferIndex]
             guard let data = audioBuffer.mData else { continue }
             let samples = data.bindMemory(to: Float.self, capacity: framesRequested)
             if framesAvailable > 0 {
-                sampleBuffer.withUnsafeBufferPointer { buffer in
+                let sourceChannel = min(bufferIndex, max(sampleBuffer.count - 1, 0))
+                sampleBuffer[sourceChannel].withUnsafeBufferPointer { buffer in
                     samples.assign(from: buffer.baseAddress!, count: framesAvailable)
                 }
             }
@@ -197,7 +200,10 @@ final class LocalMonitorManager: ObservableObject {
         }
 
         if framesAvailable > 0 {
-            sampleBuffer.removeFirst(framesAvailable)
+            for channel in 0..<sampleBuffer.count {
+                sampleBuffer[channel].removeFirst(min(framesAvailable, sampleBuffer[channel].count))
+            }
+            bufferedFrameCount = max(0, bufferedFrameCount - framesAvailable)
         }
         return noErr
     }

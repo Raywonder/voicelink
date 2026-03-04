@@ -9,28 +9,40 @@
 <body class="bugtracker-page">
     <main class="bugtracker">
         <h1>VoiceLink Bug Tracker</h1>
-        <p class="bugtracker-meta">Last updated: 2026-02-05</p>
+        <p class="bugtracker-meta">Release baseline: VoiceLink 1.0.0 Build 26</p>
+        <p class="bugtracker-meta">Last updated: 2026-03-04</p>
 
         <section class="bugtracker-section">
-            <h2>Platform</h2>
-            <p>macOS (VoiceOver enabled)</p>
+            <h2>Current Public Status</h2>
+            <ul>
+                <li>Desktop installers are the active supported release path.</li>
+                <li>Main and community VPS downloads are mirrored on the current build 26 baseline.</li>
+                <li>Public browser room access is intentionally closed until browser readiness is complete.</li>
+            </ul>
         </section>
 
         <section class="bugtracker-section">
             <h2>Current Focus</h2>
             <ol>
-                <li>Duplicate users and duplicate messages when joining rooms.</li>
-                <li>Join/leave/click sounds missing; mute/deafen labels unclear; announce input/output states.</li>
-                <li>Create room failing in desktop app; must hit API and show all room durations for authenticated users.</li>
-                <li>Room and user actions not accessible (share, whisper, DM, file send).</li>
-                <li>Whisper mode should be hold-to-whisper with release to stop and FX.</li>
-                <li>Messages should clear when switching rooms; messages scoped per room.</li>
-                <li>Switching to settings or app foregrounding can cause duplicate re-join.</li>
-                <li>Web client must be accessible in Chrome and Safari (not just desktop).</li>
-                <li>Update checker location (main app menu, single Help menu).</li>
-                <li>Sound test should play `your-sound-test.wav` once and stop on toggle.</li>
-                <li>Copy Party file transfer integration (desktop only), with storage fallback and rate limits.</li>
+                <li>Desktop media playback consistency for room preview and in-room stream startup.</li>
+                <li>Licensing and device activation flow clarity for authenticated desktop users.</li>
+                <li>Profile, account-linking, and provider-aware account management in desktop settings.</li>
+                <li>Messaging, direct messaging, attachment handling, and bot interaction polish.</li>
+                <li>Server administration coverage, module configuration, and advanced settings persistence.</li>
+                <li>Background streams, metadata, and room-level media controls.</li>
+                <li>Startup behavior, room restore, and window/minimize behavior consistency.</li>
+                <li>Mastodon/server watchdog and service-recovery automation.</li>
             </ol>
+        </section>
+
+        <section class="bugtracker-section">
+            <h2>Release Notes Context</h2>
+            <p>Use this page as the current issue and readiness summary for the desktop-first VoiceLink baseline. Older January and February issue lists are superseded by the current build 26 release state.</p>
+        </section>
+
+        <section class="bugtracker-section">
+            <h2>Report Path</h2>
+            <p>If a problem is reproducible on the current build, report it against the build 26 desktop baseline and include platform, auth method, and room/server context.</p>
         </section>
     </main>
 </body>

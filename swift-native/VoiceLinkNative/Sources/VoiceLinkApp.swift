@@ -33,6 +33,9 @@ struct VoiceLinkApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: .updateAvailable)) { _ in
                     showUpdaterSheet = true
                 }
+                .onAppear {
+                    AppDelegate.shared?.appState = appState
+                }
         }
         .defaultSize(width: 1000, height: 750)
         .commands {
@@ -376,17 +379,39 @@ struct VoiceLinkApp: App {
                 if licensing.licenseStatus == .licensed {
                     Text("Status: Licensed")
                     Text("Devices: \(licensing.activatedDevices)/\(licensing.maxDevices)")
+                    if let key = licensing.licenseKey, !key.isEmpty {
+                        Text("Key: \(key)")
+                    }
+                } else if licensing.licenseStatus == .deviceLimitReached {
+                    Text(licensing.activationRequired ? "Status: Activation Required" : "Status: Device Limit Reached")
+                    Text("Devices: \(licensing.activatedDevices)/\(licensing.maxDevices)")
+                    if let key = licensing.licenseKey, !key.isEmpty {
+                        Text("Key: \(key)")
+                    }
+                    if let email = licensing.primaryEmail, !email.isEmpty {
+                        Text("Account: \(email)")
+                    }
                 } else if licensing.licenseStatus == .pending {
                     Text("Status: Pending (\(licensing.remainingMinutes) min)")
+                    if let key = licensing.licenseKey, !key.isEmpty {
+                        Text("Key: \(key)")
+                    }
                 } else {
-                    Text("Status: Not Registered")
+                    if let key = licensing.licenseKey, !key.isEmpty {
+                        Text("Status: License Assigned")
+                        Text("Key: \(key)")
+                    } else {
+                        Text("Status: Not Registered")
+                    }
                 }
 
                 Divider()
 
-                Button("Refresh License") {
-                    Task {
-                        await licensing.checkStatus()
+                if licensing.currentMachineNeedsActivation && licensing.remainingSlots > 0 {
+                    Button("Activate This Device") {
+                        Task {
+                            _ = await licensing.activateDevice()
+                        }
                     }
                 }
             }
@@ -486,6 +511,7 @@ extension Notification.Name {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBarController: StatusBarController?
     static var shared: AppDelegate?
+    weak var appState: AppState?
     private let windowController = MainWindowController()
     private weak var mainWindow: NSWindow?
 
@@ -520,9 +546,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Show window on launch based on user preference.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             self.configureMainWindowIfNeeded()
-            if SettingsManager.shared.openMainWindowOnLaunch {
+            switch SettingsManager.shared.startupBehavior {
+            case .openMainWindow:
                 self.showMainWindow()
-            } else {
+            case .restoreCurrentRoom:
+                if self.appState?.hasMinimizedRoom == true {
+                    self.appState?.restoreMinimizedRoom()
+                    self.showMainWindow()
+                } else {
+                    self.showMainWindow()
+                }
+            case .rejoinLastRoom:
+                if self.appState?.hasMinimizedRoom == true {
+                    self.appState?.restoreMinimizedRoom()
+                    self.showMainWindow()
+                } else if self.appState?.rejoinLastRoom() == true {
+                    self.showMainWindow()
+                } else {
+                    self.showMainWindow()
+                }
+            }
+            if SettingsManager.shared.startupBehavior == .restoreCurrentRoom && self.appState?.hasActiveRoom != true {
                 self.hideMainWindow()
             }
         }
@@ -1113,6 +1157,7 @@ class AppState: ObservableObject {
                 if let room = self.currentRoom {
                     self.rememberJoinedRoom(room)
                 }
+                self.scheduleRoomMediaRefresh()
             }
             .store(in: &cancellables)
 
@@ -1135,20 +1180,39 @@ class AppState: ObservableObject {
 
             let joinedRoom: Room = {
                 if let existing = self.rooms.first(where: { $0.id == roomId }) {
-                    return existing
+                    return Room(
+                        id: existing.id,
+                        name: existing.name,
+                        description: existing.description,
+                        userCount: max(existing.userCount, self.serverManager.currentRoomUsers.filter { !$0.isBot }.count),
+                        isPrivate: existing.isPrivate,
+                        maxUsers: existing.maxUsers,
+                        createdBy: existing.createdBy,
+                        createdByRole: existing.createdByRole,
+                        roomType: existing.roomType,
+                        createdAt: existing.createdAt ?? Date(),
+                        uptimeSeconds: existing.uptimeSeconds,
+                        lastActiveUsername: existing.lastActiveUsername,
+                        lastActivityAt: Date(),
+                        hostServerName: existing.hostServerName,
+                        hostServerOwner: existing.hostServerOwner
+                    )
                 }
                 let fallbackName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let fallbackDescription = (roomData["description"] as? String) ?? ""
                 let fallbackUsers = (roomData["userCount"] as? Int) ?? 0
                 let fallbackPrivate = (roomData["isPrivate"] as? Bool) ?? false
                 let fallbackMaxUsers = (roomData["maxUsers"] as? Int) ?? 50
+                let now = Date()
                 return Room(
                     id: roomId,
                     name: (fallbackName?.isEmpty == false ? fallbackName! : "Room \(roomId)"),
                     description: fallbackDescription,
                     userCount: fallbackUsers,
                     isPrivate: fallbackPrivate,
-                    maxUsers: fallbackMaxUsers
+                    maxUsers: fallbackMaxUsers,
+                    createdAt: now,
+                    lastActivityAt: now
                 )
             }()
 
@@ -1158,11 +1222,31 @@ class AppState: ObservableObject {
             self.pendingJoinRoomId = nil
             self.errorMessage = "Joined \(joinedRoom.name)."
             self.rememberJoinedRoom(joinedRoom)
+            self.scheduleRoomMediaRefresh()
         }
 
         // Listen for navigation back to main menu
         NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
             self?.returnFromSettings()
+        }
+    }
+
+    private func scheduleRoomMediaRefresh() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.serverManager.sendAudioState(
+                isMuted: self.serverManager.inputMuted,
+                isDeafened: self.serverManager.outputMuted
+            )
+            self.serverManager.refreshCurrentRoomMedia()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                guard let self, self.currentScreen == .voiceChat else { return }
+                self.serverManager.sendAudioState(
+                    isMuted: self.serverManager.inputMuted,
+                    isDeafened: self.serverManager.outputMuted
+                )
+                self.serverManager.refreshCurrentRoomMedia()
+            }
         }
     }
 
@@ -1692,7 +1776,23 @@ class AppState: ObservableObject {
     func joinOrShowRoom(_ room: Room) {
         focusedRoomId = room.id
         if activeRoomId == room.id {
-            currentRoom = room
+            currentRoom = Room(
+                id: room.id,
+                name: room.name,
+                description: room.description,
+                userCount: max(room.userCount, serverManager.currentRoomUsers.filter { !$0.isBot }.count),
+                isPrivate: room.isPrivate,
+                maxUsers: room.maxUsers,
+                createdBy: room.createdBy,
+                createdByRole: room.createdByRole,
+                roomType: room.roomType,
+                createdAt: room.createdAt ?? Date(),
+                uptimeSeconds: room.uptimeSeconds,
+                lastActiveUsername: room.lastActiveUsername,
+                lastActivityAt: Date(),
+                hostServerName: room.hostServerName,
+                hostServerOwner: room.hostServerOwner
+            )
             minimizedRoom = nil
             currentScreen = .voiceChat
             errorMessage = "Room already joined. Showing room."
@@ -1840,6 +1940,9 @@ class AppState: ObservableObject {
             hostServerOwner: nil
         )
         joinOrShowRoom(rooms.first(where: { $0.id == last.id }) ?? fallbackRoom)
+        DispatchQueue.main.async {
+            AppDelegate.shared?.showMainWindow()
+        }
         return true
     }
 
@@ -2304,6 +2407,8 @@ struct VoiceChatView: View {
     @ObservedObject var messagingManager = MessagingManager.shared
     @ObservedObject var adminManager = AdminServerManager.shared
     @ObservedObject var roomLockManager = RoomLockManager.shared
+    @ObservedObject var audioControl = UserAudioControlManager.shared
+    @ObservedObject var settings = SettingsManager.shared
     @ObservedObject private var authManager = AuthenticationManager.shared
     @State private var isMuted = false
     @State private var isDeafened = false
@@ -2392,6 +2497,11 @@ struct VoiceChatView: View {
         authManager.authState == .authenticated && authManager.currentUser != nil
     }
 
+    private var hasRoomMediaAvailable: Bool {
+        appState.roomHasActiveMusic[appState.currentRoom?.id ?? ""] == true
+            || ((appState.serverManager.currentRoomMedia?.active) == true)
+    }
+
     @ViewBuilder
     private var roomMediaSection: some View {
         if let media = appState.serverManager.currentRoomMedia, media.active {
@@ -2432,6 +2542,7 @@ struct VoiceChatView: View {
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
+
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
@@ -2615,6 +2726,53 @@ struct VoiceChatView: View {
             }
             .padding(.bottom, 20)
 
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Playback")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.85))
+
+                HStack(spacing: 10) {
+                    if hasRoomMediaAvailable {
+                        Button(appState.serverManager.isCurrentRoomMediaMuted ? "Unmute Media" : "Mute Media") {
+                            appState.serverManager.toggleCurrentRoomMediaMuted()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canControlRoomMedia)
+                        .accessibilityHint("Mutes or unmutes room media playback for your current session.")
+                    }
+
+                    Text("VoiceLink Volume")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(width: 104, alignment: .leading)
+
+                    Slider(
+                        value: Binding(
+                            get: { settings.outputVolume },
+                            set: { newValue in
+                                settings.outputVolume = newValue
+                                audioControl.setMasterVolume(Float(newValue))
+                                settings.saveSettings()
+                            }
+                        ),
+                        in: 0...1.5
+                    )
+                    .accessibilityLabel("VoiceLink master volume")
+                    .accessibilityHint("Adjusts overall VoiceLink playback volume for heard users, room media, and preview audio.")
+
+                    Text("\(Int(settings.outputVolume * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(10)
+            .padding(.horizontal)
+            .padding(.bottom, 12)
+
             HStack(spacing: 15) {
                 Text("⌘M Mute Microphone")
                 Text("⌘D Mute Output")
@@ -2713,6 +2871,10 @@ struct VoiceChatView: View {
                 }
             }
         }
+        .onChange(of: appState.activeRoomId) { _ in
+            appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            appState.serverManager.refreshCurrentRoomMedia()
+        }
         .onDisappear {
             tearDownEscapeMonitor()
         }
@@ -2753,7 +2915,7 @@ struct VoiceChatView: View {
                 isActiveRoom: appState.activeRoomId == room.id,
                 onJoin: { appState.joinOrShowRoom(room) },
                 onShare: { shareCurrentRoom(room) },
-                onPreview: {
+                onPreview: appState.activeRoomId == room.id ? nil : {
                     PeekManager.shared.togglePreview(
                         for: room,
                         canPreview: SettingsManager.shared.canPreviewRoom(
@@ -2904,8 +3066,15 @@ struct VoiceChatView: View {
 
     private func shareCurrentRoom(_ room: Room) {
         let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
+        let url = URL(string: roomURL) ?? URL(fileURLWithPath: roomURL)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(roomURL, forType: .string)
+        if let contentView = NSApp.keyWindow?.contentView {
+            let picker = NSSharingServicePicker(items: [url])
+            picker.show(relativeTo: contentView.bounds, of: contentView, preferredEdge: .minY)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
         AppSoundManager.shared.playSound(.success)
     }
 

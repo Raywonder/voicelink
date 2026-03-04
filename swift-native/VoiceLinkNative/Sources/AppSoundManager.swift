@@ -668,7 +668,11 @@ class AppSoundManager: ObservableObject {
             player.volume = volume
             player.currentTime = 0
             player.prepareToPlay()
-            player.play()
+            let didStart = player.play()
+            guard didStart else {
+                print("AppSoundManager: Startup intro did not begin playback for \(introURL.lastPathComponent)")
+                return false
+            }
             startupIntroPlayer = player
             startupIntroPlayed = true
             print("AppSoundManager: Playing startup intro \(introURL.lastPathComponent)")
@@ -687,8 +691,8 @@ class AppSoundManager: ObservableObject {
             if self.playRandomStartupIntro() { return }
 
             if self.hasPlayableVariant(for: .connected) {
-                self.playSound(.connected, force: true, allowSystemFallback: false)
-                self.startupIntroPlayed = true
+                self.playSound(.connected, force: true, allowSystemFallback: true)
+                self.startupIntroPlayed = self.isSoundPlaying(.connected)
             } else {
                 self.queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
             }

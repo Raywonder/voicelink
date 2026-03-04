@@ -43,6 +43,21 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         setupOAuthCallbackListener()
     }
 
+    private func applyAuthenticatedUser(_ user: AuthenticatedUser, notifyMastodon: Bool = false) {
+        currentUser = user
+        authState = .authenticated
+        saveAuth(user: user)
+
+        Task { @MainActor in
+            await LicensingManager.shared.syncEntitlementsFromCurrentUser()
+            await LicensingManager.shared.refreshForCurrentUser()
+        }
+
+        if notifyMastodon {
+            NotificationCenter.default.post(name: .mastodonAccountLoaded, object: user)
+        }
+    }
+
     private func setupOAuthCallbackListener() {
         // Listen for OAuth callbacks from URL handler (fallback for external browser auth)
         NotificationCenter.default.addObserver(
@@ -108,7 +123,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    completion(false, error.localizedDescription)
+                    completion(false, "Failed to contact Mastodon instance: \(error.localizedDescription)")
+                    return
+                }
+
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    let bodyText = data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let message = (bodyText?.isEmpty == false ? bodyText! : "HTTP \(http.statusCode)")
+                    completion(false, "Failed to register with Mastodon instance: \(message)")
                     return
                 }
 
@@ -293,14 +315,9 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 user.statusesCount = json["statuses_count"] as? Int ?? 0
                 user.accountCreatedAt = accountCreatedAt
 
-                self?.currentUser = user
-                self?.authState = .authenticated
-                self?.saveAuth(user: user)
+                self?.applyAuthenticatedUser(user, notifyMastodon: true)
                 self?.pendingMastodonCompletion?(true, nil)
                 self?.pendingMastodonCompletion = nil
-
-                // Notify about reputation for room calculations
-                NotificationCenter.default.post(name: .mastodonAccountLoaded, object: user)
             }
         }.resume()
     }
@@ -403,11 +420,9 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     avatarURL: nil
                 )
 
-                self?.currentUser = user
-                self?.authState = .authenticated
+                self?.applyAuthenticatedUser(user)
                 self?.pendingEmailVerification = nil
                 self?.emailVerificationExpiry = nil
-                self?.saveAuth(user: user)
                 completion(true, nil)
             }
         }.resume()
@@ -506,9 +521,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     accessToken: accessToken,
                     avatarURL: nil
                 )
-                self?.currentUser = user
-                self?.authState = .authenticated
-                self?.saveAuth(user: user)
+                self?.applyAuthenticatedUser(user)
                 self?.pendingAdminInviteToken = nil
                 self?.pendingAdminInviteServerURL = nil
                 completion(true, nil)
@@ -652,9 +665,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     return
                 }
 
-                self?.currentUser = user
-                self?.authState = .authenticated
-                self?.saveAuth(user: user)
+                self?.applyAuthenticatedUser(user)
                 completion(true, nil, false)
             }
         }.resume()
@@ -699,8 +710,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
               let user = decodeStoredUser(data) else {
             return false
         }
-        currentUser = user
-        authState = .authenticated
+        applyAuthenticatedUser(user)
         return true
     }
 
@@ -722,8 +732,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
            let data = result as? Data,
            let user = decodeStoredUser(data) {
-            currentUser = user
-            authState = .authenticated
+            applyAuthenticatedUser(user)
             UserDefaults.standard.set(data, forKey: authDefaultsKey)
         }
     }
@@ -785,6 +794,13 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             user.entitlements = entitlements.mapValues(AnyCodable.init)
         }
         return user
+    }
+
+    func openMastodonInstanceInBrowser(instance: String) {
+        let trimmed = instance.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty,
+              let url = URL(string: "https://\(trimmed)") else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
@@ -1257,6 +1273,13 @@ struct MastodonAuthView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(instanceInput.isEmpty || isAuthenticating)
+            }
+
+            if !instanceInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button("Open Instance in Browser") {
+                    authManager.openMastodonInstanceInBrowser(instance: instanceInput)
+                }
+                .buttonStyle(.bordered)
             }
 
             Text("This will open your browser to authorize VoiceLink")

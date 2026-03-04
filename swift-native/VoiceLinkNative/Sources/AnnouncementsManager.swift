@@ -149,7 +149,7 @@ class AnnouncementsManager: ObservableObject {
     func openBugTracker() {
         if let urlString = bugTracker?.url, let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
-        } else if let url = URL(string: "\(serverURL)/report-bug.html") {
+        } else if let url = URL(string: "\(serverURL)/bugtracker/") {
             NSWorkspace.shared.open(url)
         }
     }

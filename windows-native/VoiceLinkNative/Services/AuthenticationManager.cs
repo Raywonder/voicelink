@@ -223,6 +223,8 @@ namespace VoiceLinkNative.Services
                             AccessToken = result.AccessToken
                         };
                         CurrentState = AuthState.Authenticated;
+                        _ = LicensingManager.Instance.SyncEntitlementsFromCurrentUserAsync();
+                        _ = LicensingManager.Instance.RefreshForCurrentUserAsync();
                         return true;
                     }
                 }
@@ -315,6 +317,8 @@ namespace VoiceLinkNative.Services
                         };
                         CurrentState = AuthState.Authenticated;
                         _pendingEmail = null;
+                        _ = LicensingManager.Instance.SyncEntitlementsFromCurrentUserAsync();
+                        _ = LicensingManager.Instance.RefreshForCurrentUserAsync();
                         return true;
                     }
                 }
@@ -401,6 +405,8 @@ namespace VoiceLinkNative.Services
                 var authMethod = normalizedProvider == "whmcs" ? "whmcs" : "email";
                 CurrentUser = ParseAuthenticatedUser(root.TryGetProperty("user", out var userElement) ? userElement : default, userToken, authMethod);
                 CurrentState = AuthState.Authenticated;
+                _ = LicensingManager.Instance.SyncEntitlementsFromCurrentUserAsync();
+                _ = LicensingManager.Instance.RefreshForCurrentUserAsync();
                 return (true, false, null);
             }
             catch (Exception ex)
@@ -650,6 +656,8 @@ namespace VoiceLinkNative.Services
                 PendingAdminInviteServerUrl = null;
                 PendingAdminInviteEmail = null;
                 PendingAdminInviteRole = null;
+                _ = LicensingManager.Instance.SyncEntitlementsFromCurrentUserAsync();
+                _ = LicensingManager.Instance.RefreshForCurrentUserAsync();
                 return true;
             }
             catch (Exception ex)
@@ -717,6 +725,8 @@ namespace VoiceLinkNative.Services
                                 AuthMethod = "mastodon"
                             };
                             CurrentState = AuthState.Authenticated;
+                            _ = LicensingManager.Instance.SyncEntitlementsFromCurrentUserAsync();
+                            _ = LicensingManager.Instance.RefreshForCurrentUserAsync();
                             return true;
                         }
                     }
@@ -745,6 +755,7 @@ namespace VoiceLinkNative.Services
             PendingAdminInviteEmail = null;
             PendingAdminInviteRole = null;
             ErrorMessage = null;
+            LicensingManager.Instance.Clear();
         }
     }
 

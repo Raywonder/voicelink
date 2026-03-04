@@ -278,10 +278,14 @@ class UserAudioControlManager: ObservableObject {
 
     // MARK: - Master Volume Control
 
-    func increaseMasterVolume() {
-        masterVolume = min(1.5, masterVolume + volumeStep)
+    func setMasterVolume(_ volume: Float) {
+        masterVolume = max(0.0, min(1.5, volume))
+        UserDefaults.standard.set(Double(masterVolume), forKey: "outputVolume")
+        let settings = SettingsManager.shared
+        if abs(settings.outputVolume - Double(masterVolume)) > 0.0001 {
+            settings.outputVolume = Double(masterVolume)
+        }
         saveSettings()
-        AppSoundManager.shared.playButtonClickSound()
 
         NotificationCenter.default.post(
             name: .masterVolumeChanged,
@@ -290,21 +294,19 @@ class UserAudioControlManager: ObservableObject {
         )
     }
 
+    func increaseMasterVolume() {
+        setMasterVolume(masterVolume + volumeStep)
+        AppSoundManager.shared.playButtonClickSound()
+    }
+
     func decreaseMasterVolume() {
-        masterVolume = max(0.0, masterVolume - volumeStep)
-        saveSettings()
+        setMasterVolume(masterVolume - volumeStep)
 
         if masterVolume == 0 {
             AppSoundManager.shared.playSound(.toggleOff)
         } else {
             AppSoundManager.shared.playButtonClickSound()
         }
-
-        NotificationCenter.default.post(
-            name: .masterVolumeChanged,
-            object: nil,
-            userInfo: ["volume": masterVolume]
-        )
     }
 
     // MARK: - Persistence
@@ -319,7 +321,15 @@ class UserAudioControlManager: ObservableObject {
         if let soloData = UserDefaults.standard.dictionary(forKey: "userSolo") as? [String: Bool] {
             userSolo = soloData
         }
-        masterVolume = UserDefaults.standard.float(forKey: "masterVolume")
+        if let storedMaster = UserDefaults.standard.object(forKey: "masterVolume") as? Float {
+            masterVolume = storedMaster
+        } else if let storedMaster = UserDefaults.standard.object(forKey: "masterVolume") as? Double {
+            masterVolume = Float(storedMaster)
+        } else if let storedOutput = UserDefaults.standard.object(forKey: "outputVolume") as? Double {
+            masterVolume = Float(storedOutput)
+        } else {
+            masterVolume = 1.0
+        }
         if masterVolume == 0 { masterVolume = 1.0 }
     }
 
@@ -328,6 +338,7 @@ class UserAudioControlManager: ObservableObject {
         UserDefaults.standard.set(userMuted, forKey: "userMuted")
         UserDefaults.standard.set(userSolo, forKey: "userSolo")
         UserDefaults.standard.set(masterVolume, forKey: "masterVolume")
+        UserDefaults.standard.set(Double(masterVolume), forKey: "outputVolume")
     }
 
     // MARK: - Cleanup
@@ -492,17 +503,19 @@ struct UserVolumeControlPanel: View {
             Divider()
 
             HStack {
-                Text("Master")
+                Text("VoiceLink Volume")
                     .font(.caption)
                     .foregroundColor(.gray)
 
                 Slider(
                     value: Binding(
                         get: { Double(audioControl.masterVolume) },
-                        set: { audioControl.masterVolume = Float($0) }
+                        set: { audioControl.setMasterVolume(Float($0)) }
                     ),
                     in: 0...1.5
                 )
+                .accessibilityLabel("VoiceLink master volume")
+                .accessibilityHint("Adjusts overall VoiceLink playback volume for heard users, room media, and preview audio.")
 
                 Text("\(Int(audioControl.masterVolume * 100))%")
                     .font(.caption)

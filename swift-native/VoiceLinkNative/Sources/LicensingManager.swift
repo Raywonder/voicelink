@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import IOKit
+import UserNotifications
 
 /// VoiceLink Licensing Manager
 /// Handles node registration, license validation, and device activation
@@ -11,17 +12,35 @@ import IOKit
 class LicensingManager: ObservableObject {
     static let shared = LicensingManager()
 
+    private struct LicensingIdentityContext {
+        let identity: String
+        let authProvider: String
+        let authMethod: String
+        let userId: String
+        let username: String
+        let displayName: String
+        let email: String?
+        let fullHandle: String?
+        let accessToken: String?
+    }
+
     // MARK: - Published Properties
     @Published var licenseKey: String?
     @Published var licenseStatus: LicenseStatus = .unknown
     @Published var activatedDevices: Int = 0
     @Published var maxDevices: Int = 3
     @Published var remainingSlots: Int = 3
+    @Published var activationRequired: Bool = false
     @Published var registrationProgress: Double = 0
     @Published var remainingMinutes: Int = 0
     @Published var isChecking: Bool = false
     @Published var errorMessage: String?
     @Published var devices: [ActivatedDevice] = []
+    @Published var recentMachines: [RecentMachine] = []
+    @Published var primaryEmail: String?
+    @Published var ownershipPolicy: OwnershipPolicy?
+    @Published var lastEvictedDeviceName: String?
+    @Published var latestLicenseNotice: String?
 
     // 2FA support
     @Published var requires2FA: Bool = false
@@ -33,6 +52,8 @@ class LicensingManager: ObservableObject {
     private let registrationDelayMinutes: Int = 15
     private var statusCheckTimer: Timer?
     private var heartbeatTimer: Timer?
+    private var lastAnnouncedLicenseKey: String?
+    private var lastAnnouncedActivationState: Bool = false
 
     // Device identification
     private let deviceId: String
@@ -70,6 +91,24 @@ class LicensingManager: ObservableObject {
         let lastSeen: String
     }
 
+    struct RecentMachine: Identifiable, Codable {
+        let id: String
+        let name: String
+        let platform: String
+        let osVersion: String?
+        let model: String?
+        let state: String
+        let lastSeen: String
+        let lastActivatedAt: String?
+    }
+
+    struct OwnershipPolicy: Codable {
+        let billingModel: String?
+        let allowsTransfer: Bool
+        let requiresManualTransferApproval: Bool
+        let transferCooldownDays: Int
+    }
+
     // MARK: - Initialization
     private init() {
         // Get API URL from config or use default
@@ -82,6 +121,17 @@ class LicensingManager: ObservableObject {
 
         // Load saved license
         loadSavedLicense()
+    }
+
+    var currentDeviceUUID: String { deviceInfo.uuid }
+    var currentDeviceName: String { deviceInfo.name }
+    var currentDevicePlatform: String { deviceInfo.platform }
+    var currentMachine: RecentMachine? {
+        recentMachines.first { $0.id == currentDeviceUUID || $0.name == currentDeviceName }
+    }
+    var currentMachineNeedsActivation: Bool {
+        guard let machine = currentMachine else { return activationRequired }
+        return activationRequired || machine.state == "pending_activation" || machine.state == "deactivated"
     }
 
     // MARK: - Device Identification
@@ -155,6 +205,12 @@ class LicensingManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: licenseKeyKey)
         self.licenseKey = nil
         self.licenseStatus = .notRegistered
+        self.activationRequired = false
+        self.devices = []
+        self.recentMachines = []
+        self.primaryEmail = nil
+        self.ownershipPolicy = nil
+        self.lastEvictedDeviceName = nil
     }
 
     // MARK: - API Methods
@@ -163,8 +219,7 @@ class LicensingManager: ObservableObject {
     /// Requires user to be logged in - uses AuthenticationManager email
     func registerNode(serverId: String, nodeId: String, nodeUrl: String? = nil) async {
         // Check if user is logged in
-        guard let currentUser = AuthenticationManager.shared.currentUser,
-              let userEmail = currentUser.email else {
+        guard let identityContext = currentLicensingIdentity() else {
             await MainActor.run {
                 errorMessage = "You must be logged in to get a license. Please sign in first."
                 licenseStatus = .error
@@ -180,11 +235,16 @@ class LicensingManager: ObservableObject {
         UserDefaults.standard.set(nodeId, forKey: nodeIdKey)
 
         do {
-            let body: [String: Any] = [
+            var body: [String: Any] = [
                 "serverId": serverId,
                 "nodeId": nodeId,
                 "nodeUrl": nodeUrl ?? "",
-                "email": userEmail,  // Required for WHMCS authentication
+                "identity": identityContext.identity,
+                "userId": identityContext.userId,
+                "username": identityContext.username,
+                "displayName": identityContext.displayName,
+                "authProvider": identityContext.authProvider,
+                "authMethod": identityContext.authMethod,
                 "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
                 "deviceInfo": [
                     "name": deviceInfo.name,
@@ -195,20 +255,22 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
-            let result = try await apiRequest(endpoint: "/register", method: "POST", body: body, userEmail: userEmail)
+            if let email = identityContext.email {
+                body["email"] = email
+            }
+            if let fullHandle = identityContext.fullHandle {
+                body["fullHandle"] = fullHandle
+            }
+
+            let result = try await apiRequest(endpoint: "/register", method: "POST", body: body, identityContext: identityContext)
 
             if let status = result["status"] as? String {
                 switch status {
                 case "already_licensed":
-                    if let key = result["licenseKey"] as? String {
-                        saveLicense(key)
-                        licenseStatus = .licensed
-                        activatedDevices = result["activatedDevices"] as? Int ?? 0
-                        maxDevices = result["maxDevices"] as? Int ?? 3
-                        remainingSlots = maxDevices - activatedDevices
-                    }
+                    applyLicenseState(from: result)
 
                 case "pending":
+                    applyLicenseState(from: result)
                     licenseStatus = .pending
                     remainingMinutes = result["remainingMinutes"] as? Int ?? registrationDelayMinutes
                     let remainingMs = result["remainingMs"] as? Double ?? Double(registrationDelayMinutes * 60 * 1000)
@@ -216,20 +278,15 @@ class LicensingManager: ObservableObject {
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
 
                 case "registered":
+                    applyLicenseState(from: result)
                     licenseStatus = .pending
                     remainingMinutes = result["remainingMinutes"] as? Int ?? registrationDelayMinutes
                     registrationProgress = 0
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
 
                 case "licensed":
-                    if let key = result["licenseKey"] as? String {
-                        saveLicense(key)
-                        licenseStatus = .licensed
-                        activatedDevices = result["activatedDevices"] as? Int ?? 0
-                        maxDevices = result["maxDevices"] as? Int ?? 3
-                        remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
-                        startHeartbeat()
-                    }
+                    applyLicenseState(from: result)
+                    startHeartbeat()
 
                 default:
                     errorMessage = result["message"] as? String ?? "Unknown status"
@@ -245,8 +302,7 @@ class LicensingManager: ObservableObject {
 
     /// Verify with 2FA code after 2FA is required
     func verifyWith2FA() async {
-        guard let currentUser = AuthenticationManager.shared.currentUser,
-              let userEmail = currentUser.email else {
+        guard let identityContext = currentLicensingIdentity() else {
             errorMessage = "You must be logged in to verify 2FA."
             return
         }
@@ -264,19 +320,24 @@ class LicensingManager: ObservableObject {
             // If no stored IDs, generate new ones
             let newServerId = "server_\(UUID().uuidString.prefix(8))"
             let newNodeId = "node_\(UUID().uuidString.prefix(8))"
-            await registerNodeWith2FA(serverId: newServerId, nodeId: newNodeId, email: userEmail)
+            await registerNodeWith2FA(serverId: newServerId, nodeId: newNodeId, identityContext: identityContext)
             return
         }
 
-        await registerNodeWith2FA(serverId: serverId, nodeId: nodeId, email: userEmail)
+        await registerNodeWith2FA(serverId: serverId, nodeId: nodeId, identityContext: identityContext)
     }
 
-    private func registerNodeWith2FA(serverId: String, nodeId: String, email: String) async {
+    private func registerNodeWith2FA(serverId: String, nodeId: String, identityContext: LicensingIdentityContext) async {
         do {
-            let body: [String: Any] = [
+            var body: [String: Any] = [
                 "serverId": serverId,
                 "nodeId": nodeId,
-                "email": email,
+                "identity": identityContext.identity,
+                "userId": identityContext.userId,
+                "username": identityContext.username,
+                "displayName": identityContext.displayName,
+                "authProvider": identityContext.authProvider,
+                "authMethod": identityContext.authMethod,
                 "twoFactorCode": twoFactorCode,
                 "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
                 "deviceInfo": [
@@ -288,13 +349,20 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
+            if let email = identityContext.email {
+                body["email"] = email
+            }
+            if let fullHandle = identityContext.fullHandle {
+                body["fullHandle"] = fullHandle
+            }
+
             var result: [String: Any]?
             for base in licensingBaseCandidates() {
                 guard let registerURL = URL(string: base + "/register") else { continue }
                 var request = URLRequest(url: registerURL)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(email, forHTTPHeaderField: "X-User-Email")
+                applyIdentityHeaders(identityContext, to: &request)
                 request.setValue(twoFactorCode, forHTTPHeaderField: "X-2FA-Code")
                 request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -327,15 +395,10 @@ class LicensingManager: ObservableObject {
             if let status = result["status"] as? String {
                 switch status {
                 case "licensed", "already_licensed":
-                    if let key = result["licenseKey"] as? String {
-                        saveLicense(key)
-                        licenseStatus = .licensed
-                        activatedDevices = result["activatedDevices"] as? Int ?? 0
-                        maxDevices = result["maxDevices"] as? Int ?? 3
-                        remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
-                        startHeartbeat()
-                    }
+                    applyLicenseState(from: result)
+                    startHeartbeat()
                 case "pending", "registered":
+                    applyLicenseState(from: result)
                     licenseStatus = .pending
                     remainingMinutes = result["remainingMinutes"] as? Int ?? 15
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
@@ -360,40 +423,20 @@ class LicensingManager: ObservableObject {
         }
 
         isChecking = true
+        let identityContext = currentLicensingIdentity()
 
         do {
-            let result = try await apiRequest(endpoint: "/status/\(serverId)/\(nodeId)", method: "GET")
+            let result = try await apiRequest(endpoint: "/status/\(serverId)/\(nodeId)", method: "GET", identityContext: identityContext)
 
             if let status = result["status"] as? String {
                 switch status {
                 case "licensed":
-                    if let key = result["licenseKey"] as? String {
-                        saveLicense(key)
-                        licenseStatus = .licensed
-                        activatedDevices = result["activatedDevices"] as? Int ?? 0
-                        maxDevices = result["maxDevices"] as? Int ?? 3
-                        remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
-
-                        // Parse devices
-                        if let devicesData = result["devices"] as? [[String: Any]] {
-                            devices = devicesData.compactMap { dict in
-                                guard let id = dict["id"] as? String,
-                                      let name = dict["name"] as? String else { return nil }
-                                return ActivatedDevice(
-                                    id: id,
-                                    name: name,
-                                    platform: dict["platform"] as? String ?? "unknown",
-                                    activatedAt: dict["activatedAt"] as? String ?? "",
-                                    lastSeen: dict["lastSeen"] as? String ?? ""
-                                )
-                            }
-                        }
-
-                        stopStatusCheckTimer()
-                        startHeartbeat()
-                    }
+                    applyLicenseState(from: result)
+                    stopStatusCheckTimer()
+                    startHeartbeat()
 
                 case "pending":
+                    applyLicenseState(from: result)
                     licenseStatus = .pending
                     remainingMinutes = result["remainingMinutes"] as? Int ?? 0
                     let remainingMs = result["remainingMs"] as? Double ?? 0
@@ -423,6 +466,7 @@ class LicensingManager: ObservableObject {
         }
 
         isChecking = true
+        let identityContext = currentLicensingIdentity()
 
         do {
             let body: [String: Any] = [
@@ -434,15 +478,20 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
-            let result = try await apiRequest(endpoint: "/validate", method: "POST", body: body)
+            let result = try await apiRequest(endpoint: "/validate", method: "POST", body: body, identityContext: identityContext)
 
             if result["valid"] as? Bool == true {
-                licenseStatus = .licensed
-                startHeartbeat()
+                applyLicenseState(from: result)
+                licenseStatus = currentMachineNeedsActivation ? .deviceLimitReached : .licensed
+                if !currentMachineNeedsActivation {
+                    startHeartbeat()
+                }
             } else if result["deviceActivated"] as? Bool == false {
+                applyLicenseState(from: result)
                 licenseStatus = .deviceLimitReached
                 errorMessage = result["message"] as? String ?? "Device not activated"
             } else {
+                applyLicenseState(from: result)
                 licenseStatus = .error
                 errorMessage = result["error"] as? String ?? "Validation failed"
             }
@@ -459,6 +508,7 @@ class LicensingManager: ObservableObject {
         guard let key = licenseKey else { return false }
 
         isChecking = true
+        let identityContext = currentLicensingIdentity()
 
         do {
             let body: [String: Any] = [
@@ -471,12 +521,13 @@ class LicensingManager: ObservableObject {
                 ]
             ]
 
-            let result = try await apiRequest(endpoint: "/activate", method: "POST", body: body)
+            let result = try await apiRequest(endpoint: "/activate", method: "POST", body: body, identityContext: identityContext)
 
             if result["success"] as? Bool == true {
-                activatedDevices = result["activatedDevices"] as? Int ?? activatedDevices + 1
-                remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
+                applyLicenseState(from: result)
+                activationRequired = false
                 licenseStatus = .licensed
+                startHeartbeat()
                 isChecking = false
                 return true
             } else {
@@ -498,6 +549,7 @@ class LicensingManager: ObservableObject {
         guard let key = licenseKey else { return false }
 
         isChecking = true
+        let identityContext = currentLicensingIdentity()
 
         do {
             let body: [String: Any] = [
@@ -505,11 +557,10 @@ class LicensingManager: ObservableObject {
                 "deviceId": deviceId
             ]
 
-            let result = try await apiRequest(endpoint: "/deactivate", method: "POST", body: body)
+            let result = try await apiRequest(endpoint: "/deactivate", method: "POST", body: body, identityContext: identityContext)
 
             if result["success"] as? Bool == true {
-                activatedDevices = result["activatedDevices"] as? Int ?? max(0, activatedDevices - 1)
-                remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
+                applyLicenseState(from: result)
                 devices.removeAll { $0.id == deviceId }
                 isChecking = false
                 return true
@@ -527,6 +578,7 @@ class LicensingManager: ObservableObject {
     /// Send heartbeat to keep license active
     func sendHeartbeat() async {
         guard let key = licenseKey else { return }
+        let identityContext = currentLicensingIdentity()
 
         let body: [String: Any] = [
             "licenseKey": key,
@@ -538,9 +590,95 @@ class LicensingManager: ObservableObject {
         ]
 
         do {
-            _ = try await apiRequest(endpoint: "/heartbeat", method: "POST", body: body)
+            _ = try await apiRequest(endpoint: "/heartbeat", method: "POST", body: body, identityContext: identityContext)
         } catch {
             print("[Licensing] Heartbeat error: \(error.localizedDescription)")
+        }
+    }
+
+    func refreshForCurrentUser() async {
+        guard currentLicensingIdentity() != nil else {
+            clearLicense()
+            return
+        }
+
+        isChecking = true
+        defer { isChecking = false }
+
+        do {
+            let result = try await apiRequest(endpoint: "/me", method: "GET", identityContext: currentLicensingIdentity())
+            if result["status"] as? String == "not_registered" {
+                clearLicense()
+                return
+            }
+            applyLicenseState(from: result)
+            let status = (result["status"] as? String) ?? "licensed"
+            switch status {
+            case "pending":
+                licenseStatus = .pending
+            case "licensed":
+                licenseStatus = activationRequired ? .deviceLimitReached : .licensed
+                if !activationRequired {
+                    startHeartbeat()
+                }
+            default:
+                licenseStatus = activationRequired ? .deviceLimitReached : .licensed
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func syncEntitlementsFromCurrentUser() async {
+        guard let identityContext = currentLicensingIdentity() else { return }
+
+        let entitlementPayload = AuthenticationManager.shared.currentUser?.entitlements.reduce(into: [String: Any]()) { partialResult, entry in
+            partialResult[entry.key] = entry.value.value
+        } ?? [:]
+        let source: String
+        if entitlementPayload["appStore"] != nil || entitlementPayload["iosPurchases"] != nil {
+            source = "app_store"
+        } else {
+            switch AuthenticationManager.shared.currentUser?.authMethod {
+            case .whmcs:
+                source = "whmcs"
+            case .mastodon:
+                source = "mastodon"
+            case .email, .adminInvite:
+                source = "email"
+            case .pairingCode:
+                source = "pairing"
+            case .none:
+                source = "manual"
+            }
+        }
+
+        var body: [String: Any] = [
+            "source": source,
+            "identity": identityContext.identity,
+            "userId": identityContext.userId,
+            "username": identityContext.username,
+            "displayName": identityContext.displayName,
+            "authProvider": identityContext.authProvider,
+            "authMethod": identityContext.authMethod,
+            "entitlements": entitlementPayload
+        ]
+
+        if let email = identityContext.email {
+            body["email"] = email
+        }
+        if source == "app_store" {
+            body["appStore"] = [
+                "platform": deviceInfo.platform,
+                "productState": entitlementPayload
+            ]
+        }
+
+        do {
+            let result = try await apiRequest(endpoint: "/sync-entitlements", method: "POST", body: body, identityContext: identityContext)
+            applyLicenseState(from: result)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -575,7 +713,7 @@ class LicensingManager: ObservableObject {
 
     // MARK: - Network Helper
 
-    private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil, userEmail: String? = nil) async throws -> [String: Any] {
+    private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil, identityContext: LicensingIdentityContext? = nil) async throws -> [String: Any] {
         var lastError: Error = URLError(.cannotFindHost)
 
         for base in licensingBaseCandidates() {
@@ -585,9 +723,7 @@ class LicensingManager: ObservableObject {
             request.httpMethod = method
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-            if let email = userEmail {
-                request.setValue(email, forHTTPHeaderField: "X-User-Email")
-            }
+            applyIdentityHeaders(identityContext, to: &request)
 
             if let body = body {
                 request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -633,6 +769,190 @@ class LicensingManager: ObservableObject {
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
     }
+
+    private func currentLicensingIdentity() -> LicensingIdentityContext? {
+        guard let currentUser = AuthenticationManager.shared.currentUser else {
+            return nil
+        }
+
+        let email = sanitized(currentUser.email)
+        let username = sanitized(currentUser.username) ?? currentUser.id
+        let displayName = sanitized(currentUser.displayName) ?? username
+        let authProvider = sanitized(currentUser.authProvider) ?? currentUser.authMethod.rawValue
+        let authMethod = currentUser.authMethod.rawValue
+        let userId = sanitized(currentUser.id) ?? UUID().uuidString
+        let fullHandle = sanitized(currentUser.fullHandle)
+        let identity = email ?? fullHandle ?? username
+
+        return LicensingIdentityContext(
+            identity: identity,
+            authProvider: authProvider,
+            authMethod: authMethod,
+            userId: userId,
+            username: username,
+            displayName: displayName,
+            email: email,
+            fullHandle: fullHandle,
+            accessToken: sanitized(currentUser.accessToken)
+        )
+    }
+
+    private func applyIdentityHeaders(_ identityContext: LicensingIdentityContext?, to request: inout URLRequest) {
+        guard let identityContext else { return }
+
+        request.setValue(identityContext.identity, forHTTPHeaderField: "X-User-Identity")
+        request.setValue(identityContext.userId, forHTTPHeaderField: "X-User-ID")
+        request.setValue(identityContext.username, forHTTPHeaderField: "X-Username")
+        request.setValue(identityContext.authProvider, forHTTPHeaderField: "X-Auth-Provider")
+        request.setValue(identityContext.authMethod, forHTTPHeaderField: "X-Auth-Method")
+
+        if let email = identityContext.email {
+            request.setValue(email, forHTTPHeaderField: "X-User-Email")
+        }
+        if let fullHandle = identityContext.fullHandle {
+            request.setValue(fullHandle, forHTTPHeaderField: "X-User-Full-Handle")
+        }
+        if let accessToken = identityContext.accessToken, !accessToken.isEmpty {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    private func sanitized(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func applyLicenseState(from result: [String: Any]) {
+        let previousKey = licenseKey
+        let previousActivationRequired = activationRequired
+
+        if let key = result["licenseKey"] as? String, !key.isEmpty {
+            saveLicense(key)
+        }
+
+        primaryEmail = sanitized(result["primaryEmail"] as? String)
+        activatedDevices = result["activatedDevices"] as? Int ?? activatedDevices
+        maxDevices = result["maxDevices"] as? Int ?? maxDevices
+        remainingSlots = result["remainingSlots"] as? Int ?? max(0, maxDevices - activatedDevices)
+        activationRequired = result["activationRequired"] as? Bool ?? false
+
+        if let policy = result["ownershipPolicy"] as? [String: Any] {
+            ownershipPolicy = OwnershipPolicy(
+                billingModel: policy["billingModel"] as? String,
+                allowsTransfer: policy["allowsTransfer"] as? Bool ?? false,
+                requiresManualTransferApproval: policy["requiresManualTransferApproval"] as? Bool ?? false,
+                transferCooldownDays: policy["transferCooldownDays"] as? Int ?? 30
+            )
+        } else {
+            ownershipPolicy = nil
+        }
+
+        if let evicted = result["lastEvictedDevice"] as? [String: Any] {
+            lastEvictedDeviceName = sanitized(evicted["name"] as? String) ?? sanitized(evicted["id"] as? String)
+        } else {
+            lastEvictedDeviceName = nil
+        }
+
+        if let devicesData = result["devices"] as? [[String: Any]] {
+            devices = devicesData.compactMap { dict in
+                guard let id = dict["id"] as? String,
+                      let name = dict["name"] as? String else { return nil }
+                return ActivatedDevice(
+                    id: id,
+                    name: name,
+                    platform: dict["platform"] as? String ?? "unknown",
+                    activatedAt: dict["linkedAt"] as? String ?? dict["activatedAt"] as? String ?? "",
+                    lastSeen: dict["lastSeen"] as? String ?? ""
+                )
+            }
+        } else {
+            devices = []
+        }
+
+        if let machinesData = result["recentMachines"] as? [[String: Any]] {
+            recentMachines = machinesData.compactMap { dict in
+                let id = (dict["id"] as? String) ?? (dict["uuid"] as? String) ?? UUID().uuidString
+                let name = dict["name"] as? String ?? "Unknown Device"
+                let platform = dict["platform"] as? String ?? "unknown"
+                let state = dict["state"] as? String ?? "seen"
+                let lastSeen = dict["lastSeen"] as? String ?? ""
+                return RecentMachine(
+                    id: id,
+                    name: name,
+                    platform: platform,
+                    osVersion: dict["osVersion"] as? String,
+                    model: dict["model"] as? String,
+                    state: state,
+                    lastSeen: lastSeen,
+                    lastActivatedAt: dict["lastActivatedAt"] as? String
+                )
+            }
+        } else {
+            recentMachines = []
+        }
+
+        if !activationRequired,
+           let machine = currentMachine,
+           machine.state == "pending_activation" || machine.state == "deactivated" {
+            activationRequired = true
+        }
+
+        if let key = licenseKey, !key.isEmpty, previousKey != key {
+            announceLicenseEvent(
+                title: "VoiceLink license assigned",
+                message: activationRequired
+                    ? "Your account license \(key) is available. Activate this Mac to use it."
+                    : "Your account license \(key) is now active on this Mac."
+            )
+            lastAnnouncedLicenseKey = key
+        } else if activationRequired && !previousActivationRequired && lastAnnouncedActivationState != activationRequired {
+            announceLicenseEvent(
+                title: "VoiceLink activation required",
+                message: {
+                    if let key = licenseKey, !key.isEmpty {
+                        return "This Mac is signed in. License \(key) is assigned to your account and just needs device activation."
+                    }
+                    return "This Mac is signed in, but it still needs to be activated for your license."
+                }()
+            )
+        }
+
+        lastAnnouncedActivationState = activationRequired
+    }
+
+    private func announceLicenseEvent(title: String, message: String) {
+        latestLicenseNotice = message
+        NotificationCenter.default.post(
+            name: .licenseNoticeReceived,
+            object: nil,
+            userInfo: [
+                "title": title,
+                "message": message
+            ]
+        )
+
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = message
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: "voicelink.license.\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            center.add(request)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let licenseNoticeReceived = Notification.Name("licenseNoticeReceived")
 }
 
 // MARK: - SHA256 Extension

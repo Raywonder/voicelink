@@ -6,6 +6,9 @@ struct LicensingView: View {
     @ObservedObject var licensing = LicensingManager.shared
     @State private var showDeviceManagement = false
     @State private var selectedDeviceToDeactivate: LicensingManager.ActivatedDevice?
+    @State private var selectedTab: LicensingTab = .summary
+    @State private var showActivateConfirmation = false
+    @State private var showDeactivateConfirmation = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -25,16 +28,27 @@ struct LicensingView: View {
 
             Divider()
 
-            // Status display
-            statusView
+            HStack(alignment: .top, spacing: 16) {
+                licensingTabs
+                    .frame(width: 120, alignment: .topLeading)
 
-            // Device slots
-            if licensing.licenseStatus == .licensed || licensing.licenseStatus == .deviceLimitReached {
-                deviceSlotsView
+                VStack(alignment: .leading, spacing: 16) {
+                    switch selectedTab {
+                    case .summary:
+                        statusView
+                        if licensing.licenseStatus == .licensed || licensing.licenseStatus == .deviceLimitReached {
+                            deviceSlotsView
+                        }
+                        currentMachineView
+                        actionsView
+                    case .devices:
+                        devicesView
+                    case .history:
+                        recentMachinesView
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-
-            // Actions
-            actionsView
 
             // Error message
             if let error = licensing.errorMessage {
@@ -49,6 +63,57 @@ struct LicensingView: View {
         .cornerRadius(12)
         .sheet(isPresented: $showDeviceManagement) {
             DeviceManagementSheet(licensing: licensing)
+        }
+        .task {
+            if AuthenticationManager.shared.currentUser != nil {
+                await licensing.refreshForCurrentUser()
+            } else if licensing.licenseKey != nil {
+                await licensing.validateLicense()
+            }
+        }
+        .alert("Activate This Mac?", isPresented: $showActivateConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Continue") {
+                Task {
+                    _ = await licensing.activateDevice()
+                }
+            }
+        } message: {
+            Text("This will activate \(licensing.currentDeviceName) using your assigned license.")
+        }
+        .alert("Deactivate Device?", isPresented: $showDeactivateConfirmation, presenting: selectedDeviceToDeactivate) { device in
+            Button("Cancel", role: .cancel) { }
+            Button("Continue", role: .destructive) {
+                Task {
+                    _ = await licensing.deactivateDevice(device.id)
+                }
+            }
+        } message: { device in
+            Text("This will deactivate \(device.name). If you're not sure, cancel.")
+        }
+    }
+
+    private enum LicensingTab: String, CaseIterable, Identifiable {
+        case summary = "Summary"
+        case devices = "Devices"
+        case history = "History"
+
+        var id: String { rawValue }
+    }
+
+    private var licensingTabs: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(LicensingTab.allCases) { tab in
+                Button(tab.rawValue) {
+                    selectedTab = tab
+                }
+                .buttonStyle(.bordered)
+                .tint(selectedTab == tab ? .accentColor : nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(tab.rawValue)
+                .accessibilityValue(selectedTab == tab ? "Selected" : "Not selected")
+            }
+            Spacer()
         }
     }
 
@@ -127,12 +192,27 @@ struct LicensingView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.largeTitle)
                     .foregroundColor(.yellow)
-                Text("Device Limit Reached")
+                Text(licensing.activationRequired ? "Device Activation Required" : "Device Limit Reached")
                     .font(.subheadline.bold())
                     .foregroundColor(.yellow)
-                Text("Deactivate a device or purchase more slots")
+                Text(licensing.activationRequired ? "Your account license is already assigned. Activate this Mac to attach it to the existing key." : "Deactivate a device or purchase more slots")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if let key = licensing.licenseKey {
+                    Text(formatLicenseKey(key))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                if let primaryEmail = licensing.primaryEmail {
+                    Text(primaryEmail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let evictedName = licensing.lastEvictedDeviceName {
+                    Text("Oldest install replaced: \(evictedName)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
 
         case .revoked:
@@ -215,6 +295,98 @@ struct LicensingView: View {
         .padding(.vertical, 8)
     }
 
+    private var currentMachineView: some View {
+        GroupBox("This Mac") {
+            VStack(alignment: .leading, spacing: 8) {
+                machineRow("Name", licensing.currentDeviceName)
+                machineRow("Platform", licensing.currentDevicePlatform)
+                machineRow("Status", currentMachineStatusText)
+                if let machine = currentMachine {
+                    machineRow("Last Seen", formatMachineTimestamp(machine.lastSeen))
+                    if let lastActivatedAt = machine.lastActivatedAt, !lastActivatedAt.isEmpty {
+                        machineRow("Last Activated", formatMachineTimestamp(lastActivatedAt))
+                    }
+                }
+            }
+        }
+    }
+
+    private var devicesView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if licensing.devices.isEmpty {
+                Text("No active devices")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(licensing.devices) { device in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.name)
+                                .font(.subheadline.bold())
+                            Text("\(device.platform) • Last seen \(formatMachineTimestamp(device.lastSeen))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if isCurrentDevice(device) {
+                            Text("Active Here")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                        Button("Deactivate") {
+                            selectedDeviceToDeactivate = device
+                            showDeactivateConfirmation = true
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    private var recentMachinesView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Machine History")
+                    .font(.caption.bold())
+                Spacer()
+                if let primaryEmail = licensing.primaryEmail {
+                    Text(primaryEmail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if licensing.recentMachines.isEmpty {
+                Text("No machine history")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            ForEach(licensing.recentMachines.prefix(10)) { machine in
+                HStack(spacing: 8) {
+                    Image(systemName: iconName(for: machine.state))
+                        .foregroundColor(iconColor(for: machine.state))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(machine.name)
+                            .font(.caption)
+                        Text(machineStatusText(for: machine))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func machineStatusText(for machine: LicensingManager.RecentMachine) -> String {
+        let normalizedState = machine.state.replacingOccurrences(of: "_", with: " ")
+        return "\(machine.platform) • \(normalizedState) • \(formatMachineTimestamp(machine.lastSeen))"
+    }
+
     @ViewBuilder
     private var actionsView: some View {
         switch licensing.licenseStatus {
@@ -252,19 +424,39 @@ struct LicensingView: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button(action: {
-                    Task {
-                        await licensing.validateLicense()
+                if canActivateCurrentMachine {
+                    Button(action: {
+                        showActivateConfirmation = true
+                    }) {
+                        Label("Activate This Device", systemImage: "checkmark.circle")
                     }
-                }) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    .buttonStyle(.borderedProminent)
+                    .disabled(licensing.isChecking)
                 }
-                .buttonStyle(.bordered)
-                .disabled(licensing.isChecking)
             }
 
         case .deviceLimitReached:
             VStack(spacing: 8) {
+                if canActivateCurrentMachine {
+                    Button(action: {
+                        showActivateConfirmation = true
+                    }) {
+                        Label("Activate This Device", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(licensing.isChecking)
+                }
+
+                if let key = licensing.licenseKey {
+                    Button(action: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(key, forType: .string)
+                    }) {
+                        Label("Copy License Key", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 Button(action: {
                     showDeviceManagement = true
                 }) {
@@ -301,6 +493,72 @@ struct LicensingView: View {
         let parts = key.split(separator: "-")
         guard parts.count == 5 else { return key }
         return "\(parts[0])-\(parts[1])-****-****-\(parts[4])"
+    }
+
+    private var currentMachine: LicensingManager.RecentMachine? {
+        licensing.currentMachine
+    }
+
+    private var currentMachineStatusText: String {
+        if let machine = currentMachine {
+            return machine.state.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+        if licensing.activationRequired {
+            return "Pending Activation"
+        }
+        return "Unknown"
+    }
+
+    private var canActivateCurrentMachine: Bool {
+        licensing.currentMachineNeedsActivation && licensing.remainingSlots > 0
+    }
+
+    private func machineRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .frame(width: 96, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+    }
+
+    private func formatMachineTimestamp(_ value: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return value }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func iconName(for state: String) -> String {
+        switch state {
+        case "active":
+            return "checkmark.circle.fill"
+        case "deactivated":
+            return "minus.circle.fill"
+        case "pending_activation":
+            return "clock.arrow.circlepath"
+        default:
+            return "circle"
+        }
+    }
+
+    private func iconColor(for state: String) -> Color {
+        switch state {
+        case "active":
+            return .green
+        case "deactivated":
+            return .orange
+        case "pending_activation":
+            return .secondary
+        default:
+            return .secondary
+        }
+    }
+
+    private func isCurrentDevice(_ device: LicensingManager.ActivatedDevice) -> Bool {
+        device.id == licensing.currentDeviceUUID || (device.platform == licensing.currentDevicePlatform && device.name == licensing.currentDeviceName)
     }
 }
 

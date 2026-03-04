@@ -3,13 +3,13 @@ version: 1.0
 build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: Dm+9yWtDDbBCKXMraP01+MbWWs36GDFQHJyOG6xyRc+o6cub0DLm9rJMJ1hPcHYea8AfeO31BwN+hrsbiEqnWA==
-    size: 161736189
+    sha512: bKIkkcLI+9n+aTkPE5wccVamQe9p1IPH60TS+z81nPgQjDVFNn5os1R+3IuC1nGY7jpiiyGKKpII9pESFP20Hw==
+    size: 165623193
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: Dm+9yWtDDbBCKXMraP01+MbWWs36GDFQHJyOG6xyRc+o6cub0DLm9rJMJ1hPcHYea8AfeO31BwN+hrsbiEqnWA==
-releaseDate: '2026-03-04T01:24:07.000Z'
+sha512: bKIkkcLI+9n+aTkPE5wccVamQe9p1IPH60TS+z81nPgQjDVFNn5os1R+3IuC1nGY7jpiiyGKKpII9pESFP20Hw==
+releaseDate: '2026-03-04T02:01:49.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 26)
-  - Finalized current VoiceLink auth, licensing, messaging, media, and admin improvements.
-  - Uses the current universal macOS release binary for Intel and Apple Silicon support.
-  - Keeps browser room access closed until the public web client is ready.
+  - Rebuilt from the current universal macOS source binary.
+  - Includes the current desktop auth, licensing, media, admin, and support-path baseline.
+  - Keeps desktop as the primary supported release path while browser access remains limited.

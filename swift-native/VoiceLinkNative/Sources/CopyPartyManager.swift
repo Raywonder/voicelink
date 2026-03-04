@@ -405,6 +405,48 @@ class CopyPartyManager: ObservableObject {
         )
     }
 
+    func uploadFilesAndCreateProtectedLink(
+        from localURLs: [URL],
+        to remoteDirectory: String = "/uploads",
+        folderName: String? = nil,
+        keepForever: Bool = false,
+        expiryHours: Int? = nil
+    ) async throws -> ProtectedShareLink {
+        let validURLs = localURLs.filter { !$0.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !validURLs.isEmpty else {
+            throw NSError(domain: "CopyParty", code: 4, userInfo: [NSLocalizedDescriptionKey: "No files selected"])
+        }
+
+        if validURLs.count == 1 {
+            return try await uploadFileAndCreateProtectedLink(
+                from: validURLs[0],
+                to: remoteDirectory,
+                keepForever: keepForever,
+                expiryHours: expiryHours
+            )
+        }
+
+        let normalizedDirectory = normalizedRemotePath(remoteDirectory)
+        let safeFolderName = sanitizedRemoteComponent(
+            folderName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? folderName!
+                : "VoiceLink-\(UUID().uuidString.prefix(8))"
+        )
+        let remoteFolderPath = "\(normalizedDirectory)/\(safeFolderName)"
+
+        for localURL in validURLs {
+            let safeName = sanitizedRemoteComponent(localURL.lastPathComponent)
+            let remoteFilePath = "\(remoteFolderPath)/\(safeName)"
+            try await uploadFileNow(from: localURL, to: remoteFilePath)
+        }
+
+        return try await createProtectedExternalLink(
+            filePath: remoteFolderPath,
+            keepForever: keepForever,
+            expiryHours: expiryHours
+        )
+    }
+
     private func uploadFileNow(from localURL: URL, to remoteFilePath: String) async throws {
         guard let fileData = try? Data(contentsOf: localURL) else {
             throw NSError(domain: "CopyParty", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read file"])
@@ -841,6 +883,15 @@ class CopyPartyManager: ObservableObject {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+    }
+
+    private func sanitizedRemoteComponent(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let replaced = trimmed
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let cleaned = replaced.isEmpty ? "item" : replaced
+        return cleaned
     }
 
     private func rawExternalFileURL(path: String) -> String {

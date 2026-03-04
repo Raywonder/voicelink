@@ -494,6 +494,13 @@ struct UserRow: View {
         return roomUser?.hasAudioControls ?? !(roomUser?.isBot ?? false)
     }
 
+    private var displayStatusText: String? {
+        guard settings.showUserStatusesInRoomList else { return nil }
+        let rawStatus = roomUser?.status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rawStatus.isEmpty else { return nil }
+        return rawStatus
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Main row
@@ -503,8 +510,16 @@ struct UserRow: View {
                     .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
                     .frame(width: 10, height: 10)
 
-                Text(username)
-                    .foregroundColor(.white)
+                HStack(spacing: 6) {
+                    Text(username)
+                        .foregroundColor(.white)
+                    if let displayStatusText {
+                        Text("(\(displayStatusText))")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .lineLimit(1)
+                    }
+                }
 
                 Spacer()
 
@@ -572,6 +587,13 @@ struct UserRow: View {
             if showControls {
                 VStack(spacing: 8) {
                     if hasAudioControls {
+                        if isCurrentUser {
+                            Text("You cannot mute yourself from the room user list. Use the main room mute controls.")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
                         HStack {
                             Image(systemName: "speaker.wave.2")
                                 .font(.caption)
@@ -605,23 +627,22 @@ struct UserRow: View {
                         }
 
                         HStack(spacing: 12) {
-                            Button(action: {
-                                if !isCurrentUser {
+                            if !isCurrentUser {
+                                Button(action: {
                                     audioControl.toggleMute(for: userId)
+                                }) {
+                                    HStack {
+                                        Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
+                                        Text(isUserMuted ? "Unmute" : "Mute")
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
+                                    .cornerRadius(6)
                                 }
-                            }) {
-                                HStack {
-                                    Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
-                                    Text(isUserMuted ? "Unmute" : "Mute")
-                                }
-                                .font(.caption)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
-                                .cornerRadius(6)
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(isCurrentUser)
 
                             Button(action: {
                                 if isCurrentUser {
@@ -646,9 +667,8 @@ struct UserRow: View {
                             }
                             .buttonStyle(.plain)
                         }
-
                         if isCurrentUser {
-                            Text("You cannot mute yourself in this list. Use main room mute controls. Monitor lets you hear your current input device and may cause feedback if speakers are active.")
+                            Text("Monitor lets you hear your current input device and may cause feedback if speakers are active.")
                                 .font(.caption2)
                                 .foregroundColor(.orange)
                         }

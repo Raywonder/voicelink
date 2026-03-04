@@ -14,6 +14,11 @@ class MessagingManager: ObservableObject {
     @Published var unreadCounts: [String: Int] = [:]              // odId -> unread count
     @Published var totalUnreadCount: Int = 0
     @Published var isTyping: [String: Bool] = [:]                 // odId -> isTyping
+    @Published var currentRoomId: String?
+    @Published var roomHasMoreMessages: Bool = false
+    @Published var directMessageHasMore: [String: Bool] = [:]
+    @Published var roomHistoryStatus: String = ""
+    @Published var directHistoryStatus: [String: String] = [:]
 
     private struct PendingOutgoingMessage {
         let senderId: String
@@ -23,6 +28,8 @@ class MessagingManager: ObservableObject {
     }
 
     private var pendingOutgoingMessages: [PendingOutgoingMessage] = []
+    private let roomHistoryPageSize = 20
+    private let dmHistoryPageSize = 20
 
     // MARK: - Types
 
@@ -35,6 +42,11 @@ class MessagingManager: ObservableObject {
         let type: MessageType
         var isRead: Bool
         var attachmentId: String?       // For file attachments
+        var attachmentName: String?
+        var attachmentURL: String?
+        var attachmentCaption: String?
+        var attachmentExpiresAt: Date?
+        var attachmentRemoved: Bool
         var replyToId: String?          // For replies
         var reactions: [String: [String]]  // emoji -> [userIds]
 
@@ -63,6 +75,11 @@ class MessagingManager: ObservableObject {
             self.type = type
             self.isRead = false
             self.attachmentId = nil
+            self.attachmentName = nil
+            self.attachmentURL = nil
+            self.attachmentCaption = nil
+            self.attachmentExpiresAt = nil
+            self.attachmentRemoved = false
             self.replyToId = nil
             self.reactions = [:]
         }
@@ -107,6 +124,33 @@ class MessagingManager: ObservableObject {
         sendToServer(message, isDirect: false, recipientId: nil)
     }
 
+    func sendRoomAttachment(
+        content: String,
+        attachmentName: String,
+        attachmentURL: String,
+        caption: String? = nil,
+        expiresAt: Date? = nil,
+        attachmentId: String? = nil
+    ) {
+        let body = normalizedAttachmentBody(content, attachmentName: attachmentName)
+        var message = ChatMessage(
+            senderId: getCurrentUserId(),
+            senderName: getCurrentUsername(),
+            content: body,
+            type: messageType(forAttachmentName: attachmentName)
+        )
+        message.attachmentId = attachmentId
+        message.attachmentName = attachmentName
+        message.attachmentURL = attachmentURL
+        message.attachmentCaption = normalizedAttachmentCaption(caption)
+        message.attachmentExpiresAt = expiresAt
+        message.attachmentRemoved = false
+
+        registerPendingOutgoing(message)
+        addMessage(message)
+        sendToServer(message, isDirect: false, recipientId: nil)
+    }
+
     /// Send a system message (join, leave, etc.)
     func sendSystemMessage(_ content: String) {
         let message = ChatMessage(
@@ -122,8 +166,9 @@ class MessagingManager: ObservableObject {
 
     /// Send a direct message to a specific user
     func sendDirectMessage(to userId: String, username: String, content: String) {
-        guard !content.isEmpty else { return }
-        guard content.count <= MessagingManager.maxMessageLength else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard trimmed.count <= MessagingManager.maxMessageLength else { return }
 
         let myId = getCurrentUserId()
         let myName = getCurrentUsername()
@@ -131,7 +176,7 @@ class MessagingManager: ObservableObject {
         let message = ChatMessage(
             senderId: myId,
             senderName: myName,
-            content: content,
+            content: trimmed,
             type: .text
         )
 
@@ -142,6 +187,35 @@ class MessagingManager: ObservableObject {
         AppSoundManager.shared.playSound(.buttonClick)
 
         // Send to server
+        sendToServer(message, isDirect: true, recipientId: userId)
+    }
+
+    func sendDirectAttachment(
+        to userId: String,
+        username: String,
+        content: String,
+        attachmentName: String,
+        attachmentURL: String,
+        caption: String? = nil,
+        expiresAt: Date? = nil,
+        attachmentId: String? = nil
+    ) {
+        let body = normalizedAttachmentBody(content, attachmentName: attachmentName)
+        var message = ChatMessage(
+            senderId: getCurrentUserId(),
+            senderName: getCurrentUsername(),
+            content: body,
+            type: messageType(forAttachmentName: attachmentName)
+        )
+        message.attachmentId = attachmentId
+        message.attachmentName = attachmentName
+        message.attachmentURL = attachmentURL
+        message.attachmentCaption = normalizedAttachmentCaption(caption)
+        message.attachmentExpiresAt = expiresAt
+        message.attachmentRemoved = false
+
+        addDirectMessage(message, with: userId)
+        AppSoundManager.shared.playSound(.buttonClick)
         sendToServer(message, isDirect: true, recipientId: userId)
     }
 
@@ -160,6 +234,128 @@ class MessagingManager: ObservableObject {
         }
         unreadCounts[userId] = 0
         updateTotalUnread()
+        Task {
+            await markMessagesAsReadOnServer(otherUserId: userId)
+        }
+    }
+
+    @MainActor
+    func beginRoomSession(roomId: String) {
+        currentRoomId = roomId
+        messages.removeAll()
+        roomHasMoreMessages = false
+        roomHistoryStatus = "Loading latest room messages..."
+        Task {
+            await loadRoomHistory(roomId: roomId, reset: true)
+        }
+    }
+
+    @MainActor
+    func endRoomSession() {
+        currentRoomId = nil
+        messages.removeAll()
+        roomHasMoreMessages = false
+        roomHistoryStatus = ""
+    }
+
+    @MainActor
+    func loadRoomHistory(roomId: String, reset: Bool, before: String? = nil, limit: Int? = nil) async {
+        guard let url = roomHistoryURL(roomId: roomId, before: before, limit: limit ?? initialRoomHistoryCount()) else {
+            roomHistoryStatus = "Room history is unavailable."
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                await MainActor.run { self.roomHistoryStatus = "Failed to load room history." }
+                return
+            }
+
+            let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let rawMessages = payload?["messages"] as? [[String: Any]] ?? []
+            let parsed = rawMessages.compactMap(Self.chatMessage(from:))
+            let hasMore = (payload?["hasMore"] as? Bool) ?? (parsed.count >= (limit ?? initialRoomHistoryCount()))
+
+            await MainActor.run {
+                if reset {
+                    self.messages = parsed
+                } else {
+                    let existing = self.messages
+                    self.messages = Self.mergeMessages(parsed + existing)
+                }
+                self.roomHasMoreMessages = hasMore
+                self.roomHistoryStatus = self.messages.isEmpty ? "No room messages yet." : ""
+            }
+        } catch {
+            await MainActor.run {
+                self.roomHistoryStatus = "Failed to load room history."
+            }
+        }
+    }
+
+    @MainActor
+    func loadOlderRoomMessages() async {
+        guard let roomId = currentRoomId, let firstId = messages.first?.id else { return }
+        roomHistoryStatus = "Loading older room messages..."
+        await loadRoomHistory(roomId: roomId, reset: false, before: firstId, limit: roomHistoryPageSize)
+    }
+
+    @MainActor
+    func skipToLatestRoomMessages() async {
+        guard let roomId = currentRoomId else { return }
+        roomHistoryStatus = "Loading latest room messages..."
+        await loadRoomHistory(roomId: roomId, reset: true, limit: initialRoomHistoryCount())
+    }
+
+    @MainActor
+    func loadDirectHistory(with userId: String, reset: Bool, before: String? = nil, limit: Int? = nil) async {
+        guard let url = directHistoryURL(otherUserId: userId, before: before, limit: limit ?? dmHistoryPageSize) else {
+            directHistoryStatus[userId] = "Direct message history is unavailable."
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                await MainActor.run { self.directHistoryStatus[userId] = "Failed to load direct messages." }
+                return
+            }
+
+            let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let rawMessages = payload?["messages"] as? [[String: Any]] ?? []
+            let parsed = rawMessages.compactMap(Self.chatMessage(from:))
+            let hasMore = (payload?["hasMore"] as? Bool) ?? (parsed.count >= (limit ?? dmHistoryPageSize))
+
+            await MainActor.run {
+                if reset {
+                    self.directMessages[userId] = parsed
+                } else {
+                    let existing = self.directMessages[userId] ?? []
+                    self.directMessages[userId] = Self.mergeMessages(parsed + existing)
+                }
+                self.directMessageHasMore[userId] = hasMore
+                self.directHistoryStatus[userId] = (self.directMessages[userId]?.isEmpty ?? true) ? "No direct messages yet." : ""
+                self.markAsRead(userId: userId)
+            }
+        } catch {
+            await MainActor.run {
+                self.directHistoryStatus[userId] = "Failed to load direct messages."
+            }
+        }
+    }
+
+    @MainActor
+    func loadOlderDirectMessages(with userId: String) async {
+        guard let firstId = directMessages[userId]?.first?.id else { return }
+        directHistoryStatus[userId] = "Loading older direct messages..."
+        await loadDirectHistory(with: userId, reset: false, before: firstId, limit: dmHistoryPageSize)
+    }
+
+    @MainActor
+    func skipToLatestDirectMessages(with userId: String) async {
+        directHistoryStatus[userId] = "Loading latest direct messages..."
+        await loadDirectHistory(with: userId, reset: true, limit: dmHistoryPageSize)
     }
 
     // MARK: - Replies & Reactions
@@ -285,8 +481,46 @@ class MessagingManager: ObservableObject {
         if let replyTo = message.replyToId {
             info["replyToId"] = replyTo
         }
+        if let attachmentId = message.attachmentId {
+            info["attachmentId"] = attachmentId
+        }
+        if let attachmentName = message.attachmentName {
+            info["attachmentName"] = attachmentName
+        }
+        if let attachmentURL = message.attachmentURL {
+            info["attachmentURL"] = attachmentURL
+        }
+        if let attachmentCaption = message.attachmentCaption {
+            info["attachmentCaption"] = attachmentCaption
+        }
+        if let attachmentExpiresAt = message.attachmentExpiresAt {
+            info["attachmentExpiresAt"] = attachmentExpiresAt.timeIntervalSince1970
+        }
+        info["attachmentRemoved"] = message.attachmentRemoved
 
         NotificationCenter.default.post(name: .sendMessageToServer, object: nil, userInfo: info)
+    }
+
+    private func normalizedAttachmentBody(_ content: String, attachmentName: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Shared file: \(attachmentName)" : trimmed
+    }
+
+    private func normalizedAttachmentCaption(_ caption: String?) -> String? {
+        let trimmed = caption?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func messageType(forAttachmentName fileName: String) -> ChatMessage.MessageType {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        switch ext {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic":
+            return .image
+        case "mp3", "wav", "aac", "m4a", "flac", "ogg":
+            return .audio
+        default:
+            return .file
+        }
     }
 
     private func updateTotalUnread() {
@@ -319,6 +553,30 @@ class MessagingManager: ObservableObject {
             name: .userTypingIndicator,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            forName: .roomJoined,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let payload = notification.object as? [String: Any]
+            let roomId = payload?["roomId"] as? String ?? payload?["id"] as? String
+            guard let roomId else { return }
+            Task { @MainActor in
+                self.beginRoomSession(roomId: roomId)
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .roomLeft,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.endRoomSession()
+            }
+        }
     }
 
     @objc private func handleIncomingMessage(_ notification: Notification) {
@@ -346,7 +604,17 @@ class MessagingManager: ObservableObject {
             type: type
         )
 
-        addMessage(message)
+        var enrichedMessage = message
+        enrichedMessage.attachmentId = data["attachmentId"] as? String
+        enrichedMessage.attachmentName = data["attachmentName"] as? String
+        enrichedMessage.attachmentURL = data["attachmentURL"] as? String ?? data["attachmentUrl"] as? String
+        enrichedMessage.attachmentCaption = data["attachmentCaption"] as? String ?? data["caption"] as? String
+        enrichedMessage.attachmentRemoved = data["attachmentRemoved"] as? Bool ?? false
+        if let expiresValue = data["attachmentExpiresAt"] {
+            enrichedMessage.attachmentExpiresAt = Self.parseDate(expiresValue)
+        }
+
+        addMessage(enrichedMessage)
 
         // Play incoming sound only for other users' messages.
         if senderId != getCurrentUserId() {
@@ -360,12 +628,30 @@ class MessagingManager: ObservableObject {
               let senderName = data["senderName"] as? String,
               let content = data["content"] as? String else { return }
 
-        let message = ChatMessage(
+        let typeRaw = data["type"] as? String ?? "text"
+        let type = ChatMessage.MessageType(rawValue: typeRaw) ?? .text
+        let messageId = (data["messageId"] as? String) ?? UUID().uuidString
+        let timestamp: Date = {
+            if let value = data["timestamp"] { return Self.parseDate(value) ?? Date() }
+            return Date()
+        }()
+
+        var message = ChatMessage(
+            id: messageId,
             senderId: senderId,
             senderName: senderName,
             content: normalizedIncomingContent(content, senderName: senderName),
-            type: .text
+            timestamp: timestamp,
+            type: type
         )
+        message.attachmentId = data["attachmentId"] as? String
+        message.attachmentName = data["attachmentName"] as? String
+        message.attachmentURL = data["attachmentURL"] as? String ?? data["attachmentUrl"] as? String
+        message.attachmentCaption = data["attachmentCaption"] as? String ?? data["caption"] as? String
+        message.attachmentRemoved = data["attachmentRemoved"] as? Bool ?? false
+        if let expiresValue = data["attachmentExpiresAt"] {
+            message.attachmentExpiresAt = Self.parseDate(expiresValue)
+        }
 
         addDirectMessage(message, with: senderId)
 
@@ -524,7 +810,7 @@ class MessagingManager: ObservableObject {
         if lowered.hasPrefix("/me ") {
             let action = trimmed.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !action.isEmpty else { return trimmed }
-            return "* \(username) \(action)"
+            return "\(username) \(action)"
         }
 
         if lowered == "/bot" {
@@ -548,7 +834,151 @@ class MessagingManager: ObservableObject {
     func clearDirectMessages(with userId: String) {
         directMessages[userId]?.removeAll()
         unreadCounts[userId] = 0
+        directMessageHasMore[userId] = false
+        directHistoryStatus[userId] = ""
         updateTotalUnread()
+    }
+
+    private func initialRoomHistoryCount() -> Int {
+        let configured = ServerManager.shared.serverConfig?.messageSettings.initialLoadCount ?? roomHistoryPageSize
+        return min(max(configured, 1), 200)
+    }
+
+    private func roomHistoryURL(roomId: String, before: String?, limit: Int) -> URL? {
+        guard let baseURL = ServerManager.shared.baseURL,
+              let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var components = URLComponents(string: "\(baseURL)/api/rooms/\(encodedRoomId)/messages") else {
+            return nil
+        }
+
+        var items = [URLQueryItem(name: "limit", value: String(limit))]
+        if let before, !before.isEmpty {
+            items.append(URLQueryItem(name: "before", value: before))
+        }
+        components.queryItems = items
+        return components.url
+    }
+
+    private func directHistoryURL(otherUserId: String, before: String?, limit: Int) -> URL? {
+        let currentUserId = getCurrentUserId()
+        guard let baseURL = ServerManager.shared.baseURL,
+              let user1 = currentUserId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let user2 = otherUserId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              var components = URLComponents(string: "\(baseURL)/api/messages/dm/\(user1)/\(user2)") else {
+            return nil
+        }
+
+        var items = [URLQueryItem(name: "limit", value: String(limit))]
+        if let before, !before.isEmpty {
+            items.append(URLQueryItem(name: "before", value: before))
+        }
+        components.queryItems = items
+        return components.url
+    }
+
+    private func markMessagesAsReadOnServer(otherUserId: String) async {
+        let currentUserId = getCurrentUserId()
+        guard let baseURL = ServerManager.shared.baseURL,
+              let user1 = currentUserId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let user2 = otherUserId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(baseURL)/api/messages/dm/\(user1)/\(user2)/read") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    private static func mergeMessages(_ messages: [ChatMessage]) -> [ChatMessage] {
+        var merged: [ChatMessage] = []
+        var seen = Set<String>()
+
+        for message in messages.sorted(by: { $0.timestamp < $1.timestamp }) {
+            if seen.contains(message.id) { continue }
+            seen.insert(message.id)
+            merged.append(message)
+        }
+
+        return merged
+    }
+
+    private static func chatMessage(from raw: [String: Any]) -> ChatMessage? {
+        let senderId = raw["senderId"] as? String ?? raw["userId"] as? String ?? ""
+        let senderName = raw["senderName"] as? String ?? raw["userName"] as? String ?? "Unknown"
+        let content = raw["content"] as? String ?? raw["message"] as? String ?? ""
+        let messageId = raw["messageId"] as? String ?? raw["id"] as? String ?? UUID().uuidString
+        let type = ChatMessage.MessageType(rawValue: raw["type"] as? String ?? "text") ?? .text
+        let timestamp = parseDate(raw["timestamp"] ?? raw["createdAt"] ?? raw["sentAt"]) ?? Date()
+
+        var message = ChatMessage(
+            id: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            content: content,
+            timestamp: timestamp,
+            type: type
+        )
+        message.isRead = raw["read"] as? Bool ?? false
+        message.replyToId = raw["replyToId"] as? String ?? raw["replyTo"] as? String
+        message.attachmentId = raw["attachmentId"] as? String
+        message.attachmentName = raw["attachmentName"] as? String
+        message.attachmentURL = raw["attachmentURL"] as? String ?? raw["attachmentUrl"] as? String
+        message.attachmentCaption = raw["attachmentCaption"] as? String ?? raw["caption"] as? String
+        message.attachmentRemoved = raw["attachmentRemoved"] as? Bool ?? false
+        message.reactions = Self.decodeReactions(raw["reactions"])
+        if let expiresValue = raw["attachmentExpiresAt"] {
+            message.attachmentExpiresAt = parseDate(expiresValue)
+        }
+        return message
+    }
+
+    private static func decodeReactions(_ value: Any?) -> [String: [String]] {
+        if let map = value as? [String: [String]] {
+            return map
+        }
+        if let array = value as? [[String: Any]] {
+            var grouped: [String: [String]] = [:]
+            for entry in array {
+                guard let reaction = entry["reaction"] as? String else { continue }
+                let userId = entry["userId"] as? String ?? UUID().uuidString
+                grouped[reaction, default: []].append(userId)
+            }
+            return grouped
+        }
+        return [:]
+    }
+
+    private static func parseDate(_ value: Any?) -> Date? {
+        switch value {
+        case let date as Date:
+            return date
+        case let interval as TimeInterval:
+            if interval > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: interval / 1000)
+            }
+            return Date(timeIntervalSince1970: interval)
+        case let number as NSNumber:
+            let interval = number.doubleValue
+            if interval > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: interval / 1000)
+            }
+            return Date(timeIntervalSince1970: interval)
+        case let string as String:
+            if let parsed = ISO8601DateFormatter().date(from: string) {
+                return parsed
+            }
+            if let seconds = Double(string) {
+                if seconds > 1_000_000_000_000 {
+                    return Date(timeIntervalSince1970: seconds / 1000)
+                }
+                return Date(timeIntervalSince1970: seconds)
+            }
+            return nil
+        default:
+            return nil
+        }
     }
 }
 

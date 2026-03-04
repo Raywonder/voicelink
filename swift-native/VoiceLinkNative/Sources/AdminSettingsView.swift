@@ -14,6 +14,7 @@ struct AdminSettingsView: View {
         case users = "Users"
         case rooms = "Rooms"
         case modules = "Modules"
+        case deployment = "Deployment"
         case selfTests = "Self Tests"
         case config = "Server Config"
         case streams = "Background Streams"
@@ -84,6 +85,8 @@ struct AdminSettingsView: View {
                         AdminRoomsSection()
                     case .modules:
                         AdminModulesSection()
+                    case .deployment:
+                        AdminDeploymentSection()
                     case .selfTests:
                         AdminSelfTestsSection()
                     case .config:
@@ -156,6 +159,8 @@ struct AdminSettingsView: View {
         case .rooms:
             return adminManager.adminRole.canManageRooms
         case .modules:
+            return adminManager.adminRole.canManageConfig
+        case .deployment:
             return adminManager.adminRole.canManageConfig
         case .selfTests:
             return adminManager.adminRole.canManageConfig
@@ -1101,6 +1106,7 @@ struct AdminConfigSection: View {
     enum ConfigSection: String, CaseIterable {
         case identity = "Identity"
         case access = "Access"
+        case messages = "Messages"
         case database = "Database"
         case notifications = "Notifications"
     }
@@ -1130,6 +1136,8 @@ struct AdminConfigSection: View {
                         identitySection(config: config)
                     case .access:
                         accessSection(config: config)
+                    case .messages:
+                        messagesSection(config: config)
                     case .database:
                         databaseSection
                     case .notifications:
@@ -1326,6 +1334,120 @@ struct AdminConfigSection: View {
                 ))
             }
         }
+    }
+
+    private func messagesSection(config: ServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Message Retention and Loading")
+
+            Text("These settings control room chat, direct messages, bot memory, and how much history users load by default when they join a room or open a direct conversation.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            ConfigToggle(label: "Keep Room Messages", isOn: Binding(
+                get: { editedConfig?.messageSettings.keepRoomMessages ?? config.messageSettings.keepRoomMessages },
+                set: { value in
+                    editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.keepRoomMessages = value })
+                }
+            ))
+
+            ConfigToggle(label: "Keep Direct Messages", isOn: Binding(
+                get: { editedConfig?.messageSettings.keepDirectMessages ?? config.messageSettings.keepDirectMessages },
+                set: { value in
+                    editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.keepDirectMessages = value })
+                }
+            ))
+
+            ConfigToggle(label: "Delete Room Messages When Room Empties", isOn: Binding(
+                get: { editedConfig?.messageSettings.deleteRoomMessagesWhenEmpty ?? config.messageSettings.deleteRoomMessagesWhenEmpty },
+                set: { value in
+                    editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.deleteRoomMessagesWhenEmpty = value })
+                }
+            ))
+
+            ConfigToggle(label: "Keep Messages With Attachments", isOn: Binding(
+                get: { editedConfig?.messageSettings.keepAttachmentMessages ?? config.messageSettings.keepAttachmentMessages },
+                set: { value in
+                    editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.keepAttachmentMessages = value })
+                }
+            ))
+
+            HStack(spacing: 20) {
+                ConfigNumberField(label: "Initial Load Count", value: Binding(
+                    get: { editedConfig?.messageSettings.initialLoadCount ?? config.messageSettings.initialLoadCount },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.initialLoadCount = min(max(value, 1), 200) })
+                    }
+                ))
+
+                ConfigNumberField(label: "Scrollback Limit", value: Binding(
+                    get: { editedConfig?.messageSettings.scrollbackLimit ?? config.messageSettings.scrollbackLimit },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.scrollbackLimit = min(max(value, 20), 5000) })
+                    }
+                ))
+            }
+
+            HStack(spacing: 20) {
+                ConfigNumberField(label: "Room Message Cap", value: Binding(
+                    get: { editedConfig?.messageSettings.roomMessageCap ?? config.messageSettings.roomMessageCap },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.roomMessageCap = min(max(value, 20), 5000) })
+                    }
+                ))
+
+                ConfigNumberField(label: "Direct Message Cap", value: Binding(
+                    get: { editedConfig?.messageSettings.directMessageCap ?? config.messageSettings.directMessageCap },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.directMessageCap = min(max(value, 20), 5000) })
+                    }
+                ))
+            }
+
+            HStack(spacing: 20) {
+                ConfigNumberField(label: "Guest Retention (hours)", value: Binding(
+                    get: { editedConfig?.messageSettings.guestRetentionHours ?? config.messageSettings.guestRetentionHours },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.guestRetentionHours = min(max(value, 1), 24 * 365) })
+                    }
+                ))
+
+                ConfigNumberField(label: "Authenticated Retention (days)", value: Binding(
+                    get: { editedConfig?.messageSettings.authenticatedRetentionDays ?? config.messageSettings.authenticatedRetentionDays },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.authenticatedRetentionDays = min(max(value, 1), 3650) })
+                    }
+                ))
+            }
+
+            SectionHeader(title: "Bot Memory")
+
+            HStack(spacing: 20) {
+                ConfigNumberField(label: "Bot Memory Message Limit", value: Binding(
+                    get: { editedConfig?.messageSettings.botMemoryMessageLimit ?? config.messageSettings.botMemoryMessageLimit },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.botMemoryMessageLimit = min(max(value, 0), 5000) })
+                    }
+                ))
+
+                ConfigNumberField(label: "Bot Memory Days", value: Binding(
+                    get: { editedConfig?.messageSettings.botMemoryDays ?? config.messageSettings.botMemoryDays },
+                    set: { value in
+                        editedConfig = (editedConfig ?? config).with(messageSettings: nextMessageSettings(config: config) { $0.botMemoryDays = min(max(value, 0), 3650) })
+                    }
+                ))
+            }
+
+            Text("Room owners can still get tighter room-level limits from the server API. These are the server defaults used when a room does not define its own message policy.")
+                .font(.caption2)
+                .foregroundColor(.gray)
+        }
+    }
+
+    private func nextMessageSettings(config: ServerConfig, mutate: (inout MessageSettings) -> Void) -> MessageSettings {
+        var next = editedConfig?.messageSettings ?? config.messageSettings
+        mutate(&next)
+        return next
     }
 
     @ViewBuilder
@@ -1539,8 +1661,12 @@ struct AdminConfigSection: View {
 // MARK: - Background Streams Section
 struct AdminStreamsSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
-    @State private var streams: [BackgroundStreamConfig] = []
+    @State private var config = BackgroundStreamsConfig(enabled: true, streams: [], defaultVolume: 60, fadeInDuration: 1500)
     @State private var showAddStream = false
+    @State private var editingStream: BackgroundStreamConfig?
+    @State private var probeInput: String = ""
+    @State private var probeResults: [AdminServerManager.StreamProbeResult] = []
+    @State private var isProbing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1571,37 +1697,171 @@ struct AdminStreamsSection: View {
                 .buttonStyle(.bordered)
             }
 
-            if streams.isEmpty {
-                Text("No background streams configured")
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else {
-                ForEach(streams) { stream in
-                    StreamConfigRow(stream: stream) { action in
-                        switch action {
-                        case .delete:
-                            streams.removeAll { $0.id == stream.id }
-                        case .edit:
-                            // TODO: Show edit sheet
-                            break
+            Toggle("Enable background streams", isOn: $config.enabled)
+                .toggleStyle(.switch)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Default Volume")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    HStack {
+                        Slider(value: Binding(
+                            get: { Double(config.defaultVolume) },
+                            set: { config.defaultVolume = Int($0) }
+                        ), in: 0...100, step: 1)
+                        Text("\(config.defaultVolume)%")
+                            .foregroundColor(.white)
+                            .frame(width: 48)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Fade In")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    HStack {
+                        Slider(value: Binding(
+                            get: { Double(config.fadeInDuration) },
+                            set: { config.fadeInDuration = Int($0) }
+                        ), in: 0...10000, step: 100)
+                        Text("\(config.fadeInDuration)ms")
+                            .foregroundColor(.white)
+                            .frame(width: 72)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Discover Streams From Domain or URL")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                HStack {
+                    TextField("example.com, stream.example.com:8000, or direct stream URL", text: $probeInput)
+                        .textFieldStyle(.roundedBorder)
+                    Button(isProbing ? "Checking..." : "Detect") {
+                        let input = probeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !input.isEmpty else { return }
+                        isProbing = true
+                        Task {
+                            probeResults = await adminManager.probeBackgroundStreams(input: input)
+                            isProbing = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isProbing)
+                }
+                if !probeResults.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(probeResults) { candidate in
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(candidate.name)
+                                        .foregroundColor(.white)
+                                    Text(candidate.streamUrl)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    HStack(spacing: 8) {
+                                        if let type = candidate.type, !type.isEmpty {
+                                            Text(type.uppercased())
+                                        }
+                                        if let genre = candidate.genre, !genre.isEmpty {
+                                            Text(genre)
+                                        }
+                                        if let bitrate = candidate.bitrate {
+                                            Text("\(bitrate)kbps")
+                                        }
+                                        if let listeners = candidate.listeners {
+                                            Text("\(listeners) listeners")
+                                        }
+                                    }
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                                }
+                                Spacer()
+                                Button("Add") {
+                                    let newStream = BackgroundStreamConfig(
+                                        id: UUID().uuidString,
+                                        name: candidate.name,
+                                        url: candidate.streamUrl,
+                                        streamUrl: candidate.streamUrl,
+                                        volume: config.defaultVolume,
+                                        hidden: false,
+                                        autoPlay: false,
+                                        rooms: [],
+                                        roomPatterns: []
+                                    )
+                                    config.streams.append(newStream)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            .padding(10)
+                            .background(Color.white.opacity(0.04))
+                            .cornerRadius(10)
                         }
                     }
                 }
             }
 
-            if !streams.isEmpty {
+            if config.streams.isEmpty {
+                Text("No background streams configured")
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+            } else {
+                ForEach(config.streams) { stream in
+                    StreamConfigRow(stream: stream) { action in
+                        switch action {
+                        case .delete:
+                            config.streams.removeAll { $0.id == stream.id }
+                        case .edit:
+                            editingStream = stream
+                        }
+                    }
+                }
+            }
+
+            if !config.streams.isEmpty || config.enabled {
                 Button("Save Stream Configuration") {
                     Task {
-                        await adminManager.updateBackgroundStreams(streams)
+                        await adminManager.updateBackgroundStreamsConfig(config)
                     }
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
         .onAppear {
-            if let config = adminManager.serverConfig?.backgroundStreams {
-                streams = config.streams
+            if let serverConfig = adminManager.serverConfig?.backgroundStreams {
+                config = serverConfig
+            }
+        }
+        .sheet(isPresented: $showAddStream) {
+            StreamEditorSheet(
+                title: "Add Background Stream",
+                stream: BackgroundStreamConfig(
+                    id: UUID().uuidString,
+                    name: "",
+                    url: "",
+                    streamUrl: "",
+                    volume: config.defaultVolume,
+                    hidden: false,
+                    autoPlay: false,
+                    rooms: [],
+                    roomPatterns: []
+                ),
+                availableRooms: adminManager.serverRooms
+            ) { stream in
+                config.streams.append(stream)
+            }
+        }
+        .sheet(item: $editingStream) { stream in
+            StreamEditorSheet(
+                title: "Edit Background Stream",
+                stream: stream,
+                availableRooms: adminManager.serverRooms
+            ) { updated in
+                guard let index = config.streams.firstIndex(where: { $0.id == updated.id }) else { return }
+                config.streams[index] = updated
             }
         }
     }
@@ -1633,6 +1893,9 @@ struct StreamConfigRow: View {
                         Label("Hidden", systemImage: "eye.slash")
                     }
                     Text("Volume: \(stream.volume)%")
+                    if let rooms = stream.rooms, !rooms.isEmpty {
+                        Text("Rooms: \(rooms.count)")
+                    }
                 }
                 .font(.caption2)
                 .foregroundColor(.blue)
@@ -1656,6 +1919,91 @@ struct StreamConfigRow: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(10)
+    }
+}
+
+struct StreamEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    @State var stream: BackgroundStreamConfig
+    let availableRooms: [AdminRoomInfo]
+    let onSave: (BackgroundStreamConfig) -> Void
+    @State private var selectedRooms: Set<String> = []
+    @State private var roomPatternText: String = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Stream") {
+                    TextField("Name", text: $stream.name)
+                    TextField("Direct stream URL", text: Binding(
+                        get: { stream.streamUrl.isEmpty ? stream.url : stream.streamUrl },
+                        set: {
+                            stream.streamUrl = $0
+                            stream.url = $0
+                        }
+                    ))
+                    Toggle("Auto-play in assigned rooms", isOn: $stream.autoPlay)
+                    Toggle("Hide stream from regular users", isOn: $stream.hidden)
+                    HStack {
+                        Text("Volume")
+                        Slider(value: Binding(
+                            get: { Double(stream.volume) },
+                            set: { stream.volume = Int($0) }
+                        ), in: 0...100, step: 1)
+                        Text("\(stream.volume)%")
+                            .frame(width: 48)
+                    }
+                }
+
+                Section("Assign to Rooms") {
+                    if availableRooms.isEmpty {
+                        Text("No rooms available yet.")
+                            .foregroundColor(.gray)
+                    } else {
+                        ForEach(availableRooms) { room in
+                            Toggle(room.name, isOn: Binding(
+                                get: { selectedRooms.contains(room.id) },
+                                set: { enabled in
+                                    if enabled { selectedRooms.insert(room.id) } else { selectedRooms.remove(room.id) }
+                                }
+                            ))
+                        }
+                    }
+                }
+
+                Section("Room Name Patterns") {
+                    TextField("Comma-separated patterns, optional", text: $roomPatternText)
+                    Text("Use patterns when a stream should attach to multiple rooms by naming rule.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            .navigationTitle(title)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        stream.rooms = Array(selectedRooms).sorted()
+                        let patterns = roomPatternText
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { !$0.isEmpty }
+                        stream.roomPatterns = patterns.isEmpty ? nil : patterns
+                        onSave(stream)
+                        dismiss()
+                    }
+                    .disabled(stream.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stream.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                }
+            }
+            .onAppear {
+                selectedRooms = Set(stream.rooms ?? [])
+                roomPatternText = (stream.roomPatterns ?? []).joined(separator: ", ")
+            }
+        }
+        .frame(minWidth: 640, minHeight: 560)
     }
 }
 
@@ -2040,12 +2388,385 @@ struct AdminFederationSection: View {
     }
 }
 
+// MARK: - Deployment Section
+struct AdminDeploymentSection: View {
+    @ObservedObject var adminManager = AdminServerManager.shared
+    @State private var selectedTransport = "sftp"
+    @State private var packagePreset = ""
+    @State private var targetLabel = ""
+    @State private var targetServerUrl = ""
+    @State private var ownerEmail = ""
+    @State private var trustedServers = ""
+    @State private var sanitize = true
+    @State private var linkedToMain = true
+    @State private var targetHost = ""
+    @State private var targetPort = ""
+    @State private var remotePath = ""
+    @State private var uploadUrl = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var httpMethod = "PUT"
+    @State private var insecure = false
+    @State private var bootstrap = true
+    @State private var apiBaseUrl = ""
+    @State private var apiToken = ""
+    @State private var sharedSecret = ""
+    @State private var restartAfterBootstrap = false
+    @State private var restartUrl = ""
+    @State private var restartMethod = "POST"
+    @State private var lastPackage: DeploymentPackageResponse?
+    @State private var lastDeployment: DeploymentExecutionResponse?
+    @State private var actionInFlight = false
+
+    private var availableTransports: [DeploymentTransportInfo] {
+        if adminManager.deploymentTransports.isEmpty {
+            return adminManager.deploymentManagerStatus?.supportedTransports ?? []
+        }
+        return adminManager.deploymentTransports
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AdminHelpSection(
+                title: "Quick Help",
+                summary: "Deployment Manager packages a VoiceLink install, uploads it to another server over SFTP, SMB, HTTP, or HTTPS, bootstraps the remote API config, and can email the owner a getting-started note.",
+                steps: [
+                    "Generate a package when you need a fresh install bundle or want to stage an update on another server account.",
+                    "Use Deploy when you already know the target transport and want VoiceLink to upload, bootstrap, and optionally restart the remote install.",
+                    "Use Email Owner after a successful package or deploy so the server owner gets the remote URL, API base, and startup instructions."
+                ],
+                docs: [
+                    AdminDocLink(title: "Deployment Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/authenticated/admin-panel.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Install Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html")
+                ]
+            )
+
+            statusSection
+            packageSection
+            transportSection
+            bootstrapSection
+            actionSection
+            resultsSection
+        }
+        .task {
+            _ = await adminManager.fetchDeploymentManagerStatus()
+            _ = await adminManager.fetchDeploymentTransports()
+            if let base = adminManager.serverConfig?.serverName, targetLabel.isEmpty {
+                targetLabel = "\(base) Remote Install"
+            }
+        }
+    }
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Deployment Manager")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                Button("Refresh") {
+                    Task {
+                        _ = await adminManager.fetchDeploymentManagerStatus()
+                        _ = await adminManager.fetchDeploymentTransports()
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let status = adminManager.deploymentManagerStatus {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ConfigSummaryItem(label: "Module Enabled", value: status.enabled ? "Yes" : "No")
+                    ConfigSummaryItem(label: "Mail Ready", value: status.mailConfigured ? "Yes" : "No")
+                    ConfigSummaryItem(label: "Fresh Install Bundles", value: status.supportsFreshInstall ? "Supported" : "Unavailable")
+                    ConfigSummaryItem(label: "Remote Bootstrap", value: status.supportsRemoteBootstrap ? "Supported" : "Unavailable")
+                }
+            } else {
+                Text("Deployment manager status has not loaded yet.")
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var packageSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Package Options")
+            Text("These values are embedded into the generated deployment package. Linked-to-main packages preserve trusted federation defaults and API alignment.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            HStack(spacing: 12) {
+                ConfigTextField(label: "Preset", text: $packagePreset)
+                ConfigTextField(label: "Target Label", text: $targetLabel)
+            }
+
+            HStack(spacing: 12) {
+                ConfigTextField(label: "Target Server URL", text: $targetServerUrl)
+                ConfigTextField(label: "Owner Email", text: $ownerEmail)
+            }
+
+            ConfigTextField(label: "Trusted Servers (comma separated)", text: $trustedServers)
+
+            HStack(spacing: 20) {
+                ConfigToggle(label: "Sanitize secrets in package", isOn: $sanitize)
+                ConfigToggle(label: "Link package to main cluster", isOn: $linkedToMain)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var transportSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Transport")
+            Picker("Transport", selection: $selectedTransport) {
+                ForEach(availableTransports) { transport in
+                    Text(transport.name).tag(transport.id)
+                }
+                if availableTransports.isEmpty {
+                    Text("SFTP").tag("sftp")
+                    Text("SMB").tag("smb")
+                    Text("HTTP").tag("http")
+                    Text("HTTPS").tag("https")
+                }
+            }
+            .pickerStyle(.menu)
+
+            if let transport = availableTransports.first(where: { $0.id == selectedTransport }) {
+                Text(transport.description)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+
+            if selectedTransport == "http" || selectedTransport == "https" {
+                ConfigTextField(label: "Upload URL", text: $uploadUrl)
+            } else {
+                HStack(spacing: 12) {
+                    ConfigTextField(label: "Host", text: $targetHost)
+                    ConfigTextField(label: "Port", text: $targetPort)
+                    ConfigTextField(label: "Remote Path", text: $remotePath)
+                }
+            }
+
+            HStack(spacing: 12) {
+                ConfigTextField(label: "Username", text: $username)
+                ConfigSecureField(label: "Password", text: $password)
+            }
+
+            if selectedTransport == "http" || selectedTransport == "https" {
+                Picker("HTTP Method", selection: $httpMethod) {
+                    Text("PUT").tag("PUT")
+                    Text("POST").tag("POST")
+                }
+                .pickerStyle(.segmented)
+                ConfigToggle(label: "Allow insecure TLS", isOn: $insecure)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var bootstrapSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Remote Bootstrap")
+
+            ConfigToggle(label: "Bootstrap remote API after upload", isOn: $bootstrap)
+
+            if bootstrap {
+                ConfigTextField(label: "Remote API Base URL", text: $apiBaseUrl)
+                HStack(spacing: 12) {
+                    ConfigSecureField(label: "API Token", text: $apiToken)
+                    ConfigSecureField(label: "Shared Secret", text: $sharedSecret)
+                }
+                ConfigToggle(label: "Restart remote install after bootstrap", isOn: $restartAfterBootstrap)
+                if restartAfterBootstrap {
+                    HStack(spacing: 12) {
+                        ConfigTextField(label: "Restart URL", text: $restartUrl)
+                        ConfigTextField(label: "Restart Method", text: $restartMethod)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var actionSection: some View {
+        HStack(spacing: 12) {
+            Button("Generate Package") {
+                Task { await generatePackage() }
+            }
+            .buttonStyle(.bordered)
+
+            Button("Deploy to Target") {
+                Task { await deployToTarget() }
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button("Email Owner Details") {
+                Task { await emailOwnerDetails() }
+            }
+            .buttonStyle(.bordered)
+            .disabled(ownerEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            if actionInFlight {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .disabled(actionInFlight)
+    }
+
+    private var resultsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let message = adminManager.deploymentActionMessage, !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            if let package = lastPackage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Last Package")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("Bundle: \(package.bundleName)")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    Text("Stored on server: \(package.zipPath)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                .padding()
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(10)
+            }
+
+            if let deployment = lastDeployment {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Last Deployment")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text("Upload target: \(deployment.upload.remoteUrl)")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    if let bootstrap = deployment.bootstrap {
+                        Text("Bootstrap: \(bootstrap.success ? "Succeeded" : "Failed")")
+                            .font(.caption2)
+                            .foregroundColor(bootstrap.success ? .green : .orange)
+                    }
+                    if let restart = deployment.restart {
+                        Text(restartStatusText(restart))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                }
+                .padding()
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(10)
+            }
+        }
+    }
+
+    private func generatePackage() async {
+        actionInFlight = true
+        defer { actionInFlight = false }
+        lastPackage = await adminManager.buildDeploymentPackage(packageRequest)
+    }
+
+    private func deployToTarget() async {
+        actionInFlight = true
+        defer { actionInFlight = false }
+        lastDeployment = await adminManager.runDeployment(
+            DeploymentExecutionRequest(
+                packageOptions: packageRequest,
+                target: targetRequest,
+                bootstrap: bootstrap
+            )
+        )
+    }
+
+    private func emailOwnerDetails() async {
+        actionInFlight = true
+        defer { actionInFlight = false }
+        let bundleName = lastDeployment?.bundleName ?? lastPackage?.bundleName
+        let remoteUrl = lastDeployment?.upload.remoteUrl
+        _ = await adminManager.emailDeploymentOwner(
+            DeploymentOwnerEmailRequest(
+                recipient: ownerEmail,
+                subject: "VoiceLink Deployment Details",
+                bundleName: bundleName,
+                remoteUrl: remoteUrl,
+                apiBaseUrl: apiBaseUrl.isEmpty ? nil : apiBaseUrl
+            )
+        )
+    }
+
+    private var packageRequest: DeploymentPackageRequest {
+        DeploymentPackageRequest(
+            preset: packagePreset.isEmpty ? nil : packagePreset,
+            sanitize: sanitize,
+            ownerEmail: ownerEmail.isEmpty ? nil : ownerEmail,
+            targetLabel: targetLabel.isEmpty ? nil : targetLabel,
+            targetServerUrl: targetServerUrl.isEmpty ? nil : targetServerUrl,
+            linkedToMain: linkedToMain,
+            trustedServers: trustedServersList,
+            extraConfig: DeploymentExtraConfig()
+        )
+    }
+
+    private var targetRequest: DeploymentTargetRequest {
+        DeploymentTargetRequest(
+            transport: selectedTransport,
+            host: targetHost.isEmpty ? nil : targetHost,
+            port: Int(targetPort),
+            remotePath: remotePath.isEmpty ? nil : remotePath,
+            uploadUrl: uploadUrl.isEmpty ? nil : uploadUrl,
+            username: username.isEmpty ? nil : username,
+            password: password.isEmpty ? nil : password,
+            method: (selectedTransport == "http" || selectedTransport == "https") ? httpMethod : nil,
+            insecure: insecure,
+            apiBaseUrl: apiBaseUrl.isEmpty ? nil : apiBaseUrl,
+            apiToken: apiToken.isEmpty ? nil : apiToken,
+            sharedSecret: sharedSecret.isEmpty ? nil : sharedSecret,
+            trustedServers: trustedServersList.isEmpty ? nil : trustedServersList,
+            restartAfterBootstrap: restartAfterBootstrap,
+            restartUrl: restartUrl.isEmpty ? nil : restartUrl,
+            restartMethod: restartAfterBootstrap ? restartMethod : nil
+        )
+    }
+
+    private var trustedServersList: [String] {
+        trustedServers
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func restartStatusText(_ restart: DeploymentRestartResponse) -> String {
+        if restart.success == true {
+            return "Restart: triggered"
+        }
+        if restart.skipped == true {
+            return "Restart: skipped (\(restart.reason ?? "not configured"))"
+        }
+        return "Restart: failed (\(restart.error ?? "unknown"))"
+    }
+}
+
 // MARK: - Modules Section
 struct AdminModulesSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var filterMode: ModuleFilter = .all
     @State private var query = ""
     @State private var actionInFlight: String?
+    @State private var configEditorModule: AdminModuleInfo?
+    @State private var configEditorText: String = "{}"
 
     enum ModuleFilter: String, CaseIterable {
         case all = "All"
@@ -2192,6 +2913,12 @@ struct AdminModulesSection: View {
                                 }
                                 .buttonStyle(.bordered)
 
+                                Button("Configure") {
+                                    configEditorModule = module
+                                    configEditorText = module.configJSON
+                                }
+                                .buttonStyle(.bordered)
+
                                 Button("Uninstall", role: .destructive) {
                                     runAction("uninstall-\(module.id)") {
                                         await adminManager.uninstallModule(module.id)
@@ -2226,6 +2953,19 @@ struct AdminModulesSection: View {
         .task {
             await adminManager.refreshModulesCenter()
         }
+        .sheet(item: $configEditorModule) { module in
+            ModuleConfigEditorSheet(
+                module: module,
+                jsonText: $configEditorText,
+                onSave: {
+                    let text = configEditorText
+                    runAction("save-config-\(module.id)") {
+                        await adminManager.saveModuleConfig(module.id, jsonText: text)
+                    }
+                    configEditorModule = nil
+                }
+            )
+        }
     }
 
     private func runAction(_ key: String, operation: @escaping () async -> Bool) {
@@ -2234,6 +2974,47 @@ struct AdminModulesSection: View {
             _ = await operation()
             actionInFlight = nil
         }
+    }
+}
+
+private struct ModuleConfigEditorSheet: View {
+    let module: AdminModuleInfo
+    @Binding var jsonText: String
+    let onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Configure \(module.name)")
+                .font(.title3.bold())
+                .foregroundColor(.white)
+
+            Text("Edit the module JSON config and save to reapply it on the server.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            TextEditor(text: $jsonText)
+                .font(.system(.body, design: .monospaced))
+                .padding(8)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(8)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Save") {
+                    onSave()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 640, minHeight: 420)
+        .background(Color(red: 0.08, green: 0.09, blue: 0.14))
     }
 }
 
@@ -2605,6 +3386,7 @@ extension ServerConfig {
               registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
               allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
               handoffPromptMode: String? = nil,
+              messageSettings: MessageSettings? = nil,
               pushover: PushoverConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
@@ -2621,6 +3403,7 @@ extension ServerConfig {
             maxGuestDuration: maxGuestDuration ?? self.maxGuestDuration,
             enableRateLimiting: enableRateLimiting ?? self.enableRateLimiting,
             handoffPromptMode: handoffPromptMode ?? self.handoffPromptMode,
+            messageSettings: messageSettings ?? self.messageSettings,
             backgroundStreams: self.backgroundStreams,
             pushover: pushover ?? self.pushover
         )

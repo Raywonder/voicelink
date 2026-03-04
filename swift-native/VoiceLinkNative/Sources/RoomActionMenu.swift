@@ -23,7 +23,7 @@ struct RoomActionMenu: View {
         // In production, these would come from room settings
         RoomFeatures(
             whisperEnabled: true,
-            peekEnabled: room.userCount > 0 || settings.allowPreviewWhenMediaActive,
+            peekEnabled: room.userCount > 0 || true,
             spatialAudioEnabled: true,
             recordingAllowed: false,
             voiceEffectsEnabled: true,
@@ -269,6 +269,16 @@ struct RoomActionMenu: View {
                     }
 
                     if canManageRoomActions {
+                        ActionMenuItem(
+                            icon: "pencil",
+                            label: "Edit This Room",
+                            shortcut: nil,
+                            description: "Update room details, visibility, limits, and status"
+                        ) {
+                            NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
+                            isPresented = false
+                        }
+
                         ActionMenuItem(
                             icon: "slider.horizontal.3",
                             label: "Open Server Administration",

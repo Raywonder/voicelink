@@ -52,6 +52,28 @@
     </section>
 
     <section>
+      <h2>Messaging and Retention</h2>
+      <ul>
+        <li>Direct messages replace the room chat panel while a conversation is open. Users return to room chat with the Back action.</li>
+        <li>Initial room and direct-message history should load the latest 20 messages by default unless the admin changes the initial load count.</li>
+        <li>Scrollback should stay capped by the configured retention window and the configured message cap, with an absolute hard limit of 5000 messages.</li>
+        <li>Delete room messages when empty only when the room policy allows it. Attachment-linked messages should remain available until the attachment expires or is removed.</li>
+        <li>Guest retention, authenticated-user retention, and bot memory retention should be set explicitly in Server Config so moderation and storage behavior stay predictable.</li>
+        <li>Use Skip to Latest when reviewing older history so moderators can return to the current message stream without leaving the room.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Room Bots and Assistant Behavior</h2>
+      <ul>
+        <li>Bots should publish a short status message in the room so users know which commands or mentions they accept.</li>
+        <li>Non-audio bots should not expose mute, solo, or user-volume controls. Show those controls only for bots that actually produce room audio such as TTS or broadcast sources.</li>
+        <li>Bot memory retention should be configured separately from room chat retention when the bot needs longer per-user context.</li>
+        <li>Use <code>/bot help</code> and direct mentions such as <code>@VoiceLink Bot</code> for room-level bot actions until richer per-bot command routing is enabled.</li>
+      </ul>
+    </section>
+
+    <section>
       <h2>Audio and Policy</h2>
       <ul>
         <li>Publish baseline settings for noise suppression, echo cancellation, and gain control.</li>
@@ -75,6 +97,7 @@
         <li>Use it to generate a fresh VoiceLink deployment bundle, upload it by SFTP, SMB, HTTP, or HTTPS, and bootstrap an existing remote VoiceLink install through its API when available.</li>
         <li>Fresh install bundles should be uploaded to the target server and extracted there so <code>deploy.json</code> can be loaded by the new install.</li>
         <li>Existing install updates can use the remote API bootstrap path so server config, federation peers, and API defaults stay aligned with the main server.</li>
+        <li>If the target install exposes a trusted restart endpoint, the deployment manager can trigger a post-bootstrap restart so the new config is applied without a manual shell login.</li>
         <li>Owner notification email should include upload destination, API bootstrap target, and getting-started instructions for the receiving server owner.</li>
       </ul>
     </section>

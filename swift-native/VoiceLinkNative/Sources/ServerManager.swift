@@ -43,6 +43,10 @@ class ServerManager: ObservableObject {
     private var roomStreamDidStopExplicitly = false
     private var roomStreamKeepAliveTimer: Timer?
     private var roomStreamEndObserver: NSObjectProtocol?
+    private var previewStreamPlayer: AVPlayer?
+    private var previewStreamURL: URL?
+    private var previewStreamKeepAliveTimer: Timer?
+    private var previewStreamEndObserver: NSObjectProtocol?
     private let defaultRoomStreamURLString = "https://chrismixradio.com"
     private let roomStreamDefaultVolume: Float = 0.4
 
@@ -55,6 +59,8 @@ class ServerManager: ObservableObject {
         // Default to main server
         self.currentServerURL = ServerManager.mainServer
         setupMessageNotifications()
+        setupPreviewNotifications()
+        setupVolumeNotifications()
     }
 
     private func setupMessageNotifications() {
@@ -153,6 +159,47 @@ class ServerManager: ObservableObject {
         }
 
         connectSocket(to: ServerManager.localServer, asMain: false)
+    }
+
+    private func setupPreviewNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: .startPeekingRoom,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let roomId = notification.userInfo?["roomId"] as? String else { return }
+            self.startPreviewPlayback(for: roomId)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .stopPeekingRoom,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.stopPreviewPlayback()
+        }
+    }
+
+    private func setupVolumeNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: .masterVolumeChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyCurrentPlaybackVolume()
+        }
+    }
+
+    private var effectiveRoomPlaybackVolume: Float {
+        let appVolume = UserAudioControlManager.shared.masterVolume
+        return max(0.0, min(1.0, roomStreamDefaultVolume * appVolume))
+    }
+
+    private func applyCurrentPlaybackVolume() {
+        let volume = effectiveRoomPlaybackVolume
+        roomStreamPlayer?.volume = volume
+        previewStreamPlayer?.volume = volume
     }
 
     func connectToMainServer() {
@@ -1189,39 +1236,26 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.post(name: .roomLeft, object: nil)
     }
 
-    private func fetchActiveRoomStream(for roomId: String) {
-        roomStreamDidStopExplicitly = false
+    private func fetchRoomStreamState(for roomId: String, completion: @escaping (RoomMediaState?) -> Void) {
         guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
-            DispatchQueue.main.async {
-                self.currentRoomMedia = nil
-            }
-            startDefaultRoomStreamIfNeeded()
+            DispatchQueue.main.async { completion(nil) }
             return
         }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let self else { return }
             guard let data else {
-                DispatchQueue.main.async {
-                    self.currentRoomMedia = nil
-                }
-                self.startDefaultRoomStreamIfNeeded()
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                DispatchQueue.main.async {
-                    self.currentRoomMedia = nil
-                }
-                self.startDefaultRoomStreamIfNeeded()
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
             let isActive = json["active"] as? Bool ?? false
             guard isActive, let streamUrl = json["streamUrl"] as? String else {
-                DispatchQueue.main.async {
-                    self.currentRoomMedia = nil
-                }
-                self.startDefaultRoomStreamIfNeeded()
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
             let mediaState = RoomMediaState(
@@ -1231,11 +1265,22 @@ class ServerManager: ObservableObject {
                 type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                 volume: json["volume"] as? Int
             )
-            DispatchQueue.main.async {
-                self.currentRoomMedia = mediaState
-            }
-            self.startRoomStreamPlayback(from: streamUrl)
+            DispatchQueue.main.async { completion(mediaState) }
         }.resume()
+    }
+
+    private func fetchActiveRoomStream(for roomId: String) {
+        roomStreamDidStopExplicitly = false
+        fetchRoomStreamState(for: roomId) { [weak self] mediaState in
+            guard let self else { return }
+            guard let mediaState else {
+                self.currentRoomMedia = nil
+                self.startDefaultRoomStreamIfNeeded()
+                return
+            }
+            self.currentRoomMedia = mediaState
+            self.startRoomStreamPlayback(from: mediaState.streamURL)
+        }
     }
 
     func refreshCurrentRoomMedia() {
@@ -1247,9 +1292,9 @@ class ServerManager: ObservableObject {
         guard let url = URL(string: rawURL) else { return }
         DispatchQueue.main.async {
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
-                player.volume = self.roomStreamDefaultVolume
+                player.volume = self.effectiveRoomPlaybackVolume
                 player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
-                player.play()
+                player.playImmediately(atRate: 1.0)
                 self.ensureRoomStreamKeepAlive()
                 return
             }
@@ -1271,16 +1316,16 @@ class ServerManager: ObservableObject {
 
             if let player = self.roomStreamPlayer {
                 player.replaceCurrentItem(with: item)
-                player.volume = self.roomStreamDefaultVolume
+                player.volume = self.effectiveRoomPlaybackVolume
                 player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
-                player.play()
+                player.playImmediately(atRate: 1.0)
             } else {
                 let player = AVPlayer(playerItem: item)
                 player.automaticallyWaitsToMinimizeStalling = false
-                player.volume = self.roomStreamDefaultVolume
+                player.volume = self.effectiveRoomPlaybackVolume
                 player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
                 self.roomStreamPlayer = player
-                player.play()
+                player.playImmediately(atRate: 1.0)
             }
             self.ensureRoomStreamKeepAlive()
         }
@@ -1298,15 +1343,100 @@ class ServerManager: ObservableObject {
             guard self.activeRoomId != nil else { return }
             guard !self.roomStreamDidStopExplicitly else { return }
             guard let player = self.roomStreamPlayer else { return }
-            player.volume = self.roomStreamDefaultVolume
+            player.volume = self.effectiveRoomPlaybackVolume
             player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
             if player.currentItem == nil, let current = self.currentRoomStreamURL {
                 self.startRoomStreamPlayback(from: current.absoluteString)
                 return
             }
             if player.timeControlStatus != .playing {
-                player.play()
+                player.playImmediately(atRate: 1.0)
             }
+        }
+    }
+
+    private func startPreviewPlayback(for roomId: String) {
+        fetchRoomStreamState(for: roomId) { [weak self] mediaState in
+            guard let self else { return }
+            guard let mediaState else {
+                self.stopPreviewPlayback()
+                return
+            }
+            self.startPreviewStreamPlayback(from: mediaState.streamURL)
+        }
+    }
+
+    private func startPreviewStreamPlayback(from rawURL: String) {
+        guard let url = URL(string: rawURL) else { return }
+        DispatchQueue.main.async {
+            if self.previewStreamURL == url, let player = self.previewStreamPlayer {
+                player.volume = self.effectiveRoomPlaybackVolume
+                player.isMuted = self.outputMuted
+                player.playImmediately(atRate: 1.0)
+                self.ensurePreviewStreamKeepAlive()
+                return
+            }
+
+            self.previewStreamURL = url
+            let item = AVPlayerItem(url: url)
+            if let observer = self.previewStreamEndObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.previewStreamEndObserver = nil
+            }
+            self.previewStreamEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self, let current = self.previewStreamURL else { return }
+                self.startPreviewStreamPlayback(from: current.absoluteString)
+            }
+
+            if let player = self.previewStreamPlayer {
+                player.replaceCurrentItem(with: item)
+                player.volume = self.effectiveRoomPlaybackVolume
+                player.isMuted = self.outputMuted
+                player.playImmediately(atRate: 1.0)
+            } else {
+                let player = AVPlayer(playerItem: item)
+                player.automaticallyWaitsToMinimizeStalling = false
+                player.volume = self.effectiveRoomPlaybackVolume
+                player.isMuted = self.outputMuted
+                self.previewStreamPlayer = player
+                player.playImmediately(atRate: 1.0)
+            }
+            self.ensurePreviewStreamKeepAlive()
+        }
+    }
+
+    private func ensurePreviewStreamKeepAlive() {
+        previewStreamKeepAliveTimer?.invalidate()
+        previewStreamKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, let player = self.previewStreamPlayer else { return }
+            player.volume = self.effectiveRoomPlaybackVolume
+            player.isMuted = self.outputMuted
+            if player.currentItem == nil, let current = self.previewStreamURL {
+                self.startPreviewStreamPlayback(from: current.absoluteString)
+                return
+            }
+            if player.timeControlStatus != .playing {
+                player.playImmediately(atRate: 1.0)
+            }
+        }
+    }
+
+    private func stopPreviewPlayback() {
+        DispatchQueue.main.async {
+            self.previewStreamKeepAliveTimer?.invalidate()
+            self.previewStreamKeepAliveTimer = nil
+            if let observer = self.previewStreamEndObserver {
+                NotificationCenter.default.removeObserver(observer)
+                self.previewStreamEndObserver = nil
+            }
+            self.previewStreamPlayer?.pause()
+            self.previewStreamPlayer?.replaceCurrentItem(with: nil)
+            self.previewStreamPlayer = nil
+            self.previewStreamURL = nil
         }
     }
 
@@ -1331,6 +1461,7 @@ class ServerManager: ObservableObject {
     func setCurrentRoomMediaMuted(_ muted: Bool) {
         DispatchQueue.main.async {
             self.isCurrentRoomMediaMuted = muted
+            self.roomStreamPlayer?.volume = self.effectiveRoomPlaybackVolume
             self.roomStreamPlayer?.isMuted = muted || self.outputMuted
         }
     }
@@ -1343,7 +1474,9 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.inputMuted = isMuted
             self.outputMuted = isDeafened
+            self.applyCurrentPlaybackVolume()
             self.roomStreamPlayer?.isMuted = self.isCurrentRoomMediaMuted || isDeafened
+            self.previewStreamPlayer?.isMuted = isDeafened
         }
         LocalMonitorManager.shared.setInputMuted(isMuted)
 

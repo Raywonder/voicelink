@@ -30,6 +30,7 @@ namespace VoiceLinkNative
             // Services (singletons)
             services.AddSingleton<ServerManager>(ServerManager.Instance);
             services.AddSingleton<AuthenticationManager>(AuthenticationManager.Instance);
+            services.AddSingleton<LicensingManager>(LicensingManager.Instance);
             services.AddSingleton<SyncManager>(SyncManager.Instance);
             services.AddSingleton<AdminServerManager>();
 
