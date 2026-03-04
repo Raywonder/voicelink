@@ -3,13 +3,13 @@ version: 1.0
 build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: 6o0K+kxyCCY6FfC4FVgrXKh0TCm2Z5jcDdj8mfBBARWi9z8szbbY3utIhd/lRu1bt2Kt80wE/PCfuvk5jyRHiA==
-    size: 167359138
+    sha512: Dm+9yWtDDbBCKXMraP01+MbWWs36GDFQHJyOG6xyRc+o6cub0DLm9rJMJ1hPcHYea8AfeO31BwN+hrsbiEqnWA==
+    size: 161736189
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: 6o0K+kxyCCY6FfC4FVgrXKh0TCm2Z5jcDdj8mfBBARWi9z8szbbY3utIhd/lRu1bt2Kt80wE/PCfuvk5jyRHiA==
-releaseDate: '2026-03-04T01:11:22.000Z'
+sha512: Dm+9yWtDDbBCKXMraP01+MbWWs36GDFQHJyOG6xyRc+o6cub0DLm9rJMJ1hPcHYea8AfeO31BwN+hrsbiEqnWA==
+releaseDate: '2026-03-04T01:24:07.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 26)
   - Finalized current VoiceLink auth, licensing, messaging, media, and admin improvements.
-  - Adds deployment manager watchdog APIs and improved desktop-first access messaging.
+  - Uses the current universal macOS release binary for Intel and Apple Silicon support.
   - Keeps browser room access closed until the public web client is ready.
