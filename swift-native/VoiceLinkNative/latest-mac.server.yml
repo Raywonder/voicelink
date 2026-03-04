@@ -3,13 +3,13 @@ version: 1.0
 build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: bKIkkcLI+9n+aTkPE5wccVamQe9p1IPH60TS+z81nPgQjDVFNn5os1R+3IuC1nGY7jpiiyGKKpII9pESFP20Hw==
-    size: 165623193
+    sha512: FlaX7MCo1DaZcGFe/e03s86Fd94hMS5g7CHwa58XE51525had5u4URDBIT3u2QB+UKIKuONpVcUJLJM2GXlaeA==
+    size: 192752137
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: bKIkkcLI+9n+aTkPE5wccVamQe9p1IPH60TS+z81nPgQjDVFNn5os1R+3IuC1nGY7jpiiyGKKpII9pESFP20Hw==
-releaseDate: '2026-03-04T02:01:49.000Z'
+sha512: FlaX7MCo1DaZcGFe/e03s86Fd94hMS5g7CHwa58XE51525had5u4URDBIT3u2QB+UKIKuONpVcUJLJM2GXlaeA==
+releaseDate: '2026-03-04T17:21:33.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 26)
-  - Rebuilt from the current universal macOS source binary.
-  - Includes the current desktop auth, licensing, media, admin, and support-path baseline.
-  - Keeps desktop as the primary supported release path while browser access remains limited.
+  - Refreshed from the current installed macOS app bundle with canonical intro and sound-test assets.
+  - Includes the latest room messaging, accessibility, and link preview fixes.
+  - Published as the current desktop client baseline.

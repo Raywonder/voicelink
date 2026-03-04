@@ -13,17 +13,17 @@ class AppSoundManager: ObservableObject {
         let isReminder: Bool
     }
     private let remoteSoundBaseURLDefaults = [
-        "https://im.tappedin.fm/sounds",
+        "https://im.tappedin.fm/copyparty/assets/sounds",
+        "https://im.tappedin.fm/cp/assets/sounds",
         "https://im.tappedin.fm/assets/sounds",
-        "https://im.tappedin.fm/copyparty/sounds",
-        "https://im.tappedin.fm/cp/sounds",
-        "https://voicelink.devinecreations.net/sounds",
+        "https://im.tappedin.fm/sounds",
+        "https://voicelink.devinecreations.net/copyparty/assets/sounds",
+        "https://voicelink.devinecreations.net/cp/assets/sounds",
         "https://voicelink.devinecreations.net/assets/sounds",
-        "https://voicelink.devinecreations.net/downloads/sounds",
-        "https://voicelink.devinecreations.net/voicelink/sounds",
-        "https://dl.voicelink.devinecreations.net/sounds",
-        "https://dl.voicelink.devinecreations.net/copyparty/sounds",
-        "https://dl.voicelink.devinecreations.net/cp/sounds"
+        "https://voicelink.devinecreations.net/sounds",
+        "https://dl.voicelink.devinecreations.net/copyparty/assets/sounds",
+        "https://dl.voicelink.devinecreations.net/cp/assets/sounds",
+        "https://dl.voicelink.devinecreations.net/sounds"
     ]
     
     private struct IndexedSound {
@@ -410,6 +410,16 @@ class AppSoundManager: ObservableObject {
 
     private func resolveSoundTestURL() -> URL? {
         let candidateRoots = candidateSoundRoots(preferred: soundsRootURL)
+        let preferredBaseNames = [
+            "your-sound-test",
+            "yoursoundtest",
+            "your-sound-test",
+            "soundtest",
+            "sound-test",
+            "sound_test"
+        ]
+        let allowedExtensions = ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"]
+
         for soundsRoot in candidateRoots {
             guard let entries = try? FileManager.default.contentsOfDirectory(
                 at: soundsRoot,
@@ -419,19 +429,18 @@ class AppSoundManager: ObservableObject {
                 continue
             }
 
-            let preferred = entries.first { url in
-                guard url.pathExtension.lowercased() == "wav" else { return false }
-                let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
+            let rootEntries = entries.filter { url in
+                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { return false }
+                return allowedExtensions.contains(url.pathExtension.lowercased())
             }
-            if let preferred { return preferred }
 
-            if let fallback = entries.first(where: { url in
-                guard url.pathExtension.lowercased() == "wav" else { return false }
-                let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                return base.contains("test")
-            }) {
-                return fallback
+            for preferredBase in preferredBaseNames {
+                if let match = rootEntries.first(where: {
+                    $0.deletingPathExtension().lastPathComponent.lowercased() == preferredBase
+                }) {
+                    return match
+                }
             }
         }
         return nil
@@ -655,7 +664,7 @@ class AppSoundManager: ObservableObject {
             return explicitWelcome
         }
 
-        return pickRandomStartupIntroURL()
+        return nil
     }
 
     @discardableResult
@@ -697,10 +706,6 @@ class AppSoundManager: ObservableObject {
                 return
             }
 
-            if self.hasPlayableVariant(for: .connected) {
-                self.playSound(.connected, force: true, allowSystemFallback: true)
-                self.startupIntroPlayed = self.isSoundPlaying(.connected)
-            }
         }
     }
 
@@ -722,10 +727,10 @@ class AppSoundManager: ObservableObject {
 
     private func pickExplicitStartupWelcomeURL() -> URL? {
         let preferredBaseNames = [
-            "connected",
-            "reconnected",
-            "user-join",
-            "doorbell-ding-dong-type-single"
+            "01-voicelink-intro",
+            "02-voicelink-intro",
+            "03-voicelink-faster",
+            "04-voicelink-vynal"
         ]
         let allowedExtensions: Set<String> = ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"]
 
@@ -744,74 +749,19 @@ class AppSoundManager: ObservableObject {
                 return allowedExtensions.contains(url.pathExtension.lowercased())
             }
 
-            for preferredBase in preferredBaseNames {
-                if let match = rootEntries.first(where: {
-                    $0.deletingPathExtension().lastPathComponent.lowercased() == preferredBase
-                }) {
-                    return match
-                }
+            let matches = rootEntries.filter { entry in
+                let base = entry.deletingPathExtension().lastPathComponent.lowercased()
+                return preferredBaseNames.contains(base)
             }
-        }
-
-        return nil
-    }
-
-    private func pickRandomStartupIntroURL() -> URL? {
-        let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
-        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
-            var rootLevelCandidates: [URL] = []
-            var explicit: [URL] = []
-
-            if let entries = try? FileManager.default.contentsOfDirectory(
-                at: soundsRoot,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                for url in entries {
-                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                          values.isRegularFile == true else { continue }
-                    let ext = url.pathExtension.lowercased()
-                    guard exts.contains(ext) else { continue }
-                    rootLevelCandidates.append(url)
-                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
-                        explicit.append(url)
-                    }
-                }
-            }
-
-            if let explicitIntro = explicit.randomElement() {
-                return explicitIntro
-            }
-
-            if let randomRoot = rootLevelCandidates.randomElement() {
-                return randomRoot
-            }
-
-            if let enumerator = FileManager.default.enumerator(
-                at: soundsRoot,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                for case let url as URL in enumerator {
-                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                          values.isRegularFile == true else { continue }
-                    let ext = url.pathExtension.lowercased()
-                    guard exts.contains(ext) else { continue }
-                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
-                        explicit.append(url)
-                    }
-                }
-            }
-
-            if let match = explicit.randomElement() {
+            if let match = matches.randomElement() {
                 return match
             }
         }
 
         return nil
     }
+
+    private func pickRandomStartupIntroURL() -> URL? { nil }
 
     private func candidateResourceBundles() -> [Bundle] {
         var bundles: [Bundle] = [Bundle.main, Bundle.module]
@@ -941,6 +891,10 @@ class AppSoundManager: ObservableObject {
         let serverBases = APIEndpointResolver.mainBaseCandidates(preferred: ServerManager.shared.baseURL)
         let copypartyBases = cpBaseRaw + serverBases
         let pathSuffixes = [
+            "/copyparty/assets/sounds",
+            "/cp/assets/sounds",
+            "/copyparty/voicelink/assets/sounds",
+            "/cp/voicelink/assets/sounds",
             "/sounds",
             "/assets/sounds",
             "/downloads/sounds",
@@ -1011,11 +965,11 @@ class AppSoundManager: ObservableObject {
 
         let dirCandidates = [
             "",
+            "assets/sounds",
+            "assets/sounds/ui-sounds",
             "sounds",
             "ui-sounds",
             "sounds/ui-sounds",
-            "assets/sounds",
-            "assets/sounds/ui-sounds",
             "voicelink/sounds",
             "voicelink/assets/sounds",
             "apps/voicelink/sounds",
