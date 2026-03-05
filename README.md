@@ -14,13 +14,18 @@ VoiceLink is a native voice chat app for macOS and Windows, with a web client fo
 
 - macOS (Universal): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
 - macOS checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip.sha256
-- Windows (x64): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip
-- Windows checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip.sha256
+- Windows app EXE (x64): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe
+- Windows app checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe.sha256
+- Windows setup EXE (rebuilding): https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe
+- Linux AppImage: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-linux.AppImage
+- Linux AppImage checksum: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-linux.AppImage.sha256
+- Linux .deb: https://voicelink.devinecreations.net/downloads/voicelink/voicelink-local_1.0.0_amd64.deb
+- Linux .deb checksum: https://voicelink.devinecreations.net/downloads/voicelink/voicelink-local_1.0.0_amd64.deb.sha256
 - Web client: https://voicelink.devinecreations.net/
 
 Mirror:
 - https://node2.voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
-- https://node2.voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip
+- https://node2.voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe
 
 ## Install
 
@@ -39,9 +44,26 @@ xattr -cr /Applications/VoiceLink.app
 
 ### Windows
 
-1. Download `VoiceLink-windows.zip`.
-2. Extract it.
-3. Run `VoiceLink.exe`.
+1. Download `VoiceLink-1.0.0-windows-portable.exe`.
+2. Run the EXE and allow Windows SmartScreen if prompted.
+3. Pin it to Start Menu or Taskbar if desired.
+
+### Linux
+
+1. Download `VoiceLink-linux.AppImage` or `voicelink-local_1.0.0_amd64.deb`.
+2. AppImage:
+
+```bash
+chmod +x VoiceLink-linux.AppImage
+./VoiceLink-linux.AppImage
+```
+
+3. Debian/Ubuntu:
+
+```bash
+sudo dpkg -i voicelink-local_1.0.0_amd64.deb
+sudo apt-get -f install -y
+```
 
 ## Get an Account / Sign In
 
@@ -87,6 +109,13 @@ Available login methods depend on how your server is configured.
 
 - Main downloads page: https://voicelink.devinecreations.net/downloads.html
 - Server/community mirror: https://node2.voicelink.devinecreations.net/downloads.html
+
+## Host Your Own Server (Linux)
+
+- Guide: `docs/installation/HOST-LINUX-SERVER.md`
+- Native installer: `installer/install.sh`
+- Docker compose: `installer/docker-compose.server.yml`
+- Public registration helper: `scripts/linux/register-public-server.sh`
 
 ## For Developers
 

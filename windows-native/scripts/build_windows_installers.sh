@@ -24,10 +24,11 @@ if ! command -v dotnet >/dev/null 2>&1; then
 fi
 
 dotnet restore "$PROJECT_FILE"
-dotnet publish "$PROJECT_FILE" -c Release -r win-x64 --self-contained true -o "$PUBLISH_DIR" /p:PublishSingleFile=true
+dotnet publish "$PROJECT_FILE" -c Release -r win-x64 --self-contained true -o "$PUBLISH_DIR" /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:PublishTrimmed=false
 
 if [[ "${OSTYPE:-}" != msys* && "${OSTYPE:-}" != cygwin* && "${OSTYPE:-}" != win32* ]]; then
   echo "Portable Windows binary built: $PUBLISH_DIR/VoiceLinkNative.exe"
+  echo "Recommended artifact name: $DIST_DIR/VoiceLink-${VERSION}-windows-portable.exe"
   echo "MSI/setup EXE requires Windows (WiX bind depends on msi.dll)."
   echo "Run windows-native/scripts/build_windows_installers.ps1 on a Windows 10/11 host."
   exit 2
@@ -42,17 +43,31 @@ wix extension add WixToolset.Bal.wixext >/dev/null 2>&1 || true
 
 MSI_OUT="$DIST_DIR/VoiceLinkNative-${VERSION}-win-x64.msi"
 EXE_OUT="$DIST_DIR/VoiceLinkNative-${VERSION}-setup.exe"
+PORTABLE_OUT="$DIST_DIR/VoiceLink-${VERSION}-windows-portable.exe"
+SETUP_OUT="$DIST_DIR/VoiceLink-${VERSION}-windows-setup.exe"
 
 wix build "$WIX_MSI" \
   -arch x64 \
   -d Version="$VERSION" \
+  -d PublishDir="$PUBLISH_DIR" \
   -o "$MSI_OUT"
 
 wix build "$WIX_BUNDLE" \
   -arch x64 \
   -ext WixToolset.Bal.wixext \
   -d Version="$VERSION" \
+  -d DistDir="$DIST_DIR" \
   -o "$EXE_OUT"
 
+cp -f "$PUBLISH_DIR/VoiceLinkNative.exe" "$PORTABLE_OUT"
+cp -f "$EXE_OUT" "$SETUP_OUT"
+shasum -a 256 "$PORTABLE_OUT" | awk '{print $1}' > "${PORTABLE_OUT}.sha256"
+shasum -a 256 "$SETUP_OUT" | awk '{print $1}' > "${SETUP_OUT}.sha256"
+
+if [[ "$(cat "${PORTABLE_OUT}.sha256")" == "$(cat "${SETUP_OUT}.sha256")" ]]; then
+  echo "ERROR: setup EXE hash matches portable EXE hash; refusing invalid installer output."
+  exit 3
+fi
+
 echo "Built artifacts:"
-ls -lh "$MSI_OUT" "$EXE_OUT"
+ls -lh "$MSI_OUT" "$EXE_OUT" "$PORTABLE_OUT" "$SETUP_OUT"

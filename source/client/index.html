@@ -48,11 +48,11 @@
                         <p class="download-title">Desktop Downloads</p>
                         <p class="download-subtitle">Use the latest native builds on macOS or Windows.</p>
                         <div class="download-buttons">
-                            <a href="/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn mac-btn">
-                                <span class="platform-icon">🍎</span> macOS
+                            <a href="/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-btn mac-btn">
+                                <span class="platform-icon">🍎</span> macOS Installer (.pkg)
                             </a>
-                            <a href="/downloads/voicelink/VoiceLink-windows.zip" class="download-btn">
-                                <span class="platform-icon">🪟</span> Windows
+                            <a href="/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe" class="download-btn">
+                                <span class="platform-icon">🪟</span> Windows App (.exe)
                             </a>
                             <a href="/downloads.html" class="download-btn">
                                 <span class="platform-icon">⬇️</span> All Downloads
@@ -94,11 +94,11 @@
                         <p class="download-title">Get the Desktop App</p>
                         <p class="download-subtitle">Download the current native builds for macOS or Windows.</p>
                         <div class="download-buttons">
-                            <a href="/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn mac-btn">
-                                <span class="platform-icon">🍎</span> macOS
+                            <a href="/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-btn mac-btn">
+                                <span class="platform-icon">🍎</span> macOS Installer (.pkg)
                             </a>
-                            <a href="/downloads/voicelink/VoiceLink-windows.zip" class="download-btn">
-                                <span class="platform-icon">🪟</span> Windows
+                            <a href="/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe" class="download-btn">
+                                <span class="platform-icon">🪟</span> Windows App (.exe)
                             </a>
                             <a href="/downloads.html" class="download-btn">
                                 <span class="platform-icon">⬇️</span> All Downloads
@@ -112,6 +112,7 @@
                     <div class="user-details">
                         <span id="mastodon-user-name" class="user-name"></span>
                         <span id="mastodon-user-handle" class="user-handle"></span>
+                        <span id="mastodon-user-gender" class="user-handle"></span>
                         <span id="mastodon-user-role" class="user-role"></span>
                     </div>
                     <button id="mastodon-logout-btn" class="auth-btn logout-btn">Logout</button>
@@ -1199,8 +1200,35 @@
                     <div class="settings-section">
                         <h3>Profile & Account</h3>
                         <div class="setting-item">
+                            <label for="auth-display-name">Display Name:</label>
+                            <input type="text" id="auth-display-name" placeholder="Optional display name">
+                        </div>
+                        <div class="setting-item">
+                            <label for="auth-preferred-mastodon-handle">Preferred Mastodon Handle:</label>
+                            <input type="text" id="auth-preferred-mastodon-handle" placeholder="@name@instance.social">
+                        </div>
+                        <div class="setting-item">
+                            <label for="auth-gender">Gender:</label>
+                            <select id="auth-gender">
+                                <option value="">Select...</option>
+                                <option value="male">Male</option>
+                                <option value="female">Female</option>
+                                <option value="non_binary">Non-binary</option>
+                                <option value="prefer_not_to_say">Prefer not to say</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="setting-item" id="auth-gender-custom-group" style="display: none;">
+                            <label for="auth-gender-custom">Custom Gender:</label>
+                            <input type="text" id="auth-gender-custom" placeholder="Enter custom gender">
+                        </div>
+                        <div class="setting-item">
                             <label>Current User:</label>
                             <span id="auth-current-user" class="info-value">Not logged in</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>Selected Gender:</label>
+                            <span id="auth-selected-gender" class="info-value">Not set</span>
                         </div>
                         <div class="setting-item">
                             <label>Provider:</label>

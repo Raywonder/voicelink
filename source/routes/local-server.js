@@ -109,6 +109,9 @@ class VoiceLinkLocalServer {
         this.roomMessages = new Map();
         // Key: `${senderId}_${receiverId}` (sorted), Value: array of DMs
         this.directMessages = new Map();
+        this.botConversationState = new Map();
+        this.directMessageVisibility = new Map();
+        this.directMessagePurgeRequests = new Map();
         this.serverStartedAt = Date.now();
         // Guest message expiry (24 hours in milliseconds)
         this.GUEST_MESSAGE_EXPIRY = 24 * 60 * 60 * 1000;
@@ -1115,7 +1118,7 @@ class VoiceLinkLocalServer {
     }
 
     getCopyPartyExportConfig() {
-        const baseUrl = String(process.env.VOICELINK_COPYPARTY_URL || 'https://files.raywonderis.me')
+        const baseUrl = String(process.env.VOICELINK_COPYPARTY_URL || 'https://voicelink.devinecreations.net')
             .trim()
             .replace(/\/+$/, '');
         let exportPath = String(process.env.VOICELINK_COPYPARTY_EXPORT_PATH || '/uploads/voicelink-exports').trim();
@@ -1390,7 +1393,9 @@ class VoiceLinkLocalServer {
             apiKeys: includeApiKeys ? Array.from(this.apiKeys.entries()).map(([key, data]) => ({ key, ...data })) : [],
             accessPasses: includeAccessPasses ? Array.from((this.accessPasses || new Map()).values()) : [],
             roomMessages: includeMessages ? Object.fromEntries(this.roomMessages.entries()) : {},
-            directMessages: includeMessages ? Object.fromEntries(this.directMessages.entries()) : {}
+            directMessages: includeMessages ? Object.fromEntries(this.directMessages.entries()) : {},
+            directMessageVisibility: Object.fromEntries(this.directMessageVisibility.entries()),
+            directMessagePurgeRequests: Object.fromEntries(this.directMessagePurgeRequests.entries())
         };
     }
 
@@ -1456,6 +1461,18 @@ class VoiceLinkLocalServer {
             for (const [dmKey, messages] of Object.entries(snapshot.directMessages)) {
                 this.directMessages.set(dmKey, Array.isArray(messages) ? messages : []);
                 result.importedDirectMessageBuckets += 1;
+            }
+        }
+
+        if (snapshot.directMessageVisibility && typeof snapshot.directMessageVisibility === 'object') {
+            for (const [dmKey, visibility] of Object.entries(snapshot.directMessageVisibility)) {
+                this.directMessageVisibility.set(dmKey, visibility && typeof visibility === 'object' ? visibility : {});
+            }
+        }
+
+        if (snapshot.directMessagePurgeRequests && typeof snapshot.directMessagePurgeRequests === 'object') {
+            for (const [dmKey, purgeRequests] of Object.entries(snapshot.directMessagePurgeRequests)) {
+                this.directMessagePurgeRequests.set(dmKey, purgeRequests && typeof purgeRequests === 'object' ? purgeRequests : {});
             }
         }
 
@@ -2968,18 +2985,78 @@ class VoiceLinkLocalServer {
         return `${room.name} does not have active room media right now.`;
     }
 
+    getBotConversationKey(roomId, userId) {
+        return `${roomId || 'global'}:${userId || 'unknown'}`;
+    }
+
+    getRecentRoomConversationContext(roomId, limit = 8) {
+        const messages = this.getRoomMessages(roomId, Math.max(1, limit * 3));
+        return messages
+            .filter(message => !message?.isBot)
+            .slice(-limit)
+            .map(message => {
+                const speaker = message.userName || message.senderName || 'User';
+                const content = String(message.message || message.content || '').trim();
+                return content ? `${speaker}: ${content}` : null;
+            })
+            .filter(Boolean);
+    }
+
+    isBotConversationActive(roomId, userId) {
+        const key = this.getBotConversationKey(roomId, userId);
+        const state = this.botConversationState.get(key);
+        if (!state) return false;
+        return (Date.now() - state.lastAddressedAt) <= (10 * 60 * 1000);
+    }
+
+    updateBotConversationState(roomId, userId, source) {
+        const key = this.getBotConversationKey(roomId, userId);
+        this.botConversationState.set(key, {
+            lastAddressedAt: Date.now(),
+            lastPrompt: String(source || '').trim()
+        });
+    }
+
+    dismissBotConversation(roomId, userId) {
+        this.botConversationState.delete(this.getBotConversationKey(roomId, userId));
+    }
+
     async buildBotTextReply(user, roomId, source = '') {
         const room = this.rooms.get(roomId);
         const users = this.normalizeRoomUsers(roomId);
         const config = deployConfig.getConfig() || {};
         const motd = typeof config.server?.motd === 'string' ? config.server.motd.trim() : '';
+        const roomDescription = typeof room?.description === 'string' ? room.description.trim() : '';
+        const serverName = config.server?.name || 'VoiceLink';
+        const roomPurpose = roomDescription || `${room?.name || 'This room'} is part of ${serverName}.`;
+        const recentContext = this.getRecentRoomConversationContext(roomId);
         const lowered = String(source || '').trim().toLowerCase();
 
         if (!lowered || lowered === 'hi' || lowered === 'hello' || lowered === 'hey') {
-            return `Hi ${user.name || 'there'}. Try /bot help for commands, ask for room status, or send me a text file to inspect.`;
+            const contextParts = [roomPurpose];
+            if (motd) {
+                contextParts.push(`Message of the day: ${motd}`);
+            }
+            return `Hi ${user.name || 'there'}. ${contextParts.join(' ')} Try /bot help for commands, ask what this room is for, or ask what media is playing.`;
         }
         if (lowered.includes('help')) {
-            return 'Commands: /me action, /bot help, /vb help, /bot status, /vb status, /bot users, /bot motd, /bot server.';
+            return 'Commands: /me action, /bot help, /vb help, /bot status, /vb status, /bot users, /bot motd, /bot server. You can also ask what this room is about, what media is playing, or ask topic questions relevant to the room.';
+        }
+        if (
+            lowered.includes('what is this room about') ||
+            lowered.includes('what is this room for') ||
+            lowered.includes('about this room') ||
+            lowered.includes('room about') ||
+            lowered.includes('room purpose')
+        ) {
+            const messageBits = [
+                `${room?.name || 'This room'} is hosted by ${serverName}.`,
+                roomPurpose
+            ];
+            if (motd) {
+                messageBits.push(`Message of the day: ${motd}`);
+            }
+            return messageBits.join(' ');
         }
         if (lowered.includes('status')) {
             return `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}.`;
@@ -3015,10 +3092,20 @@ class VoiceLinkLocalServer {
             return 'Admin actions are only available to authorized administrators and moderators.';
         }
         if (lowered.includes('server')) {
-            return `${config.server?.name || 'VoiceLink'} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
+            return `${serverName} allows up to ${config.server?.maxUsers || config.rooms?.maxUsers || 500} users and ${config.rooms?.maxRooms || 100} rooms.`;
+        }
+        if (lowered.includes('composr')) {
+            return `Composr is a PHP-based CMS and community platform with built-in forums, member features, permissions, and extensibility. ${roomPurpose} If you want, ask me about setup, content structure, permissions, or how it relates to this room.`;
+        }
+        if (lowered.includes('topic') || lowered.includes('research') || lowered.includes('tell me about')) {
+            return `${roomPurpose} I can answer best when you ask about this room's subject, the current media, server context, or a named topic like Composr.`;
+        }
+        if (recentContext.length) {
+            const lastLine = recentContext[recentContext.length - 1];
+            return `${roomPurpose} From the recent conversation, ${lastLine}. If you want a deeper answer, ask me directly about the topic or say /bot help.`;
         }
 
-        return `Hi ${user.name || 'there'}. I can help with room status, users, the message of the day, or basic server details. Try /bot help.`;
+        return `Hi ${user.name || 'there'}. ${roomPurpose} I can help with room status, users, media, the message of the day, server details, and topic questions related to this room. Try /bot help.`;
     }
 
     trimMessagesToCap(messages, cap) {
@@ -3480,6 +3567,9 @@ class VoiceLinkLocalServer {
                     updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
                     updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
                     previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
+                    serverTitle: this.serverName || null,
+                    serverDomain: deployConfig.getConfig()?.server?.domain || null,
+                    motd: deployConfig.getConfig()?.server?.motd || null,
                     hostServerName: room.hostServerName || this.serverName || null,
                     hostServerOwner: room.hostServerOwner || null,
                     // Lock status
@@ -3828,13 +3918,16 @@ class VoiceLinkLocalServer {
             const { userId1, userId2 } = req.params;
             const defaultLimit = this.getMessageSettingsConfig().initialLoadCount;
             const { limit = defaultLimit, before } = req.query;
+            const viewerId = String(req.query?.viewerId || userId1).trim();
 
-            const messages = this.getDirectMessages(userId1, userId2, parseInt(limit), before);
+            const messages = this.getDirectMessages(userId1, userId2, parseInt(limit), before, viewerId);
+            const dmKey = [userId1, userId2].sort().join('_');
             res.json({
                 participants: [userId1, userId2],
                 messages,
                 count: messages.length,
-                hasMore: messages.length === parseInt(limit)
+                hasMore: messages.length === parseInt(limit),
+                history: this.getDirectMessageMeta(dmKey)
             });
         });
 
@@ -3856,7 +3949,8 @@ class VoiceLinkLocalServer {
                         otherUserId,
                         lastMessage,
                         unreadCount,
-                        messageCount: messages.length
+                        messageCount: messages.length,
+                        history: this.getDirectMessageMeta(dmKey)
                     });
                 }
             }
@@ -3887,6 +3981,30 @@ class VoiceLinkLocalServer {
             } else {
                 res.json({ success: true, markedAsRead: 0 });
             }
+        });
+
+        this.app.post('/api/messages/dm/:userId1/:userId2/history/hide', (req, res) => {
+            const { userId1, userId2 } = req.params;
+            const viewerId = String(req.body?.viewerId || userId1).trim();
+            const clearBefore = req.body?.clearBefore || new Date().toISOString();
+            const visibility = this.hideDirectMessagesForUser(userId1, userId2, viewerId, clearBefore);
+            res.json({ success: true, viewerId, visibility });
+        });
+
+        this.app.post('/api/messages/dm/:userId1/:userId2/history/restore', (req, res) => {
+            const { userId1, userId2 } = req.params;
+            const viewerId = String(req.body?.viewerId || userId1).trim();
+            const visibility = this.restoreDirectMessagesForUser(userId1, userId2, viewerId);
+            res.json({ success: true, viewerId, visibility });
+        });
+
+        this.app.post('/api/messages/dm/:userId1/:userId2/history/purge', (req, res) => {
+            const { userId1, userId2 } = req.params;
+            const viewerId = String(req.body?.viewerId || userId1).trim();
+            const clearBefore = req.body?.clearBefore || new Date().toISOString();
+            const removeAttachments = req.body?.removeAttachments === true;
+            const result = this.requestDirectMessagePurge(userId1, userId2, viewerId, clearBefore, { removeAttachments });
+            res.json(result);
         });
 
         // Get message statistics
@@ -4069,6 +4187,14 @@ class VoiceLinkLocalServer {
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
             const downloadBase = process.env.VOICELINK_DOWNLOAD_BASE || 'https://voicelink.devinecreations.net/downloads/voicelink';
+            const requestedChannelRaw = String(
+                req.body?.distChannel
+                || req.headers['x-dist-channel']
+                || req.query?.distChannel
+                || process.env.DIST_CHANNEL
+                || 'direct'
+            ).trim().toLowerCase();
+            const isStoreManagedChannel = ['appstore', 'testflight', 'mac_app_store', 'playstore', 'windows_store'].includes(requestedChannelRaw);
 
             // Latest versions for each platform
             const latestVersions = {
@@ -4081,8 +4207,8 @@ class VoiceLinkLocalServer {
                 windows: {
                     version: '1.0.0',
                     buildNumber: 25,
-                    downloadURL: `${downloadBase}/VoiceLink-windows.zip`,
-                    releaseNotes: 'Latest Windows native build with federation-aware room listing and improved auth flow.'
+                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-windows-portable.exe`,
+                    releaseNotes: 'Latest Windows portable build with federation-aware room listing and improved auth flow. Installer refresh is in progress.'
                 },
                 linux: {
                     version: '1.0.0',
@@ -4108,13 +4234,17 @@ class VoiceLinkLocalServer {
             };
 
             const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
+            const updateAllowed = !isStoreManagedChannel;
 
             res.json({
-                updateAvailable: hasUpdate,
+                updateAvailable: updateAllowed ? hasUpdate : false,
                 version: platformInfo.version,
                 buildNumber: platformInfo.buildNumber,
-                downloadURL: hasUpdate ? platformInfo.downloadURL : null,
-                releaseNotes: hasUpdate ? platformInfo.releaseNotes : null,
+                downloadURL: updateAllowed && hasUpdate ? platformInfo.downloadURL : null,
+                releaseNotes: updateAllowed && hasUpdate ? platformInfo.releaseNotes : null,
+                updateSource: updateAllowed ? 'self-updater' : 'store-managed',
+                distChannel: requestedChannelRaw,
+                message: updateAllowed ? null : 'Updates are managed by the app store channel for this build.',
                 platform: platform || 'unknown',
                 currentVersion: currentVersion || 'unknown'
             });
@@ -4139,8 +4269,14 @@ class VoiceLinkLocalServer {
                         version: '1.0.0',
                         downloads: [
                             {
-                                name: 'Windows ZIP',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip',
+                                name: 'Windows Portable EXE (Recommended)',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe',
+                                size: 'Current build',
+                                type: 'native'
+                            },
+                            {
+                                name: 'Windows Installer (Setup EXE - rebuilding)',
+                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe',
                                 size: 'Current build',
                                 type: 'native'
                             }
@@ -6658,26 +6794,110 @@ class VoiceLinkLocalServer {
             res.json({ success: deviceFound });
         });
 
-        // List linked devices (server admin)
-        this.app.get('/api/devices', (req, res) => {
+        // List devices for the authenticated account, or all server-linked devices for admins
+        this.app.get('/api/devices', async (req, res) => {
+            const principal = await buildNormalizedLicenseIdentity(req, {});
+            if (principal.identityKey) {
+                const record = findLicenseRecordByIdentityKey(principal.identityKey)
+                    || await ensureLicenseRecordForPrincipal(principal, {});
+                if (!record) {
+                    return res.status(500).json({ error: 'Unable to load license devices' });
+                }
+                const accessCheck = enforceLicensePrincipalAccess(record, principal);
+                if (!accessCheck.allowed) {
+                    return res.status(403).json({ error: accessCheck.error });
+                }
+
+                const devices = (Array.isArray(record.devices) ? record.devices : []).map((device = {}) => {
+                    const liveSocketId = this.deviceSessions.get(device.id) || this.deviceSessions.get(device.uuid);
+                    const lastSeen = device.lastSeen || device.linkedAt || new Date().toISOString();
+                    const reachable = !!liveSocketId || (Date.now() - new Date(lastSeen).getTime()) <= 300000;
+                    return {
+                        id: device.id || device.uuid || null,
+                        clientId: device.uuid || device.id || null,
+                        deviceName: device.name || 'Desktop Client',
+                        authMethod: device.authMethod || null,
+                        authUsername: principal.username || null,
+                        authProvider: device.authProvider || null,
+                        linkedAt: device.linkedAt || null,
+                        lastSeen,
+                        isRevoked: false,
+                        isOnline: reachable,
+                        source: 'license'
+                    };
+                });
+
+                return res.json({
+                    devices,
+                    recentMachines: Array.isArray(record.machineHistory) ? record.machineHistory : [],
+                    source: 'license'
+                });
+            }
+
+            if (!this.isLocalAdminRequest(req)) {
+                return res.status(401).json({ error: 'Authentication required' });
+            }
+
             const devices = [];
             this.linkedDevices.forEach((device, id) => {
                 devices.push({
                     id: device.id,
+                    clientId: device.clientId || device.id,
                     deviceName: device.deviceName,
                     authMethod: device.authMethod,
                     authUsername: device.authUsername,
                     linkedAt: device.linkedAt,
                     lastSeen: device.lastSeen,
-                    isRevoked: device.isRevoked
+                    isRevoked: device.isRevoked,
+                    isOnline: (Date.now() - new Date(device.lastSeen || 0).getTime()) <= 300000,
+                    source: 'server'
                 });
             });
-            res.json({ devices });
+            res.json({ devices, source: 'server' });
         });
 
         // Revoke device access (server-initiated)
-        this.app.post('/api/devices/:deviceId/revoke', (req, res) => {
+        this.app.post('/api/devices/:deviceId/revoke', async (req, res) => {
             const { deviceId } = req.params;
+            const principal = await buildNormalizedLicenseIdentity(req, {});
+
+            if (principal.identityKey) {
+                const record = findLicenseRecordByIdentityKey(principal.identityKey)
+                    || await ensureLicenseRecordForPrincipal(principal, {});
+                if (!record) {
+                    return res.status(500).json({ success: false, error: 'Unable to load license record' });
+                }
+                const accessCheck = enforceLicensePrincipalAccess(record, principal);
+                if (!accessCheck.allowed) {
+                    return res.status(403).json({ success: false, error: accessCheck.error });
+                }
+
+                record.devices = (record.devices || []).filter((entry) => entry.id !== deviceId && entry.uuid !== deviceId);
+                if (Array.isArray(record.machineHistory)) {
+                    const machine = record.machineHistory.find((entry) => entry.id === deviceId || entry.uuid === deviceId);
+                    if (machine) {
+                        machine.state = 'deactivated';
+                        machine.lastSeen = new Date().toISOString();
+                    }
+                }
+                record.updatedAt = new Date().toISOString();
+                persistLicensingState();
+
+                const targetSocketId = this.deviceSessions.get(deviceId);
+                if (this.io && targetSocketId) {
+                    this.io.to(targetSocketId).emit('access-revoked', {
+                        deviceId,
+                        reason: req.body.reason || 'Access revoked by account owner'
+                    });
+                }
+
+                return res.json({ success: true, message: 'Device access revoked', ...publicLicenseRecord(record, principal) });
+            }
+
+            if (!this.isLocalAdminRequest(req)) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+
             const device = this.linkedDevices.get(deviceId);
 
             if (!device) {
@@ -6699,8 +6919,39 @@ class VoiceLinkLocalServer {
         });
 
         // Delete device completely
-        this.app.delete('/api/devices/:deviceId', (req, res) => {
+        this.app.delete('/api/devices/:deviceId', async (req, res) => {
             const { deviceId } = req.params;
+            const principal = await buildNormalizedLicenseIdentity(req, {});
+
+            if (principal.identityKey) {
+                const record = findLicenseRecordByIdentityKey(principal.identityKey)
+                    || await ensureLicenseRecordForPrincipal(principal, {});
+                if (!record) {
+                    return res.status(500).json({ success: false, error: 'Unable to load license record' });
+                }
+                const accessCheck = enforceLicensePrincipalAccess(record, principal);
+                if (!accessCheck.allowed) {
+                    return res.status(403).json({ success: false, error: accessCheck.error });
+                }
+
+                record.devices = (record.devices || []).filter((entry) => entry.id !== deviceId && entry.uuid !== deviceId);
+                if (Array.isArray(record.machineHistory)) {
+                    record.machineHistory = record.machineHistory.filter((entry) => entry.id !== deviceId && entry.uuid !== deviceId);
+                }
+                record.updatedAt = new Date().toISOString();
+                persistLicensingState();
+
+                const targetSocketId = this.deviceSessions.get(deviceId);
+                if (this.io && targetSocketId) {
+                    this.io.to(targetSocketId).emit('device-removed', { deviceId });
+                }
+
+                return res.json({ success: true, message: 'Device removed', ...publicLicenseRecord(record, principal) });
+            }
+
+            if (!this.isLocalAdminRequest(req)) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
 
             if (!this.linkedDevices.has(deviceId)) {
                 return res.status(404).json({ error: 'Device not found' });
@@ -12534,15 +12785,27 @@ class VoiceLinkLocalServer {
 
                     const source = (sanitizedMessage.message || '').trim();
                     const lowered = source.toLowerCase();
-                    const addressedToBot =
+                    const botMentionPattern = /@voicelink(?:\s+bot)?\b/;
+                    const explicitBotAddress =
                         lowered.startsWith('/bot') ||
                         lowered.startsWith('/vb') ||
                         lowered.startsWith('/voicebot') ||
-                        lowered.startsWith('@voicelink bot') ||
-                        lowered.includes('@voicelink bot') ||
+                        botMentionPattern.test(lowered) ||
                         lowered.includes('voicelink bot');
+                    const dismissesBot =
+                        lowered.includes('dismiss bot') ||
+                        lowered.includes('thanks bot') ||
+                        lowered.includes('thank you bot') ||
+                        lowered.includes('that is all bot') ||
+                        lowered.includes('stop bot');
+                    const addressedToBot = explicitBotAddress || this.isBotConversationActive(user.roomId, socket.id);
 
                     if (addressedToBot) {
+                        if (dismissesBot) {
+                            this.dismissBotConversation(user.roomId, socket.id);
+                            return;
+                        }
+                        this.updateBotConversationState(user.roomId, socket.id, source);
                         let reply = await this.buildBotTextReply(user, user.roomId, source);
                         const attachmentReply = sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL
                             ? await this.buildBotAttachmentReply(user, sanitizedMessage)
@@ -12936,6 +13199,92 @@ class VoiceLinkLocalServer {
         this.trimMessagesToCap(messages, settings.directMessageCap);
     }
 
+    getDirectMessageMeta(dmKey) {
+        return {
+            visibility: this.directMessageVisibility.get(dmKey) || {},
+            purgeRequests: this.directMessagePurgeRequests.get(dmKey) || {}
+        };
+    }
+
+    hideDirectMessagesForUser(userId1, userId2, viewerId, clearBefore = null) {
+        const dmKey = [userId1, userId2].sort().join('_');
+        const visibility = { ...(this.directMessageVisibility.get(dmKey) || {}) };
+        visibility[String(viewerId || '').trim()] = clearBefore || new Date().toISOString();
+        this.directMessageVisibility.set(dmKey, visibility);
+        return visibility;
+    }
+
+    restoreDirectMessagesForUser(userId1, userId2, viewerId) {
+        const dmKey = [userId1, userId2].sort().join('_');
+        const visibility = { ...(this.directMessageVisibility.get(dmKey) || {}) };
+        delete visibility[String(viewerId || '').trim()];
+        if (Object.keys(visibility).length === 0) {
+            this.directMessageVisibility.delete(dmKey);
+            return {};
+        }
+        this.directMessageVisibility.set(dmKey, visibility);
+        return visibility;
+    }
+
+    requestDirectMessagePurge(userId1, userId2, viewerId, clearBefore = null, options = {}) {
+        const dmKey = [userId1, userId2].sort().join('_');
+        const participants = [String(userId1 || '').trim(), String(userId2 || '').trim()].filter(Boolean);
+        const requester = String(viewerId || '').trim();
+        if (!participants.includes(requester)) {
+            return { success: false, reason: 'invalid_requester' };
+        }
+
+        const purgeRequests = { ...(this.directMessagePurgeRequests.get(dmKey) || {}) };
+        purgeRequests[requester] = {
+            clearBefore: clearBefore || new Date().toISOString(),
+            removeAttachments: options.removeAttachments === true
+        };
+        this.directMessagePurgeRequests.set(dmKey, purgeRequests);
+
+        const approvals = participants.filter(participant => purgeRequests[participant]);
+        if (approvals.length < participants.length) {
+            return { success: true, pending: true, purgeRequests };
+        }
+
+        const cutoffMs = approvals
+            .map(participant => new Date(purgeRequests[participant].clearBefore).getTime())
+            .filter(Number.isFinite)
+            .reduce((latest, value) => Math.max(latest, value), 0);
+        const removeAttachments = approvals.every(participant => purgeRequests[participant].removeAttachments === true);
+        const cutoffIso = new Date(cutoffMs || Date.now()).toISOString();
+        const messages = this.directMessages.get(dmKey) || [];
+        const retained = messages.reduce((acc, message) => {
+            const timestamp = new Date(message.timestamp).getTime();
+            const hasAttachment = !!(message.attachmentId || message.attachmentName || message.attachmentURL);
+            const shouldPurge = Number.isFinite(timestamp) && timestamp <= cutoffMs;
+            if (!shouldPurge) {
+                acc.push(message);
+                return acc;
+            }
+            if (!removeAttachments && hasAttachment) {
+                acc.push({
+                    ...message,
+                    content: '[message history removed]',
+                    message: '[message history removed]',
+                    attachmentRemoved: false,
+                    historyRedacted: true
+                });
+            }
+            return acc;
+        }, []);
+        this.directMessages.set(dmKey, retained);
+        this.directMessagePurgeRequests.delete(dmKey);
+        this.directMessageVisibility.delete(dmKey);
+        return {
+            success: true,
+            pending: false,
+            purged: true,
+            cutoff: cutoffIso,
+            removeAttachments,
+            removedCount: Math.max(0, messages.length - retained.length)
+        };
+    }
+
     /**
      * Get room messages with optional pagination
      */
@@ -12966,18 +13315,21 @@ class VoiceLinkLocalServer {
     /**
      * Get direct messages between two users
      */
-    getDirectMessages(userId1, userId2, limit = 50, before = null) {
+    getDirectMessages(userId1, userId2, limit = 50, before = null, viewerId = null) {
         const settings = this.getMessageSettingsConfig();
         const requestedLimit = Math.min(settings.scrollbackLimit, Math.max(1, Number(limit || settings.initialLoadCount)));
         const dmKey = [userId1, userId2].sort().join('_');
         const retentionMs = this.getMessageExpiryMs(true);
         const guestRetentionMs = this.getMessageExpiryMs(false);
         const now = Date.now();
+        const viewer = String(viewerId || userId1 || '').trim();
+        const hiddenBeforeValue = this.getDirectMessageMeta(dmKey).visibility[viewer];
+        const hiddenBeforeMs = hiddenBeforeValue ? new Date(hiddenBeforeValue).getTime() : 0;
         const messages = (this.directMessages.get(dmKey) || []).filter(message => {
             const timestamp = new Date(message.timestamp).getTime();
             if (!Number.isFinite(timestamp)) return true;
             const expiryMs = message.isAuthenticated ? retentionMs : guestRetentionMs;
-            return (now - timestamp) < expiryMs;
+            return (now - timestamp) < expiryMs && (!hiddenBeforeMs || timestamp > hiddenBeforeMs);
         });
 
         let filtered = messages;

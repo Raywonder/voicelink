@@ -17,7 +17,7 @@
     <Chain>
       <MsiPackage
         Id="VoiceLinkMsi"
-        SourceFile="../dist/VoiceLinkNative-$(var.Version)-win-x64.msi"
+        SourceFile="$(var.DistDir)\VoiceLinkNative-$(var.Version)-win-x64.msi"
         DisplayInternalUI="no"
         Visible="no" />
     </Chain>

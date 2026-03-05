@@ -19,7 +19,7 @@
 
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="ProgramFiles64Folder">
-      <Files Include="../../publish/win-x64/**" />
+      <Files Include="$(var.PublishDir)\**" />
     </ComponentGroup>
   </Fragment>
 
