@@ -87,6 +87,7 @@ struct ChatConversationSidebar: View {
 }
 
 struct ChatConversationPanel: View {
+    @ObservedObject private var messagingManager = MessagingManager.shared
     let chatTitle: String
     let selectedDirectMessageUserId: String?
     let selectedDirectMessageUserName: String?
@@ -104,38 +105,144 @@ struct ChatConversationPanel: View {
     let onSkipToLatest: () -> Void
     let onSelectAttachment: () -> Void
     let onSendMessage: () -> Void
+    let onReplyToMessage: (MessagingManager.ChatMessage) -> Void
     let onSendFileToSender: (MessagingManager.ChatMessage) -> (() -> Void)?
     let onDirectMessageSender: (MessagingManager.ChatMessage) -> (() -> Void)?
     let onViewSenderProfile: (MessagingManager.ChatMessage) -> (() -> Void)?
+    @State private var selectedMessageId: String?
+    @State private var editingMessageId: String?
+    @State private var editDraft = ""
+    @State private var pendingDeleteThreadRoot: MessagingManager.ChatMessage?
+    @State private var removeThreadAttachments = false
+    @State private var replyingToMessage: MessagingManager.ChatMessage?
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                if selectedDirectMessageUserId != nil {
-                    Button(action: onBack) {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .buttonStyle(.borderless)
-                } else {
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                }
-
-                Text(chatTitle)
+            headerSection
+            messageListSection
+            replyBarSection
+            inputBarSection
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chatReplyToLatest)) { _ in
+            if let target = currentChatMessages.last(where: { $0.type != .system }) {
+                selectedMessageId = target.id
+                replyingToMessage = target
+                onReplyToMessage(target)
+            }
+        }
+        .sheet(item: Binding(
+            get: { pendingDeleteThreadRoot },
+            set: { newValue, _ in pendingDeleteThreadRoot = newValue }
+        )) { root in
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Delete Thread")
                     .font(.headline)
-                Spacer()
-                if totalUnreadCount > 0 {
-                    Text("\(totalUnreadCount)")
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.red)
-                        .cornerRadius(10)
+                Text("This removes \(messagingManager.threadMessages(for: root.id, inDirectMessage: selectedDirectMessageUserId).count) message(s) in the thread.")
+                    .font(.subheadline)
+                Toggle("Also remove attached files and links", isOn: $removeThreadAttachments)
+                Text("If off, attachments are kept but marked removed in chat history.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        pendingDeleteThreadRoot = nil
+                    }
+                    Button("Delete Thread", role: .destructive) {
+                        messagingManager.deleteThread(
+                            rootMessageId: root.id,
+                            inDirectMessage: selectedDirectMessageUserId,
+                            removeAttachments: removeThreadAttachments
+                        )
+                        pendingDeleteThreadRoot = nil
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
-            .padding()
-            .background(Color.black.opacity(0.3))
+            .padding(20)
+            .frame(width: 420)
+        }
+        .sheet(item: editingMessageBinding) { (message: MessagingManager.ChatMessage) in
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Edit Message")
+                    .font(.headline)
+                TextEditor(text: $editDraft)
+                    .frame(minHeight: 140)
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        editingMessageId = nil
+                    }
+                    Button("Save") {
+                        messagingManager.editMessage(message.id, inDirectMessage: selectedDirectMessageUserId, newContent: editDraft)
+                        editingMessageId = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(width: 420)
+        }
+    }
 
-            ScrollViewReader { proxy in
+    private func canEdit(_ message: MessagingManager.ChatMessage) -> Bool {
+        message.senderId == (UserDefaults.standard.string(forKey: "clientId") ?? "")
+    }
+
+    private var editingMessageBinding: Binding<MessagingManager.ChatMessage?> {
+        Binding<MessagingManager.ChatMessage?>(
+            get: {
+                guard let id = editingMessageId else { return nil }
+                return messagingManager.message(withId: id, inDirectMessage: selectedDirectMessageUserId)
+            },
+            set: { newValue, _ in
+                editingMessageId = newValue?.id
+            }
+        )
+    }
+
+    private func replyPreview(for message: MessagingManager.ChatMessage) -> MessagingManager.ChatMessage? {
+        guard let replyId = message.replyToId else { return nil }
+        return messagingManager.message(withId: replyId, inDirectMessage: selectedDirectMessageUserId)
+    }
+
+    private var headerSection: some View {
+        HStack {
+            if selectedDirectMessageUserId != nil {
+                Button(action: onBack) {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+            }
+
+            Text(chatTitle)
+                .font(.headline)
+            Spacer()
+            if totalUnreadCount > 0 {
+                Text("\(totalUnreadCount)")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Color.red)
+                    .cornerRadius(10)
+            }
+        }
+        .padding()
+        .background(Color.black.opacity(0.3))
+    }
+
+    private var messageListSection: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Messages")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal)
+                    .accessibilityAddTraits(.isHeader)
+
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if canLoadOlderMessages {
@@ -156,69 +263,141 @@ struct ChatConversationPanel: View {
                         }
 
                         ForEach(currentChatMessages) { message in
-                            ChatMessageRow(
-                                message: message,
-                                onSendFileToSender: onSendFileToSender(message),
-                                onDirectMessageSender: onDirectMessageSender(message),
-                                onViewSenderProfile: onViewSenderProfile(message)
-                            )
-                            .id(message.id)
+                            messageRow(for: message)
+                                .id(message.id)
                         }
                     }
                     .padding()
                 }
-                .onChange(of: currentChatMessages.count) { _ in
-                    if let lastMessage = currentChatMessages.last {
-                        withAnimation {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
+                .accessibilityLabel("Messages list")
+                .accessibilityHint("Browse room or direct messages.")
+            }
+            .onChange(of: currentChatMessages.count) { _ in
+                if let lastMessage = currentChatMessages.last {
+                    withAnimation {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
                 }
             }
-
-            HStack(spacing: 8) {
-                Button("Latest", action: onSkipToLatest)
-                    .buttonStyle(.bordered)
-
-                Button(action: onSelectAttachment) {
-                    Image(systemName: "paperclip")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!isOnline || !hasCurrentRoom || isSharing)
-
-                TextField(isOnline ? currentChatPlaceholder : "Connect to send messages", text: $messageText)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!isOnline || !hasCurrentRoom)
-                    .onSubmit {
-                        onSendMessage()
-                    }
-
-                Button(action: onSendMessage) {
-                    HStack(spacing: 4) {
-                        Text("Send")
-                            .fontWeight(.medium)
-                        Image(systemName: "paperplane.fill")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                }
-                .disabled(messageText.isEmpty || !isOnline || !hasCurrentRoom)
-                .buttonStyle(.borderedProminent)
-                .tint((messageText.isEmpty || !isOnline) ? .gray : .blue)
-            }
-            .padding()
-            .background(Color.black.opacity(0.3))
         }
+    }
+
+    @ViewBuilder
+    private var replyBarSection: some View {
+        if let replyingToMessage {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Replying to \(replyingToMessage.senderName)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white)
+                    Text(replyingToMessage.content)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button {
+                    self.replyingToMessage = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .background(Color.black.opacity(0.2))
+        }
+    }
+
+    private var inputBarSection: some View {
+        HStack(spacing: 8) {
+            Button("Latest", action: onSkipToLatest)
+                .buttonStyle(.bordered)
+
+            Button(action: onSelectAttachment) {
+                Image(systemName: "paperclip")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isOnline || !hasCurrentRoom || isSharing)
+
+            TextField(isOnline ? currentChatPlaceholder : "Connect to send messages", text: $messageText)
+                .textFieldStyle(.roundedBorder)
+                .disabled(!isOnline || !hasCurrentRoom)
+                .submitLabel(.send)
+                .accessibilityLabel(selectedDirectMessageUserId == nil ? "Type message to room" : "Type direct message")
+                .accessibilityHint("Press Return to send.")
+                .onSubmit {
+                    onSendMessage()
+                    replyingToMessage = nil
+                }
+
+            Button(action: onSendMessage) {
+                HStack(spacing: 4) {
+                    Text("Send")
+                        .fontWeight(.medium)
+                    Image(systemName: "paperplane.fill")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+            .simultaneousGesture(TapGesture().onEnded {
+                replyingToMessage = nil
+            })
+            .disabled(messageText.isEmpty || !isOnline || !hasCurrentRoom)
+            .buttonStyle(.borderedProminent)
+            .tint((messageText.isEmpty || !isOnline) ? .gray : .blue)
+        }
+        .padding()
+        .background(Color.black.opacity(0.3))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Message composer")
+        .accessibilityHint("Type a message, attach a file, or send the current draft.")
+    }
+
+    private func messageRow(for message: MessagingManager.ChatMessage) -> some View {
+        ChatMessageRow(
+            message: message,
+            replyPreview: replyPreview(for: message),
+            isSelected: selectedMessageId == message.id,
+            onSelect: { selectedMessageId = message.id },
+            onReply: {
+                replyingToMessage = message
+                onReplyToMessage(message)
+            },
+            onEdit: canEdit(message) ? {
+                editingMessageId = message.id
+                editDraft = message.content
+            } : nil,
+            onFlattenThread: message.replyToId != nil ? {
+                messagingManager.flattenThread(rootMessageId: message.id, inDirectMessage: selectedDirectMessageUserId)
+            } : nil,
+            onDeleteThread: {
+                pendingDeleteThreadRoot = message
+                removeThreadAttachments = false
+            },
+            onSendFileToSender: onSendFileToSender(message),
+            onDirectMessageSender: onDirectMessageSender(message),
+            onViewSenderProfile: onViewSenderProfile(message)
+        )
     }
 }
 
 struct ChatMessageRow: View {
     let message: MessagingManager.ChatMessage
+    var replyPreview: MessagingManager.ChatMessage? = nil
+    var isSelected: Bool = false
+    var onSelect: (() -> Void)? = nil
+    var onReply: (() -> Void)? = nil
+    var onEdit: (() -> Void)? = nil
+    var onFlattenThread: (() -> Void)? = nil
+    var onDeleteThread: (() -> Void)? = nil
     var onSendFileToSender: (() -> Void)? = nil
     var onDirectMessageSender: (() -> Void)? = nil
     var onViewSenderProfile: (() -> Void)? = nil
     @State private var copiedNotice = false
     @State private var previewURL: URL?
+    @State private var showFullURLSheet = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -233,20 +412,50 @@ struct ChatMessageRow: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(message.senderName)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(message.type == .system ? .gray : .white)
-
-                    Text(formatTime(message.timestamp))
-                        .font(.caption2)
+                if let replyPreview {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrowshape.turn.up.left")
+                                .font(.caption2)
+                            Text("Reply to \(replyPreview.senderName)")
+                                .font(.caption2)
+                        }
                         .foregroundColor(.gray)
+                        Text(replyPreview.content)
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.9))
+                            .lineLimit(2)
+                    }
+                    .padding(.bottom, 2)
                 }
+                if isActionMessage {
+                    HStack(spacing: 6) {
+                        Text(actionDisplayText)
+                            .font(.body)
+                            .italic()
+                            .foregroundColor(message.type == .system ? .gray : .white)
+                            .textSelection(.enabled)
+                        Text(formatTime(message.timestamp))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                } else {
+                    HStack {
+                        Text(message.senderName)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(message.type == .system ? .gray : .white)
 
-                Text(message.content)
-                    .font(.body)
-                    .foregroundColor(message.type == .system ? .gray : .white)
+                        Text(formatTime(message.timestamp))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+
+                    Text(linkifiedContent)
+                        .font(.body)
+                        .foregroundColor(message.type == .system ? .gray : .white)
+                        .textSelection(.enabled)
+                }
 
                 if let previewURL {
                     LinkPreviewCard(url: previewURL)
@@ -282,11 +491,41 @@ struct ChatMessageRow: View {
             Spacer()
         }
         .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(isSelected ? Color.blue.opacity(0.12) : Color.clear)
+        .cornerRadius(8)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect?()
+        }
         .contextMenu {
+            if let onReply, message.type != .system {
+                Button("Reply") {
+                    onReply()
+                }
+            }
             Button("Copy Message") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(message.content, forType: .string)
                 copiedNotice = true
+            }
+
+            if let onEdit {
+                Button("Edit Message") {
+                    onEdit()
+                }
+            }
+
+            if let onFlattenThread {
+                Button("Flatten Thread") {
+                    onFlattenThread()
+                }
+            }
+
+            if let onDeleteThread {
+                Button("Delete Thread") {
+                    onDeleteThread()
+                }
             }
 
             if let onSendFileToSender, message.type != .system {
@@ -307,6 +546,23 @@ struct ChatMessageRow: View {
                 }
             }
 
+            if let linkURL = previewURL {
+                Divider()
+
+                Button("Open Link") {
+                    NSWorkspace.shared.open(linkURL)
+                }
+
+                Button("Copy Link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(linkURL.absoluteString, forType: .string)
+                }
+
+                Button("Show Full URL") {
+                    showFullURLSheet = true
+                }
+            }
+
             if let attachmentURL = message.attachmentURL,
                let url = URL(string: attachmentURL),
                !message.attachmentRemoved {
@@ -323,6 +579,22 @@ struct ChatMessageRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityHint("Message sent at \(formatTime(message.timestamp)). Open context menu for actions.")
+        .alert("Full URL", isPresented: $showFullURLSheet) {
+            Button("Copy URL") {
+                if let previewURL {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(previewURL.absoluteString, forType: .string)
+                }
+            }
+            Button("Open") {
+                if let previewURL {
+                    NSWorkspace.shared.open(previewURL)
+                }
+            }
+            Button("Close", role: .cancel) {}
+        } message: {
+            Text(previewURL?.absoluteString ?? "No link available.")
+        }
         .onAppear {
             previewURL = firstPreviewURL(in: message.content)
         }
@@ -372,11 +644,90 @@ struct ChatMessageRow: View {
         guard message.attachmentURL == nil else { return nil }
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let match = detector?.matches(in: text, options: [], range: range).first
-        guard let url = match?.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+        if let match = detector?.matches(in: text, options: [], range: range).first,
+           let url = match.url,
+           ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            return url
+        }
+
+        guard let bare = firstBareDomain(in: text) else { return nil }
+        return URL(string: "https://\(bare)")
+    }
+
+    private var linkifiedContent: AttributedString {
+        var attributed = AttributedString(message.content)
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let nsRange = NSRange(message.content.startIndex..<message.content.endIndex, in: message.content)
+        let matches = detector?.matches(in: message.content, options: [], range: nsRange) ?? []
+
+        for match in matches {
+            guard let url = match.url,
+                  let range = Range(match.range, in: message.content),
+                  let attributedRange = Range(NSRange(range, in: message.content), in: attributed),
+                  ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+                continue
+            }
+
+            attributed[attributedRange].link = url
+            attributed[attributedRange].foregroundColor = .blue
+            attributed[attributedRange].underlineStyle = .single
+        }
+
+        let domainRegex = #"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s<>"']*)?"#
+        if let regex = try? NSRegularExpression(pattern: domainRegex, options: [.caseInsensitive]) {
+            let matches = regex.matches(in: message.content, options: [], range: nsRange)
+            for match in matches {
+                guard let range = Range(match.range, in: message.content) else { continue }
+                let raw = String(message.content[range]).replacingOccurrences(of: #"[),.!?;:]+$"#, with: "", options: .regularExpression)
+                if raw.contains("@") || raw.lowercased().hasPrefix("http://") || raw.lowercased().hasPrefix("https://") {
+                    continue
+                }
+                guard let url = URL(string: "https://\(raw)"),
+                      let attributedRange = Range(NSRange(range, in: message.content), in: attributed) else {
+                    continue
+                }
+                attributed[attributedRange].link = url
+                attributed[attributedRange].foregroundColor = .blue
+                attributed[attributedRange].underlineStyle = .single
+            }
+        }
+
+        return attributed
+    }
+
+    private var isActionMessage: Bool {
+        guard message.type == .text else { return false }
+        let sender = message.senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sender.isEmpty, !content.isEmpty else { return false }
+        return content.lowercased().hasPrefix("\(sender.lowercased()) ")
+    }
+
+    private var actionDisplayText: String {
+        let sender = message.senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isActionMessage else { return content }
+        let prefixCount = sender.count + 1
+        guard content.count > prefixCount else { return content }
+        let actionBody = String(content.dropFirst(prefixCount)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return actionBody.isEmpty ? content : "\(sender) \(actionBody)"
+    }
+
+    private func firstBareDomain(in text: String) -> String? {
+        let domainRegex = #"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s<>"']*)?"#
+        guard let regex = try? NSRegularExpression(pattern: domainRegex, options: [.caseInsensitive]) else {
             return nil
         }
-        return url
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.matches(in: text, options: [], range: range).first,
+              let matchRange = Range(match.range, in: text) else {
+            return nil
+        }
+        let raw = String(text[matchRange]).replacingOccurrences(of: #"[),.!?;:]+$"#, with: "", options: .regularExpression)
+        if raw.contains("@") {
+            return nil
+        }
+        return raw
     }
 }
 
@@ -385,6 +736,7 @@ struct LinkPreviewCard: View {
     @State private var title: String?
     @State private var summary: String?
     @State private var resolvedURL: URL?
+    @State private var showFullURL = false
 
     var body: some View {
         Button(action: {
@@ -414,6 +766,32 @@ struct LinkPreviewCard: View {
             .cornerRadius(8)
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Open Link") {
+                NSWorkspace.shared.open(resolvedURL ?? url)
+            }
+
+            Button("Copy Link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString((resolvedURL ?? url).absoluteString, forType: .string)
+            }
+
+            Button("Show Full URL") {
+                showFullURL = true
+            }
+        }
+        .alert("Full URL", isPresented: $showFullURL) {
+            Button("Copy URL") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString((resolvedURL ?? url).absoluteString, forType: .string)
+            }
+            Button("Open") {
+                NSWorkspace.shared.open(resolvedURL ?? url)
+            }
+            Button("Close", role: .cancel) {}
+        } message: {
+            Text((resolvedURL ?? url).absoluteString)
+        }
         .task(id: url.absoluteString) {
             await loadMetadata()
         }
@@ -474,6 +852,13 @@ struct UserRow: View {
             return settings.inputVolume
         }
         return Double(audioControl.getVolume(for: userId))
+    }
+
+    private var resolvedPan: Double {
+        if isCurrentUser {
+            return 0
+        }
+        return Double(audioControl.getPan(for: userId))
     }
 
     private var isUserMuted: Bool {
@@ -684,6 +1069,33 @@ struct UserRow: View {
                                 .frame(width: 35)
                         }
 
+                        if !isCurrentUser {
+                            HStack {
+                                Image(systemName: "arrow.left.and.right")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                Slider(
+                                    value: Binding(
+                                        get: { resolvedPan },
+                                        set: { newValue in
+                                            audioControl.setPan(for: userId, pan: Float(newValue))
+                                        }
+                                    ),
+                                    in: -1...1,
+                                    step: 0.05
+                                )
+                                .frame(maxWidth: .infinity)
+                                Text(panStatusText)
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .frame(width: 52)
+                            }
+
+                            Text("Pan this user left or right. 0 keeps centered stereo.")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                        }
+
                         if isCurrentUser {
                             Text("This slider controls your microphone input level.")
                                 .font(.caption2)
@@ -887,6 +1299,16 @@ struct UserRow: View {
         let expiryHours = keepForever ? nil : max(1, min(24 * 60, shareExpiryHours))
         let caption = shareCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedFiles = pendingSharedFiles
+        let isSelfTransfer = userId == (AuthenticationManager.shared.currentUser?.id ?? "")
+        let onlineOtherDevices = LicensingManager.shared.devices.filter { device in
+            let isCurrent = device.id == LicensingManager.shared.currentDeviceUUID
+                || (device.platform == LicensingManager.shared.currentDevicePlatform
+                    && device.name == LicensingManager.shared.currentDeviceName)
+            guard !isCurrent else { return false }
+            let formatter = ISO8601DateFormatter()
+            guard let lastSeen = formatter.date(from: device.lastSeen) else { return false }
+            return Date().timeIntervalSince(lastSeen) <= 300
+        }
 
         Task {
             defer {
@@ -919,16 +1341,28 @@ struct UserRow: View {
                     MessagingManager.shared.sendDirectAttachment(
                         to: self.userId,
                         username: self.username,
-                        content: selectedFiles.count > 1 ? "Shared \(selectedFiles.count) files." : "Shared file: \(attachmentName)",
+                        content: isSelfTransfer
+                            ? (selectedFiles.count > 1 ? "Saved \(selectedFiles.count) files for later." : "Saved file for later: \(attachmentName)")
+                            : (selectedFiles.count > 1 ? "Shared \(selectedFiles.count) files." : "Shared file: \(attachmentName)"),
                         attachmentName: attachmentName,
                         attachmentURL: link.url,
                         caption: caption,
                         expiresAt: link.expiresAt
                     )
                     MessagingManager.shared.sendSystemMessage(
-                        keepForever
-                            ? "Shared \(attachmentName) with \(self.username) using a persistent link."
-                            : "Shared \(attachmentName) with \(self.username). Link expires \(link.expiresAt?.formatted(date: .abbreviated, time: .shortened) ?? "later")."
+                        {
+                            if isSelfTransfer {
+                                let availability = onlineOtherDevices.isEmpty
+                                    ? "No other signed-in devices are online right now. The protected link was saved for later use."
+                                    : "Available now on \(onlineOtherDevices.count) other signed-in device\(onlineOtherDevices.count == 1 ? "" : "s")."
+                                return keepForever
+                                    ? "Saved \(attachmentName) for later with a persistent link. \(availability)"
+                                    : "Saved \(attachmentName) for later. Link expires \(link.expiresAt?.formatted(date: .abbreviated, time: .shortened) ?? "later"). \(availability)"
+                            }
+                            return keepForever
+                                ? "Shared \(attachmentName) with \(self.username) using a persistent link."
+                                : "Shared \(attachmentName) with \(self.username). Link expires \(link.expiresAt?.formatted(date: .abbreviated, time: .shortened) ?? "later")."
+                        }()
                     )
                     showShareFileSheet = false
                 }
@@ -945,6 +1379,13 @@ struct UserRow: View {
         shareCaption = ""
         shareKeepForever = false
         shareExpiryHours = 24
+    }
+
+    private var panStatusText: String {
+        let pan = audioControl.getPan(for: userId)
+        let percent = Int(abs(pan) * 100)
+        if percent == 0 { return "0 / Stereo" }
+        return pan < 0 ? "\(percent)L" : "\(percent)R"
     }
 }
 

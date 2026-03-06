@@ -101,7 +101,7 @@ struct MainMenuView: View {
             ?? appState.serverManager.connectedServer
         let resolvedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         return appState.isConnected
-            ? "Connected to \(resolvedHost.isEmpty ? "active server" : resolvedHost)"
+            ? "Connected to \(resolvedHost.isEmpty ? "active server" : SettingsManager.shared.displayNameForFederationHost(resolvedHost))"
             : statusText
     }
 
@@ -212,6 +212,33 @@ struct MainMenuView: View {
         roomSortOption = .activeFirst
     }
 
+    private func openFocusedRoomActionsMenu() {
+        if let focused = appState.focusedRoomForQuickJoin() {
+            selectedRoomActionRoom = focused
+            showRoomActionMenuSheet = true
+            return
+        }
+
+        if let activeId = appState.activeRoomId,
+           let active = appState.rooms.first(where: { $0.id == activeId }) {
+            selectedRoomActionRoom = active
+            showRoomActionMenuSheet = true
+        }
+    }
+
+    private func resolvedRoomForDetails(_ room: Room) -> Room {
+        if let liveServerRoom = ServerManager.shared.rooms.first(where: { $0.id == room.id }) {
+            return Room(from: liveServerRoom)
+        }
+        if let live = appState.rooms.first(where: { $0.id == room.id }) {
+            return live
+        }
+        if appState.currentRoom?.id == room.id, let current = appState.currentRoom {
+            return current
+        }
+        return room
+    }
+
     private func applyScopeShortcut(_ rawValue: String) {
         switch rawValue {
         case "all":
@@ -299,7 +326,7 @@ struct MainMenuView: View {
         } onDeleteRoom: {
             appState.deleteRoomFromMenu(room)
         } onOpenDetails: {
-            selectedRoomDetails = room
+            selectedRoomDetails = resolvedRoomForDetails(room)
         } onOpenActionMenu: {
             selectedRoomActionRoom = room
             showRoomActionMenuSheet = true
@@ -336,7 +363,7 @@ struct MainMenuView: View {
         } onDeleteRoom: {
             appState.deleteRoomFromMenu(room)
         } onOpenDetails: {
-            selectedRoomDetails = room
+            selectedRoomDetails = resolvedRoomForDetails(room)
         } onOpenActionMenu: {
             selectedRoomActionRoom = room
             showRoomActionMenuSheet = true
@@ -644,6 +671,9 @@ struct MainMenuView: View {
                     guard let value = notification.userInfo?["layout"] as? String else { return }
                     applyLayoutShortcut(value)
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .roomActionOpenMenu)) { _ in
+                    openFocusedRoomActionsMenu()
+                }
                 .sheet(isPresented: $showRoomActionMenuSheet) {
                     if let room = selectedRoomActionRoom {
                         RoomActionMenu(
@@ -694,7 +724,7 @@ struct MainMenuView: View {
                                 }
                             }
                             Spacer()
-                            if adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner {
+                            if adminManager.isAdmin || adminManager.adminRole.canManageUsers || adminManager.adminRole.canManageRooms || adminManager.adminRole.canManageConfig {
                                 Button("Server Administration") {
                                     appState.currentScreen = .admin
                                 }
@@ -707,7 +737,7 @@ struct MainMenuView: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             Button("Logout") {
-                                authManager.logout()
+                                NotificationCenter.default.post(name: .requestLogoutConfirmation, object: nil)
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -970,9 +1000,7 @@ struct RoomCard: View {
             Button("Room Actions...") { onOpenActionMenu() }
             Divider()
             Button("Room Details") { onOpenDetails() }
-            if showJoinActionSeparately {
-                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
-            }
+            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -993,9 +1021,12 @@ struct RoomCard: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryActionLabel). Use room actions for more options.")
         .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text("Preview Room Audio")) {
-            if previewAvailable { onPreview() } else { onOpenDetails() }
-        }
+        .modifier(RoomPreviewAccessibilityModifier(
+            includePreviewAction: primaryActionLabel != "Preview",
+            previewAvailable: previewAvailable,
+            onPreview: onPreview,
+            onOpenDetails: onOpenDetails
+        ))
         .accessibilityAction(named: Text("Share Room Link")) { onShare() }
         .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
     }
@@ -1436,9 +1467,7 @@ struct RoomColumnRow: View {
             Button("Room Actions...") { onOpenActionMenu() }
             Divider()
             Button("Room Details") { onOpenDetails() }
-            if showJoinActionSeparately {
-                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
-            }
+            Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
             Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -1459,11 +1488,32 @@ struct RoomColumnRow: View {
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryLabel). Use VoiceOver plus Shift plus M for the actions menu.")
         .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
-        .accessibilityAction(named: Text("Preview Room Audio")) {
-            if previewAvailable { onPreview() } else { onOpenDetails() }
-        }
+        .modifier(RoomPreviewAccessibilityModifier(
+            includePreviewAction: primaryLabel != "Preview",
+            previewAvailable: previewAvailable,
+            onPreview: onPreview,
+            onOpenDetails: onOpenDetails
+        ))
         .accessibilityAction(named: Text("Share Room Link")) { onShare() }
         .accessibilityAction(named: Text("Room Details")) { onOpenDetails() }
+    }
+}
+
+private struct RoomPreviewAccessibilityModifier: ViewModifier {
+    let includePreviewAction: Bool
+    let previewAvailable: Bool
+    let onPreview: () -> Void
+    let onOpenDetails: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if includePreviewAction {
+            content.accessibilityAction(named: Text("Preview Room Audio")) {
+                if previewAvailable { onPreview() } else { onOpenDetails() }
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -1475,8 +1525,16 @@ struct RoomDetailsSheet: View {
     let onShare: () -> Void
     let onPreview: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+    @State private var actionMenuPresented = true
     @State private var holdPreviewActive = false
     @State private var holdPreviewTriggered = false
+
+    private var effectiveRoom: Room {
+        if let liveMatch = ServerManager.shared.rooms.first(where: { $0.id == room.id }) {
+            return Room(from: liveMatch)
+        }
+        return room
+    }
 
     private var liveRoomUsers: [RoomUser] {
         isActiveRoom ? ServerManager.shared.currentRoomUsers : []
@@ -1489,15 +1547,15 @@ struct RoomDetailsSheet: View {
     private var canPreviewFromSheet: Bool {
         guard !isActiveRoom else { return false }
         return SettingsManager.shared.canPreviewRoom(
-            roomId: room.id,
-            userCount: room.userCount,
+            roomId: effectiveRoom.id,
+            userCount: effectiveRoom.userCount,
             hasActiveMedia: roomHasActiveMedia
         )
     }
 
     private var totalUsersLabel: String {
-        let effectiveCount = isActiveRoom && liveHumanUserCount > 0 ? liveHumanUserCount : room.userCount
-        return "Total users in room: \(effectiveCount) of \(room.maxUsers)"
+        let effectiveCount = isActiveRoom && liveHumanUserCount > 0 ? liveHumanUserCount : effectiveRoom.userCount
+        return "Total users in room: \(effectiveCount) of \(effectiveRoom.maxUsers)"
     }
 
     private var mediaStatusLabel: String {
@@ -1538,10 +1596,10 @@ struct RoomDetailsSheet: View {
                 return formatDuration(seconds: max(0, Int(Date().timeIntervalSince(joinedReference))))
             }
         }
-        if let uptimeSeconds = room.uptimeSeconds {
+        if let uptimeSeconds = effectiveRoom.uptimeSeconds {
             return formatDuration(seconds: uptimeSeconds)
         }
-        if let createdAt = room.createdAt {
+        if let createdAt = effectiveRoom.createdAt {
             return formatDuration(seconds: max(0, Int(Date().timeIntervalSince(createdAt))))
         }
         return "Unknown"
@@ -1563,91 +1621,68 @@ struct RoomDetailsSheet: View {
                 return "Last activity was \(relative)"
             }
         }
-        guard let activityDate = room.lastActivityAt else {
+        guard let activityDate = effectiveRoom.lastActivityAt else {
             return "No recent room activity recorded"
         }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         let relative = formatter.localizedString(for: activityDate, relativeTo: Date())
-        if let user = room.lastActiveUsername?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
+        if let user = effectiveRoom.lastActiveUsername?.trimmingCharacters(in: .whitespacesAndNewlines), !user.isEmpty {
             return "\(user) was last active \(relative)"
         }
         return "Last activity was \(relative)"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(room.name).font(.title2.weight(.bold))
-            Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
-                .foregroundColor(.secondary)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(totalUsersLabel)
-                Text("Access level: \(room.isPrivate ? "Private room" : "Public room")")
-                Text("Media status: \(mediaStatusLabel)")
-                    .italic()
-                Text("Uptime: \(uptimeLabel)")
-                Text("Last activity: \(lastActivityLabel)")
-            }
-            .font(.caption)
-            .foregroundColor(.secondary)
-
-            if let hostedFrom = room.hostedFromLine {
-                Text(hostedFrom)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if shouldShowAnnouncement {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(serverAnnouncementTitle)
-                        .font(.headline)
-                    Text(roomAnnouncementText)
-                        .font(.callout)
-                        .foregroundColor(.white.opacity(0.88))
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.blue.opacity(0.14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.blue.opacity(0.35), lineWidth: 1)
-                )
-                .cornerRadius(10)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            RoomActionMenu(
+                room: effectiveRoom,
+                isInRoom: isActiveRoom,
+                isPresented: $actionMenuPresented
+            )
+            .frame(width: 360)
 
             HStack(spacing: 10) {
                 Button(isActiveRoom ? "Return to Room" : "Join Room") { onJoin(); dismiss() }
                     .buttonStyle(.borderedProminent)
                 Button("Share") { onShare() }
                     .buttonStyle(.bordered)
-                if let onPreview {
+                if !isActiveRoom, let onPreview {
                     Button("Preview / Peek") {
                         if holdPreviewTriggered { return }
                         onPreview()
                     }
-                        .buttonStyle(.bordered)
-                        .disabled(!canPreviewFromSheet)
-                        .onLongPressGesture(minimumDuration: 0.18, maximumDistance: 16, pressing: { pressing in
-                            if pressing {
-                                guard !holdPreviewActive else { return }
-                                holdPreviewActive = true
-                                holdPreviewTriggered = true
-                                PeekManager.shared.startHoldPreview(for: room, canPreview: canPreviewFromSheet)
-                            } else if holdPreviewActive {
-                                holdPreviewActive = false
-                                PeekManager.shared.stopHoldPreview(for: room)
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                    holdPreviewTriggered = false
-                                }
+                    .buttonStyle(.bordered)
+                    .disabled(!canPreviewFromSheet)
+                    .onLongPressGesture(minimumDuration: 0.18, maximumDistance: 16, pressing: { pressing in
+                        if pressing {
+                            guard !holdPreviewActive else { return }
+                            holdPreviewActive = true
+                            holdPreviewTriggered = true
+                            PeekManager.shared.startHoldPreview(for: effectiveRoom, canPreview: canPreviewFromSheet)
+                        } else if holdPreviewActive {
+                            holdPreviewActive = false
+                            PeekManager.shared.stopHoldPreview(for: effectiveRoom)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                holdPreviewTriggered = false
                             }
-                        }, perform: {})
+                        }
+                    }, perform: {})
                 }
             }
-            Spacer()
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
         }
-        .padding(20)
-        .frame(minWidth: 480, minHeight: 300)
+        .padding(8)
+        .frame(minWidth: 380, minHeight: 560)
+        .onAppear {
+            actionMenuPresented = true
+        }
+        .onChange(of: actionMenuPresented) { presented in
+            if !presented {
+                dismiss()
+            }
+        }
     }
 
     private func formatDuration(seconds: Int) -> String {
@@ -1705,6 +1740,7 @@ struct CreateRoomView: View {
     @State private var maxUsers: Int = 50
     @State private var inviteOnly: Bool = false
     @State private var enableMediaAutoPlay: Bool = true
+    @State private var enableSpatialAudio = true
     @State private var moderationNotes = ""
     @State private var hostingPreference: RoomHostingPreference = .currentServer
 
@@ -1713,7 +1749,7 @@ struct CreateRoomView: View {
     }
 
     private var canCreateAdminType: Bool {
-        adminManager.isAdmin || adminManager.adminRole == .admin || adminManager.adminRole == .owner
+        adminManager.isAdmin || adminManager.adminRole.canManageRooms || adminManager.adminRole.canManageConfig
     }
 
     var body: some View {
@@ -1791,6 +1827,10 @@ struct CreateRoomView: View {
                         .foregroundColor(.white)
                         .frame(width: 350)
 
+                    Toggle("Enable 3D Spatial Audio", isOn: $enableSpatialAudio)
+                        .foregroundColor(.white)
+                        .frame(width: 350)
+
                     if roomType == "moderated" || roomType == "admin" {
                         TextField("Moderation notes (optional)", text: $moderationNotes)
                             .textFieldStyle(.roundedBorder)
@@ -1819,6 +1859,7 @@ struct CreateRoomView: View {
                         "roomType": effectiveRoomType,
                         "inviteOnly": effectiveInviteOnly,
                         "mediaAutoPlay": effectiveMediaAutoPlay,
+                        "spatialAudioEnabled": enableSpatialAudio,
                         "hostingPreference": hostingPreference.rawValue
                     ]
                     if isLoggedIn, let currentUser = authManager.currentUser {
@@ -1869,6 +1910,7 @@ struct CreateRoomView: View {
                 maxUsers = draft.maxUsers
                 inviteOnly = draft.inviteOnly
                 hostingPreference = draft.hostingPreference
+                enableSpatialAudio = true
             } else if roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       !appState.pendingCreateRoomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 roomName = appState.pendingCreateRoomName

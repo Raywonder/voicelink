@@ -2773,8 +2773,19 @@ class VoiceLinkLocalServer {
 
     extractURLsFromText(text = '') {
         const value = String(text || '');
-        const matches = value.match(/\bhttps?:\/\/[^\s<>"']+/gi) || [];
-        return Array.from(new Set(matches.map(url => url.trim())));
+        const explicitMatches = value.match(/\bhttps?:\/\/[^\s<>"']+/gi) || [];
+        const domainMatches = value.match(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/gi) || [];
+        const combined = [...explicitMatches, ...domainMatches]
+            .map(url => url.trim().replace(/[),.!?;:]+$/g, ''))
+            .filter(Boolean)
+            .filter(url => !url.includes('@'));
+        const normalized = combined.map((url) => {
+            if (/^https?:\/\//i.test(url)) {
+                return url;
+            }
+            return `https://${url}`;
+        });
+        return Array.from(new Set(normalized));
     }
 
     async validateMessageURL(rawURL) {
@@ -2782,26 +2793,9 @@ class VoiceLinkLocalServer {
         if (!value) {
             return { valid: false, reason: 'empty link' };
         }
-
-        let parsed;
-        try {
-            parsed = new URL(value);
-        } catch {
-            return { valid: false, reason: 'invalid URL format' };
-        }
-
-        if (!/^https?:$/i.test(parsed.protocol)) {
-            return { valid: false, reason: 'unsupported URL scheme' };
-        }
-
-        const hostname = String(parsed.hostname || '').toLowerCase();
-        if (!hostname) {
-            return { valid: false, reason: 'missing hostname' };
-        }
-
-        if (hostname === 'localhost' || hostname.endsWith('.local')) {
-            return { valid: false, reason: 'local-only address' };
-        }
+        const candidates = /^https?:\/\//i.test(value)
+            ? [value]
+            : [`https://${value}`, `http://${value}`];
 
         const isPrivateIPAddress = (host) => {
             const family = net.isIP(host);
@@ -2828,64 +2822,98 @@ class VoiceLinkLocalServer {
                 || lowered.startsWith('::ffff:127.');
         };
 
-        if (isPrivateIPAddress(hostname)) {
-            return { valid: false, reason: 'private or loopback address' };
-        }
-
-        const timeout = this.withTimeoutSignal(5000);
-        try {
-            let response = await fetch(parsed.toString(), {
-                method: 'HEAD',
-                redirect: 'follow',
-                signal: timeout.signal
-            });
-
-            if (response.status === 405 || response.status === 501) {
-                timeout.clear();
-                const retryTimeout = this.withTimeoutSignal(5000);
-                try {
-                    response = await fetch(parsed.toString(), {
-                        method: 'GET',
-                        redirect: 'follow',
-                        signal: retryTimeout.signal,
-                        headers: {
-                            Range: 'bytes=0-1024'
-                        }
-                    });
-                } finally {
-                    retryTimeout.clear();
-                }
+        let lastReason = 'invalid URL format';
+        for (const candidate of candidates) {
+            let parsed;
+            try {
+                parsed = new URL(candidate);
+            } catch {
+                lastReason = 'invalid URL format';
+                continue;
             }
 
-            if (!response.ok) {
-                if (response.status >= 500 || response.status === 429) {
+            if (!/^https?:$/i.test(parsed.protocol)) {
+                lastReason = 'unsupported URL scheme';
+                continue;
+            }
+
+            const hostname = String(parsed.hostname || '').toLowerCase();
+            if (!hostname) {
+                lastReason = 'missing hostname';
+                continue;
+            }
+
+            if (hostname === 'localhost' || hostname.endsWith('.local')) {
+                return { valid: false, reason: 'local-only address' };
+            }
+
+            if (isPrivateIPAddress(hostname)) {
+                return { valid: false, reason: 'private or loopback address' };
+            }
+
+            const timeout = this.withTimeoutSignal(5000);
+            try {
+                let response = await fetch(parsed.toString(), {
+                    method: 'HEAD',
+                    redirect: 'follow',
+                    signal: timeout.signal
+                });
+
+                if (response.status === 405 || response.status === 501) {
+                    timeout.clear();
+                    const retryTimeout = this.withTimeoutSignal(5000);
+                    try {
+                        response = await fetch(parsed.toString(), {
+                            method: 'GET',
+                            redirect: 'follow',
+                            signal: retryTimeout.signal,
+                            headers: {
+                                Range: 'bytes=0-1024'
+                            }
+                        });
+                    } finally {
+                        retryTimeout.clear();
+                    }
+                }
+
+                if (!response.ok) {
+                    if (
+                        response.status >= 500
+                        || response.status === 429
+                        || response.status === 401
+                        || response.status === 403
+                    ) {
+                        return {
+                            valid: true,
+                            normalizedURL: parsed.toString(),
+                            validationDeferred: true
+                        };
+                    }
+                    lastReason = `remote server returned ${response.status}`;
+                    continue;
+                }
+
+                return { valid: true, normalizedURL: response.url || parsed.toString() };
+            } catch (error) {
+                const message = String(error?.name || error?.message || '').toLowerCase();
+                if (message.includes('abort') || message.includes('timeout')) {
                     return {
                         valid: true,
                         normalizedURL: parsed.toString(),
                         validationDeferred: true
                     };
                 }
-                return { valid: false, reason: `remote server returned ${response.status}` };
-            }
-
-            return { valid: true, normalizedURL: response.url || parsed.toString() };
-        } catch (error) {
-            const message = String(error?.name || error?.message || '').toLowerCase();
-            if (message.includes('abort') || message.includes('timeout')) {
                 return {
                     valid: true,
                     normalizedURL: parsed.toString(),
                     validationDeferred: true
                 };
+            } finally {
+                timeout.clear();
             }
-            return {
-                valid: true,
-                normalizedURL: parsed.toString(),
-                validationDeferred: true
-            };
-        } finally {
-            timeout.clear();
         }
+
+        return { valid: false, reason: lastReason };
     }
 
     async sanitizeMessageLinks(message = {}, context = {}) {
@@ -3021,6 +3049,91 @@ class VoiceLinkLocalServer {
         this.botConversationState.delete(this.getBotConversationKey(roomId, userId));
     }
 
+    isLikelyBotFollowUp(source = '') {
+        const text = String(source || '').trim();
+        if (!text || text.length < 3) return false;
+        const lowered = text.toLowerCase();
+        if (/[?]$/.test(text)) return true;
+        return /^(what|who|where|when|why|how|can|could|would|should|please|tell|show|explain)\b/.test(lowered);
+    }
+
+    decodeHtmlEntities(input = '') {
+        return String(input || '')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#39;/gi, "'")
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    async fetchLinkContext(rawURL = '') {
+        const candidate = String(rawURL || '').trim();
+        if (!candidate) return null;
+
+        const validation = await this.validateMessageURL(candidate);
+        if (!validation.valid) return null;
+        const url = validation.normalizedURL || candidate;
+
+        const timeout = this.withTimeoutSignal(6000);
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                redirect: 'follow',
+                signal: timeout.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (VoiceLink Bot)',
+                    Accept: 'text/html,application/xhtml+xml'
+                }
+            });
+            if (!response.ok) return null;
+
+            const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+            if (!contentType.includes('text/html')) return null;
+
+            const html = String(await response.text() || '').slice(0, 160000);
+            if (!html) return null;
+
+            const readMeta = (propertyName) => {
+                const escaped = propertyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const patterns = [
+                    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+                    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+                    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["'][^>]*>`, 'i'),
+                    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["'][^>]*>`, 'i')
+                ];
+                for (const pattern of patterns) {
+                    const match = html.match(pattern);
+                    if (match?.[1]) return this.decodeHtmlEntities(match[1]);
+                }
+                return null;
+            };
+
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            const title = readMeta('og:title') || (titleMatch?.[1] ? this.decodeHtmlEntities(titleMatch[1]) : null);
+            const description = readMeta('og:description') || readMeta('description');
+            let host = null;
+            try {
+                host = new URL(response.url || url).host;
+            } catch (_error) {
+                host = null;
+            }
+
+            return {
+                host,
+                title: title || null,
+                description: description || null,
+                url: response.url || url
+            };
+        } catch (_error) {
+            return null;
+        } finally {
+            timeout.clear();
+        }
+    }
+
     async buildBotTextReply(user, roomId, source = '') {
         const room = this.rooms.get(roomId);
         const users = this.normalizeRoomUsers(roomId);
@@ -3031,6 +3144,27 @@ class VoiceLinkLocalServer {
         const roomPurpose = roomDescription || `${room?.name || 'This room'} is part of ${serverName}.`;
         const recentContext = this.getRecentRoomConversationContext(roomId);
         const lowered = String(source || '').trim().toLowerCase();
+        const sourceLinks = this.extractURLsFromText(source || '');
+
+        if (sourceLinks.length) {
+            const linkContext = await this.fetchLinkContext(sourceLinks[0]);
+            if (linkContext) {
+                const segments = [];
+                if (linkContext.host) {
+                    segments.push(`${linkContext.host}`);
+                }
+                if (linkContext.title) {
+                    segments.push(`Title: ${linkContext.title}.`);
+                }
+                if (linkContext.description) {
+                    segments.push(`Summary: ${linkContext.description.slice(0, 260)}${linkContext.description.length > 260 ? '…' : ''}`);
+                }
+                if (segments.length) {
+                    return segments.join(' ');
+                }
+            }
+            return 'I saw that link. I could not fetch the page summary right now.';
+        }
 
         if (!lowered || lowered === 'hi' || lowered === 'hello' || lowered === 'hey') {
             const contextParts = [roomPurpose];
@@ -12798,7 +12932,9 @@ class VoiceLinkLocalServer {
                         lowered.includes('thank you bot') ||
                         lowered.includes('that is all bot') ||
                         lowered.includes('stop bot');
-                    const addressedToBot = explicitBotAddress || this.isBotConversationActive(user.roomId, socket.id);
+                    const addressedToBot =
+                        explicitBotAddress ||
+                        (this.isBotConversationActive(user.roomId, socket.id) && this.isLikelyBotFollowUp(source));
 
                     if (addressedToBot) {
                         if (dismissesBot) {
