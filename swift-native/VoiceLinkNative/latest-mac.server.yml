@@ -1,15 +1,15 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-version: 1.0
+version: 1.0.4
 build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: FlaX7MCo1DaZcGFe/e03s86Fd94hMS5g7CHwa58XE51525had5u4URDBIT3u2QB+UKIKuONpVcUJLJM2GXlaeA==
-    size: 192752137
+    sha512: Hg3RPO01vQtCIZ2xa9LwT36VAGnJ9uPywP5v4k9Qx4e9GXqCiSJW1lpKns3TTZHd4fIPfHULrPYxp93gEFZeUA==
+    size: 18224475
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: FlaX7MCo1DaZcGFe/e03s86Fd94hMS5g7CHwa58XE51525had5u4URDBIT3u2QB+UKIKuONpVcUJLJM2GXlaeA==
-releaseDate: '2026-03-04T17:21:33.000Z'
+sha512: Hg3RPO01vQtCIZ2xa9LwT36VAGnJ9uPywP5v4k9Qx4e9GXqCiSJW1lpKns3TTZHd4fIPfHULrPYxp93gEFZeUA==
+releaseDate: '2026-03-06T08:39:20.000Z'
 releaseNotes: |
   VoiceLink macOS Update (Internal Build 26)
-  - Refreshed from the current installed macOS app bundle with canonical intro and sound-test assets.
-  - Includes the latest room messaging, accessibility, and link preview fixes.
-  - Published as the current desktop client baseline.
+  - Fixed room details panel to use the same in-room actions/details experience.
+  - Improved link handling for bare domains and HTTP/HTTPS fallback validation.
+  - Reduced repetitive bot replies and added link title/summary responses.
