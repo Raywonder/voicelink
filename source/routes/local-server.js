@@ -3049,6 +3049,307 @@ class VoiceLinkLocalServer {
         this.botConversationState.delete(this.getBotConversationKey(roomId, userId));
     }
 
+    getBotCommandRole(user = {}) {
+        const explicitRole = user?.authInfo?.role || user?.role;
+        if (explicitRole) {
+            return this.normalizeUserRole(explicitRole);
+        }
+        if (user?.isAuthenticated) {
+            return 'user';
+        }
+        return 'visitor';
+    }
+
+    getBotCommandPermissions(user = {}, destination = {}) {
+        const role = this.getBotCommandRole(user);
+        const normalizedRole = this.normalizeUserRole(role);
+        const isAuthenticated = !!(user?.isAuthenticated || user?.authInfo?.isAuthenticated || user?.authInfo?.email || user?.authInfo?.username);
+        const isPrivileged = normalizedRole === 'owner' || normalizedRole === 'admin' || normalizedRole === 'staff';
+        const userId = String(user?.id || user?.userId || '').trim();
+        const currentRoomId = String(user?.roomId || '').trim();
+        const sameRoomTarget = destination?.type === 'room' && String(destination.roomId || '') === currentRoomId;
+        const selfTarget = destination?.type === 'user' && String(destination.userId || '') === userId;
+
+        if (isPrivileged) {
+            return {
+                allowed: true,
+                role: normalizedRole,
+                policy: 'full'
+            };
+        }
+
+        if (!isAuthenticated) {
+            return {
+                allowed: false,
+                role: normalizedRole,
+                policy: 'guest',
+                reason: 'You must be signed in to run bot file commands.'
+            };
+        }
+
+        if (sameRoomTarget || selfTarget) {
+            return {
+                allowed: true,
+                role: normalizedRole,
+                policy: 'self_service'
+            };
+        }
+
+        return {
+            allowed: false,
+            role: normalizedRole,
+            policy: 'self_service',
+            reason: 'Your current role can only generate files for your current room or yourself.'
+        };
+    }
+
+    findConnectedRoomByName(query = '') {
+        const needle = String(query || '').trim().toLowerCase();
+        if (!needle) return null;
+        for (const room of this.rooms.values()) {
+            const candidates = [
+                room.id,
+                room.name,
+                room.description
+            ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+            if (candidates.some((value) => value === needle || value.includes(needle) || needle.includes(value))) {
+                return room;
+            }
+        }
+        return null;
+    }
+
+    parseBotCommandDestination(source = '', currentRoomId = null) {
+        const text = String(source || '').trim();
+        const lowered = text.toLowerCase();
+        const defaultRoom = this.rooms.get(currentRoomId);
+        const destination = {
+            type: 'room',
+            roomId: currentRoomId,
+            roomName: defaultRoom?.name || currentRoomId || 'current room',
+            fromPattern: 'default'
+        };
+
+        if (/\b(to|in|into)\s+(this|current)\s+room\b/i.test(lowered) || /\b(send|upload)\s+here\b/i.test(lowered)) {
+            return destination;
+        }
+
+        const roomMatch = text.match(/\b(?:to|in|into)\s+room\s+["“]?([^"\n]+?)["”]?(?:\s|$)/i);
+        if (roomMatch?.[1]) {
+            const targetRoom = this.findConnectedRoomByName(roomMatch[1]);
+            if (targetRoom?.id) {
+                return {
+                    type: 'room',
+                    roomId: targetRoom.id,
+                    roomName: targetRoom.name || targetRoom.id,
+                    fromPattern: 'named_room'
+                };
+            }
+        }
+
+        const explicitUserMatch = text.match(/\b(?:to|for|dm|message)\s+user\s+@?([a-z0-9_.@-]{2,80})\b/i);
+        const mentionCandidates = Array.from(text.matchAll(/@([a-z0-9_.-]{2,64})/gi)).map((match) => match[1]);
+        const mentionTarget = mentionCandidates.find((value) => !/^voicelink$/i.test(value) && !/^bot$/i.test(value));
+        const userQuery = explicitUserMatch?.[1] || mentionTarget || null;
+        if (userQuery) {
+            const targetUser = this.findConnectedUserByName(userQuery);
+            if (targetUser?.id) {
+                return {
+                    type: 'user',
+                    userId: targetUser.id,
+                    userName: targetUser.name || targetUser.username || userQuery,
+                    roomId: currentRoomId,
+                    fromPattern: explicitUserMatch?.[1] ? 'explicit_user' : 'mention_user'
+                };
+            }
+        }
+
+        return destination;
+    }
+
+    deliverBotFileToDestination(destination = {}, sourceRoomId, replyMessage = '', attachmentName = null, attachmentURL = null) {
+        if (!attachmentName || !attachmentURL) {
+            return;
+        }
+
+        if (destination.type === 'user' && destination.userId) {
+            const timestamp = new Date();
+            const senderId = `bot:${sourceRoomId || 'global'}`;
+            const dmMessage = {
+                id: uuidv4(),
+                senderId,
+                senderName: 'VoiceLink Bot',
+                receiverId: destination.userId,
+                message: replyMessage || `Generated and uploaded ${attachmentName}.`,
+                content: replyMessage || `Generated and uploaded ${attachmentName}.`,
+                timestamp,
+                isAuthenticated: true,
+                isBot: true,
+                authProvider: 'voicelink_bot',
+                type: 'text',
+                attachmentName,
+                attachmentURL,
+                reactions: [],
+                read: false
+            };
+            this.storeDirectMessage(senderId, destination.userId, dmMessage);
+            this.io.to(destination.userId).emit('direct-message', dmMessage);
+            return;
+        }
+
+        if (destination.type === 'room' && destination.roomId && destination.roomId !== sourceRoomId) {
+            const botMessage = {
+                id: uuidv4(),
+                userId: `bot:${destination.roomId}`,
+                userName: 'VoiceLink Bot',
+                message: replyMessage || `Generated and uploaded ${attachmentName}.`,
+                timestamp: new Date(),
+                isAuthenticated: true,
+                isBot: true,
+                authProvider: 'voicelink_bot',
+                attachmentName,
+                attachmentURL,
+                reactions: []
+            };
+            this.storeRoomMessage(destination.roomId, botMessage);
+            this.io.to(destination.roomId).emit('chat-message', botMessage);
+        }
+    }
+
+    async uploadFileToCopyParty(filePath, fileName, contentType = 'application/octet-stream') {
+        const config = this.getCopyPartyExportConfig();
+        if (!config.enabled) {
+            return { uploaded: false, reason: 'CopyParty not configured' };
+        }
+
+        const uploadUrl = `${config.baseUrl}${config.exportPath}/${encodeURIComponent(fileName)}`;
+        const headers = { 'Content-Type': contentType };
+        if (config.username) {
+            const auth = Buffer.from(`${config.username}:${config.password || ''}`).toString('base64');
+            headers.Authorization = `Basic ${auth}`;
+        }
+
+        const response = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers,
+            body: fs.readFileSync(filePath)
+        });
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            throw new Error(`CopyParty upload failed (${response.status}): ${errorText.slice(0, 240)}`);
+        }
+
+        return {
+            uploaded: true,
+            url: uploadUrl,
+            baseUrl: config.baseUrl,
+            exportPath: config.exportPath
+        };
+    }
+
+    async executeRoomBotCommand(user, roomId, source = '') {
+        const normalized = String(source || '').trim();
+        const lowered = normalized.toLowerCase();
+        const addressed = lowered.includes('@voicelink') || lowered.includes('@voicelink bot') || lowered.startsWith('/bot') || lowered.startsWith('/vb');
+        if (!addressed) return { handled: false };
+        const asksRole =
+            lowered.includes('my role')
+            || lowered.includes('current role')
+            || lowered.includes('what role')
+            || lowered.includes('which role')
+            || lowered.includes('what can i do');
+        if (asksRole) {
+            const role = this.getBotCommandRole(user);
+            const policy = this.getBotCommandPermissions(user, { type: 'room', roomId });
+            const accessLine = policy.policy === 'full'
+                ? 'You can run bot exports to any room or user.'
+                : policy.policy === 'self_service'
+                    ? 'You can run bot exports for your current room or yourself.'
+                    : 'You need to sign in before using bot file commands.';
+            return {
+                handled: true,
+                reply: `Your current role is ${role}. ${accessLine}`
+            };
+        }
+
+        const asksGenerateText = lowered.includes('generate text file') || lowered.includes('create text file');
+        const asksUpload = lowered.includes('upload') || lowered.includes('send');
+        if (!asksGenerateText && !asksUpload) {
+            return { handled: false };
+        }
+
+        const destination = this.parseBotCommandDestination(normalized, roomId);
+        const permissions = this.getBotCommandPermissions(user, destination);
+        if (!permissions.allowed) {
+            return {
+                handled: true,
+                reply: `Command denied. ${permissions.reason || 'You do not have permission to run this command.'}`
+            };
+        }
+
+        if (!asksGenerateText) {
+            return {
+                handled: true,
+                reply: 'I can generate and upload text files now. Example: "@voicelink generate text file of recent room updates and upload to this room" or "... send to @username".'
+            };
+        }
+
+        const targetRoomId = destination.type === 'room' && destination.roomId ? destination.roomId : roomId;
+        const room = this.rooms.get(targetRoomId) || this.rooms.get(roomId);
+        const recentContext = this.getRecentRoomConversationContext(targetRoomId, 14);
+        const now = new Date().toISOString();
+        const titleLine = `VoiceLink Bot Export - ${room?.name || roomId}`;
+        const bodyLines = [
+            titleLine,
+            `Generated: ${now}`,
+            `Requested by: ${user?.name || user?.username || 'User'}`,
+            `Requested role: ${permissions.role}`,
+            `Delivery target: ${destination.type === 'user' ? `user:${destination.userName || destination.userId}` : `room:${destination.roomName || destination.roomId}`}`,
+            '',
+            'Recent conversation:',
+            ...(recentContext.length ? recentContext : ['No recent conversation captured.'])
+        ];
+        const textContent = bodyLines.join('\n');
+
+        const exportDir = path.join(__dirname, '../../data/exports');
+        fs.mkdirSync(exportDir, { recursive: true });
+        const fileName = `${this.sanitizeExportSegment(room?.name || 'room', 'room')}-notes-${Date.now()}.txt`;
+        const filePath = path.join(exportDir, fileName);
+        fs.writeFileSync(filePath, textContent, 'utf8');
+
+        try {
+            const upload = await this.uploadFileToCopyParty(filePath, fileName, 'text/plain; charset=utf-8');
+            if (!upload.uploaded || !upload.url) {
+                return {
+                    handled: true,
+                    reply: 'I generated the text file but could not upload it because CopyParty export is not configured.'
+                };
+            }
+            this.deliverBotFileToDestination(
+                destination,
+                roomId,
+                `Generated and uploaded ${fileName}.`,
+                fileName,
+                upload.url
+            );
+            const deliveredToCurrentRoom = destination.type === 'room' && destination.roomId === roomId;
+            const deliveryLabel = destination.type === 'user'
+                ? `user ${destination.userName || destination.userId}`
+                : `room ${destination.roomName || destination.roomId}`;
+            return {
+                handled: true,
+                reply: `Generated and uploaded ${fileName} to ${deliveryLabel}.`,
+                attachmentName: deliveredToCurrentRoom ? fileName : null,
+                attachmentURL: deliveredToCurrentRoom ? upload.url : null
+            };
+        } catch (error) {
+            return {
+                handled: true,
+                reply: `I generated the text file but upload failed: ${error.message}`
+            };
+        }
+    }
+
     isLikelyBotFollowUp(source = '') {
         const text = String(source || '').trim();
         if (!text || text.length < 3) return false;
@@ -3164,6 +3465,26 @@ class VoiceLinkLocalServer {
                 }
             }
             return 'I saw that link. I could not fetch the page summary right now.';
+        }
+
+        if (
+            lowered.includes("what's new")
+            || lowered.includes("whats new")
+            || lowered.includes("latest update")
+            || lowered.includes("latest updates")
+            || lowered.includes("new features")
+            || lowered.includes("latest info")
+        ) {
+            const highlights = [
+                'Room details now use the full in-room actions/details panel.',
+                'Chat link previews support bare domains and show titles faster.',
+                'Bot replies are less repetitive and now summarize posted links.',
+                'Startup + status-menu behavior was tuned for smoother room return.'
+            ];
+            const roomStatus = `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'}.`;
+            const mediaStatus = this.describeCurrentRoomMedia(roomId);
+            const motdLine = motd ? `Message of the day: ${motd}` : 'No message of the day is currently configured.';
+            return `Latest VoiceLink updates: ${highlights.join(' ')} ${roomStatus} ${mediaStatus} ${motdLine}`;
         }
 
         if (!lowered || lowered === 'hi' || lowered === 'hello' || lowered === 'hey') {
@@ -4333,20 +4654,20 @@ class VoiceLinkLocalServer {
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
-                    version: '1.0.0',
-                    buildNumber: 25,
+                    version: '1.0.4',
+                    buildNumber: 26,
                     downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
-                    releaseNotes: 'Latest native macOS build with room/federation fixes and admin invite activation updates.'
+                    releaseNotes: 'Latest macOS build includes full room details/actions alignment, faster chat link title previews, improved status-menu room return behavior, and less repetitive bot responses.'
                 },
                 windows: {
-                    version: '1.0.0',
-                    buildNumber: 25,
+                    version: '1.0.4',
+                    buildNumber: 26,
                     downloadURL: `${downloadBase}/VoiceLink-1.0.0-windows-portable.exe`,
                     releaseNotes: 'Latest Windows portable build with federation-aware room listing and improved auth flow. Installer refresh is in progress.'
                 },
                 linux: {
-                    version: '1.0.0',
-                    buildNumber: 25,
+                    version: '1.0.4',
+                    buildNumber: 26,
                     downloadURL: `${downloadBase}/VoiceLink-linux.AppImage`,
                     releaseNotes: 'Linux client release with AppImage and .deb installer support.'
                 }
@@ -12942,7 +13263,10 @@ class VoiceLinkLocalServer {
                             return;
                         }
                         this.updateBotConversationState(user.roomId, socket.id, source);
-                        let reply = await this.buildBotTextReply(user, user.roomId, source);
+                        const commandResult = await this.executeRoomBotCommand(user, user.roomId, source);
+                        let reply = commandResult.handled
+                            ? commandResult.reply
+                            : await this.buildBotTextReply(user, user.roomId, source);
                         const attachmentReply = sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL
                             ? await this.buildBotAttachmentReply(user, sanitizedMessage)
                             : null;
@@ -12960,6 +13284,8 @@ class VoiceLinkLocalServer {
                             isBot: true,
                             authProvider: 'voicelink_bot',
                             replyTo: message.id,
+                            attachmentName: commandResult.attachmentName || null,
+                            attachmentURL: commandResult.attachmentURL || null,
                             reactions: []
                         };
                         this.storeRoomMessage(user.roomId, botMessage);

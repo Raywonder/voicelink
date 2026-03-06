@@ -3046,8 +3046,7 @@ struct AdminModulesSection: View {
             ModuleConfigEditorSheet(
                 module: module,
                 jsonText: $configEditorText,
-                onSave: {
-                    let text = configEditorText
+                onSave: { text in
                     runAction("save-config-\(module.id)") {
                         await adminManager.saveModuleConfig(module.id, jsonText: text)
                     }
@@ -3067,10 +3066,29 @@ struct AdminModulesSection: View {
 }
 
 private struct ModuleConfigEditorSheet: View {
+    enum FieldKind {
+        case bool
+        case string
+        case number
+        case json
+    }
+
+    struct ConfigField: Identifiable {
+        let id: String
+        let path: [String]
+        let label: String
+        let kind: FieldKind
+        var textValue: String
+        var boolValue: Bool
+    }
+
     let module: AdminModuleInfo
     @Binding var jsonText: String
-    let onSave: () -> Void
+    let onSave: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var useAdvancedJSON = false
+    @State private var fields: [ConfigField] = []
+    @State private var validationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -3078,15 +3096,92 @@ private struct ModuleConfigEditorSheet: View {
                 .font(.title3.bold())
                 .foregroundColor(.white)
 
-            Text("Edit the module JSON config and save to reapply it on the server.")
+            Text("Standard controls are shown by default. Use Advanced JSON only when needed.")
                 .font(.caption)
                 .foregroundColor(.gray)
 
-            TextEditor(text: $jsonText)
-                .font(.system(.body, design: .monospaced))
-                .padding(8)
-                .background(Color.white.opacity(0.08))
-                .cornerRadius(8)
+            HStack {
+                Picker("Editor Mode", selection: $useAdvancedJSON) {
+                    Text("Standard").tag(false)
+                    Text("Advanced JSON").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+                Spacer()
+            }
+
+            if useAdvancedJSON {
+                TextEditor(text: $jsonText)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(8)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(8)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if fields.isEmpty {
+                            Text("No editable config fields were detected. Switch to Advanced JSON to edit raw config.")
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        } else {
+                            ForEach(fields.indices, id: \.self) { index in
+                                let field = fields[index]
+                                switch field.kind {
+                                case .bool:
+                                    Toggle(field.label, isOn: Binding(
+                                        get: { fields[index].boolValue },
+                                        set: { fields[index].boolValue = $0 }
+                                    ))
+                                    .tint(.blue)
+                                case .string:
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(field.label)
+                                            .foregroundColor(.gray)
+                                            .font(.caption)
+                                        TextField(field.label, text: Binding(
+                                            get: { fields[index].textValue },
+                                            set: { fields[index].textValue = $0 }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                case .number:
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(field.label)
+                                            .foregroundColor(.gray)
+                                            .font(.caption)
+                                        TextField("Number", text: Binding(
+                                            get: { fields[index].textValue },
+                                            set: { fields[index].textValue = $0 }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                case .json:
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(field.label)
+                                            .foregroundColor(.gray)
+                                            .font(.caption)
+                                        TextEditor(text: Binding(
+                                            get: { fields[index].textValue },
+                                            set: { fields[index].textValue = $0 }
+                                        ))
+                                        .font(.system(.caption, design: .monospaced))
+                                        .frame(minHeight: 64)
+                                        .padding(6)
+                                        .background(Color.white.opacity(0.08))
+                                        .cornerRadius(8)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let validationError, !validationError.isEmpty {
+                Text(validationError)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
 
             HStack {
                 Spacer()
@@ -3096,7 +3191,18 @@ private struct ModuleConfigEditorSheet: View {
                 .buttonStyle(.bordered)
 
                 Button("Save") {
-                    onSave()
+                    validationError = nil
+                    if useAdvancedJSON {
+                        onSave(jsonText)
+                        dismiss()
+                        return
+                    }
+                    guard let generatedJSON = rebuildJSONFromFields() else {
+                        return
+                    }
+                    jsonText = generatedJSON
+                    onSave(generatedJSON)
+                    dismiss()
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -3104,6 +3210,164 @@ private struct ModuleConfigEditorSheet: View {
         .padding(20)
         .frame(minWidth: 640, minHeight: 420)
         .background(Color(red: 0.08, green: 0.09, blue: 0.14))
+        .onAppear {
+            parseFieldsFromJSON()
+        }
+        .onChange(of: useAdvancedJSON) { enabled in
+            if enabled {
+                if let generatedJSON = rebuildJSONFromFields() {
+                    jsonText = generatedJSON
+                    validationError = nil
+                }
+            } else {
+                parseFieldsFromJSON()
+            }
+        }
+    }
+
+    private func parseFieldsFromJSON() {
+        validationError = nil
+        guard let data = jsonText.data(using: .utf8) else {
+            fields = []
+            validationError = "Config text must be valid UTF-8."
+            return
+        }
+
+        do {
+            let object = try JSONSerialization.jsonObject(with: data)
+            guard let dictionary = object as? [String: Any] else {
+                fields = []
+                validationError = "Module config must be a JSON object."
+                return
+            }
+            fields = flattenConfig(dictionary)
+        } catch {
+            fields = []
+            validationError = "Unable to parse current config JSON: \(error.localizedDescription)"
+        }
+    }
+
+    private func flattenConfig(_ dictionary: [String: Any], path: [String] = []) -> [ConfigField] {
+        var output: [ConfigField] = []
+        for key in dictionary.keys.sorted() {
+            let value = dictionary[key] as Any
+            let currentPath = path + [key]
+            if let nested = value as? [String: Any] {
+                output.append(contentsOf: flattenConfig(nested, path: currentPath))
+                continue
+            }
+
+            let label = currentPath.joined(separator: " > ")
+            if let boolValue = value as? Bool {
+                output.append(ConfigField(
+                    id: currentPath.joined(separator: "."),
+                    path: currentPath,
+                    label: label,
+                    kind: .bool,
+                    textValue: boolValue ? "true" : "false",
+                    boolValue: boolValue
+                ))
+                continue
+            }
+
+            if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+                output.append(ConfigField(
+                    id: currentPath.joined(separator: "."),
+                    path: currentPath,
+                    label: label,
+                    kind: .number,
+                    textValue: number.stringValue,
+                    boolValue: false
+                ))
+                continue
+            }
+
+            if let stringValue = value as? String {
+                output.append(ConfigField(
+                    id: currentPath.joined(separator: "."),
+                    path: currentPath,
+                    label: label,
+                    kind: .string,
+                    textValue: stringValue,
+                    boolValue: false
+                ))
+                continue
+            }
+
+            let fallback = stringifyJSONObject(value) ?? "\(value)"
+            output.append(ConfigField(
+                id: currentPath.joined(separator: "."),
+                path: currentPath,
+                label: label,
+                kind: .json,
+                textValue: fallback,
+                boolValue: false
+            ))
+        }
+        return output
+    }
+
+    private func rebuildJSONFromFields() -> String? {
+        var root: [String: Any] = [:]
+        for field in fields {
+            let value: Any
+            switch field.kind {
+            case .bool:
+                value = field.boolValue
+            case .string:
+                value = field.textValue
+            case .number:
+                let trimmed = field.textValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let intValue = Int(trimmed) {
+                    value = intValue
+                } else if let doubleValue = Double(trimmed) {
+                    value = doubleValue
+                } else {
+                    validationError = "Invalid number for \(field.label)."
+                    return nil
+                }
+            case .json:
+                let trimmed = field.textValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    value = [:]
+                } else if let data = trimmed.data(using: .utf8),
+                          let object = try? JSONSerialization.jsonObject(with: data) {
+                    value = object
+                } else {
+                    validationError = "Invalid JSON for \(field.label)."
+                    return nil
+                }
+            }
+            assignValue(value, into: &root, path: field.path)
+        }
+
+        guard JSONSerialization.isValidJSONObject(root),
+              let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            validationError = "Failed to serialize updated module config."
+            return nil
+        }
+
+        return text
+    }
+
+    private func assignValue(_ value: Any, into dictionary: inout [String: Any], path: [String]) {
+        guard let key = path.first else { return }
+        if path.count == 1 {
+            dictionary[key] = value
+            return
+        }
+        var child = dictionary[key] as? [String: Any] ?? [:]
+        assignValue(value, into: &child, path: Array(path.dropFirst()))
+        dictionary[key] = child
+    }
+
+    private func stringifyJSONObject(_ value: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
     }
 }
 
