@@ -247,6 +247,56 @@ class PairingManager: ObservableObject {
 
     // MARK: - Pairing Code Generation (Server Side)
 
+    func generatePairingCode(serverURL: String, authToken: String?, completion: @escaping (Bool, String?) -> Void) {
+        pairingStatus = .generatingCode
+        guard let url = URL(string: "\(serverURL)/api/pairing/generate") else {
+            DispatchQueue.main.async {
+                self.pairingStatus = .failed
+                completion(false, "Invalid server URL")
+            }
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [:]
+        if let token = authToken?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
+            body["authToken"] = token
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self?.pairingStatus = .failed
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self?.pairingStatus = .failed
+                    completion(false, "Invalid response from server")
+                    return
+                }
+                guard json["success"] as? Bool == true,
+                      let code = json["code"] as? String else {
+                    self?.pairingStatus = .failed
+                    completion(false, (json["error"] as? String) ?? "Pairing code generation failed")
+                    return
+                }
+                self?.currentPairingCode = code
+                self?.pairingCodeExpiry = Date().addingTimeInterval(60)
+                self?.isPairingMode = true
+                self?.pairingStatus = .waitingForPair
+                self?.startExpiryTimer()
+                completion(true, nil)
+            }
+        }.resume()
+    }
+
     func generatePairingCode() -> String {
         // Generate 6-digit alphanumeric code
         let characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Removed confusing chars (0, O, 1, I)

@@ -1278,6 +1278,7 @@ struct PairingSheetView: View {
     @State private var showMastodonAuth = false
     @State private var showEmailAuth = false
     @State private var showAdminInviteAuth = false
+    @State private var isGeneratingCode = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -1345,8 +1346,7 @@ struct PairingSheetView: View {
                         .font(.caption)
                         .foregroundColor(.green)
                     Button("Sign out") {
-                        authManager.logout()
-                        selectedAuthMethod = .pairingCode
+                        NotificationCenter.default.post(name: .requestLogoutConfirmation, object: nil)
                     }
                     .font(.caption)
                     .foregroundColor(.blue)
@@ -1369,6 +1369,12 @@ struct PairingSheetView: View {
                 .onChange(of: enteredCode) { newValue in
                     enteredCode = String(newValue.uppercased().prefix(6))
                 }
+
+            Button(isGeneratingCode ? "Generating..." : "Generate Pairing Code (Admin)") {
+                generatePairingCodeFromServer()
+            }
+            .buttonStyle(.bordered)
+            .disabled(isGeneratingCode || authManager.currentUser == nil)
 
             // Server URL
             TextField("Server URL", text: $serverURL)
@@ -1411,6 +1417,11 @@ struct PairingSheetView: View {
                 selectedAuthMethod = .email
             }
         }
+        .onChange(of: authManager.authState) { newState in
+            if newState != .authenticated {
+                selectedAuthMethod = .pairingCode
+            }
+        }
         .onAppear {
             if serverURL.isEmpty {
                 serverURL = defaultServerURL()
@@ -1437,6 +1448,22 @@ struct PairingSheetView: View {
                 dismiss()
             } else {
                 errorMessage = error ?? "Pairing failed"
+            }
+        }
+    }
+
+    private func generatePairingCodeFromServer() {
+        isGeneratingCode = true
+        errorMessage = nil
+        let url = resolvedServerURL()
+        let token = authManager.currentUser?.accessToken
+
+        PairingManager.shared.generatePairingCode(serverURL: url, authToken: token) { success, error in
+            isGeneratingCode = false
+            if success, let generated = PairingManager.shared.currentPairingCode {
+                enteredCode = generated
+            } else {
+                errorMessage = error ?? "Could not generate pairing code. Sign in as a server admin and try again."
             }
         }
     }

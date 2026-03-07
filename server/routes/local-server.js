@@ -7300,6 +7300,16 @@ class VoiceLinkLocalServer {
 
         // Generate pairing code for this server
         this.app.post('/api/pairing/generate', (req, res) => {
+            const authToken = String(req.body?.authToken || '').trim();
+            const authReq = authToken
+                ? { ...req, body: { ...(req.body || {}), accessToken: authToken } }
+                : req;
+            const actingUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(authReq) : null;
+            const role = String(actingUser?.role || '').toLowerCase();
+            if (!actingUser || (role !== 'owner' && role !== 'admin')) {
+                return res.status(403).json({ success: false, error: 'Only authenticated server admins can generate pairing codes.' });
+            }
+
             // Generate 6-character code (no confusing chars)
             const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
             let code = '';
@@ -7313,7 +7323,12 @@ class VoiceLinkLocalServer {
                     id: this.serverId,
                     name: this.serverName || 'VoiceLink Server',
                     url: req.protocol + '://' + req.get('host')
-                }
+                },
+                generatedBy: {
+                    id: actingUser.id || null,
+                    username: actingUser.username || actingUser.fullHandle || actingUser.email || 'admin'
+                },
+                requireAuth: true
             });
 
             // Auto-cleanup after expiry
@@ -7324,7 +7339,8 @@ class VoiceLinkLocalServer {
             res.json({
                 success: true,
                 code,
-                expiresAt: new Date(Date.now() + 60000)
+                expiresAt: new Date(Date.now() + 60000),
+                generatedBy: actingUser.username || actingUser.fullHandle || actingUser.email || 'admin'
             });
         });
 
@@ -7347,6 +7363,14 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ error: 'Pairing code expired' });
             }
 
+            const authReq = authToken
+                ? { ...req, body: { ...(req.body || {}), accessToken: authToken } }
+                : req;
+            const pairingUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(authReq) : null;
+            if (pairingData.requireAuth && !pairingUser) {
+                return res.status(401).json({ error: 'You must sign in before pairing this client.' });
+            }
+
             // Generate access token for this device
             const accessToken = 'vldev_' + uuidv4() + '_' + Date.now().toString(36);
             const deviceId = 'dev_' + uuidv4().substring(0, 8);
@@ -7360,6 +7384,8 @@ class VoiceLinkLocalServer {
                 authUsername,
                 mastodonInstance,
                 email,
+                pairedByUserId: pairingUser?.id || null,
+                pairedByUsername: pairingUser?.username || pairingUser?.fullHandle || pairingUser?.email || null,
                 accessToken,
                 linkedAt: new Date(),
                 lastSeen: new Date(),
