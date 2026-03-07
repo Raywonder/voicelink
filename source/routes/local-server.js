@@ -2336,6 +2336,9 @@ class VoiceLinkLocalServer {
         const configuredMainServer = process.env.MAIN_SERVER_URL
             || config.federation?.hubUrl
             || MAIN_SERVER_URL;
+        const trustedServers = Array.isArray(config.federation?.trustedServers)
+            ? config.federation.trustedServers
+            : [];
         const configuredPublicUrl = process.env.PUBLIC_URL
             || config.server?.publicUrl
             || null;
@@ -2351,12 +2354,16 @@ class VoiceLinkLocalServer {
         };
 
         const currentOrigin = normalizeUrl(configuredPublicUrl);
-        const mainOrigin = normalizeUrl(configuredMainServer);
-        const isMainServer = process.env.IS_MAIN_SERVER === 'true' ||
-            (!!currentOrigin && !!mainOrigin && currentOrigin === mainOrigin);
+        const candidateOrigins = [
+            configuredMainServer,
+            ...trustedServers
+        ]
+            .map(normalizeUrl)
+            .filter(Boolean);
+        const targetOrigins = Array.from(new Set(candidateOrigins))
+            .filter((origin) => origin && (!currentOrigin || origin !== currentOrigin));
 
-        if (isMainServer) {
-            console.log('[LocalServer] Running as main server, skipping external room fetch');
+        if (targetOrigins.length === 0) {
             return [];
         }
 
@@ -2372,35 +2379,68 @@ class VoiceLinkLocalServer {
         }
 
         this.mainServerRoomFetchPromise = new Promise((resolve) => {
-            const url = `${configuredMainServer}/api/rooms?source=app`;
-            console.log('[LocalServer] Fetching rooms from main server:', url);
+            const fetchSingleServer = (origin) => new Promise((serverResolve) => {
+                const url = `${origin}/api/rooms?source=app`;
+                const client = origin.startsWith('https://') ? https : http;
 
-            https.get(url, { timeout: 5000 }, (response) => {
-                let data = '';
-                response.on('data', chunk => data += chunk);
-                response.on('end', () => {
-                    try {
-                        const rooms = JSON.parse(data);
-                        console.log(`[LocalServer] Got ${rooms.length} rooms from main server`);
-                        const normalizedRooms = rooms.map(r => ({ ...r, serverSource: 'main' }));
-                        this.cachedMainServerRooms = normalizedRooms;
-                        this.cachedMainServerRoomsFetchedAt = Date.now();
-                        resolve(normalizedRooms);
-                    } catch (e) {
-                        console.error('[LocalServer] Failed to parse main server response:', e.message);
-                        resolve(this.cachedMainServerRooms || []);
+                client.get(url, { timeout: 5000 }, (response) => {
+                    let data = '';
+                    response.on('data', (chunk) => { data += chunk; });
+                    response.on('end', () => {
+                        try {
+                            const rooms = JSON.parse(data);
+                            const hostLabel = (() => {
+                                try {
+                                    return new URL(origin).host;
+                                } catch {
+                                    return origin;
+                                }
+                            })();
+                            const normalizedRooms = Array.isArray(rooms)
+                                ? rooms.map((room) => ({
+                                    ...room,
+                                    serverSource: room.serverSource || hostLabel,
+                                    serverTitle: room.serverTitle || hostLabel,
+                                    serverApiBase: room.serverApiBase || origin
+                                }))
+                                : [];
+                            serverResolve(normalizedRooms);
+                        } catch (error) {
+                            console.error(`[LocalServer] Failed to parse rooms from ${origin}:`, error.message);
+                            serverResolve([]);
+                        }
+                    });
+                }).on('error', (error) => {
+                    console.error(`[LocalServer] Room fetch error from ${origin}:`, error.message);
+                    serverResolve([]);
+                }).on('timeout', function onTimeout() {
+                    this.destroy(new Error('timeout'));
+                    serverResolve([]);
+                });
+            });
+
+            Promise.all(targetOrigins.map((origin) => fetchSingleServer(origin)))
+                .then((results) => {
+                    const merged = results.flat();
+                    const deduped = [];
+                    const seen = new Set();
+                    for (const room of merged) {
+                        const key = `${room.id || ''}|${String(room.serverApiBase || '').toLowerCase()}`;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        deduped.push(room);
                     }
+                    this.cachedMainServerRooms = deduped;
+                    this.cachedMainServerRoomsFetchedAt = Date.now();
+                    resolve(deduped);
+                })
+                .catch((error) => {
+                    console.error('[LocalServer] Federated room fetch failed:', error.message);
+                    resolve(this.cachedMainServerRooms || []);
+                })
+                .finally(() => {
                     this.mainServerRoomFetchPromise = null;
                 });
-            }).on('error', (err) => {
-                console.error('[LocalServer] Main server fetch error:', err.message);
-                this.mainServerRoomFetchPromise = null;
-                resolve(this.cachedMainServerRooms || []);
-            }).on('timeout', () => {
-                console.error('[LocalServer] Main server fetch timeout');
-                this.mainServerRoomFetchPromise = null;
-                resolve(this.cachedMainServerRooms || []);
-            });
         });
 
         return this.mainServerRoomFetchPromise;
@@ -2625,13 +2665,50 @@ class VoiceLinkLocalServer {
             }
         }
 
-        this.io.emit('admin-notification', {
+        this.emitSystemActionNotification({
             type: 'room_join_request',
             title: `Join request for ${room.name}`,
             message: `${requestEntry.userName} requested access to locked room ${room.name}.`,
             roomId,
             requestId: requestEntry.id
         });
+    }
+
+    emitSystemActionNotification({
+        type = 'system_action',
+        title = 'VoiceLink System',
+        message = '',
+        severity = 'info',
+        targetUserId = null,
+        roomId = null,
+        metadata = {}
+    } = {}) {
+        if (!this.io) return;
+        const payload = {
+            id: uuidv4(),
+            type: String(type || 'system_action'),
+            title: String(title || 'VoiceLink System'),
+            message: String(message || ''),
+            severity: String(severity || 'info'),
+            timestamp: new Date().toISOString(),
+            roomId: roomId || null,
+            targetUserId: targetUserId || null,
+            ...((metadata && typeof metadata === 'object') ? metadata : {})
+        };
+
+        if (targetUserId) {
+            this.io.to(targetUserId).emit('admin-notification', payload);
+            this.io.to(targetUserId).emit('system-action-notification', payload);
+            return;
+        }
+        if (roomId) {
+            this.io.to(roomId).emit('admin-notification', payload);
+            this.io.to(roomId).emit('system-action-notification', payload);
+            return;
+        }
+
+        this.io.emit('admin-notification', payload);
+        this.io.emit('system-action-notification', payload);
     }
 
     getConfiguredBackgroundStreamForRoom(room = {}) {
@@ -3968,6 +4045,11 @@ class VoiceLinkLocalServer {
         this.app.get('/api/rooms', async (req, res) => {
             const source = req.query.source || 'app'; // 'app', 'web', 'all'
             const includeHidden = req.query.includeHidden === 'true';
+            const localServerApiBase = (
+                process.env.PUBLIC_URL
+                || deployConfig.getConfig()?.server?.publicUrl
+                || `${req.protocol}://${req.get('host')}`
+            ).replace(/\/+$/, '');
 
             // Fetch rooms from main server first
             let mainServerRooms = [];
@@ -4024,6 +4106,7 @@ class VoiceLinkLocalServer {
                     previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
                     serverTitle: this.serverName || null,
                     serverDomain: deployConfig.getConfig()?.server?.domain || null,
+                    serverApiBase: localServerApiBase,
                     motd: deployConfig.getConfig()?.server?.motd || null,
                     hostServerName: room.hostServerName || this.serverName || null,
                     hostServerOwner: room.hostServerOwner || null,
@@ -4034,15 +4117,57 @@ class VoiceLinkLocalServer {
                 };
             });
 
-            // Merge: main server rooms first, then local rooms (avoiding duplicates)
-            const mainRoomIds = new Set(mainServerRooms.map(r => r.id));
-            const mergedRooms = [
-                ...mainServerRooms,
-                ...localRoomList.filter(r => !mainRoomIds.has(r.id))
-            ];
+            // Merge and dedupe exact room instance collisions while keeping multi-server room variants.
+            const mergedRooms = [];
+            const seenRoomInstances = new Set();
+            for (const room of [...mainServerRooms, ...localRoomList]) {
+                const instanceKey = `${room.id || ''}|${String(room.serverApiBase || room.serverSource || '').toLowerCase()}`;
+                if (seenRoomInstances.has(instanceKey)) continue;
+                seenRoomInstances.add(instanceKey);
+                mergedRooms.push(room);
+            }
 
-            console.log(`[LocalServer] Returning ${mergedRooms.length} rooms (${mainServerRooms.length} main + ${localRoomList.length} local)`);
-            res.json(mergedRooms);
+            const hasAuthContext = Boolean(
+                req.headers.authorization
+                || req.headers['x-user-email']
+                || req.headers['x-user-id']
+                || req.query.authenticated === 'true'
+            );
+
+            let filteredRooms = mergedRooms;
+            if (!hasAuthContext) {
+                filteredRooms = mergedRooms.filter((room) => {
+                    const visibility = String(room.visibility || '').toLowerCase();
+                    if (visibility === 'private') return false;
+                    if (room.isPrivate === true) return false;
+                    if (room.visibleToGuests === false) return false;
+                    return true;
+                });
+            }
+
+            const platform = String(req.query.client || req.query.platform || '').trim().toLowerCase();
+            const sortBy = String(req.query.sort || (platform === 'ios' ? 'activity' : 'name')).trim().toLowerCase();
+            filteredRooms = filteredRooms
+                .map((room) => ({
+                    ...room,
+                    sortWeight: Number(room.userCount ?? room.users ?? 0),
+                    lastActivityAt: room.updatedAt || room.createdAt || null
+                }))
+                .sort((a, b) => {
+                    if (sortBy === 'activity' || sortBy === 'users') {
+                        const byUsers = (Number(b.sortWeight || 0) - Number(a.sortWeight || 0));
+                        if (byUsers !== 0) return byUsers;
+                    }
+                    if (sortBy === 'recent') {
+                        const at = new Date(a.lastActivityAt || 0).getTime();
+                        const bt = new Date(b.lastActivityAt || 0).getTime();
+                        if (bt !== at) return bt - at;
+                    }
+                    return String(a.name || '').localeCompare(String(b.name || ''));
+                });
+
+            console.log(`[LocalServer] Returning ${filteredRooms.length} rooms (${mainServerRooms.length} main + ${localRoomList.length} local)`);
+            res.json(filteredRooms);
         });
 
         this.app.post('/api/rooms', (req, res) => {
@@ -4642,6 +4767,12 @@ class VoiceLinkLocalServer {
         this.app.post('/api/updates/check', (req, res) => {
             const { platform, currentVersion, buildNumber } = req.body;
             const downloadBase = process.env.VOICELINK_DOWNLOAD_BASE || 'https://voicelink.devinecreations.net/downloads/voicelink';
+            const downloadRootCandidates = [
+                process.env.VOICELINK_DOWNLOAD_ROOT,
+                path.join(process.cwd(), 'downloads', 'voicelink'),
+                '/home/devinecr/downloads/voicelink'
+            ].filter(Boolean);
+            const resolvedDownloadRoot = downloadRootCandidates.find((candidate) => fs.existsSync(candidate)) || downloadRootCandidates[0];
             const requestedChannelRaw = String(
                 req.body?.distChannel
                 || req.headers['x-dist-channel']
@@ -4651,19 +4782,33 @@ class VoiceLinkLocalServer {
             ).trim().toLowerCase();
             const isStoreManagedChannel = ['appstore', 'testflight', 'mac_app_store', 'playstore', 'windows_store'].includes(requestedChannelRaw);
 
+            const readChecksum = (filename) => {
+                if (!resolvedDownloadRoot) return null;
+                const checksumPath = path.join(resolvedDownloadRoot, `${filename}.sha256`);
+                if (!fs.existsSync(checksumPath)) return null;
+                const raw = fs.readFileSync(checksumPath, 'utf8').trim();
+                if (!raw) return null;
+                return raw.split(/\s+/)[0] || null;
+            };
+
+            const fileExists = (filename) => {
+                if (!resolvedDownloadRoot) return false;
+                return fs.existsSync(path.join(resolvedDownloadRoot, filename));
+            };
+
             // Latest versions for each platform
             const latestVersions = {
                 macos: {
                     version: '1.0.4',
                     buildNumber: 26,
-                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
+                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
                     releaseNotes: 'Latest macOS build includes full room details/actions alignment, faster chat link title previews, improved status-menu room return behavior, and less repetitive bot responses.'
                 },
                 windows: {
                     version: '1.0.4',
                     buildNumber: 26,
                     downloadURL: `${downloadBase}/VoiceLink-1.0.0-windows-portable.exe`,
-                    releaseNotes: 'Latest Windows portable build with federation-aware room listing and improved auth flow. Installer refresh is in progress.'
+                    releaseNotes: 'Latest Windows build includes federation-aware room listing and improved auth flow. Setup installer and builder package are available on the downloads page.'
                 },
                 linux: {
                     version: '1.0.4',
@@ -4690,6 +4835,17 @@ class VoiceLinkLocalServer {
 
             const hasUpdate = compareVersions(platformInfo.version, currentVersion || '0.0.0') > 0;
             const updateAllowed = !isStoreManagedChannel;
+            const checksumByPlatform = {
+                macos: readChecksum('VoiceLink-1.0.0-macos.pkg'),
+                windows: readChecksum('VoiceLink-1.0.0-windows-portable.exe'),
+                linux: readChecksum('VoiceLink-linux.AppImage')
+            };
+
+            const windowsArtifacts = {
+                portable: fileExists('VoiceLink-1.0.0-windows-portable.exe'),
+                setup: fileExists('VoiceLink-1.0.0-windows-setup.exe'),
+                buildZip: fileExists('VoiceLink-1.0.0-windows-build.zip')
+            };
 
             res.json({
                 updateAvailable: updateAllowed ? hasUpdate : false,
@@ -4697,61 +4853,65 @@ class VoiceLinkLocalServer {
                 buildNumber: platformInfo.buildNumber,
                 downloadURL: updateAllowed && hasUpdate ? platformInfo.downloadURL : null,
                 releaseNotes: updateAllowed && hasUpdate ? platformInfo.releaseNotes : null,
+                checksum: checksumByPlatform[platform] || null,
                 updateSource: updateAllowed ? 'self-updater' : 'store-managed',
                 distChannel: requestedChannelRaw,
                 message: updateAllowed ? null : 'Updates are managed by the app store channel for this build.',
                 platform: platform || 'unknown',
-                currentVersion: currentVersion || 'unknown'
+                currentVersion: currentVersion || 'unknown',
+                windowsArtifacts
             });
         });
 
         // Get all available downloads
         this.app.get('/api/downloads', (req, res) => {
+            const downloadBase = process.env.VOICELINK_DOWNLOAD_BASE || 'https://voicelink.devinecreations.net/downloads/voicelink';
+            const downloadRootCandidates = [
+                process.env.VOICELINK_DOWNLOAD_ROOT,
+                path.join(process.cwd(), 'downloads', 'voicelink'),
+                '/home/devinecr/downloads/voicelink'
+            ].filter(Boolean);
+            const resolvedDownloadRoot = downloadRootCandidates.find((candidate) => fs.existsSync(candidate)) || downloadRootCandidates[0];
+
+            const readChecksum = (filename) => {
+                if (!resolvedDownloadRoot) return null;
+                const checksumPath = path.join(resolvedDownloadRoot, `${filename}.sha256`);
+                if (!fs.existsSync(checksumPath)) return null;
+                const raw = fs.readFileSync(checksumPath, 'utf8').trim();
+                return raw ? (raw.split(/\s+/)[0] || null) : null;
+            };
+
+            const buildEntry = (filename, name, type, size = 'Current build') => ({
+                name,
+                url: `${downloadBase}/${filename}`,
+                size,
+                type,
+                checksum: readChecksum(filename),
+                checksumUrl: `${downloadBase}/${filename}.sha256`
+            });
+
             res.json({
                 platforms: {
                     macos: {
-                        version: '1.0.0',
+                        version: '1.0.4',
                         downloads: [
-                            {
-                                name: 'macOS Universal ZIP',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip',
-                                size: 'Current build',
-                                type: 'native'
-                            }
+                            buildEntry('VoiceLink-1.0.0-macos.pkg', 'macOS Installer (.pkg)', 'native'),
+                            buildEntry('VoiceLinkMacOS.zip', 'macOS ZIP (Alternative)', 'native')
                         ]
                     },
                     windows: {
-                        version: '1.0.0',
+                        version: '1.0.4',
                         downloads: [
-                            {
-                                name: 'Windows Portable EXE (Recommended)',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-portable.exe',
-                                size: 'Current build',
-                                type: 'native'
-                            },
-                            {
-                                name: 'Windows Installer (Setup EXE - rebuilding)',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe',
-                                size: 'Current build',
-                                type: 'native'
-                            }
+                            buildEntry('VoiceLink-1.0.0-windows-portable.exe', 'Windows Portable EXE', 'native'),
+                            buildEntry('VoiceLink-1.0.0-windows-setup.exe', 'Windows Setup EXE Installer', 'native'),
+                            buildEntry('VoiceLink-1.0.0-windows-build.zip', 'Windows Installer Builder ZIP', 'tools')
                         ]
                     },
                     linux: {
-                        version: '1.0.0',
+                        version: '1.0.4',
                         downloads: [
-                            {
-                                name: 'Linux AppImage',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-linux.AppImage',
-                                size: 'Current build',
-                                type: 'native'
-                            },
-                            {
-                                name: 'Linux DEB',
-                                url: 'https://voicelink.devinecreations.net/downloads/voicelink/voicelink-local_1.0.0_amd64.deb',
-                                size: 'Current build',
-                                type: 'native'
-                            }
+                            buildEntry('VoiceLink-linux.AppImage', 'Linux AppImage', 'native'),
+                            buildEntry('voicelink-local_1.0.0_amd64.deb', 'Linux DEB', 'native')
                         ]
                     }
                 },
@@ -8310,9 +8470,110 @@ class VoiceLinkLocalServer {
             console.log('[LocalServer] Deployment configuration loaded');
         });
 
+        const normalizeVisibilityConfig = (value = {}) => {
+            const fallback = { desktop: true, ios: true, web: true, frontendOpen: true };
+            if (!value || typeof value !== 'object') return fallback;
+            return {
+                desktop: value.desktop !== false,
+                ios: value.ios !== false,
+                web: value.web !== false,
+                frontendOpen: value.frontendOpen !== false
+            };
+        };
+
+        const resolveDeploymentActor = (req) => {
+            const authUser = req.authUser || req.user || {};
+            const actorName = String(
+                authUser.displayName
+                || authUser.username
+                || authUser.email
+                || req.headers['x-user-email']
+                || req.headers['x-forwarded-user']
+                || 'admin'
+            ).trim();
+            return {
+                actorName,
+                actorId: String(authUser.id || authUser.userId || req.headers['x-client-id'] || '').trim() || null,
+                actorEmail: String(authUser.email || req.headers['x-user-email'] || '').trim() || null,
+                actorClientId: String(req.headers['x-client-id'] || '').trim() || null
+            };
+        };
+
+        const getServerPolicyConfig = () => {
+            const cfg = deployConfig.get('serverPolicies') || {};
+            const ownerVisibility = normalizeVisibilityConfig(cfg.visibility);
+            const override = cfg.visibilityOverride && typeof cfg.visibilityOverride === 'object'
+                ? cfg.visibilityOverride
+                : {};
+            const now = Date.now();
+            const expiresAtTs = override.expiresAt ? new Date(override.expiresAt).getTime() : null;
+            const overrideExpired = Number.isFinite(expiresAtTs) && expiresAtTs <= now;
+            if (override.active && overrideExpired) {
+                const next = { ...cfg, visibilityOverride: { active: false, reason: '', setBy: '', setAt: null, expiresAt: null, visibility: null } };
+                deployConfig.updateSection('serverPolicies', next);
+            }
+            const freshCfg = deployConfig.get('serverPolicies') || cfg;
+            const freshOverride = freshCfg.visibilityOverride && typeof freshCfg.visibilityOverride === 'object'
+                ? freshCfg.visibilityOverride
+                : {};
+            const overrideActive = !!freshOverride.active && !(freshOverride.expiresAt && new Date(freshOverride.expiresAt).getTime() <= Date.now());
+            const effectiveVisibility = overrideActive && freshOverride.visibility
+                ? normalizeVisibilityConfig(freshOverride.visibility)
+                : ownerVisibility;
+            return {
+                primaryServerUrl: freshCfg.primaryServerUrl || 'https://voicelink.devinecreations.net',
+                autoPairPrimaryServer: freshCfg.autoPairPrimaryServer !== false,
+                autoPullUpdatesFromPrimary: freshCfg.autoPullUpdatesFromPrimary !== false,
+                autoInstallRequiredModules: freshCfg.autoInstallRequiredModules !== false,
+                autoInstallOptionalModules: !!freshCfg.autoInstallOptionalModules,
+                updatePushMode: freshCfg.updatePushMode || 'manual',
+                updateCheckIntervalMinutes: Number(freshCfg.updateCheckIntervalMinutes || 30),
+                bootstrapFederationOnInstall: freshCfg.bootstrapFederationOnInstall !== false,
+                bootstrapFederationMinutes: Number(freshCfg.bootstrapFederationMinutes || 15),
+                moduleGovernance: {
+                    required: Array.isArray(freshCfg.moduleGovernance?.required) ? freshCfg.moduleGovernance.required : [],
+                    optional: Array.isArray(freshCfg.moduleGovernance?.optional) ? freshCfg.moduleGovernance.optional : [],
+                    revoked: Array.isArray(freshCfg.moduleGovernance?.revoked) ? freshCfg.moduleGovernance.revoked : [],
+                    allowedByServer: freshCfg.moduleGovernance?.allowedByServer && typeof freshCfg.moduleGovernance.allowedByServer === 'object'
+                        ? freshCfg.moduleGovernance.allowedByServer
+                        : {},
+                    ownerAutoUpdateModules: !!freshCfg.moduleGovernance?.ownerAutoUpdateModules,
+                    ownerUpdateChannel: freshCfg.moduleGovernance?.ownerUpdateChannel || 'manual'
+                },
+                networkTrust: {
+                    level: Math.min(100, Math.max(1, Number(freshCfg.networkTrust?.level || 1))),
+                    role: String(freshCfg.networkTrust?.role || 'visitor'),
+                    isCommunityServer: !!freshCfg.networkTrust?.isCommunityServer,
+                    isTrustedModerator: !!freshCfg.networkTrust?.isTrustedModerator,
+                    isTrustedOwner: !!freshCfg.networkTrust?.isTrustedOwner
+                },
+                visibility: ownerVisibility,
+                visibilityOverride: {
+                    active: overrideActive,
+                    reason: String(freshOverride.reason || ''),
+                    setBy: String(freshOverride.setBy || ''),
+                    setAt: freshOverride.setAt || null,
+                    expiresAt: freshOverride.expiresAt || null,
+                    visibility: freshOverride.visibility ? normalizeVisibilityConfig(freshOverride.visibility) : null
+                },
+                effectiveVisibility
+            };
+        };
+
+        const networkTrustMeaning = (level = 1) => {
+            const numeric = Math.min(100, Math.max(1, Number(level || 1)));
+            if (numeric >= 90) return 'Network core authority';
+            if (numeric >= 75) return 'Trusted owner tier';
+            if (numeric >= 60) return 'Trusted moderator tier';
+            if (numeric >= 40) return 'Community server tier';
+            if (numeric >= 20) return 'Verified server tier';
+            return 'Visitor / baseline tier';
+        };
+
         // Get current server configuration
         this.app.get('/api/config', (req, res) => {
             const config = deployConfig.getConfig() || {};
+            const serverPolicies = getServerPolicyConfig();
             const flattened = {
                 serverName: config.server?.name || 'VoiceLink',
                 serverDescription: config.server?.description || config.server?.tagline || '',
@@ -8333,6 +8594,9 @@ class VoiceLinkLocalServer {
                 allowGuests: config.security?.allowGuests ?? true,
                 maxGuestDuration: config.security?.maxGuestDuration ?? null,
                 enableRateLimiting: config.security?.enableRateLimiting ?? true,
+                serverVisibility: serverPolicies.effectiveVisibility,
+                ownerVisibility: serverPolicies.visibility,
+                visibilityOverrideActive: serverPolicies.visibilityOverride.active,
                 backgroundStreams: config.backgroundStreams || null,
                 pushover: config.pushover || null,
                 messageSettings: this.getMessageSettingsConfig()
@@ -8380,6 +8644,13 @@ class VoiceLinkLocalServer {
                     maxGuestDuration: updates.maxGuestDuration ?? null,
                     enableRateLimiting: updates.enableRateLimiting !== false
                 });
+                if (updates.serverVisibility && typeof updates.serverVisibility === 'object') {
+                    const currentPolicies = deployConfig.get('serverPolicies') || {};
+                    deployConfig.updateSection('serverPolicies', {
+                        ...currentPolicies,
+                        visibility: normalizeVisibilityConfig(updates.serverVisibility)
+                    });
+                }
                 if (updates.backgroundStreams && typeof updates.backgroundStreams === 'object') {
                     deployConfig.updateSection('backgroundStreams', updates.backgroundStreams);
                 }
@@ -8704,6 +8975,7 @@ class VoiceLinkLocalServer {
         // Get federation status
         this.app.get('/api/federation/status', (req, res) => {
             const config = deployConfig.get('federation');
+            const policy = getServerPolicyConfig();
             res.json({
                 enabled: config?.enabled || false,
                 mode: config?.mode || 'standalone',
@@ -8717,7 +8989,13 @@ class VoiceLinkLocalServer {
                 autoHandoffEnabled: config?.autoHandoffEnabled || false,
                 handoffTargetServer: config?.handoffTargetServer || null,
                 pendingApprovals: this.roomApprovalQueue.size,
-                connectedServers: this.federation.getConnectedServers().length
+                connectedServers: this.federation.getConnectedServers().length,
+                serverVisibility: policy.effectiveVisibility,
+                networkTrust: {
+                    level: policy.networkTrust.level,
+                    role: policy.networkTrust.role,
+                    meaning: networkTrustMeaning(policy.networkTrust.level)
+                }
             });
         });
 
@@ -9218,6 +9496,70 @@ class VoiceLinkLocalServer {
         });
 
         // ============================================
+        // UPDATER MODULE API
+        // ============================================
+
+        const requireUpdaterModule = (req, res, next) => {
+            if (!this.modules.updater) {
+                return res.status(503).json({ success: false, error: 'Updater module not available' });
+            }
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            next();
+        };
+
+        this.app.get('/api/modules/updater/status', requireUpdaterModule, (req, res) => {
+            res.json({ success: true, ...this.modules.updater.getStatus() });
+        });
+
+        this.app.get('/api/modules/updater/preferences', requireUpdaterModule, (req, res) => {
+            res.json({ success: true, ...this.modules.updater.getPreferences() });
+        });
+
+        this.app.put('/api/modules/updater/preferences', requireUpdaterModule, (req, res) => {
+            const result = this.modules.updater.setPreferences(req.body || {});
+            res.json(result);
+        });
+
+        this.app.post('/api/modules/updater/check', requireUpdaterModule, async (req, res) => {
+            try {
+                const result = await this.modules.updater.checkForUpdates();
+                res.json({ success: true, updates: result });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/updater/category/:categoryId', requireUpdaterModule, (req, res) => {
+            const enabled = req.body?.enabled !== false;
+            const result = this.modules.updater.setCategoryEnabled(req.params.categoryId, enabled);
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+            res.json(result);
+        });
+
+        this.app.post('/api/modules/updater/apply/:updateId', requireUpdaterModule, async (req, res) => {
+            try {
+                const result = await this.modules.updater.applyUpdate(req.params.updateId);
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/modules/updater/alerts', requireUpdaterModule, (req, res) => {
+            const limit = Number(req.query.limit || 50);
+            res.json({ success: true, alerts: this.modules.updater.getAdminAlerts(limit) });
+        });
+
+        this.app.delete('/api/modules/updater/alerts', requireUpdaterModule, (req, res) => {
+            const result = this.modules.updater.clearAdminAlerts();
+            res.json(result);
+        });
+
+        // ============================================
         // JELLYFIN MANAGEMENT API
         // Bot control, library import, backup, removal
         // ============================================
@@ -9570,6 +9912,31 @@ class VoiceLinkLocalServer {
             } catch (e) { /* use defaults */ }
         }
 
+        // System action push notifications (desktop/iOS clients)
+        this.app.post('/api/notifications/system-action', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ error: 'Admin access required' });
+            }
+
+            const body = req.body || {};
+            const message = String(body.message || '').trim();
+            if (!message) {
+                return res.status(400).json({ error: 'message is required' });
+            }
+
+            this.emitSystemActionNotification({
+                type: body.type || 'system_action',
+                title: body.title || 'VoiceLink System',
+                message,
+                severity: body.severity || 'info',
+                targetUserId: body.targetUserId || null,
+                roomId: body.roomId || null,
+                metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
+            });
+
+            return res.json({ success: true });
+        });
+
         // Get documentation status
         this.app.get('/api/docs/status', (req, res) => {
             const docsDir = path.join(__dirname, '../../docs');
@@ -9614,7 +9981,7 @@ class VoiceLinkLocalServer {
                 this.docsConfig.pendingFeatures = newFeatures;
                 // Notify admins via socket
                 if (this.io) {
-                    this.io.emit('admin-notification', {
+                    this.emitSystemActionNotification({
                         type: 'docs-update-needed',
                         message: `${newFeatures.length} new feature(s) need documentation`,
                         features: newFeatures,
@@ -9661,7 +10028,7 @@ class VoiceLinkLocalServer {
 
                 // Notify admins
                 if (this.io) {
-                    this.io.emit('admin-notification', {
+                    this.emitSystemActionNotification({
                         type: 'docs-scheduled',
                         message: `Documentation generation scheduled for ${scheduledTime.toLocaleString()}`,
                         scheduledTime: this.docsConfig.scheduledUpdate
@@ -9709,7 +10076,7 @@ class VoiceLinkLocalServer {
 
             // Notify start
             if (this.io) {
-                this.io.emit('admin-notification', {
+                this.emitSystemActionNotification({
                     type: 'docs-generation-started',
                     message: 'Documentation generation has started'
                 });
@@ -9738,7 +10105,7 @@ class VoiceLinkLocalServer {
                 console.log('[Docs] Generation complete');
 
                 if (this.io) {
-                    this.io.emit('admin-notification', {
+                    this.emitSystemActionNotification({
                         type: 'docs-generation-complete',
                         message: 'Documentation generation completed successfully',
                         timestamp: this.docsConfig.lastGenerated
@@ -9749,7 +10116,7 @@ class VoiceLinkLocalServer {
                 console.error('[Docs] Generation failed:', error.message);
 
                 if (this.io) {
-                    this.io.emit('admin-notification', {
+                    this.emitSystemActionNotification({
                         type: 'docs-generation-failed',
                         message: 'Documentation generation failed: ' + error.message
                     });
@@ -10075,6 +10442,89 @@ class VoiceLinkLocalServer {
         // MODULE INSTALLER API
         // ============================================
 
+        this.app.get('/api/admin/module-governance', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const policies = getServerPolicyConfig();
+            const modules = this.moduleRegistry.getAvailableModules({ sortBy: 'recommended' });
+            res.json({
+                success: true,
+                governance: policies.moduleGovernance,
+                modules
+            });
+        });
+
+        this.app.put('/api/admin/module-governance', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const body = req.body || {};
+                const current = getServerPolicyConfig();
+                const required = Array.isArray(body.required) ? body.required.filter(Boolean) : current.moduleGovernance.required;
+                const optional = Array.isArray(body.optional) ? body.optional.filter(Boolean) : current.moduleGovernance.optional;
+                const revoked = Array.isArray(body.revoked) ? body.revoked.filter(Boolean) : current.moduleGovernance.revoked;
+                const allowedByServer = body.allowedByServer && typeof body.allowedByServer === 'object'
+                    ? body.allowedByServer
+                    : current.moduleGovernance.allowedByServer;
+
+                deployConfig.updateSection('serverPolicies', {
+                    ...current,
+                    moduleGovernance: {
+                        ...current.moduleGovernance,
+                        required,
+                        optional,
+                        revoked,
+                        allowedByServer,
+                        ownerAutoUpdateModules: body.ownerAutoUpdateModules !== undefined
+                            ? !!body.ownerAutoUpdateModules
+                            : current.moduleGovernance.ownerAutoUpdateModules,
+                        ownerUpdateChannel: typeof body.ownerUpdateChannel === 'string'
+                            ? body.ownerUpdateChannel
+                            : current.moduleGovernance.ownerUpdateChannel
+                    }
+                });
+                await deployConfig.save();
+                res.json({ success: true, governance: getServerPolicyConfig().moduleGovernance });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/module-governance/apply', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const required = new Set(Array.isArray(policy.required) ? policy.required : []);
+                const revoked = new Set(Array.isArray(policy.revoked) ? policy.revoked : []);
+                const actions = [];
+
+                for (const moduleId of required) {
+                    if (revoked.has(moduleId)) continue;
+                    const module = this.moduleRegistry.getModule(moduleId);
+                    if (!module?.installed) {
+                        actions.push({ moduleId, action: 'install', result: this.moduleRegistry.installModule(moduleId, { enabled: true }) });
+                    }
+                    actions.push({ moduleId, action: 'enable', result: this.moduleRegistry.setModuleEnabled(moduleId, true) });
+                }
+
+                for (const moduleId of revoked) {
+                    const module = this.moduleRegistry.getModule(moduleId);
+                    if (module?.installed) {
+                        actions.push({ moduleId, action: 'disable', result: this.moduleRegistry.setModuleEnabled(moduleId, false) });
+                    }
+                }
+
+                this.initializeModules();
+                res.json({ success: true, actions });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         // Get available modules
         this.app.get('/api/modules', (req, res) => {
             const { sortBy = 'recommended', category = null } = req.query;
@@ -10101,6 +10551,10 @@ class VoiceLinkLocalServer {
 
         // Install module
         this.app.post('/api/modules/:moduleId/install', (req, res) => {
+            const policy = getServerPolicyConfig().moduleGovernance;
+            if (Array.isArray(policy.revoked) && policy.revoked.includes(req.params.moduleId)) {
+                return res.status(403).json({ success: false, error: 'Module is revoked by admin policy' });
+            }
             const result = this.moduleRegistry.installModule(req.params.moduleId, req.body.config);
             if (result.success) {
                 // Reinitialize modules after install
@@ -10111,6 +10565,10 @@ class VoiceLinkLocalServer {
 
         // Uninstall module
         this.app.post('/api/modules/:moduleId/uninstall', (req, res) => {
+            const policy = getServerPolicyConfig().moduleGovernance;
+            if (Array.isArray(policy.required) && policy.required.includes(req.params.moduleId)) {
+                return res.status(403).json({ success: false, error: 'Required modules cannot be removed by policy' });
+            }
             const result = this.moduleRegistry.uninstallModule(req.params.moduleId);
             if (result.success) {
                 // Clear module instance
@@ -10140,7 +10598,14 @@ class VoiceLinkLocalServer {
             if (!module?.installed) {
                 return res.status(404).json({ error: 'Module not installed' });
             }
+            const policy = getServerPolicyConfig().moduleGovernance;
             const enabled = req.body.enabled !== undefined ? req.body.enabled : !module.config.enabled;
+            if (enabled && Array.isArray(policy.revoked) && policy.revoked.includes(req.params.moduleId)) {
+                return res.status(403).json({ success: false, error: 'Module is revoked by admin policy' });
+            }
+            if (!enabled && Array.isArray(policy.required) && policy.required.includes(req.params.moduleId)) {
+                return res.status(403).json({ success: false, error: 'Required modules cannot be disabled by policy' });
+            }
             const result = this.moduleRegistry.setModuleEnabled(req.params.moduleId, enabled);
             if (result.success) {
                 this.initializeModules();
@@ -10168,6 +10633,11 @@ class VoiceLinkLocalServer {
 
         this.app.get('/api/modules/deployment-manager/transports', requireDeploymentManager, (req, res) => {
             res.json({ transports: this.modules.deploymentManager.getSupportedTransports() });
+        });
+
+        this.app.get('/api/modules/deployment-manager/history', requireDeploymentManager, (req, res) => {
+            const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+            res.json({ actions: this.modules.deploymentManager.getActionHistory(limit) });
         });
 
         this.app.get('/api/modules/deployment-manager/watchdog', requireDeploymentManager, (req, res) => {
@@ -10207,6 +10677,19 @@ class VoiceLinkLocalServer {
                     extraConfig
                 });
 
+                this.modules.deploymentManager.recordDeploymentAction({
+                    type: 'package',
+                    actor: resolveDeploymentActor(req),
+                    target: {
+                        label: targetLabel || null,
+                        serverUrl: targetServerUrl || null
+                    },
+                    bundle: {
+                        id: bundle.bundleId,
+                        name: bundle.zipName
+                    }
+                });
+
                 res.json({
                     success: true,
                     bundleId: bundle.bundleId,
@@ -10239,6 +10722,23 @@ class VoiceLinkLocalServer {
                     }
                 }
 
+                this.modules.deploymentManager.recordDeploymentAction({
+                    type: 'deploy',
+                    actor: resolveDeploymentActor(req),
+                    target: {
+                        transport: target.transport || null,
+                        host: target.host || null,
+                        uploadUrl: target.uploadUrl || null,
+                        apiBaseUrl: target.apiBaseUrl || null
+                    },
+                    bundle: {
+                        id: bundle.bundleId,
+                        name: bundle.zipName
+                    },
+                    bootstrap: !!bootstrap,
+                    bootstrapSuccess: bootstrap ? !!bootstrapResult?.success : null
+                });
+
                 res.json({
                     success: true,
                     bundleId: bundle.bundleId,
@@ -10268,6 +10768,18 @@ class VoiceLinkLocalServer {
                     bundleName,
                     remoteUrl,
                     apiBaseUrl
+                });
+
+                this.modules.deploymentManager.recordDeploymentAction({
+                    type: 'email-owner',
+                    actor: resolveDeploymentActor(req),
+                    target: {
+                        recipient: recipient || null,
+                        remoteUrl: remoteUrl || null,
+                        apiBaseUrl: apiBaseUrl || null
+                    },
+                    subject: subject || null,
+                    bundleName: bundleName || null
                 });
                 res.json(result);
             } catch (error) {
@@ -11270,6 +11782,7 @@ class VoiceLinkLocalServer {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
             }
             const config = deployConfig.getConfig() || {};
+            const serverPolicies = getServerPolicyConfig();
             const database = { ...(config.database || {}) };
             if (database?.postgres?.password) database.postgres.password = '********';
             if (database?.mysql?.password) database.mysql.password = '********';
@@ -11279,6 +11792,7 @@ class VoiceLinkLocalServer {
                 maxRooms: config.rooms?.maxRooms ?? 100,
                 requireAuth: config.security?.requireAuth ?? false,
                 messageSettings: this.getMessageSettingsConfig(),
+                serverPolicies,
                 database
             });
         });
@@ -11343,7 +11857,8 @@ class VoiceLinkLocalServer {
                 uptime,
                 peakUsers,
                 messagesPerMinute,
-                bandwidthUsage
+                bandwidthUsage,
+                visibility: getServerPolicyConfig().effectiveVisibility
             });
         });
 
@@ -11353,6 +11868,7 @@ class VoiceLinkLocalServer {
             }
             try {
                 const maxRooms = Number(req.body?.maxRooms);
+                const hasRequireAuth = Object.prototype.hasOwnProperty.call(req.body || {}, 'requireAuth');
                 const requireAuth = !!req.body?.requireAuth;
                 const incomingMessageSettings = req.body?.messageSettings && typeof req.body.messageSettings === 'object'
                     ? req.body.messageSettings
@@ -11360,11 +11876,20 @@ class VoiceLinkLocalServer {
                 const incomingDatabase = req.body?.database && typeof req.body.database === 'object'
                     ? req.body.database
                     : null;
+                const incomingServerPolicies = req.body?.serverPolicies && typeof req.body.serverPolicies === 'object'
+                    ? req.body.serverPolicies
+                    : null;
 
                 if (!Number.isNaN(maxRooms) && maxRooms > 0) {
                     deployConfig.updateSection('rooms', { maxRooms });
                 }
-                deployConfig.updateSection('security', { requireAuth });
+                if (hasRequireAuth) {
+                    const currentSecurity = deployConfig.get('security') || {};
+                    deployConfig.updateSection('security', {
+                        ...currentSecurity,
+                        requireAuth
+                    });
+                }
                 if (incomingMessageSettings) {
                     deployConfig.updateSection('messageSettings', {
                         ...this.getMessageSettingsConfig(),
@@ -11374,15 +11899,65 @@ class VoiceLinkLocalServer {
 
                 if (incomingDatabase) {
                     const current = deployConfig.get('database') || {};
+                    const preserveMaskedPassword = (incomingValue, existingValue) => {
+                        if (typeof incomingValue === 'string' && incomingValue.trim() === '********') {
+                            return existingValue || '';
+                        }
+                        return incomingValue;
+                    };
+
+                    const postgresPassword = preserveMaskedPassword(
+                        incomingDatabase?.postgres?.password,
+                        current?.postgres?.password
+                    );
+                    const mysqlPassword = preserveMaskedPassword(
+                        incomingDatabase?.mysql?.password,
+                        current?.mysql?.password
+                    );
+                    const mariadbPassword = preserveMaskedPassword(
+                        incomingDatabase?.mariadb?.password,
+                        current?.mariadb?.password
+                    );
                     const merged = {
                         ...current,
                         ...incomingDatabase,
                         sqlite: { ...(current.sqlite || {}), ...(incomingDatabase.sqlite || {}) },
-                        postgres: { ...(current.postgres || {}), ...(incomingDatabase.postgres || {}) },
-                        mysql: { ...(current.mysql || {}), ...(incomingDatabase.mysql || {}) },
-                        mariadb: { ...(current.mariadb || {}), ...(incomingDatabase.mariadb || {}) }
+                        postgres: {
+                            ...(current.postgres || {}),
+                            ...(incomingDatabase.postgres || {}),
+                            password: postgresPassword
+                        },
+                        mysql: {
+                            ...(current.mysql || {}),
+                            ...(incomingDatabase.mysql || {}),
+                            password: mysqlPassword
+                        },
+                        mariadb: {
+                            ...(current.mariadb || {}),
+                            ...(incomingDatabase.mariadb || {}),
+                            password: mariadbPassword
+                        }
                     };
                     deployConfig.updateSection('database', merged);
+                }
+                if (incomingServerPolicies) {
+                    const currentPolicies = getServerPolicyConfig();
+                    deployConfig.updateSection('serverPolicies', {
+                        ...currentPolicies,
+                        ...incomingServerPolicies,
+                        visibility: incomingServerPolicies.visibility
+                            ? normalizeVisibilityConfig(incomingServerPolicies.visibility)
+                            : currentPolicies.visibility,
+                        visibilityOverride: incomingServerPolicies.visibilityOverride
+                            ? {
+                                ...currentPolicies.visibilityOverride,
+                                ...incomingServerPolicies.visibilityOverride,
+                                visibility: incomingServerPolicies.visibilityOverride.visibility
+                                    ? normalizeVisibilityConfig(incomingServerPolicies.visibilityOverride.visibility)
+                                    : currentPolicies.visibilityOverride.visibility
+                            }
+                            : currentPolicies.visibilityOverride
+                    });
                 }
 
                 await deployConfig.save();
@@ -11390,6 +11965,143 @@ class VoiceLinkLocalServer {
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
             }
+        });
+
+        this.app.get('/api/admin/server-visibility', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const policies = getServerPolicyConfig();
+            res.json({
+                success: true,
+                ownerVisibility: policies.visibility,
+                override: policies.visibilityOverride,
+                effectiveVisibility: policies.effectiveVisibility,
+                frontendStatus: policies.effectiveVisibility.frontendOpen ? 'open' : 'closed'
+            });
+        });
+
+        this.app.put('/api/admin/server-visibility', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const current = getServerPolicyConfig();
+                const nextVisibility = normalizeVisibilityConfig(req.body?.visibility || req.body || {});
+                deployConfig.updateSection('serverPolicies', {
+                    ...current,
+                    visibility: nextVisibility
+                });
+                await deployConfig.save();
+                const fresh = getServerPolicyConfig();
+                res.json({ success: true, ownerVisibility: fresh.visibility, effectiveVisibility: fresh.effectiveVisibility });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/server-visibility/override', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const current = getServerPolicyConfig();
+                const actor = resolveDeploymentActor(req);
+                const reason = String(req.body?.reason || '').trim();
+                const visibility = normalizeVisibilityConfig(req.body?.visibility || {});
+                const permanent = req.body?.permanent === true;
+                const durationMinutes = Math.max(1, Number(req.body?.durationMinutes || 0));
+                const expiresAt = permanent ? null : new Date(Date.now() + durationMinutes * 60000).toISOString();
+                deployConfig.updateSection('serverPolicies', {
+                    ...current,
+                    visibilityOverride: {
+                        active: true,
+                        reason,
+                        setBy: actor.actorName,
+                        setAt: new Date().toISOString(),
+                        expiresAt,
+                        visibility
+                    }
+                });
+                await deployConfig.save();
+                const fresh = getServerPolicyConfig();
+                res.json({ success: true, override: fresh.visibilityOverride, effectiveVisibility: fresh.effectiveVisibility });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.delete('/api/admin/server-visibility/override', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const current = getServerPolicyConfig();
+                deployConfig.updateSection('serverPolicies', {
+                    ...current,
+                    visibilityOverride: {
+                        active: false,
+                        reason: '',
+                        setBy: '',
+                        setAt: null,
+                        expiresAt: null,
+                        visibility: null
+                    }
+                });
+                await deployConfig.save();
+                const fresh = getServerPolicyConfig();
+                res.json({ success: true, override: fresh.visibilityOverride, effectiveVisibility: fresh.effectiveVisibility });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/admin/network-trust', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const policy = getServerPolicyConfig();
+            res.json({
+                success: true,
+                trust: {
+                    ...policy.networkTrust,
+                    meaning: networkTrustMeaning(policy.networkTrust.level)
+                }
+            });
+        });
+
+        this.app.put('/api/admin/network-trust', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const current = getServerPolicyConfig();
+                const body = req.body || {};
+                const nextTrust = {
+                    level: Math.min(100, Math.max(1, Number(body.level || current.networkTrust.level || 1))),
+                    role: String(body.role || current.networkTrust.role || 'visitor'),
+                    isCommunityServer: body.isCommunityServer !== undefined ? !!body.isCommunityServer : current.networkTrust.isCommunityServer,
+                    isTrustedModerator: body.isTrustedModerator !== undefined ? !!body.isTrustedModerator : current.networkTrust.isTrustedModerator,
+                    isTrustedOwner: body.isTrustedOwner !== undefined ? !!body.isTrustedOwner : current.networkTrust.isTrustedOwner
+                };
+                deployConfig.updateSection('serverPolicies', {
+                    ...current,
+                    networkTrust: nextTrust
+                });
+                await deployConfig.save();
+                res.json({ success: true, trust: { ...nextTrust, meaning: networkTrustMeaning(nextTrust.level) } });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/network/trust', (req, res) => {
+            const policy = getServerPolicyConfig();
+            res.json({
+                level: policy.networkTrust.level,
+                role: policy.networkTrust.role,
+                meaning: networkTrustMeaning(policy.networkTrust.level)
+            });
         });
 
         this.app.get('/api/admin/api-sync', (req, res) => {
@@ -12916,6 +13628,32 @@ class VoiceLinkLocalServer {
             // Get room list for desktop/mobile apps
             socket.on('get-rooms', () => {
                 const roomList = Array.from(this.rooms.values()).map(room => ({
+                    ...(() => {
+                        const createdAt = room.createdAt ? new Date(room.createdAt) : null;
+                        const uptimeSeconds = createdAt
+                            ? Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 1000))
+                            : null;
+                        const lastActiveAt = Array.isArray(room.users) && room.users.length > 0
+                            ? room.users
+                                .map((u) => (u?.lastActiveAt ? new Date(u.lastActiveAt) : null))
+                                .filter(Boolean)
+                                .sort((a, b) => b - a)[0]
+                            : null;
+                        const lastActiveUser = Array.isArray(room.users) && room.users.length > 0
+                            ? [...room.users]
+                                .sort((a, b) => {
+                                    const left = a?.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
+                                    const right = b?.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
+                                    return right - left;
+                                })[0]
+                            : null;
+                        return {
+                            createdAt: createdAt ? createdAt.toISOString() : null,
+                            uptimeSeconds,
+                            lastActivityAt: lastActiveAt ? lastActiveAt.toISOString() : null,
+                            lastActiveUsername: lastActiveUser?.name || null
+                        };
+                    })(),
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
@@ -13051,6 +13789,8 @@ class VoiceLinkLocalServer {
                     userCount: this.normalizeRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false,
+                    createdAt: room.createdAt ? new Date(room.createdAt).toISOString() : null,
+                    uptimeSeconds: room.createdAt ? Math.max(0, Math.floor((Date.now() - new Date(room.createdAt).getTime()) / 1000)) : null,
                     backgroundStream: configuredBackgroundStream?.streamUrl || null,
                     streamVolume: configuredBackgroundStream?.volume ?? null,
                     nowPlaying: configuredBackgroundStream ? {
