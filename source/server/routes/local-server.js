@@ -8608,6 +8608,7 @@ class VoiceLinkLocalServer {
         this.app.put('/api/config', async (req, res) => {
             try {
                 const updates = req.body || {};
+                const hasKey = (key) => Object.prototype.hasOwnProperty.call(updates, key);
                 if (typeof updates.serverName === 'string') {
                     const motdSettings = updates.motdSettings && typeof updates.motdSettings === 'object'
                         ? {
@@ -8633,17 +8634,47 @@ class VoiceLinkLocalServer {
                         maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
                     });
                 }
-                deployConfig.updateSection('rooms', {
-                    maxRooms: Number(updates.maxRooms) || 100,
-                    maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
-                });
-                deployConfig.updateSection('security', {
-                    requireAuth: !!updates.requireAuth,
-                    registrationEnabled: updates.registrationEnabled !== false,
-                    allowGuests: updates.allowGuests !== false,
-                    maxGuestDuration: updates.maxGuestDuration ?? null,
-                    enableRateLimiting: updates.enableRateLimiting !== false
-                });
+                if (hasKey('maxRooms') || hasKey('maxUsersPerRoom')) {
+                    const currentRooms = deployConfig.get('rooms') || {};
+                    const nextRooms = { ...currentRooms };
+                    if (hasKey('maxRooms')) {
+                        const parsedMaxRooms = Number(updates.maxRooms);
+                        nextRooms.maxRooms = Number.isFinite(parsedMaxRooms) && parsedMaxRooms > 0
+                            ? parsedMaxRooms
+                            : currentRooms.maxRooms;
+                    }
+                    if (hasKey('maxUsersPerRoom')) {
+                        const parsedMaxUsersPerRoom = Number(updates.maxUsersPerRoom);
+                        nextRooms.maxUsersPerRoom = Number.isFinite(parsedMaxUsersPerRoom) && parsedMaxUsersPerRoom > 0
+                            ? parsedMaxUsersPerRoom
+                            : currentRooms.maxUsersPerRoom;
+                    }
+                    deployConfig.updateSection('rooms', nextRooms);
+                }
+                if (hasKey('requireAuth')
+                    || hasKey('registrationEnabled')
+                    || hasKey('allowGuests')
+                    || hasKey('maxGuestDuration')
+                    || hasKey('enableRateLimiting')) {
+                    const currentSecurity = deployConfig.get('security') || {};
+                    const nextSecurity = { ...currentSecurity };
+                    if (hasKey('requireAuth')) {
+                        nextSecurity.requireAuth = !!updates.requireAuth;
+                    }
+                    if (hasKey('registrationEnabled')) {
+                        nextSecurity.registrationEnabled = updates.registrationEnabled !== false;
+                    }
+                    if (hasKey('allowGuests')) {
+                        nextSecurity.allowGuests = updates.allowGuests !== false;
+                    }
+                    if (hasKey('maxGuestDuration')) {
+                        nextSecurity.maxGuestDuration = updates.maxGuestDuration ?? null;
+                    }
+                    if (hasKey('enableRateLimiting')) {
+                        nextSecurity.enableRateLimiting = updates.enableRateLimiting !== false;
+                    }
+                    deployConfig.updateSection('security', nextSecurity);
+                }
                 if (updates.serverVisibility && typeof updates.serverVisibility === 'object') {
                     const currentPolicies = deployConfig.get('serverPolicies') || {};
                     deployConfig.updateSection('serverPolicies', {
