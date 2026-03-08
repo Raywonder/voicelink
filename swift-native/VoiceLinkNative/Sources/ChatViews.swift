@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LinkPresentation
+import AVFoundation
 
 struct ChatConversationSidebar: View {
     let visibleRoomUsers: [RoomUser]
@@ -17,7 +18,19 @@ struct ChatConversationSidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
 
-            Button(action: onSelectMainRoomChat) {
+            Menu {
+                Button("Send to Main Room") {
+                    onSelectMainRoomChat()
+                }
+                if !visibleRoomUsers.isEmpty {
+                    Divider()
+                    ForEach(visibleRoomUsers) { user in
+                        Button("Send to \(user.displayName ?? user.username)") {
+                            onOpenDirectMessage(user)
+                        }
+                    }
+                }
+            } label: {
                 HStack {
                     Image(systemName: "bubble.left.and.bubble.right.fill")
                     Text("Main Room Chat")
@@ -29,6 +42,7 @@ struct ChatConversationSidebar: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 12)
+            .accessibilityHint("Choose whether messages go to the main room or a selected user.")
 
             ScrollView {
                 LazyVStack(spacing: 8) {
@@ -99,6 +113,8 @@ struct ChatConversationPanel: View {
     let isOnline: Bool
     let hasCurrentRoom: Bool
     let isSharing: Bool
+    let directTransferStatusText: String?
+    let directTransferProgressValue: Double?
     @Binding var messageText: String
     let onBack: () -> Void
     let onLoadOlder: () -> Void
@@ -187,7 +203,7 @@ struct ChatConversationPanel: View {
     }
 
     private func canEdit(_ message: MessagingManager.ChatMessage) -> Bool {
-        message.senderId == (UserDefaults.standard.string(forKey: "clientId") ?? "")
+        message.senderId == (UserDefaults().string(forKey: "clientId") ?? "")
     }
 
     private var editingMessageBinding: Binding<MessagingManager.ChatMessage?> {
@@ -347,6 +363,25 @@ struct ChatConversationPanel: View {
             .disabled(messageText.isEmpty || !isOnline || !hasCurrentRoom)
             .buttonStyle(.borderedProminent)
             .tint((messageText.isEmpty || !isOnline) ? .gray : .blue)
+
+            if let directTransferStatusText {
+                HStack(spacing: 6) {
+                    if let directTransferProgressValue {
+                        ProgressView(value: min(max(directTransferProgressValue, 0), 1))
+                            .frame(width: 84)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(directTransferStatusText)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: 240, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(directTransferStatusText)
+            }
         }
         .padding()
         .background(Color.black.opacity(0.3))
@@ -451,10 +486,17 @@ struct ChatMessageRow: View {
                             .foregroundColor(.gray)
                     }
 
-                    Text(linkifiedContent)
-                        .font(.body)
-                        .foregroundColor(message.type == .system ? .gray : .white)
-                        .textSelection(.enabled)
+                    if shouldUsePreviewOnlyText, let previewDisplayText {
+                        Text(previewDisplayText)
+                            .font(.body)
+                            .foregroundColor(message.type == .system ? .gray : .white)
+                            .textSelection(.enabled)
+                    } else {
+                        Text(linkifiedContent)
+                            .font(.body)
+                            .foregroundColor(message.type == .system ? .gray : .white)
+                            .textSelection(.enabled)
+                    }
                 }
 
                 if let previewURL {
@@ -729,6 +771,34 @@ struct ChatMessageRow: View {
         }
         return raw
     }
+
+    private var shouldUsePreviewOnlyText: Bool {
+        previewURL != nil && !isActionMessage
+    }
+
+    private var previewDisplayText: String? {
+        let stripped = stripURLs(from: message.content).trimmingCharacters(in: .whitespacesAndNewlines)
+        if stripped.isEmpty {
+            return "Shared a link"
+        }
+        return stripped
+    }
+
+    private func stripURLs(from text: String) -> String {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var cleaned = text
+        let matches = detector?.matches(in: text, options: [], range: range) ?? []
+        for match in matches.reversed() {
+            guard let foundRange = Range(match.range, in: cleaned) else { continue }
+            cleaned.removeSubrange(foundRange)
+        }
+
+        let domainRegex = #"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s<>"']*)?"#
+        cleaned = cleaned.replacingOccurrences(of: domainRegex, with: "", options: [.regularExpression, .caseInsensitive])
+        cleaned = cleaned.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return cleaned
+    }
 }
 
 struct LinkPreviewCard: View {
@@ -737,35 +807,94 @@ struct LinkPreviewCard: View {
     @State private var summary: String?
     @State private var resolvedURL: URL?
     @State private var showFullURL = false
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+    @State private var isMuted = false
+    @State private var duration: Double = 0
+    @State private var currentTime: Double = 0
+    @State private var isSeeking = false
+    @State private var timeObserverToken: Any?
 
     var body: some View {
-        Button(action: {
-            NSWorkspace.shared.open(resolvedURL ?? url)
-        }) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title ?? fallbackTitle)
-                    .font(.caption.bold())
-                    .foregroundColor(.white)
-                    .lineLimit(2)
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: {
+                NSWorkspace.shared.open(resolvedURL ?? url)
+            }) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title ?? fallbackTitle)
+                        .font(.caption.bold())
+                        .foregroundColor(.white)
+                        .lineLimit(2)
 
-                if let summary, !summary.isEmpty {
-                    Text(summary)
+                    if let summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                            .lineLimit(3)
+                    }
+
+                    Text((resolvedURL ?? url).host ?? fallbackTitle)
                         .font(.caption2)
-                        .foregroundColor(.gray)
-                        .lineLimit(3)
+                        .foregroundColor(.blue.opacity(0.9))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            if isPlayableMediaLink {
+                Divider().overlay(Color.white.opacity(0.12))
+                HStack(spacing: 8) {
+                    Button(isPlaying ? "Pause" : "Play") {
+                        togglePlayback()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Stop") {
+                        stopPlayback()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button(isMuted ? "Unmute" : "Mute") {
+                        toggleMute()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
 
-                Text((resolvedURL ?? url).absoluteString)
-                    .font(.caption2)
-                    .foregroundColor(.blue.opacity(0.9))
-                    .lineLimit(1)
+                Slider(
+                    value: Binding(
+                        get: { currentTime },
+                        set: { newValue in
+                            isSeeking = true
+                            currentTime = newValue
+                        }
+                    ),
+                    in: 0...max(duration, 1),
+                    onEditingChanged: { editing in
+                        if !editing {
+                            seek(to: currentTime)
+                            isSeeking = false
+                        }
+                    }
+                )
+                .controlSize(.small)
+
+                HStack {
+                    Text(formatTime(currentTime))
+                    Spacer()
+                    Text(formatTime(duration))
+                }
+                .font(.caption2)
+                .foregroundColor(.gray)
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06))
-            .cornerRadius(8)
         }
-        .buttonStyle(.plain)
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(8)
         .contextMenu {
             Button("Open Link") {
                 NSWorkspace.shared.open(resolvedURL ?? url)
@@ -795,28 +924,189 @@ struct LinkPreviewCard: View {
         .task(id: url.absoluteString) {
             await loadMetadata()
         }
+        .onDisappear {
+            teardownPlayer()
+        }
         .accessibilityLabel("Link preview for \(title ?? fallbackTitle)")
         .accessibilityHint("Opens \(resolvedURL?.absoluteString ?? url.absoluteString)")
     }
 
     private var fallbackTitle: String {
-        url.host ?? url.absoluteString
+        let host = (resolvedURL ?? url).host ?? url.host ?? url.absoluteString
+        if host.isEmpty { return url.absoluteString }
+        let cleaned = host.replacingOccurrences(of: "www.", with: "")
+        return cleaned
+            .split(separator: ".")
+            .map { $0.capitalized }
+            .joined(separator: " ")
+    }
+
+    private var isPlayableMediaLink: Bool {
+        let candidate = resolvedURL ?? url
+        let ext = candidate.pathExtension.lowercased()
+        if ["mp3", "m4a", "aac", "wav", "ogg", "flac", "mp4", "m3u8", "mov", "webm"].contains(ext) {
+            return true
+        }
+        let host = candidate.host?.lowercased() ?? ""
+        if host.contains("youtube.com") || host.contains("youtu.be") || host.contains("soundcloud.com") || host.contains("vimeo.com") {
+            return true
+        }
+        return false
     }
 
     @MainActor
     private func loadMetadata() async {
+        resolvedURL = url
+        title = fallbackTitle
+        summary = (resolvedURL ?? url).host ?? url.host
+
+        if let fastTitle = await fetchFastTitle(for: url), !fastTitle.isEmpty {
+            title = fastTitle
+        }
+
         let provider = LPMetadataProvider()
         provider.timeout = 5
         do {
             let metadata = try await provider.startFetchingMetadata(for: url)
-            title = metadata.title ?? fallbackTitle
+            title = metadata.title ?? title ?? fallbackTitle
             resolvedURL = metadata.originalURL ?? metadata.url ?? url
-            summary = metadata.url?.host ?? metadata.originalURL?.host
+            summary = metadata.url?.host ?? metadata.originalURL?.host ?? summary
         } catch {
-            title = fallbackTitle
-            resolvedURL = url
-            summary = nil
+            if title == nil {
+                title = fallbackTitle
+            }
+            if resolvedURL == nil {
+                resolvedURL = url
+            }
         }
+    }
+
+    private func fetchFastTitle(for url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        request.setValue("Mozilla/5.0 (VoiceLink)", forHTTPHeaderField: "User-Agent")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...399).contains(http.statusCode) else {
+                return nil
+            }
+            guard let html = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            if let ogTitle = firstMatch(in: html, pattern: #"<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']"#) {
+                return decodeHTMLEntities(ogTitle)
+            }
+            if let title = firstMatch(in: html, pattern: #"<title[^>]*>([^<]+)</title>"#) {
+                return decodeHTMLEntities(title)
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
+    private func firstMatch(in text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+              match.numberOfRanges > 1,
+              let valueRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return String(text[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func decodeHTMLEntities(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func togglePlayback() {
+        if player == nil {
+            preparePlayer()
+        }
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func stopPlayback() {
+        guard let player else { return }
+        player.pause()
+        player.seek(to: .zero)
+        isPlaying = false
+        currentTime = 0
+    }
+
+    private func toggleMute() {
+        guard let player else { return }
+        isMuted.toggle()
+        player.isMuted = isMuted
+    }
+
+    private func seek(to time: Double) {
+        guard let player else { return }
+        let target = CMTime(seconds: max(0, min(time, duration)), preferredTimescale: 600)
+        player.seek(to: target)
+    }
+
+    private func preparePlayer() {
+        guard player == nil else { return }
+        let targetURL = resolvedURL ?? url
+        let newPlayer = AVPlayer(url: targetURL)
+        newPlayer.isMuted = isMuted
+        player = newPlayer
+
+        if let token = timeObserverToken {
+            newPlayer.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
+
+        timeObserverToken = newPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            guard !isSeeking else { return }
+            currentTime = time.seconds.isFinite ? time.seconds : 0
+            if let item = newPlayer.currentItem {
+                let seconds = item.duration.seconds
+                duration = seconds.isFinite && seconds > 0 ? seconds : duration
+            }
+        }
+    }
+
+    private func teardownPlayer() {
+        if let token = timeObserverToken, let player {
+            player.removeTimeObserver(token)
+        }
+        timeObserverToken = nil
+        player?.pause()
+        player = nil
+        isPlaying = false
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite && seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        let mins = total / 60
+        let secs = total % 60
+        return "\(mins):" + String(format: "%02d", secs)
     }
 }
 

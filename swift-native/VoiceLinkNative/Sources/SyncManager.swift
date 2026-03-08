@@ -367,19 +367,19 @@ class SyncManager: ObservableObject {
         }
 
         // Listen for specific events that should trigger sync
-        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: nil) { [weak self] _ in
             self?.syncMembershipData { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .trustScoreChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .trustScoreChanged, object: nil, queue: nil) { [weak self] _ in
             self?.syncTrustScore { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .serverLinked, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .serverLinked, object: nil, queue: nil) { [weak self] _ in
             self?.syncLinkedDevices { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .walletConnected, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .walletConnected, object: nil, queue: nil) { [weak self] _ in
             self?.syncWalletData { _ in }
         }
     }
@@ -477,11 +477,11 @@ class SyncManager: ObservableObject {
     }
 
     private func getClientId() -> String {
-        if let clientId = UserDefaults.standard.string(forKey: "clientId") {
+        if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
         }
         let newId = UUID().uuidString
-        UserDefaults.standard.set(newId, forKey: "clientId")
+        UserDefaults().set(newId, forKey: "clientId")
         return newId
     }
 
@@ -492,13 +492,13 @@ class SyncManager: ObservableObject {
     }
 
     private func loadLastSyncDate() {
-        if let date = UserDefaults.standard.object(forKey: "lastSyncDate") as? Date {
+        if let date = UserDefaults().object(forKey: "lastSyncDate") as? Date {
             lastSyncDate = date
         }
     }
 
     private func saveLastSyncDate() {
-        UserDefaults.standard.set(lastSyncDate, forKey: "lastSyncDate")
+        UserDefaults().set(lastSyncDate, forKey: "lastSyncDate")
     }
 }
 

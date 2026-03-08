@@ -2,6 +2,7 @@ import Foundation
 import SocketIO
 import AVFoundation
 import CoreAudio
+import UserNotifications
 
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
@@ -47,8 +48,11 @@ class ServerManager: ObservableObject {
     private var previewStreamURL: URL?
     private var previewStreamKeepAliveTimer: Timer?
     private var previewStreamEndObserver: NSObjectProtocol?
+    private var lastSystemNotificationFingerprint: String?
+    private var lastSystemNotificationAt: Date?
     private let defaultRoomStreamURLString = "https://chrismixradio.com"
     private let roomStreamDefaultVolume: Float = 0.4
+    private var audioDeviceChangeObserver: NSObjectProtocol?
 
     // Public accessor for the current server URL
     var baseURL: String? {
@@ -61,6 +65,7 @@ class ServerManager: ObservableObject {
         setupMessageNotifications()
         setupPreviewNotifications()
         setupVolumeNotifications()
+        setupAudioRecoveryObservers()
     }
 
     private func setupMessageNotifications() {
@@ -68,7 +73,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendMessageToServer,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo else { return }
             let content = data["content"] as? String ?? ""
@@ -107,6 +112,9 @@ class ServerManager: ObservableObject {
                     "type": type,
                     "attachmentRemoved": attachmentRemoved
                 ]
+                if let roomId = self?.activeRoomId {
+                    msgData["roomId"] = roomId
+                }
                 if let reply = replyToId {
                     msgData["replyTo"] = reply
                 }
@@ -123,7 +131,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendTypingIndicator,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo,
                   let typing = data["typing"] as? Bool else { return }
@@ -134,7 +142,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendReactionToServer,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo,
                   let messageId = data["messageId"] as? String,
@@ -165,7 +173,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .startPeekingRoom,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let self,
                   let roomId = notification.userInfo?["roomId"] as? String else { return }
@@ -175,7 +183,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .stopPeekingRoom,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
             self?.stopPreviewPlayback()
         }
@@ -185,9 +193,142 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .masterVolumeChanged,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
             self?.applyCurrentPlaybackVolume()
+        }
+    }
+
+    private func setupAudioRecoveryObservers() {
+        audioDeviceChangeObserver = NotificationCenter.default.addObserver(
+            forName: .audioDevicesChanged,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleAudioDeviceChange()
+        }
+    }
+
+    private func handleAudioDeviceChange() {
+        // Refresh output route and volume immediately.
+        applyCurrentPlaybackVolume()
+        roomStreamPlayer?.isMuted = isCurrentRoomMediaMuted || outputMuted
+        previewStreamPlayer?.isMuted = outputMuted
+
+        // If actively transmitting, restart capture so the new input selection takes effect.
+        guard isConnected, activeRoomId != nil, !inputMuted else { return }
+        audioStartQueue.async { [weak self] in
+            guard let self else { return }
+            self.stopAudioTransmissionNow()
+            self.startAudioTransmissionNow()
+        }
+    }
+
+    private func shouldAcceptSystemNotification(fingerprint: String) -> Bool {
+        if lastSystemNotificationFingerprint == fingerprint,
+           let lastAt = lastSystemNotificationAt,
+           Date().timeIntervalSince(lastAt) < 1.25 {
+            return false
+        }
+        lastSystemNotificationFingerprint = fingerprint
+        lastSystemNotificationAt = Date()
+        return true
+    }
+
+    private func presentSystemActionNotification(_ payload: [String: Any]) {
+        let settings = SettingsManager.shared
+        guard settings.systemActionNotifications else { return }
+
+        let title = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = (payload["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = (title?.isEmpty == false) ? title! : "VoiceLink System"
+        let resolvedMessage = (message?.isEmpty == false) ? message! : "A system action was sent."
+        let type = (payload["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "system_action"
+        let timestamp = (payload["timestamp"] as? String) ?? ""
+        let fingerprint = "\(type)|\(resolvedTitle)|\(resolvedMessage)|\(timestamp)"
+        guard shouldAcceptSystemNotification(fingerprint: fingerprint) else { return }
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .systemActionNotification,
+                object: nil,
+                userInfo: payload
+            )
+            if settings.soundNotifications && settings.systemActionNotificationSound {
+                AppSoundManager.shared.playSound(.notification)
+            }
+            AccessibilityManager.shared.announceStatus("\(resolvedTitle). \(resolvedMessage)")
+            guard settings.desktopNotifications else { return }
+            self.deliverSystemActionDesktopNotification(
+                identifier: "system-action-\(UUID().uuidString)",
+                title: resolvedTitle,
+                body: resolvedMessage
+            )
+        }
+    }
+
+    private func deliverSystemActionDesktopNotification(identifier: String, title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            let deliver: () -> Void = {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+                center.add(request)
+            }
+
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                deliver()
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+                    if granted {
+                        deliver()
+                    }
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func refreshSpatialLayoutIfNeeded() {
+        guard SettingsManager.shared.spatialAudioEnabled else { return }
+        if let activeRoomId,
+           let activeRoom = rooms.first(where: { $0.id == activeRoomId }),
+           activeRoom.spatialAudioEnabled == false {
+            return
+        }
+
+        let listeners = currentRoomUsers.filter { !$0.isBot }
+        guard !listeners.isEmpty else { return }
+
+        let ordered = listeners.sorted {
+            let left = ($0.displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? $0.displayName!
+                : $0.username).localizedLowercase
+            let right = ($1.displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? $1.displayName!
+                : $1.username).localizedLowercase
+            return left < right
+        }
+
+        let total = max(ordered.count, 1)
+        let startAngle: Float = total == 1 ? 0 : -70
+        let endAngle: Float = total == 1 ? 0 : 70
+        let distance: Float = 2.2
+
+        for (index, user) in ordered.enumerated() {
+            let angle: Float
+            if total == 1 {
+                angle = 0
+            } else {
+                let progress = Float(index) / Float(total - 1)
+                angle = startAngle + ((endAngle - startAngle) * progress)
+            }
+            SpatialAudioEngine.shared.setUserPositionPolar(userId: user.odId, angle: angle, distance: distance)
         }
     }
 
@@ -559,6 +700,7 @@ class ServerManager: ObservableObject {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self.currentRoomUsers = users
+                    self.refreshSpatialLayoutIfNeeded()
                 }
             }
 
@@ -605,6 +747,7 @@ class ServerManager: ObservableObject {
                     guard let self = self else { return }
                     if !self.currentRoomUsers.contains(where: { $0.id == user.id }) {
                         self.currentRoomUsers.append(user)
+                        self.refreshSpatialLayoutIfNeeded()
                         // Play user join sound
                         AppSoundManager.shared.playSound(.userJoin)
                         // Announce user joined
@@ -623,6 +766,7 @@ class ServerManager: ObservableObject {
                     // Get username before removing for announcement
                     let userName = self?.currentRoomUsers.first(where: { $0.id == userId })?.username
                     self?.currentRoomUsers.removeAll { $0.id == userId }
+                    self?.refreshSpatialLayoutIfNeeded()
                     // Play user leave sound
                     AppSoundManager.shared.playSound(.userLeave)
                     // Announce user left
@@ -641,6 +785,7 @@ class ServerManager: ObservableObject {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self?.currentRoomUsers = users
+                    self?.refreshSpatialLayoutIfNeeded()
                 }
             }
         }
@@ -653,6 +798,7 @@ class ServerManager: ObservableObject {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self?.currentRoomUsers = users
+                    self?.refreshSpatialLayoutIfNeeded()
                 }
             }
         }
@@ -698,6 +844,18 @@ class ServerManager: ObservableObject {
                 self?.errorMessage = message
             }
             self?.handleForcedRoomExit()
+        }
+
+        let handleSystemActionEvent: ([Any]) -> Void = { [weak self] data in
+            guard let self else { return }
+            guard let payload = data.first as? [String: Any] else { return }
+            self.presentSystemActionNotification(payload)
+        }
+        socket.on("system-action-notification") { data, ack in
+            handleSystemActionEvent(data)
+        }
+        socket.on("admin-notification") { data, ack in
+            handleSystemActionEvent(data)
         }
 
         // Server push events for sync
@@ -924,6 +1082,9 @@ class ServerManager: ObservableObject {
             if let streamUrl {
                 self.roomStreamDidStopExplicitly = false
                 self.startRoomStreamPlayback(from: streamUrl)
+            } else if let activeRoomId = self.activeRoomId {
+                // Some servers omit streamUrl in push payloads; re-fetch full room stream state.
+                self.fetchActiveRoomStream(for: activeRoomId)
             }
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) started.")
@@ -1224,12 +1385,26 @@ class ServerManager: ObservableObject {
             createdByRole: mergedCreatedByRole,
             roomType: mergedRoomType,
             createdAt: primary.createdAt ?? incoming.createdAt,
-            uptimeSeconds: max(primary.uptimeSeconds ?? 0, incoming.uptimeSeconds ?? 0),
+            uptimeSeconds: mergedUptimeSeconds(primary: primary.uptimeSeconds, incoming: incoming.uptimeSeconds),
             lastActiveUsername: preferIncoming ? (incoming.lastActiveUsername ?? primary.lastActiveUsername) : (primary.lastActiveUsername ?? incoming.lastActiveUsername),
             lastActivityAt: max(primaryDate, incomingDate) == .distantPast ? nil : max(primaryDate, incomingDate),
             hostServerName: mergedHostServerName,
-            hostServerOwner: mergedHostServerOwner
+            hostServerOwner: mergedHostServerOwner,
+            spatialAudioEnabled: primary.spatialAudioEnabled ?? incoming.spatialAudioEnabled
         )
+    }
+
+    private func mergedUptimeSeconds(primary: Int?, incoming: Int?) -> Int? {
+        switch (primary, incoming) {
+        case let (a?, b?):
+            return max(a, b)
+        case let (a?, nil):
+            return a
+        case let (nil, b?):
+            return b
+        case (nil, nil):
+            return nil
+        }
     }
 
     func leaveRoom() {
@@ -1253,36 +1428,52 @@ class ServerManager: ObservableObject {
     }
 
     private func fetchRoomStreamState(for roomId: String, completion: @escaping (RoomMediaState?) -> Void) {
-        guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
+        guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             DispatchQueue.main.async { completion(nil) }
             return
         }
 
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self else { return }
-            guard let data else {
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
+
+        func tryCandidate(at index: Int) {
+            guard index < candidates.count else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                DispatchQueue.main.async { completion(nil) }
+
+            guard let url = APIEndpointResolver.url(base: candidates[index], path: "/api/jellyfin/room-stream/\(encodedRoomId)") else {
+                tryCandidate(at: index + 1)
                 return
             }
-            let isActive = json["active"] as? Bool ?? false
-            guard isActive, let streamUrl = json["streamUrl"] as? String else {
-                DispatchQueue.main.async { completion(nil) }
-                return
-            }
-            let mediaState = RoomMediaState(
-                active: isActive,
-                title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                streamURL: streamUrl,
-                type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                volume: json["volume"] as? Int
-            )
-            DispatchQueue.main.async { completion(mediaState) }
-        }.resume()
+
+            URLSession.shared.dataTask(with: url) { data, response, _ in
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode),
+                      let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    tryCandidate(at: index + 1)
+                    return
+                }
+
+                let isActive = json["active"] as? Bool ?? false
+                let streamUrl = (json["streamUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard isActive, !streamUrl.isEmpty else {
+                    tryCandidate(at: index + 1)
+                    return
+                }
+
+                let mediaState = RoomMediaState(
+                    active: isActive,
+                    title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    streamURL: streamUrl,
+                    type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    volume: json["volume"] as? Int
+                )
+                DispatchQueue.main.async { completion(mediaState) }
+            }.resume()
+        }
+
+        tryCandidate(at: 0)
     }
 
     private func fetchActiveRoomStream(for roomId: String) {
@@ -1291,7 +1482,7 @@ class ServerManager: ObservableObject {
             guard let self else { return }
             guard let mediaState else {
                 self.currentRoomMedia = nil
-                self.startDefaultRoomStreamIfNeeded()
+                self.stopRoomStreamPlayback(explicit: false)
                 return
             }
             self.currentRoomMedia = mediaState
@@ -1305,7 +1496,7 @@ class ServerManager: ObservableObject {
     }
 
     private func startRoomStreamPlayback(from rawURL: String) {
-        guard let url = URL(string: rawURL) else { return }
+        guard let url = normalizedMediaStreamURL(from: rawURL) else { return }
         DispatchQueue.main.async {
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
                 player.volume = self.effectiveRoomPlaybackVolume
@@ -1323,7 +1514,7 @@ class ServerManager: ObservableObject {
             self.roomStreamEndObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
-                queue: .main
+                queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
                 guard !self.roomStreamDidStopExplicitly, let current = self.currentRoomStreamURL else { return }
@@ -1345,11 +1536,6 @@ class ServerManager: ObservableObject {
             }
             self.ensureRoomStreamKeepAlive()
         }
-    }
-
-    private func startDefaultRoomStreamIfNeeded() {
-        guard !roomStreamDidStopExplicitly else { return }
-        startRoomStreamPlayback(from: defaultRoomStreamURLString)
     }
 
     private func ensureRoomStreamKeepAlive() {
@@ -1383,7 +1569,7 @@ class ServerManager: ObservableObject {
     }
 
     private func startPreviewStreamPlayback(from rawURL: String) {
-        guard let url = URL(string: rawURL) else { return }
+        guard let url = normalizedMediaStreamURL(from: rawURL) else { return }
         DispatchQueue.main.async {
             if self.previewStreamURL == url, let player = self.previewStreamPlayer {
                 player.volume = self.effectiveRoomPlaybackVolume
@@ -1402,7 +1588,7 @@ class ServerManager: ObservableObject {
             self.previewStreamEndObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
-                queue: .main
+                queue: nil
             ) { [weak self] _ in
                 guard let self, let current = self.previewStreamURL else { return }
                 self.startPreviewStreamPlayback(from: current.absoluteString)
@@ -1484,6 +1670,33 @@ class ServerManager: ObservableObject {
 
     func toggleCurrentRoomMediaMuted() {
         setCurrentRoomMediaMuted(!isCurrentRoomMediaMuted)
+    }
+
+    private func normalizedMediaStreamURL(from rawValue: String) -> URL? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let explicit = URL(string: trimmed), let scheme = explicit.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            return explicit
+        }
+
+        // Relative paths from API payloads should resolve against the active API base.
+        if trimmed.hasPrefix("/") {
+            for base in APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL) {
+                if let resolved = APIEndpointResolver.url(base: base, path: trimmed) {
+                    return resolved
+                }
+            }
+        }
+
+        // Many admin-configured streams are saved without a scheme.
+        if let httpsFallback = URL(string: "https://\(trimmed)") {
+            return httpsFallback
+        }
+        if let httpFallback = URL(string: "http://\(trimmed)") {
+            return httpFallback
+        }
+        return nil
     }
 
     func sendAudioState(isMuted: Bool, isDeafened: Bool) {
@@ -1684,7 +1897,7 @@ class ServerManager: ObservableObject {
 
             DispatchQueue.main.async {
                 // Check if this revocation is for us
-                let ourClientId = UserDefaults.standard.string(forKey: "clientId")
+                let ourClientId = UserDefaults().string(forKey: "clientId")
                 if revokedClientId == ourClientId || revokedClientId == nil {
                     // Our access has been revoked
                     self?.handleAccessRevoked(revokedBy: revokedBy)
@@ -1729,6 +1942,7 @@ struct ServerRoom: Identifiable {
     let lastActivityAt: Date?
     let hostServerName: String?
     let hostServerOwner: String?
+    let spatialAudioEnabled: Bool?
 
     init(
         id: String,
@@ -1745,7 +1959,8 @@ struct ServerRoom: Identifiable {
         lastActiveUsername: String?,
         lastActivityAt: Date?,
         hostServerName: String?,
-        hostServerOwner: String?
+        hostServerOwner: String?,
+        spatialAudioEnabled: Bool?
     ) {
         self.id = id
         self.name = name
@@ -1762,6 +1977,7 @@ struct ServerRoom: Identifiable {
         self.lastActivityAt = lastActivityAt
         self.hostServerName = hostServerName
         self.hostServerOwner = hostServerOwner
+        self.spatialAudioEnabled = spatialAudioEnabled
     }
 
     init?(from dict: [String: Any]) {
@@ -1853,6 +2069,8 @@ struct ServerRoom: Identifiable {
             ?? stringValue(dict["serverOwner"])
             ?? stringValue(dict["ownerUsername"])
             ?? stringValue(dict["createdBy"])
+        self.spatialAudioEnabled = dict["spatialAudioEnabled"] as? Bool
+            ?? (dict["metadata"] as? [String: Any])?["spatialAudioEnabled"] as? Bool
     }
 }
 

@@ -1,15 +1,15 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-version: 1.0.4
-build: 26
+version: 1.0.0
+build: 29
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: yDlNF9kEFeRgQmdIG09Oc0kW+xfyMOLkQLkV9PotfsmWi36OsMY118jW1Tzea/OtmuuBOqOgF6Ra3la18TijRw==
-    size: 9271927
+    sha512: /xm3OxdbaMXIBL5zGFzPqJINsDa01GdHiZ/oUOtiarl9bIqsahBHOORijH/C+c2LQanVLYdXZohJ3TBEjBDL0Q==
+    size: 177181525
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: yDlNF9kEFeRgQmdIG09Oc0kW+xfyMOLkQLkV9PotfsmWi36OsMY118jW1Tzea/OtmuuBOqOgF6Ra3la18TijRw==
-releaseDate: '2026-03-06T09:26:00.000Z'
+sha512: /xm3OxdbaMXIBL5zGFzPqJINsDa01GdHiZ/oUOtiarl9bIqsahBHOORijH/C+c2LQanVLYdXZohJ3TBEjBDL0Q==
+releaseDate: '2026-03-08T22:35:00.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Internal Build 26)
-  - Fixed room details panel to use the same in-room actions/details experience.
-  - Improved link handling for bare domains and HTTP/HTTPS fallback validation.
-  - Reduced repetitive bot replies and added link title/summary responses.
+  VoiceLink macOS Hotfix (Internal Build 29)
+  - Fixed room actions flow to keep actions separate from room details.
+  - Fixed room chat target chooser to allow room vs direct-user send routing.
+  - Updated updater checksum/signature metadata for immediate redetection.
