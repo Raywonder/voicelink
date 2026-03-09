@@ -5,7 +5,7 @@
 
 class VoiceLinkApp {
     constructor() {
-        this.browserAccessOpen = false;
+        this.browserAccessOpen = true;
         this.socket = null;
         this.audioEngine = null;
         this.spatialAudio = null;
@@ -13,6 +13,7 @@ class VoiceLinkApp {
 
         this.currentRoom = null;
         this.currentUser = null;
+        this.serverConfigCache = null;
         this.users = new Map();
         this.multiDeviceState = {
             activeDevices: [],
@@ -594,6 +595,7 @@ class VoiceLinkApp {
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
+
             const isNativeApp = !!window.nativeAPI;
             const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
                 pageHost.includes('voicelink.devinecreations.net') ||
@@ -1417,11 +1419,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('startup-guest-btn')?.addEventListener('click', () => {
-            if (!this.browserAccessOpen) {
-                alert('Browser room access is temporarily closed. Please use the desktop app for VoiceLink access right now.');
-                return;
-            }
             this.showScreen('main-menu');
+            this.showNotification('Browser mode enabled. Join a room to start chat and media features.', 'info');
         });
 
         // Menu navigation
@@ -2397,6 +2396,7 @@ class VoiceLinkApp {
     async loadRooms() {
         try {
             const apiBase = this.getApiBaseUrl();
+            await this.loadServerConfig();
 
             // Fetch rooms from local server (which now proxies main server rooms)
             let rooms = [];
@@ -2471,7 +2471,8 @@ class VoiceLinkApp {
                 } else {
                     // Group rooms by category for better organization
                     const groupedRooms = this.groupRoomsByCategory(rooms);
-                    let html = this.renderGroupedRooms(groupedRooms);
+                    let html = this.renderLobbyWelcomeMessage();
+                    html += this.renderGroupedRooms(groupedRooms);
 
                     // Add login prompt for guests if there are hidden rooms
                     if (!isAuthenticated && hiddenCount > 0) {
@@ -2582,6 +2583,43 @@ class VoiceLinkApp {
         }
 
         return html;
+    }
+
+    async loadServerConfig() {
+        try {
+            const response = await fetch(`${this.getApiBaseUrl()}/api/config`);
+            if (!response.ok) {
+                return this.serverConfigCache;
+            }
+            this.serverConfigCache = await response.json();
+        } catch (error) {
+            console.warn('Failed to load server config for lobby welcome message:', error);
+        }
+        return this.serverConfigCache;
+    }
+
+    renderLobbyWelcomeMessage() {
+        if (this.currentRoom) return '';
+        const template = this.serverConfigCache?.lobbyWelcomeMessage
+            || 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+        const messageHtml = String(template)
+            .split(/\n{2,}/)
+            .map((paragraph) => `<p>${this.escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+            .join('');
+        return `
+            <section class="room-list-welcome-message" aria-label="Server welcome message">
+                ${messageHtml}
+            </section>
+        `;
+    }
+
+    escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     renderRoomItem(room, isDefault = false) {
@@ -3845,7 +3883,7 @@ class VoiceLinkApp {
                 <strong>${message.userName}</strong>
                 <span class="timestamp">${timestamp}</span>
             </div>
-            <div class="message-text">${this.escapeHtml(message.message)}</div>
+            <div class="message-text">${this.formatChatMessage(message.message)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
@@ -3862,11 +3900,22 @@ class VoiceLinkApp {
         messageElement.style.opacity = '0.8';
 
         messageElement.innerHTML = `
-            <div class="message-text">${this.escapeHtml(text)}</div>
+            <div class="message-text">${this.formatChatMessage(text)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    formatChatMessage(value) {
+        const escaped = this.escapeHtml(value || '');
+        return escaped
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, title, url) => {
+                const safeTitle = this.escapeHtml(title);
+                const safeUrl = this.escapeHtml(url);
+                return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`;
+            })
+            .replace(/\n/g, '<br>');
     }
 
     playUiSound(filename, volume = 0.6) {
@@ -4451,12 +4500,16 @@ class VoiceLinkApp {
         if (bufferSizeSelect) {
             bufferSizeSelect.value = localStorage.getItem('voicelink_audio_buffer_size') || bufferSizeSelect.value || '512';
         }
-        const savedDisplayName = localStorage.getItem('voicelink_auth_display_name') || '';
-        const savedMastodonHandle = localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '';
+        const identityPrefs = this.getStoredIdentityPreferences();
         const authDisplayNameInput = document.getElementById('auth-display-name');
         const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
-        if (authDisplayNameInput) authDisplayNameInput.value = savedDisplayName;
-        if (authPreferredHandleInput) authPreferredHandleInput.value = savedMastodonHandle;
+        const authGenderSelect = document.getElementById('auth-gender');
+        const authGenderCustomInput = document.getElementById('auth-gender-custom');
+        if (authDisplayNameInput) authDisplayNameInput.value = identityPrefs.displayName;
+        if (authPreferredHandleInput) authPreferredHandleInput.value = identityPrefs.mastodonHandle;
+        if (authGenderSelect) authGenderSelect.value = identityPrefs.gender;
+        if (authGenderCustomInput) authGenderCustomInput.value = identityPrefs.genderCustom;
+        this.toggleCustomGenderInput(identityPrefs.gender);
         this.applySavedIdentityPreferences();
         this.refreshAuthenticationSettingsPanel();
         this.updateMultiDeviceStatusUI();
@@ -4511,6 +4564,19 @@ class VoiceLinkApp {
             this.applySavedIdentityPreferences();
         });
         document.getElementById('auth-preferred-mastodon-handle')?.addEventListener('change', () => {
+            this.applySavedIdentityPreferences();
+        });
+        document.getElementById('auth-gender')?.addEventListener('change', (e) => {
+            const selected = this.normalizeGenderSelection(e.target.value);
+            e.target.value = selected;
+            this.toggleCustomGenderInput(selected);
+            if (selected !== 'other') {
+                const customInput = document.getElementById('auth-gender-custom');
+                if (customInput) customInput.value = '';
+            }
+            this.applySavedIdentityPreferences();
+        });
+        document.getElementById('auth-gender-custom')?.addEventListener('change', () => {
             this.applySavedIdentityPreferences();
         });
 
@@ -4689,6 +4755,10 @@ class VoiceLinkApp {
         const bufferSize = document.getElementById('buffer-size-select')?.value || '512';
         const authDisplayName = (document.getElementById('auth-display-name')?.value || '').trim();
         const authPreferredMastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || '').trim();
+        const authGender = this.normalizeGenderSelection(document.getElementById('auth-gender')?.value || '');
+        const authGenderCustom = authGender === 'other'
+            ? (document.getElementById('auth-gender-custom')?.value || '').trim()
+            : '';
         this.setAudioBehaviorSettings({
             autoEnableMic: typeof autoEnableMic === 'boolean' ? autoEnableMic : true,
             alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
@@ -4698,6 +4768,9 @@ class VoiceLinkApp {
         localStorage.setItem('voicelink_audio_buffer_size', bufferSize);
         localStorage.setItem('voicelink_auth_display_name', authDisplayName);
         localStorage.setItem('voicelink_auth_preferred_mastodon_handle', authPreferredMastodonHandle);
+        localStorage.setItem('voicelink_auth_gender', authGender);
+        localStorage.setItem('voicelink_auth_gender_custom', authGenderCustom);
+        this.toggleCustomGenderInput(authGender);
         this.applySavedIdentityPreferences();
         alert('Settings saved successfully!');
     }
@@ -4711,18 +4784,66 @@ class VoiceLinkApp {
         localStorage.removeItem('voicelink_audio_buffer_size');
         localStorage.removeItem('voicelink_auth_display_name');
         localStorage.removeItem('voicelink_auth_preferred_mastodon_handle');
+        localStorage.removeItem('voicelink_auth_gender');
+        localStorage.removeItem('voicelink_auth_gender_custom');
         const authDisplayNameInput = document.getElementById('auth-display-name');
         const authPreferredHandleInput = document.getElementById('auth-preferred-mastodon-handle');
+        const authGenderInput = document.getElementById('auth-gender');
+        const authGenderCustomInput = document.getElementById('auth-gender-custom');
         if (authDisplayNameInput) authDisplayNameInput.value = '';
         if (authPreferredHandleInput) authPreferredHandleInput.value = '';
+        if (authGenderInput) authGenderInput.value = '';
+        if (authGenderCustomInput) authGenderCustomInput.value = '';
+        this.toggleCustomGenderInput('');
         this.applySavedIdentityPreferences();
         this.logCaptureEnabled = false;
         alert('Settings reset to defaults!');
     }
 
+    getStoredIdentityPreferences() {
+        return {
+            displayName: localStorage.getItem('voicelink_auth_display_name') || '',
+            mastodonHandle: localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '',
+            gender: this.normalizeGenderSelection(localStorage.getItem('voicelink_auth_gender') || ''),
+            genderCustom: localStorage.getItem('voicelink_auth_gender_custom') || ''
+        };
+    }
+
+    normalizeGenderSelection(value) {
+        const allowed = new Set(['', 'male', 'female', 'non_binary', 'prefer_not_to_say', 'other']);
+        const normalized = String(value || '').trim();
+        return allowed.has(normalized) ? normalized : '';
+    }
+
+    formatGenderLabel(gender, customValue = '') {
+        const normalized = this.normalizeGenderSelection(gender);
+        if (!normalized) return 'Not set';
+        if (normalized === 'male') return 'Male';
+        if (normalized === 'female') return 'Female';
+        if (normalized === 'non_binary') return 'Non-binary';
+        if (normalized === 'prefer_not_to_say') return 'Prefer not to say';
+        if (normalized === 'other') {
+            const custom = String(customValue || '').trim();
+            return custom ? `Other (${custom})` : 'Other';
+        }
+        return 'Not set';
+    }
+
+    toggleCustomGenderInput(selectedValue) {
+        const customGroup = document.getElementById('auth-gender-custom-group');
+        if (!customGroup) return;
+        customGroup.style.display = selectedValue === 'other' ? '' : 'none';
+    }
+
     applySavedIdentityPreferences() {
         const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || '').trim();
         const mastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '').trim();
+        const gender = this.normalizeGenderSelection(
+            document.getElementById('auth-gender')?.value || localStorage.getItem('voicelink_auth_gender') || ''
+        );
+        const genderCustom = gender === 'other'
+            ? (document.getElementById('auth-gender-custom')?.value || localStorage.getItem('voicelink_auth_gender_custom') || '').trim()
+            : '';
         const joinNameInput = document.getElementById('user-name');
         const whmcsMastodonHandleInput = document.getElementById('whmcs-mastodon-handle');
 
@@ -4735,6 +4856,12 @@ class VoiceLinkApp {
         if (whmcsMastodonHandleInput && mastodonHandle && !whmcsMastodonHandleInput.value?.trim()) {
             whmcsMastodonHandleInput.value = mastodonHandle;
         }
+        this.identityPreferences = {
+            displayName,
+            mastodonHandle,
+            gender,
+            genderCustom
+        };
     }
 
     setupLogCapture() {
@@ -5530,6 +5657,7 @@ class VoiceLinkApp {
         const avatar = document.getElementById('mastodon-user-avatar');
         const userName = document.getElementById('mastodon-user-name');
         const userHandle = document.getElementById('mastodon-user-handle');
+        const userGender = document.getElementById('mastodon-user-gender');
         const userRole = document.getElementById('mastodon-user-role');
         const joinNameInput = document.getElementById('user-name');
 
@@ -5543,6 +5671,11 @@ class VoiceLinkApp {
             if (avatar) avatar.src = user.avatar || user.avatarStatic || '';
             if (userName) userName.textContent = user.displayName || user.username || 'VoiceLink User';
             if (userHandle) userHandle.textContent = user.fullHandle || user.email || user.username || '';
+            if (userGender) {
+                const prefs = this.getStoredIdentityPreferences();
+                const label = this.formatGenderLabel(user.gender || prefs.gender, prefs.genderCustom);
+                userGender.textContent = `Gender: ${label}`;
+            }
 
             const roleValue = user.role || (user.isAdmin ? 'admin' : user.isModerator ? 'staff' : 'user');
             if (userRole) {
@@ -5582,6 +5715,7 @@ class VoiceLinkApp {
             // Show logged-out state
             if (loginPrompt) loginPrompt.style.display = 'block';
             if (userInfo) userInfo.style.display = 'none';
+            if (userGender) userGender.textContent = '';
             if (!this.isNativeApp() && !this.currentRoom && this.ui.currentScreen !== 'loading-screen') {
                 this.showScreen('startup-auth-screen');
             }
@@ -5596,7 +5730,9 @@ class VoiceLinkApp {
 
     refreshAuthenticationSettingsPanel() {
         const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+        const identityPrefs = this.getStoredIdentityPreferences();
         const currentUser = document.getElementById('auth-current-user');
+        const selectedGender = document.getElementById('auth-selected-gender');
         const currentProvider = document.getElementById('auth-current-provider');
         const currentRole = document.getElementById('auth-current-role');
         const walletStatus = document.getElementById('auth-wallet-status');
@@ -5605,6 +5741,9 @@ class VoiceLinkApp {
 
         if (currentUser) {
             currentUser.textContent = user ? (user.displayName || user.username || user.email || 'Authenticated User') : 'Not logged in';
+        }
+        if (selectedGender) {
+            selectedGender.textContent = this.formatGenderLabel(identityPrefs.gender, identityPrefs.genderCustom);
         }
         if (currentProvider) {
             const auth = this.getAuthContext();

@@ -5,7 +5,7 @@
 
 class VoiceLinkApp {
     constructor() {
-        this.browserAccessOpen = false;
+        this.browserAccessOpen = true;
         this.socket = null;
         this.audioEngine = null;
         this.spatialAudio = null;
@@ -13,6 +13,7 @@ class VoiceLinkApp {
 
         this.currentRoom = null;
         this.currentUser = null;
+        this.serverConfigCache = null;
         this.users = new Map();
         this.multiDeviceState = {
             activeDevices: [],
@@ -594,6 +595,7 @@ class VoiceLinkApp {
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
+
             const isNativeApp = !!window.nativeAPI;
             const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
                 pageHost.includes('voicelink.devinecreations.net') ||
@@ -1417,11 +1419,8 @@ class VoiceLinkApp {
         });
 
         document.getElementById('startup-guest-btn')?.addEventListener('click', () => {
-            if (!this.browserAccessOpen) {
-                alert('Browser room access is temporarily closed. Please use the desktop app for VoiceLink access right now.');
-                return;
-            }
             this.showScreen('main-menu');
+            this.showNotification('Browser mode enabled. Join a room to start chat and media features.', 'info');
         });
 
         // Menu navigation
@@ -2397,6 +2396,7 @@ class VoiceLinkApp {
     async loadRooms() {
         try {
             const apiBase = this.getApiBaseUrl();
+            await this.loadServerConfig();
 
             // Fetch rooms from local server (which now proxies main server rooms)
             let rooms = [];
@@ -2471,7 +2471,8 @@ class VoiceLinkApp {
                 } else {
                     // Group rooms by category for better organization
                     const groupedRooms = this.groupRoomsByCategory(rooms);
-                    let html = this.renderGroupedRooms(groupedRooms);
+                    let html = this.renderLobbyWelcomeMessage();
+                    html += this.renderGroupedRooms(groupedRooms);
 
                     // Add login prompt for guests if there are hidden rooms
                     if (!isAuthenticated && hiddenCount > 0) {
@@ -2582,6 +2583,43 @@ class VoiceLinkApp {
         }
 
         return html;
+    }
+
+    async loadServerConfig() {
+        try {
+            const response = await fetch(`${this.getApiBaseUrl()}/api/config`);
+            if (!response.ok) {
+                return this.serverConfigCache;
+            }
+            this.serverConfigCache = await response.json();
+        } catch (error) {
+            console.warn('Failed to load server config for lobby welcome message:', error);
+        }
+        return this.serverConfigCache;
+    }
+
+    renderLobbyWelcomeMessage() {
+        if (this.currentRoom) return '';
+        const template = this.serverConfigCache?.lobbyWelcomeMessage
+            || 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+        const messageHtml = String(template)
+            .split(/\n{2,}/)
+            .map((paragraph) => `<p>${this.escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+            .join('');
+        return `
+            <section class="room-list-welcome-message" aria-label="Server welcome message">
+                ${messageHtml}
+            </section>
+        `;
+    }
+
+    escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     renderRoomItem(room, isDefault = false) {
@@ -3845,7 +3883,7 @@ class VoiceLinkApp {
                 <strong>${message.userName}</strong>
                 <span class="timestamp">${timestamp}</span>
             </div>
-            <div class="message-text">${this.escapeHtml(message.message)}</div>
+            <div class="message-text">${this.formatChatMessage(message.message)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
@@ -3862,11 +3900,22 @@ class VoiceLinkApp {
         messageElement.style.opacity = '0.8';
 
         messageElement.innerHTML = `
-            <div class="message-text">${this.escapeHtml(text)}</div>
+            <div class="message-text">${this.formatChatMessage(text)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    formatChatMessage(value) {
+        const escaped = this.escapeHtml(value || '');
+        return escaped
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, title, url) => {
+                const safeTitle = this.escapeHtml(title);
+                const safeUrl = this.escapeHtml(url);
+                return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`;
+            })
+            .replace(/\n/g, '<br>');
     }
 
     playUiSound(filename, volume = 0.6) {
