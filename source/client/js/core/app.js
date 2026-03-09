@@ -13,6 +13,7 @@ class VoiceLinkApp {
         this.currentRoom = null;
         this.currentUser = null;
         this.users = new Map();
+        this.isElectronApp = false;
 
         // Audio playback management
         this.currentAudio = null;
@@ -77,6 +78,7 @@ class VoiceLinkApp {
         // IMMEDIATE: Hide platform-specific elements based on environment
         // This must run FIRST to prevent flash of unwanted content
         const isElectronApp = !!(window.electronAPI || window.nodeAPI?.versions?.electron || navigator.userAgent.toLowerCase().includes('electron'));
+        this.isElectronApp = isElectronApp;
         console.log('IMMEDIATE platform check:', { isElectronApp, hasElectronAPI: !!window.electronAPI });
 
         if (isElectronApp) {
@@ -119,6 +121,8 @@ class VoiceLinkApp {
                 }, { once: true });
             }
         }
+
+        this.applyPlatformSpecificSettingsUI();
 
         try {
             // CRITICAL: Register IPC listener FIRST before any async operations
@@ -193,6 +197,25 @@ class VoiceLinkApp {
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
                 this.startServerStatusMonitoring();
             }, 2000);
+        }
+    }
+
+    applyPlatformSpecificSettingsUI() {
+        // Browser mode should not expose desktop-only streaming/control settings.
+        if (this.isElectronApp) return;
+
+        const streamingTabButton = document.querySelector('.settings-tabs .tab-btn[data-tab="streaming"]');
+        const streamingTab = document.getElementById('streaming-tab');
+
+        streamingTabButton?.remove();
+        streamingTab?.remove();
+
+        // If the removed tab was active for any reason, force Audio as default.
+        const audioTabButton = document.querySelector('.settings-tabs .tab-btn[data-tab="audio"]');
+        const audioTab = document.getElementById('audio-tab');
+        if (audioTabButton && audioTab) {
+            audioTabButton.classList.add('active');
+            audioTab.classList.add('active');
         }
     }
 
@@ -296,10 +319,8 @@ class VoiceLinkApp {
             window.multiChannelEngine = new MultiChannelAudioEngine(this.audioEngine.audioContext);
         }
 
-        // Initialize VST streaming engine
-        if (typeof VSTStreamingEngine !== 'undefined') {
-            window.vstStreamingEngine = new VSTStreamingEngine(this.audioEngine.audioContext);
-        }
+        // Initialize streaming-related modules (desktop app only)
+        this.initializeStreamingModules();
 
         // Initialize server access manager
         if (typeof ServerAccessManager !== 'undefined') {
@@ -355,12 +376,6 @@ class VoiceLinkApp {
             console.log('User settings interface initialized');
         }
 
-        // Initialize media streaming interface
-        if (typeof MediaStreamingInterface !== 'undefined') {
-            window.mediaStreamingInterface = new MediaStreamingInterface();
-            console.log('Media streaming interface initialized');
-        }
-
         // Initialize user context menu
         if (typeof UserContextMenu !== 'undefined') {
             window.userContextMenu = new UserContextMenu();
@@ -406,6 +421,33 @@ class VoiceLinkApp {
         }
 
         console.log('Advanced systems initialized');
+    }
+
+    initializeStreamingModules() {
+        if (!this.isElectronApp) {
+            console.log('Web mode: skipping desktop streaming modules');
+            return;
+        }
+
+        if (typeof VSTStreamingEngine !== 'undefined' && this.audioEngine?.audioContext) {
+            window.vstStreamingEngine = new VSTStreamingEngine(this.audioEngine.audioContext);
+            console.log('VST streaming module initialized');
+        }
+
+        if (typeof MediaStreamingInterface !== 'undefined') {
+            window.mediaStreamingInterface = new MediaStreamingInterface();
+            console.log('Media streaming interface module initialized');
+        }
+
+        if (typeof LiveStreamingManager !== 'undefined' && !window.liveStreamingManager) {
+            window.liveStreamingManager = new LiveStreamingManager();
+            console.log('Live streaming module initialized');
+        }
+
+        if (typeof BroadcastStreamingManager !== 'undefined' && !window.broadcastStreamingManager) {
+            window.broadcastStreamingManager = new BroadcastStreamingManager();
+            console.log('Broadcast streaming module initialized');
+        }
     }
 
     initializePASystemAndTTS() {
@@ -4353,6 +4395,10 @@ class VoiceLinkApp {
     }
 
     setupStreamingWarnings() {
+        if (!this.isElectronApp) {
+            return;
+        }
+
         // List of streaming feature checkboxes that need warnings
         const streamingFeatures = [
             'enable-streaming',

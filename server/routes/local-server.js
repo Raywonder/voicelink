@@ -2092,7 +2092,12 @@ class VoiceLinkLocalServer {
 
         // Serve downloads page
         this.app.get('/downloads.html', (req, res) => {
-            res.sendFile(path.join(__dirname, '..', '..', 'client', 'downloads.html'));
+            const downloadsPath = path.join(__dirname, '..', '..', 'client', 'downloads.html');
+            if (fs.existsSync(downloadsPath)) {
+                return res.sendFile(downloadsPath);
+            }
+            // Fallback when downloads page is not bundled yet.
+            return res.redirect('/docs/getting-started.html');
         });
 
         // Setup federation API routes
@@ -5538,8 +5543,39 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Serve documentation files
-        this.app.use('/docs', express.static(path.join(__dirname, '../../docs/public')));
+        // Serve documentation files (support legacy and new layouts)
+        const docsPublicDir = path.join(__dirname, '../../docs/public');
+        const docsRootDir = path.join(__dirname, '../../docs');
+        const sourceDocsDir = path.join(__dirname, '../../source/docs');
+        const docsBaseDir = fs.existsSync(docsPublicDir)
+            ? docsPublicDir
+            : (fs.existsSync(docsRootDir) ? docsRootDir : sourceDocsDir);
+
+        this.app.use('/docs', express.static(docsBaseDir));
+        this.app.get('/docs', (req, res) => {
+            const indexPath = path.join(docsBaseDir, 'index.html');
+            if (fs.existsSync(indexPath)) {
+                return res.sendFile(indexPath);
+            }
+            return res.status(404).send('Documentation index not found');
+        });
+
+        // Fallback for broken/missing doc links: serve docs home instead of 404.
+        this.app.get('/docs/:page', (req, res) => {
+            const pageName = String(req.params.page || '').trim();
+            if (!pageName) {
+                return res.redirect('/docs/index.html');
+            }
+
+            const fileName = pageName.endsWith('.html') ? pageName : `${pageName}.html`;
+            const filePath = path.join(docsBaseDir, fileName);
+
+            if (fs.existsSync(filePath)) {
+                return res.sendFile(filePath);
+            }
+            return res.sendFile(path.join(docsBaseDir, 'index.html'));
+        });
+
         this.app.use('/admin/docs', express.static(path.join(__dirname, '../../docs/authenticated')));
 
         // Serve release packages for installer downloads
