@@ -17,8 +17,9 @@ Build and deployment status for the current VoiceLink desktop cycle:
   - `swift-native/VoiceLinkNative/VoiceLink-macOS.zip`
   - `swift-native/VoiceLinkNative/latest-mac.yml`
   - `swift-native/VoiceLinkNative/latest-mac.server.yml`
-- Windows portable artifact refreshed from `windows-native/publish/win-x64`
-  - `windows-native/dist/VoiceLink-windows.zip`
+- Windows installer channel moved to setup EXE with portable fallback
+  - `windows-native/dist/VoiceLink-1.0.0-windows-setup.exe`
+  - `windows-native/dist/VoiceLink-1.0.0-windows-portable.exe`
 - Updated artifacts uploaded to:
   - Main server: `/home/devinecr/downloads/voicelink/`
   - VPS/community server: `/home/devinecr/downloads/voicelink/`
@@ -43,7 +44,7 @@ Operational findings from post-deploy checks:
   - both `/api/downloads` endpoints now return current direct-download metadata
 - Public main-server checks are confirmed:
   - `https://voicelink.devinecreations.net/admin-invite.html` returned `200`
-  - `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-windows.zip` returned `200`
+  - `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe` should return `200`
 - Main-server local auth persistence is now valid again:
   - owner account `domdom` / `d.stansberry@me.com` exists and is verified
   - temporary bootstrap owner used for recovery was removed after the invite claim completed
@@ -98,6 +99,20 @@ Known deployment blockers still requiring follow-up:
   - `source/routes/local-server.js` is the closer source mirror
   - `source/server/routes/local-server.js` is an older divergent copy and must not be treated as the canonical auth/runtime source during rebuilds
 
+Documentation governance for VoiceLink:
+- Before any new VoiceLink build or public artifact replacement, documentation must follow:
+  1. doc update pass
+  2. doc review pass
+  3. final confirmation
+- This applies to:
+  - in-app help/docs
+  - `docs/` and `source/docs/`
+  - downloads pages
+  - bugtracker/status pages
+  - admin docs
+- Live docs should only be replaced from reviewed, current source copies.
+- Public builds should not be published against stale docs when the feature set changed.
+
 Governance rule for this state:
 - A build may be marked "artifact-complete" before it is marked "deployment-complete"
 - "deployment-complete" requires:
@@ -105,6 +120,363 @@ Governance rule for this state:
   - PM2 process restarted or confirmed healthy
   - live API/download endpoints checked on the active service port
   - blockers recorded if any of the above fail
+
+====================================================
+# Platform Architecture
+
+VoiceLink operates as a distributed platform built around
+a gateway architecture.
+
+Core principles:
+
+1. HubNode acts as the API gateway.
+2. Voice services operate independently of external APIs.
+3. Federation nodes can be deployed automatically.
+4. Domains follow the platform namespace model.
+
+Example:
+
+voicelink.app
+   api.voicelink.app
+   nodes.voicelink.app
+   community.voicelink.app
+  
+==================================================
+FEDERATION MODEL
+==================================================
+
+VoiceLink supports federated server deployments.
+
+Federation nodes may run on:
+
+- main servers
+- VPS
+- client deployments
+
+Nodes must register with the gateway.
+
+Example endpoint:
+
+/federation/register
+
+Nodes must report:
+
+- hostname
+- region
+- latency
+- capacity
+
+Nodes must never trust external nodes without validation.
+====================================================
+# 📦 Apple Developer Governance & Distribution
+
+## 1. Membership & Account Requirements
+
+### 1.1 Membership Status
+- Apple Developer Program membership **must be Active**
+- Membership Type: Individual (or Organization if upgraded)
+- Expiration date must be tracked and monitored
+- Renewal reminder recommended 30 days before expiration
+
+### 1.2 Account Ownership
+- Apple ID must be controlled by project owner
+- Email must remain accessible
+- 2FA must be enabled
+- Recovery contact information documented securely
+
+### 1.3 Support Case Tracking
+- Store Apple Developer Support case numbers in secure internal documentation
+- Reference case IDs when contacting support for enrollment or review issues
+
+---
+
+## 2. App Record Creation (App Store Connect)
+
+### 2.1 App Naming
+- Public display name should be consistent across:
+  - App Store listing
+  - GitHub repository
+  - Website branding
+- Reserve alternate bundle names early if expansion is planned
+
+### 2.2 Bundle Identifier Strategy
+Use reverse domain format:
+
+```
+com.devinecreations.voicelink
+```
+
+For modular releases:
+
+```
+com.devinecreations.voicelink.beta
+com.devinecreations.voicelink.enterprise
+```
+
+Rules:
+- Must match Xcode project exactly
+- Cannot be changed after release
+- Should not use temporary naming
+
+---
+
+## 3. Code Signing & Certificates
+
+### 3.1 Signing Configuration
+- Use Automatic Signing when possible
+- Team must be set correctly in Xcode
+- Provisioning Profiles must match:
+  - Bundle ID
+  - Capabilities enabled
+
+### 3.2 Required Certificates
+- Apple Development
+- Apple Distribution
+
+Certificates should:
+- Be backed up securely
+- Not be shared insecurely
+- Be documented in governance notes
+
+---
+
+## 4. TestFlight Governance
+
+### 4.1 Internal Testing
+- Up to 100 internal testers
+- No App Review required
+- Used for:
+  - Accessibility verification
+  - API testing
+  - Authentication testing
+
+### 4.2 External Testing
+- Requires Beta App Review
+- Provide:
+  - Demo account (if needed)
+  - Explanation of features
+  - Notes on authentication flow (e.g., Mastodon login)
+
+### 4.3 Beta Notes Template
+Each build must include:
+
+- What changed
+- Known issues
+- Required permissions
+- Federation/server dependencies
+- Accessibility updates
+
+### 4.4 Execution Runbook (Current)
+- macOS app should use HTTPS for remote APIs and only allow HTTP on local/LAN development endpoints.
+- If ATS-related errors appear in admin/settings fetches, treat them as release blockers for TestFlight.
+- Keep insecure HTTP fallback behavior disabled for store/TestFlight channel by default.
+
+### 4.5 Manual Gate (Safari + Xcode)
+When moving from local validation to TestFlight distribution, stop automation and perform these manual steps first:
+1. Safari → App Store Connect: verify app record, bundle ID mapping, tester groups, and compliance forms.
+2. Safari → app metadata: verify privacy policy URL, support URL, and beta review notes.
+3. Xcode Organizer: archive and upload the selected build.
+4. Resume automation only after build processing completes and appears in TestFlight.
+
+---
+
+## 5. App Permissions & Privacy Governance
+
+### 5.1 Required Usage Descriptions
+If app uses:
+
+- Microphone → `NSMicrophoneUsageDescription`
+- Camera → `NSCameraUsageDescription`
+- Network → ATS configuration
+- Notifications → `NSUserNotificationUsageDescription`
+
+Each string must:
+- Clearly explain purpose
+- Reference feature functionality
+- Avoid vague language
+
+Example:
+
+> “Voice Link uses the microphone for live audio communication between federated servers.”
+
+---
+
+### 5.2 Privacy Policy Requirements
+- Public URL required before App Store submission
+- Must explain:
+  - Federation architecture
+  - Data storage location
+  - Server synchronization
+  - User authentication method (Mastodon OAuth)
+
+---
+
+## 6. Federation & Server Architecture Disclosure
+
+Because Voice Link uses a federated model:
+
+### 6.1 Review Notes Must Include
+- Explanation of decentralized hosting
+- Clarification that:
+  - Users may host independent instances
+  - Main server acts as primary federation hub
+  - Data is not centrally locked
+
+### 6.2 Demo Server
+Maintain:
+- Stable primary API endpoint
+- Known working federation node for review testing
+
+---
+
+## 7. Mac Catalyst Governance (Optional but Supported)
+
+### 7.1 Catalyst Enablement Policy
+Mac Catalyst may be enabled when:
+- Shared iOS codebase exists
+- Desktop testing is required
+- Distribution through Mac App Store is planned
+
+### 7.2 Catalyst Configuration Checklist
+- Enable Mac Catalyst in Xcode target settings
+- Adjust UI scaling for Mac layouts
+- Verify:
+  - Keyboard navigation
+  - VoiceOver on macOS
+  - Window resizing support
+
+### 7.3 When NOT to Use Catalyst
+Avoid Catalyst if:
+- Native macOS app already exists
+- Feature set diverges significantly
+- Performance constraints require AppKit
+
+---
+
+## 8. Release Track Strategy
+
+### 8.1 Distribution Phases
+1. Internal TestFlight
+2. External TestFlight
+3. Public App Store Release
+
+### 8.2 Infrastructure Requirements Before Release
+- API uptime verified
+- Authentication validated
+- Federation stable
+- DNS records confirmed
+- SSL certificates valid
+
+---
+
+## 9. Accessibility Governance
+
+Voice Link is accessibility-first.
+
+### 9.1 VoiceOver Compliance
+Each release must verify:
+- Proper button labels
+- Logical rotor navigation
+- Accessible authentication flow
+- Status updates announced properly
+- Default action behavior is preserved (double-tap opens details/main action)
+- Secondary actions are exposed via VoiceOver custom actions (join/preview/etc)
+- Focus remains stable after async updates and navigation changes
+- Microphone permission flow follows iOS policy (request only, never auto-grant)
+
+Reference baseline for implementation and QA:
+- `docs/VOICEOVER_IOS_DEVELOPMENT_BASELINE.md`
+
+### 9.2 Testing Requirements
+- Test with:
+  - VoiceOver enabled
+  - Dynamic Type scaling
+  - Reduced motion setting
+
+Accessibility regressions block release.
+
+---
+
+## 10. Future Template Standardization (.github Integration)
+
+All new projects must include:
+
+- Apple Developer checklist
+- Signing verification section
+- Privacy policy template
+- TestFlight notes template
+- Catalyst decision checklist
+- Federation disclosure template
+
+Recommended repo folder structure:
+
+```
+/docs
+  governance.md
+  privacy-policy.md
+  app-store-notes.md
+  testflight-template.md
+```
+
+---
+
+## 11. Risk & Recovery Governance
+
+### 11.1 Membership Lapse Prevention
+- Calendar renewal reminder 30 days before expiration
+- Secondary payment method documented
+
+### 11.2 App Store Rejection Handling
+- Maintain changelog
+- Maintain review communication log
+- Respond within 24 hours to review queries
+
+---
+
+## 12. Multi-App Scaling Policy
+
+If future apps are added:
+
+- Maintain unique bundle IDs
+- Separate API keys where needed
+- Document shared infrastructure dependencies
+- Avoid hard-coded server assumptions
+
+## 13. Build Command Automation (Mandatory)
+
+For repeated iOS builds/TestFlight uploads, agents must use:
+
+`cd /Users/admin/dev/apps/voicelink-local/swift-native/VoiceLinkiOS`
+
+`BUILD_NUMBER=<next> AUTO_UPLOAD=1 ./scripts/archive_ios_testflight.sh`
+
+Credential resolution order (no prompt flow):
+1. `/Users/admin/dev/appstore/voicelink/ios_testflight_credentials.env`
+2. macOS Keychain service `voicelink.transporter`
+
+Requirements:
+- keep `CODE_SIGN_STYLE=Automatic` for routine archive/upload cycles
+- do not persist real account passwords in tracked files
+- include `-itc_provider G5232LU4Z7` when using manual transporter commands
+- if archive fails, fix project/signing state first, then rerun the same command
+- do not switch to manual signing unless release governance explicitly requires it
+- before every iOS/TestFlight upload, increment build number (CURRENT_PROJECT_VERSION)
+- update `/Users/admin/dev/appstore/voicelink/TESTFLIGHT_BUILD_LEDGER.md` before upload
+- duplicate IPA uploads (same checksum / "already uploaded") do not count as update delivery
+- "upload-complete" for iOS requires a new processed build visible in App Store Connect/TestFlight
+
+---
+
+# Optional Section: Infrastructure Dependency Notice
+
+Voice Link requires:
+
+- Active primary API server
+- SSL certificates
+- Domain stability
+- DNS propagation
+
+App releases must not occur during server instability.
 
 ============================================================
 SECTION 1 – CURRENT STATE (v1.0 RELEASE MOMENT)
@@ -1328,3 +1700,48 @@ END PATCH LIST + IMPLEMENTATION PLAN
 ============================================================
 END OF DOCUMENT
 ============================================================
+
+============================================================
+APPLE CERTIFICATES + APP STORE BILLING AUTORUNBOOK (MANDATORY WHEN NEEDED)
+============================================================
+
+Trigger condition:
+- Any request mentioning App Store, TestFlight, certificates, signing, IAP,
+  subscriptions, payments, payouts, or Apple distribution.
+
+Execution rules:
+1. Use next-step-only guidance for beginners.
+2. Provide one immediate action at a time.
+3. Provide exact field values when data entry is required.
+4. Update docs in-place while user progresses.
+
+Certificate order:
+1. Apple Development
+2. Apple Distribution
+3. Developer ID Application
+4. Developer ID Installer (optional; only for .pkg)
+
+Required local artifacts:
+1. CSR folder must exist:
+   - `/Users/admin/dev/appstore/csr`
+2. Mapping doc must exist:
+   - `/Users/admin/dev/appstore/csr/UPLOAD_ORDER.md`
+3. Upload only `.csr`; never upload `.key`.
+
+Create New App minimum fields:
+1. Platform
+2. App Name
+3. Primary Language
+4. Bundle ID (exact match with Apple Developer Identifier)
+5. SKU (unique internal value)
+
+Payments/subscriptions rules:
+1. Default payout destination:
+   - App Store Connect -> Agreements, Tax, and Banking -> Banking
+2. Real subscription billing starts only when approved and live on App Store.
+3. TestFlight billing is non-production test billing.
+4. Subscription Product IDs are permanent after creation.
+
+Skip logic:
+1. Completed steps must be marked "skip" in docs.
+2. Do not repeat completed steps unless explicitly requested.
