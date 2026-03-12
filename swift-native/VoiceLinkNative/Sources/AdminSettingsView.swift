@@ -1484,6 +1484,7 @@ struct AdminConfigSection: View {
     @State private var editedAdvancedSettings: AdvancedServerSettings?
     @State private var selectedSection: ConfigSection = .identity
     @State private var isSaving = false
+    @State private var databaseActionInFlight = false
 
     enum ConfigSection: String, CaseIterable {
         case identity = "Identity"
@@ -1561,6 +1562,9 @@ struct AdminConfigSection: View {
                 async let config: Void = adminManager.fetchServerConfig()
                 async let advanced: Void = adminManager.fetchAdvancedServerSettings()
                 _ = await (config, advanced)
+            }
+            if adminManager.databaseStatus == nil {
+                await adminManager.fetchDatabaseStatus()
             }
         }
     }
@@ -2003,6 +2007,79 @@ struct AdminConfigSection: View {
                     field: \.serverConfig,
                     settings: settings
                 )
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Database Actions")
+
+                Text("Initialize the database first, then migrate the current JSON-backed defaults into database snapshots. This keeps your existing files in place while you verify the database state.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let status = adminManager.databaseStatus {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Provider: \(status.provider.capitalized)")
+                        Text("SQLite Available: \(status.sqliteAvailable ? "Yes" : "No")")
+                        Text("Database File: \(status.exists ? "Ready" : "Not Created Yet")")
+                        if !status.dbPath.isEmpty {
+                            Text("Path: \(status.dbPath)")
+                        }
+                        Text("Size: \(ByteCountFormatter.string(fromByteCount: Int64(status.sizeBytes), countStyle: .file))")
+                        if let lastMigration = status.lastMigration, !lastMigration.isEmpty {
+                            Text("Last Migration: \(lastMigration)")
+                        }
+                        if !status.snapshotCounts.isEmpty {
+                            Text("Snapshots: " + status.snapshotCounts.keys.sorted().map { "\($0)=\(status.snapshotCounts[$0] ?? 0)" }.joined(separator: ", "))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                } else {
+                    Text("Database status has not been loaded yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let message = adminManager.databaseActionMessage, !message.isEmpty {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Refresh Status") {
+                        databaseActionInFlight = true
+                        Task {
+                            await adminManager.fetchDatabaseStatus()
+                            databaseActionInFlight = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Initialize Database") {
+                        databaseActionInFlight = true
+                        Task {
+                            _ = await adminManager.initializeDatabase()
+                            databaseActionInFlight = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Migrate Default Data") {
+                        databaseActionInFlight = true
+                        Task {
+                            _ = await adminManager.migrateDefaultDataToDatabase()
+                            databaseActionInFlight = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .disabled(databaseActionInFlight)
             }
         }
     }

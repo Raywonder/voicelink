@@ -11,6 +11,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
+const { DatabaseStorageManager } = require('../services/database-storage');
 const FederationManager = require('../utils/federation-manager');
 const MastodonBotManager = require('../utils/mastodon-bot');
 const { deployConfig, PRESETS } = require('../config/deploy-config');
@@ -34,6 +35,7 @@ const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
 const fileTransferRoutes = require("./file-transfer");
 const execFileAsync = promisify(execFile);
+const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '..') });
 
 // Stripe integration - lazy loaded if configured
 let stripe = null;
@@ -14359,6 +14361,57 @@ class VoiceLinkLocalServer {
             socket.once('timeout', () => finish(false, `Connection timeout to ${host}:${port}`));
             socket.once('error', (error) => finish(false, `Connection failed: ${error.message}`));
             socket.connect(port, host);
+        });
+
+        this.app.get('/api/admin/database/status', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                return res.json({
+                    success: true,
+                    status: databaseStorage.status()
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/database/initialize', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                const dbPath = databaseStorage.ensureSchema();
+                return res.json({
+                    success: true,
+                    dbPath,
+                    status: databaseStorage.status(),
+                    message: 'Database initialized'
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/database/migrate-defaults', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                const result = databaseStorage.migrateDefaults();
+                return res.json({
+                    success: true,
+                    result,
+                    status: databaseStorage.status(),
+                    message: 'Default data migrated into database snapshots'
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
         });
 
         // Admin restart server (graceful)

@@ -801,29 +801,6 @@ struct MainMenuView: View {
                                 appState.currentScreen = .login
                             }
                         }
-                        HStack(spacing: 8) {
-                            Button("Google") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            Button("Apple") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            Button("GitHub") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
                     }
                 }
             }
@@ -835,6 +812,7 @@ struct MainMenuView: View {
             .onAppear {
                 selectedServerFilter = "All Servers"
                 roomScopeFilter = .all
+                appState.refreshRooms()
                 if !isAuthenticatedForRoomAccess && hasPendingAdminInvite {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         showAdminInviteSheet = true

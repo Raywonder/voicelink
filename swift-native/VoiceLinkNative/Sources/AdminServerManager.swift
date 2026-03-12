@@ -17,12 +17,14 @@ class AdminServerManager: ObservableObject {
     @Published var availableModules: [AdminModuleInfo] = []
     @Published var serverLogLines: [String] = []
     @Published var serverLogSource: String?
+    @Published var databaseStatus: DatabaseAdminStatus?
     @Published var moduleCategories: [String: String] = [:]
     @Published var modulesLoading: Bool = false
     @Published var moduleActionMessage: String?
     @Published var deploymentManagerStatus: DeploymentManagerStatus?
     @Published var deploymentTransports: [DeploymentTransportInfo] = []
     @Published var deploymentActionMessage: String?
+    @Published var databaseActionMessage: String?
     @Published var isLoading: Bool = false
     @Published var error: String?
 
@@ -267,6 +269,89 @@ class AdminServerManager: ObservableObject {
             return true
         } catch {
             self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func fetchDatabaseStatus() async {
+        guard canManageConfigEffective else { return }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/database/status") else {
+            error = "Invalid database status URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let decoder = JSONDecoder()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                error = "Failed to fetch database status"
+                return
+            }
+            guard httpResponse.statusCode == 200 else {
+                let message = (try? decoder.decode(DatabaseActionResponse.self, from: data).error) ?? "Failed to fetch database status (\(httpResponse.statusCode))"
+                error = message
+                return
+            }
+            let payload = try decoder.decode(DatabaseStatusEnvelope.self, from: data)
+            databaseStatus = payload.status
+            databaseActionMessage = nil
+        } catch {
+            self.error = "Failed to fetch database status: \(error.localizedDescription)"
+        }
+    }
+
+    func initializeDatabase() async -> Bool {
+        await runDatabaseAction(path: "/api/admin/database/initialize", successPrefix: "Database initialized")
+    }
+
+    func migrateDefaultDataToDatabase() async -> Bool {
+        await runDatabaseAction(path: "/api/admin/database/migrate-defaults", successPrefix: "Default data migrated")
+    }
+
+    @discardableResult
+    private func runDatabaseAction(path: String, successPrefix: String) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: path) else {
+            error = "Invalid database action URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let decoder = JSONDecoder()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                error = "Database action failed"
+                return false
+            }
+            let payload = try? decoder.decode(DatabaseActionResponse.self, from: data)
+            guard httpResponse.statusCode == 200, let payload else {
+                error = payload?.error ?? "Database action failed (\(httpResponse.statusCode))"
+                return false
+            }
+            databaseStatus = payload.status ?? databaseStatus
+            if let message = payload.message, !message.isEmpty {
+                databaseActionMessage = message
+            } else {
+                databaseActionMessage = successPrefix
+            }
+            return true
+        } catch {
+            self.error = "Database action failed: \(error.localizedDescription)"
             return false
         }
     }
@@ -2081,6 +2166,47 @@ struct DatabaseNetworkConfig: Codable, Equatable {
         user = try container.decodeIfPresent(String.self, forKey: .user) ?? "voicelink"
         password = try container.decodeIfPresent(String.self, forKey: .password) ?? ""
         ssl = try container.decodeIfPresent(Bool.self, forKey: .ssl) ?? false
+    }
+}
+
+struct DatabaseStatusEnvelope: Codable {
+    let success: Bool
+    let status: DatabaseAdminStatus
+    let message: String?
+}
+
+struct DatabaseActionResponse: Codable {
+    let success: Bool
+    let message: String?
+    let error: String?
+    let status: DatabaseAdminStatus?
+}
+
+struct DatabaseAdminStatus: Codable, Equatable {
+    var provider: String
+    var sqliteAvailable: Bool
+    var dbPath: String
+    var exists: Bool
+    var sizeBytes: Int
+    var lastMigration: String?
+    var snapshotCounts: [String: Int]
+
+    init(
+        provider: String = "sqlite",
+        sqliteAvailable: Bool = false,
+        dbPath: String = "",
+        exists: Bool = false,
+        sizeBytes: Int = 0,
+        lastMigration: String? = nil,
+        snapshotCounts: [String: Int] = [:]
+    ) {
+        self.provider = provider
+        self.sqliteAvailable = sqliteAvailable
+        self.dbPath = dbPath
+        self.exists = exists
+        self.sizeBytes = sizeBytes
+        self.lastMigration = lastMigration
+        self.snapshotCounts = snapshotCounts
     }
 }
 
