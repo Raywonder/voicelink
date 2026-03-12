@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import AVFoundation
 import AppKit
@@ -29,6 +30,7 @@ struct VoiceLinkApp: App {
                 }
                 .sheet(isPresented: $appState.showBugReport) {
                     BugReportView()
+                        .environmentObject(appState)
                 }
                 .sheet(isPresented: $showUpdaterSheet) {
                     UpdateSettingsView()
@@ -46,13 +48,8 @@ struct VoiceLinkApp: App {
                     Button("Sign Out This Mac", role: .destructive) {
                         AuthenticationManager.shared.logout()
                     }
-                    if licensingManager.devices.contains(where: {
-                        $0.id != licensingManager.currentDeviceUUID
-                            && !($0.platform == licensingManager.currentDevicePlatform && $0.name == licensingManager.currentDeviceName)
-                    }) {
-                        Button("Manage Other Devices") {
-                            showOtherDevicesSheet = true
-                        }
+                    Button("Manage Other Devices") {
+                        showOtherDevicesSheet = true
                     }
                     if !licensingManager.devices.isEmpty {
                         Button("Sign Out All Devices", role: .destructive) {
@@ -83,6 +80,14 @@ struct VoiceLinkApp: App {
                             await licensingManager.refreshForCurrentUser()
                         }
                         showLogoutOptions = true
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .returnToActiveRoomAfterUpdateDismiss)) { _ in
+                    showUpdaterSheet = false
+                    if appState.currentRoom == nil, appState.hasMinimizedRoom {
+                        appState.restoreMinimizedRoom()
+                    } else if appState.hasActiveRoom {
+                        appState.currentScreen = .voiceChat
                     }
                 }
                 .onAppear {
@@ -297,7 +302,7 @@ struct VoiceLinkApp: App {
                     }
                     .keyboardShortcut("q", modifiers: [.command, .shift])
                 } else {
-                    Button("Login with Mastodon") {
+                    Button("Open Login Menu") {
                         appState.currentScreen = .login
                     }
                     .keyboardShortcut("l", modifiers: .command)
@@ -491,6 +496,7 @@ struct VoiceLinkApp: App {
 
 extension Notification.Name {
     static let requestLogoutConfirmation = Notification.Name("requestLogoutConfirmation")
+    static let startupIntroDidFinish = Notification.Name("startupIntroDidFinish")
     static let toggleMute = Notification.Name("toggleMute")
     static let toggleDeafen = Notification.Name("toggleDeafen")
     static let roomJoined = Notification.Name("roomJoined")
@@ -504,7 +510,10 @@ extension Notification.Name {
     static let roomActionLeave = Notification.Name("roomActionLeave")
     static let roomActionJoin = Notification.Name("roomActionJoin")
     static let roomActionOpenSettings = Notification.Name("roomActionOpenSettings")
+    static let roomActionEditRoom = Notification.Name("roomActionEditRoom")
     static let reopenRoomDetailsSheet = Notification.Name("reopenRoomDetailsSheet")
+    static let roomConfigurationChanged = Notification.Name("roomConfigurationChanged")
+    static let serverConfigurationChanged = Notification.Name("serverConfigurationChanged")
     static let roomActionCreate = Notification.Name("roomActionCreate")
     static let roomActionDelete = Notification.Name("roomActionDelete")
     static let roomActionToggleLock = Notification.Name("roomActionToggleLock")
@@ -653,19 +662,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func handleURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
-        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-              let url = URL(string: urlString) else {
-            return
-        }
-
-        print("[AppDelegate] Received URL: \(url)")
-
-        // Show app window and handle URL
+        print("[AppDelegate] Received external URL event")
         showMainWindow()
-
-        Task { @MainActor in
-            URLHandler.shared.handleURL(url)
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -796,6 +794,11 @@ class AppState: ObservableObject {
         }
     }
 
+    struct PendingGuestJoinRequest: Equatable {
+        let roomId: String
+        let roomName: String
+    }
+
     enum HandoffDecision: String {
         case accept
         case decline
@@ -813,7 +816,9 @@ class AppState: ObservableObject {
     @Published var rooms: [Room] = []
     @Published var localIP: String = "Detecting..."
     @Published var serverStatus: ServerStatus = .offline
-    @Published var username: String = "User\(Int.random(in: 1000...9999))"
+    @Published var username: String = "Guest"
+    @Published var guestSessionDisplayName: String = ""
+    @Published var showGuestNamePrompt: Bool = false
     @Published var errorMessage: String?
     @Published var showAnnouncements: Bool = false
     @Published var showBugReport: Bool = false
@@ -833,6 +838,7 @@ class AppState: ObservableObject {
     private var lastHandoffOfferId: String?
     private var pendingHandoffRoom: Room?
     private var pendingHandoffTargetURL: String?
+    private var pendingGuestJoinRequest: PendingGuestJoinRequest?
 
     let serverManager = ServerManager.shared
     let licensing = LicensingManager.shared
@@ -899,6 +905,21 @@ class AppState: ObservableObject {
         setupURLObservers()
         setupHandoffObservers()
         refreshAdminCapabilities()
+        observeAuthenticationState()
+    }
+
+    private func observeAuthenticationState() {
+        AuthenticationManager.shared.$currentUser
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] user in
+                guard let self else { return }
+                if user != nil {
+                    self.guestSessionDisplayName = ""
+                    self.pendingGuestJoinRequest = nil
+                    self.showGuestNamePrompt = false
+                }
+            }
+            .store(in: &cancellables)
     }
 
     private func setupLicensingObservers() {
@@ -987,6 +1008,9 @@ class AppState: ObservableObject {
                 currentScreen = .voiceChat
                 return
             }
+            if requiresGuestDisplayName(roomId: roomId, roomName: roomId) {
+                return
+            }
             let joinName = preferredDisplayName()
             username = joinName
             pendingJoinRoomId = roomId
@@ -1025,6 +1049,9 @@ class AppState: ObservableObject {
             }
             if activeRoomId == code {
                 currentScreen = .voiceChat
+                return
+            }
+            if requiresGuestDisplayName(roomId: code, roomName: code) {
                 return
             }
             let joinName = preferredDisplayName()
@@ -1479,6 +1506,19 @@ class AppState: ObservableObject {
             }
             RoomLockManager.shared.toggleLock()
         }
+        NotificationCenter.default.addObserver(forName: .roomConfigurationChanged, object: nil, queue: nil) { [weak self] notification in
+            guard let self else { return }
+            self.refreshRooms()
+            if let changedRoom = notification.object as? Room,
+               self.activeRoomId == changedRoom.id {
+                self.currentRoom = changedRoom
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .serverConfigurationChanged, object: nil, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.refreshRooms()
+            AppSoundManager.shared.startStartupAmbienceIfNeeded()
+        }
     }
 
     private func setupWindowBehaviorObservers() {
@@ -1693,23 +1733,19 @@ class AppState: ObservableObject {
     }
 
     func canManageRoom(_ room: Room) -> Bool {
-        let role = room.createdByRole?.lowercased() ?? ""
         let createdBy = room.createdBy?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let currentUser = AuthenticationManager.shared.currentUser
+        let isAuthenticated = AuthenticationManager.shared.authState == .authenticated && currentUser != nil
         let ownerCandidates = Set([
-            preferredDisplayName().trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-            username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             currentUser?.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "",
             currentUser?.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "",
             currentUser?.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         ]).filter { !$0.isEmpty }
-        let isRoomOwnerByIdentity = !createdBy.isEmpty && ownerCandidates.contains(createdBy)
+        let isRoomOwnerByIdentity = isAuthenticated && !createdBy.isEmpty && ownerCandidates.contains(createdBy)
 
         return SettingsManager.shared.adminGodModeEnabled
             || AdminServerManager.shared.isAdmin
             || AdminServerManager.shared.adminRole.canManageRooms
-            || role.contains("admin")
-            || role.contains("owner")
             || isRoomOwnerByIdentity
     }
 
@@ -1726,11 +1762,11 @@ class AppState: ObservableObject {
     }
 
     func preferredDisplayName() -> String {
-        let nickname = SettingsManager.shared.userNickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !nickname.isEmpty {
-            return nickname
-        }
         if let user = AuthenticationManager.shared.currentUser {
+            let nickname = SettingsManager.shared.userNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !nickname.isEmpty {
+                return nickname
+            }
             let display = user.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
             if !display.isEmpty {
                 return display
@@ -1740,7 +1776,47 @@ class AppState: ObservableObject {
                 return username
             }
         }
+        let guestName = guestSessionDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !guestName.isEmpty {
+            return guestName
+        }
+        let nickname = SettingsManager.shared.userNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !nickname.isEmpty {
+            return nickname
+        }
         return username
+    }
+
+    private var isGuestSession: Bool {
+        AuthenticationManager.shared.currentUser == nil
+            || AuthenticationManager.shared.authState != .authenticated
+    }
+
+    private func requiresGuestDisplayName(roomId: String, roomName: String) -> Bool {
+        guard isGuestSession else { return false }
+        if !guestSessionDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return false
+        }
+        pendingGuestJoinRequest = PendingGuestJoinRequest(roomId: roomId, roomName: roomName)
+        errorMessage = "Welcome, Guest. Enter a display name before joining \(roomName)."
+        showGuestNamePrompt = true
+        return true
+    }
+
+    func commitGuestDisplayNameAndContinue(_ displayName: String) {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            errorMessage = "Enter a guest display name before joining a room."
+            return
+        }
+        guestSessionDisplayName = trimmed
+        username = trimmed
+        showGuestNamePrompt = false
+        guard let pending = pendingGuestJoinRequest else { return }
+        pendingGuestJoinRequest = nil
+        pendingJoinRoomId = pending.roomId
+        errorMessage = "Joining \(pending.roomName)..."
+        serverManager.joinRoom(roomId: pending.roomId, username: trimmed)
     }
 
     func exportUserDataSnapshot() {
@@ -1847,6 +1923,9 @@ class AppState: ObservableObject {
         }
 
         errorMessage = nil
+        if requiresGuestDisplayName(roomId: room.id, roomName: room.name) {
+            return
+        }
         let joinName = preferredDisplayName()
         username = joinName
         pendingJoinRoomId = room.id
@@ -1924,6 +2003,27 @@ class AppState: ObservableObject {
         return false
     }
 
+    func openHiddenRoom(roomId: String, roomName: String? = nil) {
+        let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if hasActiveRoom {
+            let fromName = currentRoom?.name ?? minimizedRoom?.name ?? "current room"
+            errorMessage = "Leaving \(fromName) and opening support room."
+            AccessibilityManager.shared.announceStatus("Leaving \(fromName) and opening support room.")
+            serverManager.leaveRoom()
+            currentRoom = nil
+            minimizedRoom = nil
+        }
+
+        focusedRoomId = trimmed
+        pendingJoinRoomId = trimmed
+        errorMessage = "Opening \(roomName ?? "support room")..."
+        let joinName = preferredDisplayName()
+        username = joinName
+        serverManager.joinRoom(roomId: trimmed, username: joinName)
+    }
+
     func minimizeCurrentRoom() {
         guard let room = currentRoom else { return }
         minimizedRoom = room
@@ -1943,13 +2043,15 @@ class AppState: ObservableObject {
     func closeAdminScreen() {
         let roomToRestore = roomToRestoreAfterAdminClose
         roomToRestoreAfterAdminClose = nil
-        currentScreen = .mainMenu
         errorMessage = nil
 
-        guard let room = roomToRestore else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            NotificationCenter.default.post(name: .reopenRoomDetailsSheet, object: room)
+        guard let room = roomToRestore else {
+            currentScreen = .mainMenu
+            return
         }
+
+        currentRoom = room
+        currentScreen = .voiceChat
     }
 
     func leaveCurrentRoom() {
@@ -2142,27 +2244,10 @@ class AppState: ObservableObject {
 
     private func disableRoomFromDeletionPrompt(_ room: Room) async -> Bool {
         let replacement = suggestedReplacementRoom(excluding: room)
-        let adminRoom = AdminRoomInfo(
-            id: room.id,
-            name: room.name,
-            description: room.description,
-            isPrivate: room.isPrivate,
-            maxUsers: room.maxUsers,
-            userCount: room.userCount,
-            createdBy: nil,
-            createdAt: nil,
-            isPermanent: false,
-            backgroundStream: nil,
-            visibility: room.isPrivate ? "private" : "public",
-            accessType: room.roomType,
-            hidden: true,
-            locked: room.userCount > 0 ? true : nil,
-            enabled: false,
-            isDefault: false,
-            hostServerName: room.hostServerName,
-            hostServerOwner: nil,
-            serverSource: room.hostServerName
-        )
+        var adminRoom = adminEditableRoomInfo(for: room)
+        adminRoom.hidden = true
+        adminRoom.locked = room.userCount > 0 ? true : nil
+        adminRoom.enabled = false
         let updated = await AdminServerManager.shared.updateRoom(adminRoom)
         if updated {
             await MainActor.run {
@@ -2173,6 +2258,33 @@ class AppState: ObservableObject {
             }
         }
         return updated
+    }
+
+    func adminEditableRoomInfo(for room: Room) -> AdminRoomInfo {
+        AdminRoomInfo(
+            id: room.id,
+            name: room.name,
+            description: room.description,
+            isPrivate: room.isPrivate,
+            maxUsers: room.maxUsers,
+            userCount: room.userCount,
+            createdBy: nil,
+            createdAt: room.createdAt,
+            isPermanent: false,
+            backgroundStream: nil,
+            visibility: room.isPrivate ? "private" : "public",
+            accessType: room.roomType,
+            hidden: nil,
+            locked: nil,
+            enabled: nil,
+            isDefault: nil,
+            hostServerName: room.hostServerName,
+            hostServerOwner: room.hostServerOwner,
+            serverSource: room.hostServerName,
+            updatedBy: nil,
+            updatedAt: room.lastActivityAt,
+            previousNames: []
+        )
     }
 
     func detectLocalIP() {
@@ -2305,6 +2417,7 @@ struct ContentView: View {
     @ObservedObject private var soundManager = AppSoundManager.shared
     @State private var showJukeboxSheet = false
     @State private var showFileTransfersSheet = false
+    @State private var guestDisplayNameInput = ""
 
     var body: some View {
         ZStack {
@@ -2393,6 +2506,24 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openFileTransfers)) { _ in
             showFileTransfersSheet = true
         }
+        .onAppear {
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
+        .onChange(of: appState.currentRoom?.id) { _ in
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
+        .onChange(of: appState.minimizedRoom?.id) { _ in
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
+        .onChange(of: appState.serverManager.serverConfig?.backgroundStreams?.preJoinEnabled) { _ in
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
+        .onChange(of: appState.serverManager.serverConfig?.backgroundStreams?.preJoinStreamId) { _ in
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .startupIntroDidFinish)) { _ in
+            soundManager.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+        }
         .sheet(isPresented: $showJukeboxSheet) {
             NavigationView {
                 JellyfinView()
@@ -2416,6 +2547,39 @@ struct ContentView: View {
                     }
             }
             .frame(minWidth: 760, minHeight: 520)
+        }
+        .sheet(isPresented: $appState.showGuestNamePrompt) {
+            VStack(spacing: 16) {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+                    .font(.system(size: 48))
+                    .foregroundColor(.blue)
+                Text("Welcome, Guest")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("Enter a display name before joining your first room. This name stays in use until you close the app or sign in with an account.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                TextField("Display Name", text: $guestDisplayNameInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                HStack(spacing: 12) {
+                    Button("Cancel") {
+                        appState.showGuestNamePrompt = false
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Continue") {
+                        appState.commitGuestDisplayNameAndContinue(guestDisplayNameInput)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(guestDisplayNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+            .onAppear {
+                guestDisplayNameInput = appState.guestSessionDisplayName
+            }
         }
         .alert(
             "Maintenance Handoff Available",
@@ -2475,6 +2639,7 @@ struct VoiceChatView: View {
     @State private var chatShareInProgress = false
     @State private var selectedRoomDetails: Room?
     @State private var selectedRoomActionRoom: Room?
+    @State private var roomBeingEditedFromMenu: AdminRoomInfo?
     @State private var showEscortSheet = false
 
     private var meDisplayName: String {
@@ -2569,17 +2734,11 @@ struct VoiceChatView: View {
 
     private var inRoomAnnouncementText: String {
         guard let config = appState.serverManager.serverConfig else { return "" }
-        let welcome = config.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let motd = config.motd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let settings = config.motdSettings
 
         guard settings.enabled, settings.showInRoom else { return "" }
-
-        if settings.appendToWelcomeMessage {
-            return [welcome, motd].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        }
-
-        return motd.isEmpty ? welcome : motd
+        return motd
     }
 
     private var canControlRoomMedia: Bool {
@@ -2591,9 +2750,13 @@ struct VoiceChatView: View {
             || ((appState.serverManager.currentRoomMedia?.active) == true)
     }
 
+    private var isSupportRoom: Bool {
+        appState.currentRoom?.roomType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "support"
+    }
+
     @ViewBuilder
     private var roomMediaSection: some View {
-        if let media = appState.serverManager.currentRoomMedia, media.active {
+        if !isSupportRoom, let media = appState.serverManager.currentRoomMedia, media.active {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -2621,6 +2784,15 @@ struct VoiceChatView: View {
                 }
 
                 HStack(spacing: 10) {
+                    if hasRoomMediaAvailable {
+                        Button("Stop Playing Here") {
+                            appState.serverManager.stopCurrentRoomMedia()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canControlRoomMedia)
+                        .accessibilityHint("Stops room media playback for your current session.")
+                    }
+
                     Button(appState.serverManager.isCurrentRoomMediaMuted ? "Unmute Stream" : "Mute Stream") {
                         appState.serverManager.toggleCurrentRoomMediaMuted()
                     }
@@ -2671,9 +2843,6 @@ struct VoiceChatView: View {
                 Spacer()
 
                 Menu {
-                    Button("Room Actions...") {
-                        openRoomActionsMenu()
-                    }
                     Button("Room Details") {
                         if let room = appState.currentRoom {
                             selectedRoomDetails = room
@@ -2681,6 +2850,14 @@ struct VoiceChatView: View {
                     }
                     Button("Open Jukebox") {
                         NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
+                    }
+                    if hasRoomMediaAvailable {
+                        Button("Stop Playing Here") {
+                            appState.serverManager.stopCurrentRoomMedia()
+                        }
+                        Button(appState.serverManager.isCurrentRoomMediaMuted ? "Unmute Stream" : "Mute Stream") {
+                            appState.serverManager.toggleCurrentRoomMediaMuted()
+                        }
                     }
                     Button("Share Room Link") {
                         guard let room = appState.currentRoom else { return }
@@ -2703,7 +2880,11 @@ struct VoiceChatView: View {
                         showEscortSheet = true
                     }
                     if let room = appState.currentRoom, appState.canManageRoom(room) {
-                        Button("Server Administration") {
+                        Button("Edit This Room") {
+                            NotificationCenter.default.post(name: .roomActionEditRoom, object: room)
+                        }
+                        Button("Open Server Administration") {
+                            appState.roomToRestoreAfterAdminClose = room
                             appState.currentScreen = .admin
                         }
                         Divider()
@@ -2885,6 +3066,7 @@ struct VoiceChatView: View {
             ChatConversationSidebar(
                 visibleRoomUsers: visibleRoomUsers,
                 selectedDirectMessageUserId: selectedDirectMessageUserId,
+                selectedDirectMessageUserName: selectedDirectMessageUserName,
                 unreadCounts: messagingManager.unreadCounts,
                 onSelectMainRoomChat: {
                     selectedDirectMessageUserId = nil
@@ -3013,12 +3195,61 @@ struct VoiceChatView: View {
             messagingManager.sendSystemMessage(message)
             AccessibilityManager.shared.announce(message, priority: .status, withSound: true, category: .status)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .remoteCommandSuccess)) { notification in
+            guard SettingsManager.shared.systemActionNotifications else { return }
+            let payload = (notification.object as? [String: Any])
+                ?? (notification.userInfo?.reduce(into: [String: Any]()) { partialResult, item in
+                    if let key = item.key as? String {
+                        partialResult[key] = item.value
+                    }
+                } ?? [:])
+            let command = (payload["command"] as? String ?? "command").lowercased()
+            let rawServerName = appState.serverManager.connectedServer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let serverName = rawServerName.isEmpty ? "server" : rawServerName
+            let message: String
+            switch command {
+            case "restart":
+                message = "System. \(serverName) is restarting. Active rooms will reconnect when it is back."
+            case "start":
+                message = "System. \(serverName) is starting."
+            case "stop":
+                message = "System. \(serverName) is stopping."
+            default:
+                message = "System. \(serverName) command completed."
+            }
+            messagingManager.sendSystemMessage(message)
+            AccessibilityManager.shared.announce(
+                message,
+                priority: .status,
+                withSound: SettingsManager.shared.systemActionNotificationSound,
+                category: .status
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .remoteCommandFailed)) { notification in
+            guard SettingsManager.shared.systemActionNotifications else { return }
+            let payload = (notification.object as? [String: Any])
+                ?? (notification.userInfo?.reduce(into: [String: Any]()) { partialResult, item in
+                    if let key = item.key as? String {
+                        partialResult[key] = item.value
+                    }
+                } ?? [:])
+            let error = payload["error"] as? String ?? "Remote command failed."
+            let message = "System. \(error)"
+            messagingManager.sendSystemMessage(message)
+            AccessibilityManager.shared.announce(
+                message,
+                priority: .status,
+                withSound: SettingsManager.shared.systemActionNotificationSound,
+                category: .status
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openEscortWindow)) { _ in
             guard appState.currentRoom != nil else { return }
             showEscortSheet = true
         }
         .sheet(isPresented: $showRoomActionsSheet, onDismiss: {
             selectedRoomActionRoom = nil
+            AppSoundManager.shared.playMenuCloseSound()
         }) {
             if let room = selectedRoomActionRoom ?? appState.currentRoom {
                 RoomActionMenu(room: room, isInRoom: true, isPresented: $showRoomActionsSheet)
@@ -3049,17 +3280,34 @@ struct VoiceChatView: View {
                             hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
                         )
                     )
-                },
-                onOpenActions: {
-                    selectedRoomActionRoom = room
-                    showRoomActionsSheet = true
                 }
             )
+        }
+        .sheet(item: $roomBeingEditedFromMenu) { room in
+            AdminRoomEditSheet(room: room) { updatedRoom in
+                Task {
+                    _ = await AdminServerManager.shared.updateRoom(updatedRoom)
+                    await AdminServerManager.shared.fetchRooms()
+                    await MainActor.run {
+                        appState.refreshRooms()
+                        roomBeingEditedFromMenu = nil
+                    }
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .reopenRoomDetailsSheet)) { notification in
             guard appState.currentScreen == .voiceChat else { return }
             guard let room = notification.object as? Room else { return }
             selectedRoomDetails = room
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roomActionEditRoom)) { notification in
+            guard let room = notification.object as? Room else { return }
+            guard appState.canManageRoom(room) else {
+                appState.errorMessage = "Edit denied for \(room.name). Your current account is not recognized as owner/admin on this server."
+                return
+            }
+            appState.setFocusedRoom(room)
+            roomBeingEditedFromMenu = appState.adminEditableRoomInfo(for: room)
         }
         .sheet(isPresented: $showChatShareSheet, onDismiss: resetChatShareDraft) {
             if !pendingChatShareURLs.isEmpty {
@@ -3146,8 +3394,10 @@ struct VoiceChatView: View {
         let expiryHours = keepForever ? nil : max(1, min(24 * 60, chatShareExpiryHours))
         let caption = chatShareCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedFiles = pendingChatShareURLs
+        let targetDirectUserId = selectedDirectMessageUserId
+        let targetDirectUserName = selectedDirectMessageUserName
         let currentUserId = AuthenticationManager.shared.currentUser?.id ?? ""
-        let isSelfTransfer = selectedDirectMessageUserId == currentUserId && !currentUserId.isEmpty
+        let isSelfTransfer = targetDirectUserId == currentUserId && !currentUserId.isEmpty
         let licenseManager = LicensingManager.shared
         let formatter = ISO8601DateFormatter()
         let currentDeviceUUID = licenseManager.currentDeviceUUID
@@ -3160,9 +3410,23 @@ struct VoiceChatView: View {
             guard let lastSeen = formatter.date(from: device.lastSeen) else { return false }
             return Date().timeIntervalSince(lastSeen) <= 300
         }
+        let attachmentName = selectedFiles.count > 1
+            ? "\(selectedFiles.count) files"
+            : selectedFiles[0].lastPathComponent
 
-        if let recipientId = selectedDirectMessageUserId,
-           let recipientName = selectedDirectMessageUserName {
+        showChatShareSheet = false
+        resetChatShareDraft()
+
+        if targetDirectUserId == nil {
+            messagingManager.sendSystemMessage(
+                selectedFiles.count > 1
+                    ? "Uploading \(selectedFiles.count) files to this room..."
+                    : "Uploading \(attachmentName) to this room..."
+            )
+        }
+
+        if let recipientId = targetDirectUserId,
+           let recipientName = targetDirectUserName {
             let trackedURL: URL?
             if selectedFiles.count > 1 {
                 trackedURL = try? FileTransferManager.shared.createZipArchive(
@@ -3188,14 +3452,12 @@ struct VoiceChatView: View {
                 }
             }
             do {
-                let attachmentName = selectedFiles.count > 1
-                    ? "\(selectedFiles.count) files"
-                    : selectedFiles[0].lastPathComponent
+                let uploadBasePath = "/uploads/voicelink-exports"
                 let link: CopyPartyManager.ProtectedShareLink
                 if selectedFiles.count > 1 {
                     link = try await CopyPartyManager.shared.uploadFilesAndCreateProtectedLink(
                         from: selectedFiles,
-                        to: "/uploads/chat",
+                        to: uploadBasePath,
                         folderName: "VoiceLink-Chat-Files",
                         keepForever: keepForever,
                         expiryHours: expiryHours
@@ -3203,16 +3465,16 @@ struct VoiceChatView: View {
                 } else {
                     link = try await CopyPartyManager.shared.uploadFileAndCreateProtectedLink(
                         from: selectedFiles[0],
-                        to: "/uploads/chat",
+                        to: uploadBasePath,
                         keepForever: keepForever,
                         expiryHours: expiryHours
                     )
                 }
                 DispatchQueue.main.async {
-                    if let userId = selectedDirectMessageUserId {
+                    if let userId = targetDirectUserId {
                         messagingManager.sendDirectAttachment(
                             to: userId,
-                            username: selectedDirectMessageUserName ?? (isSelfTransfer ? "Saved Items" : "User"),
+                            username: targetDirectUserName ?? (isSelfTransfer ? "Saved Items" : "User"),
                             content: isSelfTransfer
                                 ? (selectedFiles.count > 1 ? "Saved \(selectedFiles.count) files for later." : "Saved file for later: \(attachmentName)")
                                 : (selectedFiles.count > 1 ? "Shared \(selectedFiles.count) files." : "Shared file: \(attachmentName)"),
@@ -3239,10 +3501,14 @@ struct VoiceChatView: View {
                             caption: caption,
                             expiresAt: link.expiresAt
                         )
+                        messagingManager.sendSystemMessage(
+                            keepForever
+                                ? "Shared \(attachmentName) with the room using a persistent link."
+                                : "Shared \(attachmentName) with the room. Link expires \(link.expiresAt?.formatted(date: .abbreviated, time: .shortened) ?? "later")."
+                        )
                     }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(link.url, forType: .string)
-                    showChatShareSheet = false
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -3271,6 +3537,7 @@ struct VoiceChatView: View {
         chatShareCaption = ""
         chatShareKeepForever = false
         chatShareExpiryHours = 24
+        showChatShareSheet = false
     }
 
     private func actionForDirectMessage(to message: MessagingManager.ChatMessage) -> (() -> Void)? {
@@ -3343,7 +3610,6 @@ struct VoiceChatView: View {
             }
 
             pendingEscapeTimestamp = now
-            AccessibilityManager.shared.announce("Press Escape again to open room actions")
             return nil
         }
     }
@@ -3370,7 +3636,11 @@ struct VoiceChatView: View {
 
     private func openRoomActionsMenu(for room: Room? = nil) {
         selectedRoomActionRoom = room ?? appState.currentRoom
-        showRoomActionsSheet = selectedRoomActionRoom != nil
+        let shouldPresent = selectedRoomActionRoom != nil
+        showRoomActionsSheet = shouldPresent
+        if shouldPresent {
+            AppSoundManager.shared.playMenuOpenSound()
+        }
     }
 }
 

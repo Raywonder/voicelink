@@ -12,6 +12,7 @@ class AdminServerManager: ObservableObject {
     @Published var advancedServerSettings: AdvancedServerSettings?
     @Published var connectedUsers: [AdminUserInfo] = []
     @Published var serverRooms: [AdminRoomInfo] = []
+    @Published var supportSessions: [AdminSupportSessionInfo] = []
     @Published var serverStats: ServerStats?
     @Published var availableModules: [AdminModuleInfo] = []
     @Published var serverLogLines: [String] = []
@@ -174,7 +175,16 @@ class AdminServerManager: ObservableObject {
                     return
                 }
                 if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                    error = "Advanced settings access denied (\(httpResponse.statusCode))."
+                    // Treat advanced settings auth denial as non-fatal; core admin tabs can still work.
+                    if advancedServerSettings == nil {
+                        advancedServerSettings = AdvancedServerSettings(
+                            maxRooms: serverConfig?.maxRooms ?? 100,
+                            requireAuth: serverConfig?.requireAuth ?? false,
+                            database: DatabaseConfig()
+                        )
+                    }
+                    currentServerURL = base
+                    return
                 }
             } catch {
                 self.error = "Failed to fetch advanced server settings: \(error.localizedDescription)"
@@ -217,6 +227,7 @@ class AdminServerManager: ObservableObject {
             }
 
             serverConfig = config
+            NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
             return true
         } catch {
             self.error = error.localizedDescription
@@ -547,6 +558,27 @@ class AdminServerManager: ObservableObject {
                 if let idx = serverRooms.firstIndex(where: { $0.id == room.id }) {
                     serverRooms[idx] = room
                 }
+                NotificationCenter.default.post(
+                    name: .roomConfigurationChanged,
+                    object: Room(
+                        id: room.id,
+                        name: room.name,
+                        description: room.description,
+                        userCount: room.userCount,
+                        isPrivate: (room.visibility ?? (room.isPrivate ? "private" : "public")).localizedCaseInsensitiveContains("private"),
+                        maxUsers: room.maxUsers,
+                        createdBy: room.createdBy,
+                        createdByRole: nil,
+                        roomType: nil,
+                        createdAt: room.createdAt,
+                        uptimeSeconds: nil,
+                        lastActiveUsername: nil,
+                        lastActivityAt: nil,
+                        hostServerName: room.hostServerName,
+                        hostServerOwner: room.hostServerOwner,
+                        spatialAudioEnabled: nil
+                    )
+                )
                 return true
             }
             if let http = response as? HTTPURLResponse {
@@ -555,6 +587,154 @@ class AdminServerManager: ObservableObject {
             return false
         } catch {
             self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: - Support Sessions
+
+    func fetchSupportSessions() async {
+        guard canManageUsersEffective else { return }
+
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/support/sessions") else {
+            error = "Invalid support sessions URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return }
+            guard httpResponse.statusCode == 200 else {
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    supportSessions = []
+                    return
+                }
+                error = "Failed to fetch support sessions (\(httpResponse.statusCode))"
+                return
+            }
+
+            let sessions = try await Task.detached(priority: .userInitiated) {
+                guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rawSessions = payload["sessions"] as? [[String: Any]] else {
+                    return [AdminSupportSessionInfo]()
+                }
+                return rawSessions.compactMap(Self.adminSupportSession(from:))
+                    .sorted {
+                        let lhs = $0.updatedAt ?? $0.createdAt ?? .distantPast
+                        let rhs = $1.updatedAt ?? $1.createdAt ?? .distantPast
+                        return lhs > rhs
+                    }
+            }.value
+
+            supportSessions = sessions
+        } catch {
+            supportSessions = []
+        }
+    }
+
+    func pickupSupportSession(_ sessionId: String) async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/support/sessions/\(sessionId)/pickup") else {
+            error = "Invalid support pickup URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            guard httpResponse.statusCode == 200 else {
+                error = "Unable to pick up support session (\(httpResponse.statusCode)): \(String(data: data, encoding: .utf8) ?? "Unknown error")"
+                return false
+            }
+            await fetchSupportSessions()
+            return true
+        } catch {
+            self.error = "Unable to pick up support session: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func closeSupportSession(_ sessionId: String, reason: String = "completed") async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/support/sessions/\(sessionId)/end") else {
+            error = "Invalid support close URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "reason": reason,
+            "status": "closed"
+        ])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            guard httpResponse.statusCode == 200 else {
+                error = "Unable to close support session (\(httpResponse.statusCode)): \(String(data: data, encoding: .utf8) ?? "Unknown error")"
+                return false
+            }
+            await fetchSupportSessions()
+            await fetchRooms()
+            return true
+        } catch {
+            self.error = "Unable to close support session: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func createOrAttachSupportTicket(for sessionId: String) async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/support/sessions/\(sessionId)/attach-whmcs-ticket") else {
+            error = "Invalid support ticket URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            guard httpResponse.statusCode == 200 else {
+                error = "Unable to attach support ticket (\(httpResponse.statusCode)): \(String(data: data, encoding: .utf8) ?? "Unknown error")"
+                return false
+            }
+            await fetchSupportSessions()
+            return true
+        } catch {
+            self.error = "Unable to attach support ticket: \(error.localizedDescription)"
             return false
         }
     }
@@ -645,11 +825,17 @@ class AdminServerManager: ObservableObject {
             enabled: !streams.isEmpty,
             streams: streams,
             defaultVolume: existing.defaultVolume,
-            fadeInDuration: existing.fadeInDuration
+            fadeInDuration: existing.fadeInDuration,
+            autoRefreshEnabled: existing.autoRefreshEnabled,
+            autoReconnectDropped: existing.autoReconnectDropped,
+            metadataRefreshIntervalSeconds: existing.metadataRefreshIntervalSeconds,
+            preJoinEnabled: existing.preJoinEnabled,
+            preJoinStreamId: existing.preJoinStreamId
         )
         let success = await updateServerConfig(config)
         if success {
             serverConfig = config
+            NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
         }
         return success
     }
@@ -661,6 +847,7 @@ class AdminServerManager: ObservableObject {
         let success = await updateServerConfig(serverConfig)
         if success {
             self.serverConfig = serverConfig
+            NotificationCenter.default.post(name: .serverConfigurationChanged, object: serverConfig)
         }
         return success
     }
@@ -744,6 +931,7 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
         let encoder = JSONEncoder()
         request.httpBody = try? encoder.encode(settings)
@@ -821,6 +1009,7 @@ class AdminServerManager: ObservableObject {
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
 
         let payload: [String: Any] = [
             "enabled": settings.enabled,
@@ -1268,6 +1457,10 @@ class AdminServerManager: ObservableObject {
         return APIEndpointResolver.canonicalMainBase
     }
 
+    var resolvedServerURL: String {
+        effectiveServerURL
+    }
+
     nonisolated private static func sourceLabel(from base: String) -> String {
         if let host = URL(string: base)?.host?.trimmingCharacters(in: .whitespacesAndNewlines),
            !host.isEmpty {
@@ -1340,6 +1533,59 @@ class AdminServerManager: ObservableObject {
             updatedAt: Self.parseDate(dict["updatedAt"] ?? dict["lastUpdated"]),
             previousNames: Self.parseStringArray(dict["previousNames"] ?? dict["nameHistory"] ?? dict["priorNames"])
         )
+    }
+
+    nonisolated private static func adminSupportSession(from dict: [String: Any]) -> AdminSupportSessionInfo? {
+        guard let id = dict["id"] as? String, !id.isEmpty else { return nil }
+        return AdminSupportSessionInfo(
+            id: id,
+            userId: dict["userId"] as? String,
+            userName: (dict["userName"] as? String) ?? "Guest",
+            userEmail: dict["userEmail"] as? String,
+            issue: (dict["issue"] as? String) ?? "",
+            roomId: dict["roomId"] as? String,
+            roomName: dict["roomName"] as? String,
+            hiddenRoomId: dict["hiddenRoomId"] as? String,
+            hiddenRoomName: dict["hiddenRoomName"] as? String,
+            ticketId: dict["ticketId"] as? String,
+            whmcsTicketId: dict["whmcsTicketId"] as? String,
+            whmcsTicketNumber: dict["whmcsTicketNumber"] as? String,
+            assignedAgentId: dict["assignedAgentId"] as? String,
+            assignedAgentName: dict["assignedAgentName"] as? String,
+            status: (dict["status"] as? String) ?? "pending",
+            channel: (dict["channel"] as? String) ?? "voicelink",
+            supportPinRequired: dict["supportPinRequired"] as? Bool ?? false,
+            supportPinValidated: dict["supportPinValidated"] as? Bool ?? false,
+            pinDelivery: dict["pinDelivery"] as? String,
+            createdAt: Self.parseAdminDate(dict["createdAt"]),
+            updatedAt: Self.parseAdminDate(dict["updatedAt"]),
+            startedAt: Self.parseAdminDate(dict["startedAt"]),
+            endedAt: Self.parseAdminDate(dict["endedAt"]),
+            endReason: dict["endReason"] as? String
+        )
+    }
+
+    nonisolated private static func parseAdminDate(_ raw: Any?) -> Date? {
+        if let timestamp = raw as? TimeInterval {
+            if timestamp > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: timestamp / 1000.0)
+            }
+            return Date(timeIntervalSince1970: timestamp)
+        }
+        if let value = raw as? NSNumber {
+            let timestamp = value.doubleValue
+            if timestamp > 1_000_000_000_000 {
+                return Date(timeIntervalSince1970: timestamp / 1000.0)
+            }
+            return Date(timeIntervalSince1970: timestamp)
+        }
+        if let string = raw as? String {
+            let iso = ISO8601DateFormatter()
+            if let parsed = iso.date(from: string) {
+                return parsed
+            }
+        }
+        return nil
     }
 
     nonisolated private static func parseDate(_ value: Any?) -> Date? {
@@ -1443,11 +1689,11 @@ class AdminServerManager: ObservableObject {
     }
 
     private func getClientId() -> String {
-        if let clientId = UserDefaults.standard.string(forKey: "clientId") {
+        if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
         }
         let newId = UUID().uuidString
-        UserDefaults.standard.set(newId, forKey: "clientId")
+        UserDefaults().set(newId, forKey: "clientId")
         return newId
     }
 }
@@ -1460,6 +1706,7 @@ struct ServerConfig: Codable {
     var maxUsers: Int
     var maxRooms: Int
     var maxUsersPerRoom: Int
+    var lobbyWelcomeMessage: String?
     var welcomeMessage: String?
     var motd: String?
     var motdSettings: MOTDSettings
@@ -1468,6 +1715,7 @@ struct ServerConfig: Codable {
     var allowGuests: Bool
     var maxGuestDuration: Int?
     var enableRateLimiting: Bool
+    var serverVisibility: ServerVisibilityConfig
     var handoffPromptMode: String
     var messageSettings: MessageSettings
     var backgroundStreams: BackgroundStreamsConfig?
@@ -1479,6 +1727,7 @@ struct ServerConfig: Codable {
         case maxUsers
         case maxRooms
         case maxUsersPerRoom
+        case lobbyWelcomeMessage
         case welcomeMessage
         case motd
         case motdSettings
@@ -1487,6 +1736,7 @@ struct ServerConfig: Codable {
         case allowGuests
         case maxGuestDuration
         case enableRateLimiting
+        case serverVisibility
         case handoffPromptMode
         case messageSettings
         case backgroundStreams
@@ -1499,6 +1749,7 @@ struct ServerConfig: Codable {
         maxUsers: Int = 500,
         maxRooms: Int = 100,
         maxUsersPerRoom: Int = 50,
+        lobbyWelcomeMessage: String? = nil,
         welcomeMessage: String? = nil,
         motd: String? = nil,
         motdSettings: MOTDSettings = MOTDSettings(),
@@ -1507,6 +1758,7 @@ struct ServerConfig: Codable {
         allowGuests: Bool = true,
         maxGuestDuration: Int? = nil,
         enableRateLimiting: Bool = true,
+        serverVisibility: ServerVisibilityConfig = ServerVisibilityConfig(),
         handoffPromptMode: String = "serverRecommended",
         messageSettings: MessageSettings = MessageSettings(),
         backgroundStreams: BackgroundStreamsConfig? = nil,
@@ -1517,6 +1769,7 @@ struct ServerConfig: Codable {
         self.maxUsers = maxUsers
         self.maxRooms = maxRooms
         self.maxUsersPerRoom = maxUsersPerRoom
+        self.lobbyWelcomeMessage = lobbyWelcomeMessage
         self.welcomeMessage = welcomeMessage
         self.motd = motd
         self.motdSettings = motdSettings
@@ -1525,6 +1778,7 @@ struct ServerConfig: Codable {
         self.allowGuests = allowGuests
         self.maxGuestDuration = maxGuestDuration
         self.enableRateLimiting = enableRateLimiting
+        self.serverVisibility = serverVisibility
         self.handoffPromptMode = handoffPromptMode
         self.messageSettings = messageSettings
         self.backgroundStreams = backgroundStreams
@@ -1538,6 +1792,7 @@ struct ServerConfig: Codable {
         maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 500
         maxRooms = try container.decodeIfPresent(Int.self, forKey: .maxRooms) ?? 100
         maxUsersPerRoom = try container.decodeIfPresent(Int.self, forKey: .maxUsersPerRoom) ?? 50
+        lobbyWelcomeMessage = try container.decodeIfPresent(String.self, forKey: .lobbyWelcomeMessage)
         welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
         motd = try container.decodeIfPresent(String.self, forKey: .motd)
         motdSettings = try container.decodeIfPresent(MOTDSettings.self, forKey: .motdSettings) ?? MOTDSettings()
@@ -1546,10 +1801,40 @@ struct ServerConfig: Codable {
         allowGuests = try container.decodeIfPresent(Bool.self, forKey: .allowGuests) ?? true
         maxGuestDuration = try container.decodeIfPresent(Int.self, forKey: .maxGuestDuration)
         enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
+        serverVisibility = try container.decodeIfPresent(ServerVisibilityConfig.self, forKey: .serverVisibility) ?? ServerVisibilityConfig()
         handoffPromptMode = try container.decodeIfPresent(String.self, forKey: .handoffPromptMode) ?? "serverRecommended"
         messageSettings = try container.decodeIfPresent(MessageSettings.self, forKey: .messageSettings) ?? MessageSettings()
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
+    }
+}
+
+struct ServerVisibilityConfig: Codable, Equatable {
+    var desktop: Bool
+    var ios: Bool
+    var web: Bool
+    var frontendOpen: Bool
+
+    init(desktop: Bool = true, ios: Bool = true, web: Bool = true, frontendOpen: Bool = true) {
+        self.desktop = desktop
+        self.ios = ios
+        self.web = web
+        self.frontendOpen = frontendOpen
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case desktop
+        case ios
+        case web
+        case frontendOpen
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        desktop = try container.decodeIfPresent(Bool.self, forKey: .desktop) ?? true
+        ios = try container.decodeIfPresent(Bool.self, forKey: .ios) ?? true
+        web = try container.decodeIfPresent(Bool.self, forKey: .web) ?? true
+        frontendOpen = try container.decodeIfPresent(Bool.self, forKey: .frontendOpen) ?? true
     }
 }
 
@@ -1643,6 +1928,7 @@ struct AdvancedServerSettings: Codable, Equatable {
 struct DatabaseConfig: Codable, Equatable {
     var enabled: Bool
     var provider: String
+    var storage: DatabaseStorageConfig
     var sqlite: DatabaseSQLiteConfig
     var postgres: DatabaseNetworkConfig
     var mysql: DatabaseNetworkConfig
@@ -1651,6 +1937,7 @@ struct DatabaseConfig: Codable, Equatable {
     init(
         enabled: Bool = false,
         provider: String = "sqlite",
+        storage: DatabaseStorageConfig = DatabaseStorageConfig(),
         sqlite: DatabaseSQLiteConfig = DatabaseSQLiteConfig(),
         postgres: DatabaseNetworkConfig = DatabaseNetworkConfig(port: 5432),
         mysql: DatabaseNetworkConfig = DatabaseNetworkConfig(port: 3306),
@@ -1658,6 +1945,7 @@ struct DatabaseConfig: Codable, Equatable {
     ) {
         self.enabled = enabled
         self.provider = provider
+        self.storage = storage
         self.sqlite = sqlite
         self.postgres = postgres
         self.mysql = mysql
@@ -1667,6 +1955,7 @@ struct DatabaseConfig: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case enabled
         case provider
+        case storage
         case sqlite
         case postgres
         case mysql
@@ -1677,10 +1966,60 @@ struct DatabaseConfig: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "sqlite"
+        storage = try container.decodeIfPresent(DatabaseStorageConfig.self, forKey: .storage) ?? DatabaseStorageConfig()
         sqlite = try container.decodeIfPresent(DatabaseSQLiteConfig.self, forKey: .sqlite) ?? DatabaseSQLiteConfig()
         postgres = try container.decodeIfPresent(DatabaseNetworkConfig.self, forKey: .postgres) ?? DatabaseNetworkConfig(port: 5432)
         mysql = try container.decodeIfPresent(DatabaseNetworkConfig.self, forKey: .mysql) ?? DatabaseNetworkConfig(port: 3306)
         mariadb = try container.decodeIfPresent(DatabaseNetworkConfig.self, forKey: .mariadb) ?? DatabaseNetworkConfig(port: 3306)
+    }
+}
+
+struct DatabaseStorageConfig: Codable, Equatable {
+    var defaultMode: String
+    var accounts: String
+    var rooms: String
+    var support: String
+    var scheduler: String
+    var diagnostics: String
+    var serverConfig: String
+
+    init(
+        defaultMode: String = "default",
+        accounts: String = "default",
+        rooms: String = "default",
+        support: String = "default",
+        scheduler: String = "default",
+        diagnostics: String = "default",
+        serverConfig: String = "default"
+    ) {
+        self.defaultMode = defaultMode
+        self.accounts = accounts
+        self.rooms = rooms
+        self.support = support
+        self.scheduler = scheduler
+        self.diagnostics = diagnostics
+        self.serverConfig = serverConfig
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case defaultMode
+        case accounts
+        case rooms
+        case support
+        case scheduler
+        case diagnostics
+        case serverConfig
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultMode = try container.decodeIfPresent(String.self, forKey: .defaultMode) ?? "default"
+        accounts = try container.decodeIfPresent(String.self, forKey: .accounts) ?? "default"
+        rooms = try container.decodeIfPresent(String.self, forKey: .rooms) ?? "default"
+        support = try container.decodeIfPresent(String.self, forKey: .support) ?? "default"
+        scheduler = try container.decodeIfPresent(String.self, forKey: .scheduler) ?? "default"
+        diagnostics = try container.decodeIfPresent(String.self, forKey: .diagnostics) ?? "default"
+        serverConfig = try container.decodeIfPresent(String.self, forKey: .serverConfig) ?? "default"
     }
 }
 
@@ -1750,6 +2089,68 @@ struct BackgroundStreamsConfig: Codable {
     var streams: [BackgroundStreamConfig]
     var defaultVolume: Int
     var fadeInDuration: Int
+    var shuffleEnabled: Bool
+    var shuffleIntervalMinutes: Int
+    var autoRefreshEnabled: Bool
+    var autoReconnectDropped: Bool
+    var metadataRefreshIntervalSeconds: Int
+    var preJoinEnabled: Bool
+    var preJoinStreamId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case streams
+        case defaultVolume
+        case fadeInDuration
+        case shuffleEnabled
+        case shuffleIntervalMinutes
+        case autoRefreshEnabled
+        case autoReconnectDropped
+        case metadataRefreshIntervalSeconds
+        case preJoinEnabled
+        case preJoinStreamId
+    }
+
+    init(
+        enabled: Bool = true,
+        streams: [BackgroundStreamConfig] = [],
+        defaultVolume: Int = 60,
+        fadeInDuration: Int = 1500,
+        shuffleEnabled: Bool = false,
+        shuffleIntervalMinutes: Int = 15,
+        autoRefreshEnabled: Bool = true,
+        autoReconnectDropped: Bool = true,
+        metadataRefreshIntervalSeconds: Int = 20,
+        preJoinEnabled: Bool = false,
+        preJoinStreamId: String? = nil
+    ) {
+        self.enabled = enabled
+        self.streams = streams
+        self.defaultVolume = defaultVolume
+        self.fadeInDuration = fadeInDuration
+        self.shuffleEnabled = shuffleEnabled
+        self.shuffleIntervalMinutes = shuffleIntervalMinutes
+        self.autoRefreshEnabled = autoRefreshEnabled
+        self.autoReconnectDropped = autoReconnectDropped
+        self.metadataRefreshIntervalSeconds = metadataRefreshIntervalSeconds
+        self.preJoinEnabled = preJoinEnabled
+        self.preJoinStreamId = preJoinStreamId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        streams = try container.decodeIfPresent([BackgroundStreamConfig].self, forKey: .streams) ?? []
+        defaultVolume = try container.decodeIfPresent(Int.self, forKey: .defaultVolume) ?? 60
+        fadeInDuration = try container.decodeIfPresent(Int.self, forKey: .fadeInDuration) ?? 1500
+        shuffleEnabled = try container.decodeIfPresent(Bool.self, forKey: .shuffleEnabled) ?? false
+        shuffleIntervalMinutes = max(1, try container.decodeIfPresent(Int.self, forKey: .shuffleIntervalMinutes) ?? 15)
+        autoRefreshEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRefreshEnabled) ?? true
+        autoReconnectDropped = try container.decodeIfPresent(Bool.self, forKey: .autoReconnectDropped) ?? true
+        metadataRefreshIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .metadataRefreshIntervalSeconds) ?? 20
+        preJoinEnabled = try container.decodeIfPresent(Bool.self, forKey: .preJoinEnabled) ?? false
+        preJoinStreamId = try container.decodeIfPresent(String.self, forKey: .preJoinStreamId)
+    }
 }
 
 struct BackgroundStreamConfig: Codable, Identifiable {
@@ -1904,6 +2305,41 @@ struct AdminRoomInfo: Codable, Identifiable {
     }
 }
 
+struct AdminSupportSessionInfo: Identifiable, Equatable {
+    let id: String
+    let userId: String?
+    let userName: String
+    let userEmail: String?
+    let issue: String
+    let roomId: String?
+    let roomName: String?
+    let hiddenRoomId: String?
+    let hiddenRoomName: String?
+    let ticketId: String?
+    let whmcsTicketId: String?
+    let whmcsTicketNumber: String?
+    let assignedAgentId: String?
+    let assignedAgentName: String?
+    let status: String
+    let channel: String
+    let supportPinRequired: Bool
+    let supportPinValidated: Bool
+    let pinDelivery: String?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let startedAt: Date?
+    let endedAt: Date?
+    let endReason: String?
+
+    var supportTicketLabel: String? {
+        ticketId ?? whmcsTicketNumber ?? whmcsTicketId
+    }
+
+    var displayRoomName: String {
+        hiddenRoomName ?? roomName ?? hiddenRoomId ?? "No room"
+    }
+}
+
 struct PushoverConfig: Codable, Equatable {
     var enabled: Bool
     var appToken: String?
@@ -1952,6 +2388,10 @@ struct APISyncSettings: Codable {
     var whmcsUrl: String?
     var whmcsApiIdentifier: String?
     var whmcsApiSecret: String?
+    var allowClientChoice: Bool
+    var autoReturnRecoveredUsers: Bool
+    var snapshotIntervalSeconds: Int
+    var routingProfiles: [APISyncRoutingProfile]
 
     enum CodingKeys: String, CodingKey {
         case enabled
@@ -1962,6 +2402,10 @@ struct APISyncSettings: Codable {
         case whmcsUrl
         case whmcsApiIdentifier
         case whmcsApiSecret
+        case allowClientChoice
+        case autoReturnRecoveredUsers
+        case snapshotIntervalSeconds
+        case routingProfiles
     }
 
     init(
@@ -1972,7 +2416,11 @@ struct APISyncSettings: Codable {
         whmcsEnabled: Bool = false,
         whmcsUrl: String? = nil,
         whmcsApiIdentifier: String? = nil,
-        whmcsApiSecret: String? = nil
+        whmcsApiSecret: String? = nil,
+        allowClientChoice: Bool = true,
+        autoReturnRecoveredUsers: Bool = false,
+        snapshotIntervalSeconds: Int = 180,
+        routingProfiles: [APISyncRoutingProfile] = []
     ) {
         self.enabled = enabled
         self.mode = mode
@@ -1982,6 +2430,10 @@ struct APISyncSettings: Codable {
         self.whmcsUrl = whmcsUrl
         self.whmcsApiIdentifier = whmcsApiIdentifier
         self.whmcsApiSecret = whmcsApiSecret
+        self.allowClientChoice = allowClientChoice
+        self.autoReturnRecoveredUsers = autoReturnRecoveredUsers
+        self.snapshotIntervalSeconds = snapshotIntervalSeconds
+        self.routingProfiles = routingProfiles
     }
 
     init(from decoder: Decoder) throws {
@@ -1994,6 +2446,38 @@ struct APISyncSettings: Codable {
         whmcsUrl = try container.decodeIfPresent(String.self, forKey: .whmcsUrl)
         whmcsApiIdentifier = try container.decodeIfPresent(String.self, forKey: .whmcsApiIdentifier)
         whmcsApiSecret = try container.decodeIfPresent(String.self, forKey: .whmcsApiSecret)
+        allowClientChoice = try container.decodeIfPresent(Bool.self, forKey: .allowClientChoice) ?? true
+        autoReturnRecoveredUsers = try container.decodeIfPresent(Bool.self, forKey: .autoReturnRecoveredUsers) ?? false
+        snapshotIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .snapshotIntervalSeconds) ?? 180
+        routingProfiles = try container.decodeIfPresent([APISyncRoutingProfile].self, forKey: .routingProfiles) ?? []
+    }
+}
+
+struct APISyncRoutingProfile: Codable, Identifiable, Hashable {
+    var id: UUID
+    var label: String
+    var targetServer: String
+    var targetType: String
+    var installPath: String?
+    var manualAddress: String?
+    var actions: [String]
+
+    init(
+        id: UUID = UUID(),
+        label: String = "Routing Profile",
+        targetServer: String = "",
+        targetType: String = "domain",
+        installPath: String? = nil,
+        manualAddress: String? = nil,
+        actions: [String] = ["start"]
+    ) {
+        self.id = id
+        self.label = label
+        self.targetServer = targetServer
+        self.targetType = targetType
+        self.installPath = installPath
+        self.manualAddress = manualAddress
+        self.actions = Array(actions.prefix(4))
     }
 }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WebKit
 
 // MARK: - Admin Settings View
 struct AdminSettingsView: View {
@@ -12,6 +13,7 @@ struct AdminSettingsView: View {
     enum AdminTab: String, CaseIterable {
         case overview = "Overview"
         case users = "Users"
+        case support = "Support"
         case rooms = "Rooms"
         case modules = "Modules"
         case deployment = "Deployment"
@@ -81,6 +83,8 @@ struct AdminSettingsView: View {
                         AdminOverviewSection()
                     case .users:
                         AdminUsersSection()
+                    case .support:
+                        AdminSupportSection()
                     case .rooms:
                         AdminRoomsSection()
                     case .modules:
@@ -131,7 +135,12 @@ struct AdminSettingsView: View {
             async let config: Void = adminManager.fetchServerConfig()
             async let advanced: Void = adminManager.fetchAdvancedServerSettings()
             async let modules: Void = adminManager.refreshModulesCenter()
-            _ = await (stats, config, advanced, modules)
+            if canAccessTab(.support) {
+                async let support: Void = adminManager.fetchSupportSessions()
+                _ = await (stats, config, advanced, modules, support)
+            } else {
+                _ = await (stats, config, advanced, modules)
+            }
         }
     }
 
@@ -158,6 +167,8 @@ struct AdminSettingsView: View {
         case .overview:
             return true
         case .users:
+            return adminManager.adminRole.canManageUsers
+        case .support:
             return adminManager.adminRole.canManageUsers
         case .rooms:
             return adminManager.adminRole.canManageRooms
@@ -190,9 +201,22 @@ struct AdminTabButton: View {
                 .cornerRadius(8)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
         .accessibilityHint(isSelected ? "Current server administration tab." : "Opens the \(title) tab.")
+        .modifier(AdminSelectedAccessibilityModifier(isSelected: isSelected))
+    }
+}
+
+private struct AdminSelectedAccessibilityModifier: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        if isSelected {
+            content.accessibilityAddTraits(.isSelected)
+        } else {
+            content
+        }
     }
 }
 
@@ -200,6 +224,13 @@ struct AdminTabButton: View {
 struct AdminOverviewSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var showLogsSheet = false
+
+    private var webFrontendURL: URL? {
+        if let url = URL(string: adminManager.resolvedServerURL) {
+            return url
+        }
+        return URL(string: APIEndpointResolver.canonicalMainBase)
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -225,8 +256,28 @@ struct AdminOverviewSection: View {
 
                 operationalSummary(stats: stats)
             } else {
-                ProgressView("Loading server stats...")
-                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 10) {
+                    if let error = adminManager.error, !error.isEmpty {
+                        Label("Server stats are unavailable right now.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    } else {
+                        ProgressView("Loading server stats...")
+                            .foregroundColor(.white)
+                    }
+                    Button("Refresh Stats") {
+                        Task {
+                            await adminManager.fetchServerStats()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(Color.white.opacity(0.04))
+                .cornerRadius(12)
             }
 
             // Server config summary
@@ -241,6 +292,7 @@ struct AdminOverviewSection: View {
                 AdminQuickAction(title: "Refresh Stats", icon: "arrow.clockwise") {
                     Task {
                         await adminManager.fetchServerStats()
+                        await adminManager.fetchServerLogs()
                     }
                 }
 
@@ -257,9 +309,38 @@ struct AdminOverviewSection: View {
                     Task { await adminManager.fetchServerLogs() }
                 }
             }
+
+            HStack(spacing: 15) {
+                AdminQuickAction(title: "Open Web App", icon: "safari") {
+                    guard let url = webFrontendURL else { return }
+                    NSWorkspace.shared.open(url)
+                }
+
+                AdminQuickAction(
+                    title: (adminManager.serverConfig?.serverVisibility.frontendOpen ?? true) ? "Close Browser Access" : "Open Browser Access",
+                    icon: (adminManager.serverConfig?.serverVisibility.frontendOpen ?? true) ? "lock.slash" : "lock.open"
+                ) {
+                    Task {
+                        guard var config = adminManager.serverConfig else { return }
+                        config.serverVisibility.frontendOpen.toggle()
+                        _ = await adminManager.updateServerConfig(config)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showLogsSheet) {
             AdminServerLogsSheet()
+        }
+        .task {
+            if adminManager.serverStats == nil {
+                await adminManager.fetchServerStats()
+            }
+            if adminManager.serverConfig == nil {
+                await adminManager.fetchServerConfig()
+            }
+            if adminManager.serverLogLines.isEmpty {
+                await adminManager.fetchServerLogs()
+            }
         }
     }
 
@@ -463,9 +544,21 @@ struct AdminServerLogsSheet: View {
             }
 
             if adminManager.serverLogLines.isEmpty {
-                Text("No logs available.")
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                VStack(alignment: .center, spacing: 10) {
+                    Text(adminManager.error?.isEmpty == false ? "Server logs are unavailable right now." : "No logs available.")
+                        .foregroundColor(.gray)
+                    if let error = adminManager.error, !error.isEmpty {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                    }
+                    Button("Refresh") {
+                        Task { await adminManager.fetchServerLogs() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
@@ -482,6 +575,9 @@ struct AdminServerLogsSheet: View {
         .padding(20)
         .frame(minWidth: 820, minHeight: 520)
         .background(Color.black.opacity(0.94))
+        .task {
+            await adminManager.fetchServerLogs()
+        }
     }
 }
 
@@ -725,6 +821,211 @@ struct AdminUsersSection: View {
             }
         } message: {
             Text("Remove moderator or admin access for this user and return them to normal member access.")
+        }
+    }
+}
+
+struct AdminSupportSection: View {
+    @EnvironmentObject var appState: AppState
+    @ObservedObject var adminManager = AdminServerManager.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Support Sessions (\(adminManager.supportSessions.count))")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text("Private support rooms, live pickup, and ticket reuse.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+
+                Button(action: {
+                    Task { await adminManager.fetchSupportSessions() }
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Support Workflow")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Support sessions create hidden rooms for the conversation first. Staff can attach an existing support ticket or create one from the session when needed, and closing the session closes the hidden room.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Text("Support rooms are task-focused spaces. They do not need the normal social room media controls unless you explicitly turn that behavior back on later.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Text("Picking up a support session opens the hidden room so you can continue with the user immediately.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.05))
+            .cornerRadius(10)
+
+            if adminManager.supportSessions.isEmpty {
+                Text("No support sessions are waiting right now.")
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding()
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(adminManager.supportSessions) { session in
+                        AdminSupportSessionRow(session: session) { action in
+                            switch action {
+                            case .pickup:
+                                Task {
+                                    let pickedUp = await adminManager.pickupSupportSession(session.id)
+                                    if pickedUp, let hiddenRoomId = session.hiddenRoomId {
+                                        await MainActor.run {
+                                            appState.openHiddenRoom(roomId: hiddenRoomId, roomName: session.hiddenRoomName)
+                                        }
+                                    }
+                                }
+                            case .openRoom:
+                                if let hiddenRoomId = session.hiddenRoomId {
+                                    appState.openHiddenRoom(roomId: hiddenRoomId, roomName: session.hiddenRoomName)
+                                }
+                            case .close:
+                                Task {
+                                    _ = await adminManager.closeSupportSession(session.id)
+                                }
+                            case .attachTicket:
+                                Task {
+                                    _ = await adminManager.createOrAttachSupportTicket(for: session.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            await adminManager.fetchSupportSessions()
+        }
+    }
+}
+
+struct AdminSupportSessionRow: View {
+    let session: AdminSupportSessionInfo
+    let onAction: (Action) -> Void
+
+    enum Action {
+        case pickup
+        case openRoom
+        case close
+        case attachTicket
+    }
+
+    private var accent: Color {
+        switch session.status.lowercased() {
+        case "active":
+            return .green
+        case "closed", "completed":
+            return .gray
+        default:
+            return .orange
+        }
+    }
+
+    private var statusLabel: String {
+        session.status.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.userName)
+                        .foregroundColor(.white)
+                        .font(.headline)
+                    if let userEmail = session.userEmail, !userEmail.isEmpty {
+                        Text(userEmail)
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    }
+                    Text(session.issue.isEmpty ? "Support session" : session.issue)
+                        .foregroundColor(.white.opacity(0.88))
+                        .font(.subheadline)
+                        .lineLimit(3)
+                    Text(session.displayRoomName)
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+
+                Spacer()
+
+                Text(statusLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(accent.opacity(0.15))
+                    .cornerRadius(20)
+            }
+
+            HStack(spacing: 12) {
+                supportMeta(label: "Ticket", value: session.supportTicketLabel ?? "Pending")
+                supportMeta(label: "Channel", value: session.channel.capitalized)
+                supportMeta(label: "Agent", value: session.assignedAgentName ?? "Unassigned")
+                supportMeta(label: "PIN", value: session.supportPinRequired ? (session.supportPinValidated ? "Verified" : "Required") : "Off")
+            }
+
+            HStack(spacing: 10) {
+                if session.status.lowercased() != "active" && session.status.lowercased() != "closed" {
+                    Button("Pick Up") {
+                        onAction(.pickup)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                if session.hiddenRoomId != nil {
+                    Button("Open Room") {
+                        onAction(.openRoom)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if session.supportTicketLabel == nil {
+                    Button("Create or Reuse Support Ticket") {
+                        onAction(.attachTicket)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if session.status.lowercased() != "closed" {
+                    Button("Close Session and Room") {
+                        onAction(.close)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        )
+        .cornerRadius(10)
+    }
+
+    @ViewBuilder
+    private func supportMeta(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(.gray)
+            Text(value)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.9))
+                .lineLimit(1)
         }
     }
 }
@@ -1283,7 +1584,7 @@ struct AdminConfigSection: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(section.rawValue)
-                    .accessibilityValue(selectedSection == section ? "Selected" : "Not selected")
+                    .accessibilityValue(selectedSection == section ? "Selected" : "")
                 }
             }
         }
@@ -1401,6 +1702,44 @@ struct AdminConfigSection: View {
                 ConfigToggle(label: "Enable Rate Limiting", isOn: Binding(
                     get: { editedConfig?.enableRateLimiting ?? config.enableRateLimiting },
                     set: { editedConfig = (editedConfig ?? config).with(enableRateLimiting: $0) }
+                ))
+
+                SectionHeader(title: "Client Visibility")
+
+                ConfigToggle(label: "Show Server in Desktop Clients", isOn: Binding(
+                    get: { editedConfig?.serverVisibility.desktop ?? config.serverVisibility.desktop },
+                    set: { value in
+                        var next = editedConfig ?? config
+                        next.serverVisibility.desktop = value
+                        editedConfig = next
+                    }
+                ))
+
+                ConfigToggle(label: "Show Server in iOS Clients", isOn: Binding(
+                    get: { editedConfig?.serverVisibility.ios ?? config.serverVisibility.ios },
+                    set: { value in
+                        var next = editedConfig ?? config
+                        next.serverVisibility.ios = value
+                        editedConfig = next
+                    }
+                ))
+
+                ConfigToggle(label: "Show Server in Web Client", isOn: Binding(
+                    get: { editedConfig?.serverVisibility.web ?? config.serverVisibility.web },
+                    set: { value in
+                        var next = editedConfig ?? config
+                        next.serverVisibility.web = value
+                        editedConfig = next
+                    }
+                ))
+
+                ConfigToggle(label: "Frontend Open Status", isOn: Binding(
+                    get: { editedConfig?.serverVisibility.frontendOpen ?? config.serverVisibility.frontendOpen },
+                    set: { value in
+                        var next = editedConfig ?? config
+                        next.serverVisibility.frontendOpen = value
+                        editedConfig = next
+                    }
                 ))
 
                 ConfigNumberField(label: "Guest Session Limit (minutes, 0 = unlimited)", value: Binding(
@@ -1536,6 +1875,11 @@ struct AdminConfigSection: View {
         if let settings = editedAdvancedSettings ?? adminManager.advancedServerSettings {
             SectionHeader(title: "Database")
 
+            Text("Choose the main database provider first, then decide which server data types should stay on default storage, move into the database, or remain file-backed.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             ConfigToggle(label: "Enable External Database", isOn: Binding(
                 get: { (editedAdvancedSettings ?? settings).database.enabled },
                 set: { value in
@@ -1607,6 +1951,86 @@ struct AdminConfigSection: View {
                     set: { value in updateDatabaseNetworkConfig(provider: selectedProvider) { $0.ssl = value } }
                 ))
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Storage Policy")
+
+                HStack(spacing: 12) {
+                    Text("Default Mode")
+                        .foregroundColor(.white)
+                    Picker("Default Mode", selection: Binding(
+                        get: { (editedAdvancedSettings ?? settings).database.storage.defaultMode },
+                        set: { value in
+                            var next = editedAdvancedSettings ?? settings
+                            next.database.storage.defaultMode = value
+                            editedAdvancedSettings = next
+                        }
+                    )) {
+                        Text("Use Default").tag("default")
+                        Text("Prefer Database").tag("database")
+                        Text("Prefer Files").tag("file")
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                storageModePicker(
+                    title: "Accounts and Linked Login Methods",
+                    field: \.accounts,
+                    settings: settings
+                )
+                storageModePicker(
+                    title: "Rooms and Room Metadata",
+                    field: \.rooms,
+                    settings: settings
+                )
+                storageModePicker(
+                    title: "Support Sessions and Tickets",
+                    field: \.support,
+                    settings: settings
+                )
+                storageModePicker(
+                    title: "Scheduler State and History",
+                    field: \.scheduler,
+                    settings: settings
+                )
+                storageModePicker(
+                    title: "Diagnostics and Bug Reports",
+                    field: \.diagnostics,
+                    settings: settings
+                )
+                storageModePicker(
+                    title: "Server Config Records",
+                    field: \.serverConfig,
+                    settings: settings
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func storageModePicker(
+        title: String,
+        field: WritableKeyPath<DatabaseStorageConfig, String>,
+        settings: AdvancedServerSettings
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .foregroundColor(.white)
+            Spacer(minLength: 12)
+            Picker(title, selection: Binding(
+                get: { (editedAdvancedSettings ?? settings).database.storage[keyPath: field] },
+                set: { value in
+                    var next = editedAdvancedSettings ?? settings
+                    next.database.storage[keyPath: field] = value
+                    editedAdvancedSettings = next
+                }
+            )) {
+                Text("Use Default").tag("default")
+                Text("Database").tag("database")
+                Text("Files").tag("file")
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 180)
         }
     }
 
@@ -1745,9 +2169,8 @@ struct AdminStreamsSection: View {
     @State private var config = BackgroundStreamsConfig(enabled: true, streams: [], defaultVolume: 60, fadeInDuration: 1500)
     @State private var showAddStream = false
     @State private var editingStream: BackgroundStreamConfig?
-    @State private var probeInput: String = ""
-    @State private var probeResults: [AdminServerManager.StreamProbeResult] = []
-    @State private var isProbing = false
+    @State private var selectedStreamID: String?
+    @State private var pendingDeleteStream: BackgroundStreamConfig?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1813,76 +2236,44 @@ struct AdminStreamsSection: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Discover Streams From Domain or URL")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                HStack {
-                    TextField("example.com, stream.example.com:8000, or direct stream URL", text: $probeInput)
-                        .textFieldStyle(.roundedBorder)
-                    Button(isProbing ? "Checking..." : "Detect") {
-                        let input = probeInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !input.isEmpty else { return }
-                        isProbing = true
-                        Task {
-                            probeResults = await adminManager.probeBackgroundStreams(input: input)
-                            isProbing = false
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(isProbing)
+            Toggle("Shuffle matched background streams", isOn: $config.shuffleEnabled)
+                .toggleStyle(.switch)
+
+            ConfigNumberField(label: "Shuffle interval (minutes)", helpText: "Rotate through eligible background streams on this schedule when more than one stream matches a room.", value: Binding(
+                get: { max(1, config.shuffleIntervalMinutes) },
+                set: { config.shuffleIntervalMinutes = min(max($0, 1), 1440) }
+            ))
+            .disabled(!config.shuffleEnabled)
+
+            ConfigToggle(label: "Auto-refresh stream playback", helpText: "When enabled, stream state is monitored and refreshed automatically.", isOn: $config.autoRefreshEnabled)
+            ConfigToggle(label: "Auto-reconnect dropped streams", helpText: "If a playing stream drops, reconnect and continue playback automatically.", isOn: $config.autoReconnectDropped)
+            ConfigNumberField(label: "Metadata refresh (seconds)", helpText: "Refresh interval for now-playing metadata while stream is active.", value: Binding(
+                get: { max(5, config.metadataRefreshIntervalSeconds) },
+                set: { config.metadataRefreshIntervalSeconds = min(max($0, 5), 600) }
+            ))
+
+            Divider()
+
+            Toggle("Enable pre-join background ambience", isOn: $config.preJoinEnabled)
+                .toggleStyle(.switch)
+
+            Picker("Pre-join source", selection: Binding(
+                get: { config.preJoinStreamId ?? "__local__" },
+                set: { newValue in
+                    config.preJoinStreamId = newValue == "__local__" ? nil : newValue
                 }
-                if !probeResults.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(probeResults) { candidate in
-                            HStack(alignment: .top) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(candidate.name)
-                                        .foregroundColor(.white)
-                                    Text(candidate.streamUrl)
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    HStack(spacing: 8) {
-                                        if let type = candidate.type, !type.isEmpty {
-                                            Text(type.uppercased())
-                                        }
-                                        if let genre = candidate.genre, !genre.isEmpty {
-                                            Text(genre)
-                                        }
-                                        if let bitrate = candidate.bitrate {
-                                            Text("\(bitrate)kbps")
-                                        }
-                                        if let listeners = candidate.listeners {
-                                            Text("\(listeners) listeners")
-                                        }
-                                    }
-                                    .font(.caption2)
-                                    .foregroundColor(.blue)
-                                }
-                                Spacer()
-                                Button("Add") {
-                                    let newStream = BackgroundStreamConfig(
-                                        id: UUID().uuidString,
-                                        name: candidate.name,
-                                        url: candidate.streamUrl,
-                                        streamUrl: candidate.streamUrl,
-                                        volume: config.defaultVolume,
-                                        hidden: false,
-                                        autoPlay: false,
-                                        rooms: [],
-                                        roomPatterns: []
-                                    )
-                                    config.streams.append(newStream)
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                            .padding(10)
-                            .background(Color.white.opacity(0.04))
-                            .cornerRadius(10)
-                        }
-                    }
+            )) {
+                Text("Bundled Local Ambience").tag("__local__")
+                ForEach(config.streams) { stream in
+                    Text(stream.name).tag(stream.id)
                 }
             }
+            .pickerStyle(.menu)
+            .disabled(!config.preJoinEnabled)
+
+            Text("When enabled, clients can play a low-volume ambience or selected server stream before a user joins a room. Disable this to keep it in testing only.")
+                .font(.caption)
+                .foregroundColor(.gray)
 
             if config.streams.isEmpty {
                 Text("No background streams configured")
@@ -1890,15 +2281,48 @@ struct AdminStreamsSection: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             } else {
-                ForEach(config.streams) { stream in
-                    StreamConfigRow(stream: stream) { action in
-                        switch action {
-                        case .delete:
-                            config.streams.removeAll { $0.id == stream.id }
-                        case .edit:
-                            editingStream = stream
+                List(selection: $selectedStreamID) {
+                    ForEach(config.streams) { stream in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(stream.name)
+                                    .foregroundColor(.white)
+                                Text(stream.streamUrl)
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                            Spacer()
+                            Text("\(stream.volume)%")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            if stream.autoPlay {
+                                Image(systemName: "play.circle.fill")
+                                    .foregroundColor(.green)
+                            }
                         }
+                        .tag(stream.id)
                     }
+                }
+                .frame(minHeight: 220, maxHeight: 320)
+
+                HStack {
+                    Button {
+                        guard let selected = config.streams.first(where: { $0.id == selectedStreamID }) else { return }
+                        editingStream = selected
+                    } label: {
+                        Label("Edit Selected", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedStreamID == nil)
+
+                    Button(role: .destructive) {
+                        guard let selected = config.streams.first(where: { $0.id == selectedStreamID }) else { return }
+                        pendingDeleteStream = selected
+                    } label: {
+                        Label("Delete Selected", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(selectedStreamID == nil)
                 }
             }
 
@@ -1930,21 +2354,40 @@ struct AdminStreamsSection: View {
                     rooms: [],
                     roomPatterns: []
                 ),
+                isAddMode: true,
                 availableRooms: adminManager.serverRooms
             ) { stream in
                 config.streams.append(stream)
+                selectedStreamID = stream.id
             }
         }
         .sheet(item: $editingStream) { stream in
             StreamEditorSheet(
                 title: "Edit Background Stream",
                 stream: stream,
+                isAddMode: false,
                 availableRooms: adminManager.serverRooms
             ) { updated in
                 guard let index = config.streams.firstIndex(where: { $0.id == updated.id }) else { return }
                 config.streams[index] = updated
             }
         }
+        .alert("Delete Stream?", isPresented: Binding(
+            get: { pendingDeleteStream != nil },
+            set: { if !$0 { pendingDeleteStream = nil } }
+        ), actions: {
+            Button("Delete", role: .destructive) {
+                guard let stream = pendingDeleteStream else { return }
+                config.streams.removeAll { $0.id == stream.id }
+                if selectedStreamID == stream.id { selectedStreamID = nil }
+                pendingDeleteStream = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteStream = nil
+            }
+        }, message: {
+            Text("This removes the selected stream from server configuration.")
+        })
     }
 }
 
@@ -2005,12 +2448,31 @@ struct StreamConfigRow: View {
 
 struct StreamEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var serverManager = ServerManager.shared
     let title: String
     @State var stream: BackgroundStreamConfig
+    let isAddMode: Bool
     let availableRooms: [AdminRoomInfo]
     let onSave: (BackgroundStreamConfig) -> Void
     @State private var selectedRooms: Set<String> = []
     @State private var roomPatternText: String = ""
+    @State private var isResolvingName = false
+    @State private var probeInput: String = ""
+    @State private var probeResults: [AdminServerManager.StreamProbeResult] = []
+    @State private var isProbing = false
+
+    private var resolvedStreamURL: String {
+        let primary = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+        return stream.url.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isEditedStreamPlayingInCurrentRoom: Bool {
+        guard let media = serverManager.currentRoomMedia, media.active else { return false }
+        let current = media.streamURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !current.isEmpty else { return false }
+        return current.caseInsensitiveCompare(resolvedStreamURL) == .orderedSame
+    }
 
     var body: some View {
         NavigationView {
@@ -2034,6 +2496,70 @@ struct StreamEditorSheet: View {
                         ), in: 0...100, step: 1)
                         Text("\(stream.volume)%")
                             .frame(width: 48)
+                    }
+                }
+
+                if isAddMode {
+                    Section("Discover Stream URL") {
+                        HStack {
+                            TextField("example.com, stream domain, or direct URL", text: $probeInput)
+                                .textFieldStyle(.roundedBorder)
+                            Button(isProbing ? "Checking..." : "Detect") {
+                                let input = probeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !input.isEmpty else { return }
+                                isProbing = true
+                                Task {
+                                    probeResults = await AdminServerManager.shared.probeBackgroundStreams(input: input)
+                                    isProbing = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isProbing)
+                        }
+                        if !probeResults.isEmpty {
+                            ForEach(probeResults) { candidate in
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(candidate.name)
+                                        Text(candidate.streamUrl)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("Use") {
+                                        stream.streamUrl = candidate.streamUrl
+                                        stream.url = candidate.streamUrl
+                                        if stream.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                            stream.name = candidate.name
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if serverManager.activeRoomId != nil {
+                    Section("Current Room Playback") {
+                        if isEditedStreamPlayingInCurrentRoom {
+                            Text("This stream is playing in the room you are currently in.")
+                                .foregroundColor(.green)
+                            HStack {
+                                Button("Stop Playing Here") {
+                                    serverManager.stopCurrentRoomMedia()
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(serverManager.isCurrentRoomMediaMuted ? "Unmute Stream" : "Mute Stream") {
+                                    serverManager.toggleCurrentRoomMediaMuted()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        } else {
+                            Text("This stream is not currently playing in the room you are in.")
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
@@ -2067,24 +2593,67 @@ struct StreamEditorSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        stream.rooms = Array(selectedRooms).sorted()
-                        let patterns = roomPatternText
-                            .split(separator: ",")
-                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .filter { !$0.isEmpty }
-                        stream.roomPatterns = patterns.isEmpty ? nil : patterns
-                        onSave(stream)
-                        dismiss()
+                        Task {
+                            isResolvingName = true
+                            stream.rooms = Array(selectedRooms).sorted()
+                            let patterns = roomPatternText
+                                .split(separator: ",")
+                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                .filter { !$0.isEmpty }
+                            stream.roomPatterns = patterns.isEmpty ? nil : patterns
+                            if stream.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                stream.name = await detectStreamName(from: stream.streamUrl.isEmpty ? stream.url : stream.streamUrl)
+                            }
+                            isResolvingName = false
+                            onSave(stream)
+                            dismiss()
+                        }
                     }
-                    .disabled(stream.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stream.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    .disabled(isResolvingName || (stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && stream.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }
             .onAppear {
                 selectedRooms = Set(stream.rooms ?? [])
                 roomPatternText = (stream.roomPatterns ?? []).joined(separator: ", ")
+                probeInput = stream.streamUrl.isEmpty ? stream.url : stream.streamUrl
             }
         }
         .frame(minWidth: 640, minHeight: 560)
+    }
+
+    private func detectStreamName(from rawURL: String) async -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Unnamed Stream" }
+        guard let url = URL(string: trimmed) else {
+            return inferredNameFromURL(trimmed)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        request.setValue("1", forHTTPHeaderField: "Icy-MetaData")
+        request.setValue("VoiceLink/1.0", forHTTPHeaderField: "User-Agent")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                if let icyName = http.value(forHTTPHeaderField: "icy-name"), !icyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return icyName
+                }
+            }
+        } catch {
+            // Fall back to URL-derived naming.
+        }
+        return inferredNameFromURL(trimmed)
+    }
+
+    private func inferredNameFromURL(_ value: String) -> String {
+        if let url = URL(string: value) {
+            if let host = url.host, !host.isEmpty {
+                return host.replacingOccurrences(of: "www.", with: "")
+            }
+            if !url.lastPathComponent.isEmpty {
+                return url.lastPathComponent
+            }
+        }
+        return "Unnamed Stream"
     }
 }
 
@@ -2092,8 +2661,19 @@ struct StreamEditorSheet: View {
 struct AdminAPISyncSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
     @State private var settings: APISyncSettings?
+    @State private var loadError: String?
     @State private var isSaving = false
+    @State private var selectedSubtab: APISyncSubtab = .connection
+    @State private var manualServerEntry = ""
     private let syncModes = ["standalone", "hybrid", "hub", "federated"]
+    private let actionChoices = ["none", "start", "handoff", "return", "fallback"]
+
+    enum APISyncSubtab: String, CaseIterable {
+        case connection = "Connection"
+        case routing = "Routing"
+        case whmcs = "WHMCS"
+        case discovery = "Discovery"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -2112,85 +2692,242 @@ struct AdminAPISyncSection: View {
             )
 
             if var config = settings {
-                SectionHeader(title: "VoiceLink API Sync")
+                subtabToolbar
 
-                ConfigToggle(
-                    label: "Enable API Sync",
-                    helpText: "Turn this on when the server should stay linked to a main VoiceLink authority, hosted portal, or managed federation setup.",
-                    isOn: Binding(
-                        get: { config.enabled },
-                        set: { config.enabled = $0; settings = config }
+                switch selectedSubtab {
+                case .connection:
+                    SectionHeader(title: "VoiceLink API Sync")
+
+                    ConfigToggle(
+                        label: "Enable API Sync",
+                        helpText: "Turn this on when the server should stay linked to a main VoiceLink authority, hosted portal, or managed federation setup.",
+                        isOn: Binding(
+                            get: { config.enabled },
+                            set: { config.enabled = $0; settings = config }
+                        )
                     )
-                )
 
-                Picker("Sync Mode", selection: Binding(
-                    get: { config.mode },
-                    set: { config.mode = $0; settings = config }
-                )) {
-                    ForEach(syncModes, id: \.self) { mode in
-                        Text(mode.capitalized).tag(mode)
+                    Picker("Sync Mode", selection: Binding(
+                        get: { config.mode },
+                        set: { config.mode = $0; settings = config }
+                    )) {
+                        ForEach(syncModes, id: \.self) { mode in
+                            Text(mode.capitalized).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("`Standalone` keeps the server self-contained. `Hybrid` keeps it linked to the main VoiceLink API. `Hub` is for central-control installs. `Federated` is for trusted peer clusters.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    SectionHeader(title: "Sync Behavior")
+
+                    ConfigNumberField(
+                        label: "Sync Interval (seconds)",
+                        helpText: "How often this server should refresh linked API state in the background.",
+                        value: Binding(
+                            get: { config.syncInterval },
+                            set: { config.syncInterval = $0; settings = config }
+                        )
+                    )
+
+                    ConfigToggle(label: "Auto-sync on Changes", helpText: "Immediately push changes when config, room ownership, or linked license state changes.", isOn: Binding(
+                        get: { config.autoSyncOnChange },
+                        set: { config.autoSyncOnChange = $0; settings = config }
+                    ))
+
+                    ConfigToggle(label: "Allow client choice on handoff", helpText: "Let connected clients choose whether to accept an offered handoff when policy allows.", isOn: Binding(
+                        get: { config.allowClientChoice },
+                        set: { config.allowClientChoice = $0; settings = config }
+                    ))
+
+                    ConfigToggle(label: "Auto-return after recovery", helpText: "Return users to the preferred primary server when it recovers and the routing policy allows it.", isOn: Binding(
+                        get: { config.autoReturnRecoveredUsers },
+                        set: { config.autoReturnRecoveredUsers = $0; settings = config }
+                    ))
+
+                    ConfigNumberField(
+                        label: "Snapshot Interval (seconds)",
+                        helpText: "How often join/leave and transfer snapshots should be refreshed for failover and return actions.",
+                        value: Binding(
+                            get: { config.snapshotIntervalSeconds },
+                            set: { config.snapshotIntervalSeconds = $0; settings = config }
+                        )
+                    )
+
+                case .routing:
+                    SectionHeader(title: "Routing Profiles")
+
+                    Text("Profiles define ordered handoff and fallback actions. You can keep more than one entry for the same server when the target path or action chain is different.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    ForEach(Array(config.routingProfiles.enumerated()), id: \.element.id) { index, profile in
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("Profile \(index + 1)")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Spacer()
+                                Button(role: .destructive) {
+                                    config.routingProfiles.removeAll { $0.id == profile.id }
+                                    settings = config
+                                } label: {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            ConfigTextField(label: "Label", placeholder: "Main to VPS fallback", helpText: "Friendly name for this routing profile.", text: Binding(
+                                get: { config.routingProfiles[safe: index]?.label ?? profile.label },
+                                set: {
+                                    guard config.routingProfiles.indices.contains(index) else { return }
+                                    config.routingProfiles[index].label = $0
+                                    settings = config
+                                }
+                            ))
+
+                            ConfigTextField(label: "Target Server", placeholder: "https://node2.voicelink.devinecreations.net", helpText: "Domain, public IP, private IP, or known endpoint for this target.", text: Binding(
+                                get: { config.routingProfiles[safe: index]?.targetServer ?? profile.targetServer },
+                                set: {
+                                    guard config.routingProfiles.indices.contains(index) else { return }
+                                    config.routingProfiles[index].targetServer = $0
+                                    settings = config
+                                }
+                            ))
+
+                            ConfigTextField(label: "Install Path / Manual Address", placeholder: "/home/devinecr/apps/voicelink-local or 10.0.0.5", helpText: "Optional path or direct address used for same-host or manual routing.", text: Binding(
+                                get: { config.routingProfiles[safe: index]?.installPath ?? config.routingProfiles[safe: index]?.manualAddress ?? "" },
+                                set: {
+                                    guard config.routingProfiles.indices.contains(index) else { return }
+                                    config.routingProfiles[index].installPath = $0.isEmpty ? nil : $0
+                                    config.routingProfiles[index].manualAddress = $0.isEmpty ? nil : $0
+                                    settings = config
+                                }
+                            ))
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Ordered Actions")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                ForEach(0..<4, id: \.self) { slot in
+                                    Picker("Action \(slot + 1)", selection: Binding(
+                                        get: {
+                                            let actions = config.routingProfiles[safe: index]?.actions ?? []
+                                            return slot < actions.count ? actions[slot] : "none"
+                                        },
+                                        set: { value in
+                                            guard config.routingProfiles.indices.contains(index) else { return }
+                                            var actions = config.routingProfiles[index].actions
+                                            while actions.count <= slot { actions.append("none") }
+                                            actions[slot] = value
+                                            config.routingProfiles[index].actions = actions.filter { $0 != "none" }
+                                            settings = config
+                                        }
+                                    )) {
+                                        ForEach(actionChoices, id: \.self) { choice in
+                                            Text(choice.capitalized).tag(choice)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                }
+                            }
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(12)
+                    }
+
+                    Button {
+                        config.routingProfiles.append(APISyncRoutingProfile())
+                        settings = config
+                    } label: {
+                        Label("Add Routing Profile", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+
+                case .whmcs:
+                    SectionHeader(title: "WHMCS Integration")
+
+                    ConfigToggle(label: "Enable WHMCS", helpText: "Use the hosted client portal as an entitlement and ownership source for this server install.", isOn: Binding(
+                        get: { config.whmcsEnabled },
+                        set: { config.whmcsEnabled = $0; settings = config }
+                    ))
+
+                    if config.whmcsEnabled {
+                        ConfigTextField(
+                            label: "WHMCS URL",
+                            placeholder: "https://devine-creations.com",
+                            helpText: "Enter the base client portal URL this server should use for WHMCS-backed account and licensing checks.",
+                            text: Binding(
+                                get: { config.whmcsUrl ?? "" },
+                                set: { config.whmcsUrl = $0.isEmpty ? nil : $0; settings = config }
+                            )
+                        )
+
+                        ConfigTextField(
+                            label: "API Identifier",
+                            placeholder: "WHMCS API identifier",
+                            helpText: "Use the WHMCS API identifier for the portal account that should authorize server-side license and ownership checks.",
+                            text: Binding(
+                                get: { config.whmcsApiIdentifier ?? "" },
+                                set: { config.whmcsApiIdentifier = $0.isEmpty ? nil : $0; settings = config }
+                            )
+                        )
+
+                        ConfigSecureField(
+                            label: "API Secret",
+                            placeholder: "WHMCS API secret",
+                            helpText: "Paste the matching WHMCS API secret. It stays masked in the client UI.",
+                            text: Binding(
+                                get: { config.whmcsApiSecret ?? "" },
+                                set: { config.whmcsApiSecret = $0.isEmpty ? nil : $0; settings = config }
+                            )
+                        )
+                    }
+
+                case .discovery:
+                    SectionHeader(title: "Detected Targets")
+
+                    Text("Detected peers and manual entries can both be used. Duplicate targets are valid if they serve different fallback or return flows.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+
+                    ForEach(detectedTargets, id: \.self) { target in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(target)
+                                    .foregroundColor(.white)
+                                Text("Detected")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+                            Spacer()
+                            Button("Add Profile") {
+                                config.routingProfiles.append(APISyncRoutingProfile(label: "Detected Route", targetServer: target))
+                                settings = config
+                                selectedSubtab = .routing
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    HStack {
+                        TextField("Manual domain or IP", text: $manualServerEntry)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Add") {
+                            let trimmed = manualServerEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            config.routingProfiles.append(APISyncRoutingProfile(label: "Manual Route", targetServer: trimmed, manualAddress: trimmed))
+                            settings = config
+                            manualServerEntry = ""
+                            selectedSubtab = .routing
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
-                .pickerStyle(.segmented)
-
-                Text("`Standalone` keeps the server self-contained. `Hybrid` keeps it linked to the main VoiceLink API. `Hub` is for central-control installs. `Federated` is for trusted peer clusters.")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-
-                SectionHeader(title: "WHMCS Integration")
-
-                ConfigToggle(label: "Enable WHMCS", helpText: "Use the hosted client portal as an entitlement and ownership source for this server install.", isOn: Binding(
-                    get: { config.whmcsEnabled },
-                    set: { config.whmcsEnabled = $0; settings = config }
-                ))
-
-                if config.whmcsEnabled {
-                    ConfigTextField(
-                        label: "WHMCS URL",
-                        placeholder: "https://devine-creations.com",
-                        helpText: "Enter the base client portal URL this server should use for WHMCS-backed account and licensing checks.",
-                        text: Binding(
-                            get: { config.whmcsUrl ?? "" },
-                            set: { config.whmcsUrl = $0.isEmpty ? nil : $0; settings = config }
-                        )
-                    )
-
-                    ConfigTextField(
-                        label: "API Identifier",
-                        placeholder: "WHMCS API identifier",
-                        helpText: "Use the WHMCS API identifier for the portal account that should authorize server-side license and ownership checks.",
-                        text: Binding(
-                            get: { config.whmcsApiIdentifier ?? "" },
-                            set: { config.whmcsApiIdentifier = $0.isEmpty ? nil : $0; settings = config }
-                        )
-                    )
-
-                    ConfigSecureField(
-                        label: "API Secret",
-                        placeholder: "WHMCS API secret",
-                        helpText: "Paste the matching WHMCS API secret. It stays masked in the client UI.",
-                        text: Binding(
-                            get: { config.whmcsApiSecret ?? "" },
-                            set: { config.whmcsApiSecret = $0.isEmpty ? nil : $0; settings = config }
-                        )
-                    )
-                }
-
-                SectionHeader(title: "Sync Settings")
-
-                ConfigNumberField(
-                    label: "Sync Interval (seconds)",
-                    helpText: "How often this server should refresh linked API state in the background.",
-                    value: Binding(
-                        get: { config.syncInterval },
-                        set: { config.syncInterval = $0; settings = config }
-                    )
-                )
-
-                ConfigToggle(label: "Auto-sync on Changes", helpText: "Immediately push changes when config, room ownership, or linked license state changes.", isOn: Binding(
-                    get: { config.autoSyncOnChange },
-                    set: { config.autoSyncOnChange = $0; settings = config }
-                ))
 
                 // Save button
                 HStack {
@@ -2208,12 +2945,29 @@ struct AdminAPISyncSection: View {
                 }
                 .padding(.top)
             } else {
-                ProgressView("Loading API sync settings...")
-                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("API Sync settings are unavailable right now.")
+                        .foregroundColor(.white)
+                    if let loadError, !loadError.isEmpty {
+                        Text(loadError)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    Button("Load Default Settings") {
+                        settings = APISyncSettings()
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
         }
         .task {
-            settings = await adminManager.fetchAPISyncSettings()
+            if let fetched = await adminManager.fetchAPISyncSettings() {
+                settings = fetched
+                loadError = nil
+            } else {
+                settings = APISyncSettings()
+                loadError = adminManager.error ?? "The admin API returned no data. Defaults are loaded so you can still edit and save."
+            }
         }
     }
 
@@ -2225,6 +2979,26 @@ struct AdminAPISyncSection: View {
             await adminManager.updateAPISyncSettings(config)
             isSaving = false
         }
+    }
+
+    private var subtabToolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(APISyncSubtab.allCases, id: \.self) { tab in
+                    Button(tab.rawValue) {
+                        selectedSubtab = tab
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(selectedSubtab == tab ? .blue : .gray.opacity(0.4))
+                    .accessibilityLabel(tab.rawValue)
+                    .accessibilityAddTraits(selectedSubtab == tab ? .isSelected : [])
+                }
+            }
+        }
+    }
+
+    private var detectedTargets: [String] {
+        Array(Set(SettingsManager.managedFederationServers.map(\.url))).sorted()
     }
 }
 
@@ -2854,8 +3628,17 @@ struct AdminModulesSection: View {
     @State private var filterMode: ModuleFilter = .all
     @State private var query = ""
     @State private var actionInFlight: String?
-    @State private var configEditorModule: AdminModuleInfo?
+    @State private var configEditorModule: ModuleEditorRequest?
     @State private var configEditorText: String = "{}"
+
+    struct ModuleEditorRequest: Identifiable {
+        let module: AdminModuleInfo
+        let useAdvancedJSON: Bool
+
+        var id: String {
+            "\(module.id)-\(useAdvancedJSON ? "advanced" : "standard")"
+        }
+    }
 
     enum ModuleFilter: String, CaseIterable {
         case all = "All"
@@ -3002,9 +3785,15 @@ struct AdminModulesSection: View {
                                 }
                                 .buttonStyle(.bordered)
 
-                                Button("Configure") {
-                                    configEditorModule = module
-                                    configEditorText = module.configJSON
+                                Menu("Configure") {
+                                    Button("Standard Controls") {
+                                        configEditorModule = ModuleEditorRequest(module: module, useAdvancedJSON: false)
+                                        configEditorText = module.configJSON
+                                    }
+                                    Button("Advanced JSON") {
+                                        configEditorModule = ModuleEditorRequest(module: module, useAdvancedJSON: true)
+                                        configEditorText = module.configJSON
+                                    }
                                 }
                                 .buttonStyle(.bordered)
 
@@ -3025,6 +3814,19 @@ struct AdminModulesSection: View {
                             Spacer()
                         }
                         .disabled(actionInFlight != nil)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            if module.installed {
+                                Text(module.enabled ? "Disable stops this module without removing its saved configuration." : "Enable turns this module back on with its saved configuration.")
+                                Text("Update fetches the latest version of this module from the server.")
+                                Text("Configure opens standard controls first. Advanced JSON is available from the Configure menu for power users.")
+                                Text("Uninstall removes the module from this server.")
+                            } else {
+                                Text("Install adds this module to the server and enables its standard controls.")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.gray)
                     }
                     .padding()
                     .background(Color.white.opacity(0.05))
@@ -3042,13 +3844,14 @@ struct AdminModulesSection: View {
         .task {
             await adminManager.refreshModulesCenter()
         }
-        .sheet(item: $configEditorModule) { module in
+        .sheet(item: $configEditorModule) { request in
             ModuleConfigEditorSheet(
-                module: module,
+                module: request.module,
                 jsonText: $configEditorText,
+                useAdvancedJSON: request.useAdvancedJSON,
                 onSave: { text in
-                    runAction("save-config-\(module.id)") {
-                        await adminManager.saveModuleConfig(module.id, jsonText: text)
+                    runAction("save-config-\(request.module.id)") {
+                        await adminManager.saveModuleConfig(request.module.id, jsonText: text)
                     }
                     configEditorModule = nil
                 }
@@ -3084,9 +3887,9 @@ private struct ModuleConfigEditorSheet: View {
 
     let module: AdminModuleInfo
     @Binding var jsonText: String
+    let useAdvancedJSON: Bool
     let onSave: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var useAdvancedJSON = false
     @State private var fields: [ConfigField] = []
     @State private var validationError: String?
 
@@ -3099,16 +3902,6 @@ private struct ModuleConfigEditorSheet: View {
             Text("Standard controls are shown by default. Use Advanced JSON only when needed.")
                 .font(.caption)
                 .foregroundColor(.gray)
-
-            HStack {
-                Picker("Editor Mode", selection: $useAdvancedJSON) {
-                    Text("Standard").tag(false)
-                    Text("Advanced JSON").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
-                Spacer()
-            }
 
             if useAdvancedJSON {
                 TextEditor(text: $jsonText)
@@ -3212,16 +4005,6 @@ private struct ModuleConfigEditorSheet: View {
         .background(Color(red: 0.08, green: 0.09, blue: 0.14))
         .onAppear {
             parseFieldsFromJSON()
-        }
-        .onChange(of: useAdvancedJSON) { enabled in
-            if enabled {
-                if let generatedJSON = rebuildJSONFromFields() {
-                    jsonText = generatedJSON
-                    validationError = nil
-                }
-            } else {
-                parseFieldsFromJSON()
-            }
         }
     }
 
@@ -3632,6 +4415,7 @@ struct AdminHelpSection: View {
     let steps: [String]
     let docs: [AdminDocLink]
     @ObservedObject private var adminManager = AdminServerManager.shared
+    @State private var inAppDoc: IdentifiedURL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -3658,12 +4442,31 @@ struct AdminHelpSection: View {
             if !docs.isEmpty {
                 HStack(spacing: 10) {
                     ForEach(docs) { doc in
-                        Button(doc.title) {
-                            guard let url = AdminDocsResolver.resolve(doc, isAdmin: adminManager.adminRole.canManageConfig) else { return }
-                            NSWorkspace.shared.open(url)
+                        let resolvedURL = AdminDocsResolver.resolve(doc, isAdmin: adminManager.adminRole.canManageConfig)
+                        Menu {
+                            Button("Open in App") {
+                                guard let url = resolvedURL else { return }
+                                inAppDoc = IdentifiedURL(url: url)
+                            }
+                            .disabled(resolvedURL == nil)
+
+                            Button("Open in Safari") {
+                                guard let url = resolvedURL else { return }
+                                openInSafari(url)
+                            }
+                            .disabled(resolvedURL == nil)
+
+                            Button("Open in Default Browser") {
+                                guard let url = resolvedURL else { return }
+                                NSWorkspace.shared.open(url)
+                            }
+                            .disabled(resolvedURL == nil)
+                        } label: {
+                            Label(doc.title, systemImage: "ellipsis.circle")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .disabled(resolvedURL == nil)
                     }
                 }
             }
@@ -3672,6 +4475,71 @@ struct AdminHelpSection: View {
         .padding()
         .background(Color.white.opacity(0.05))
         .cornerRadius(12)
+        .sheet(item: $inAppDoc) { destination in
+            AdminDocViewer(url: destination.url)
+        }
+    }
+
+    private func openInSafari(_ url: URL) {
+        guard let safariURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open([url], withApplicationAt: safariURL, configuration: configuration)
+    }
+}
+
+private struct IdentifiedURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct AdminDocViewer: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(url.lastPathComponent.isEmpty ? "Documentation" : url.lastPathComponent)
+                    .font(.headline)
+                Spacer()
+                Button("Open in Browser") {
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.bordered)
+                Button("Close") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(12)
+            Divider()
+            AdminDocWebView(url: url)
+        }
+        .frame(minWidth: 900, minHeight: 640)
+    }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
+private struct AdminDocWebView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.allowsMagnification = true
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        if webView.url != url {
+            webView.load(URLRequest(url: url))
+        }
     }
 }
 
@@ -3768,6 +4636,7 @@ extension ServerConfig {
               motd: String?? = nil, motdSettings: MOTDSettings? = nil,
               registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
               allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
+              serverVisibility: ServerVisibilityConfig? = nil,
               handoffPromptMode: String? = nil,
               messageSettings: MessageSettings? = nil,
               pushover: PushoverConfig?? = nil) -> ServerConfig {
@@ -3785,6 +4654,7 @@ extension ServerConfig {
             allowGuests: allowGuests ?? self.allowGuests,
             maxGuestDuration: maxGuestDuration ?? self.maxGuestDuration,
             enableRateLimiting: enableRateLimiting ?? self.enableRateLimiting,
+            serverVisibility: serverVisibility ?? self.serverVisibility,
             handoffPromptMode: handoffPromptMode ?? self.handoffPromptMode,
             messageSettings: messageSettings ?? self.messageSettings,
             backgroundStreams: self.backgroundStreams,

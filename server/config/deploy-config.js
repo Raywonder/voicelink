@@ -63,6 +63,15 @@ const DEFAULT_CONFIG = {
     database: {
         enabled: false,
         provider: 'sqlite', // sqlite | postgres | mysql | mariadb
+        storage: {
+            defaultMode: 'default', // default | database | file
+            accounts: 'default',
+            rooms: 'default',
+            support: 'default',
+            scheduler: 'default',
+            diagnostics: 'default',
+            serverConfig: 'default'
+        },
         sqlite: {
             path: path.join(CONFIG_DIR, 'voicelink.db')
         },
@@ -114,6 +123,54 @@ const DEFAULT_CONFIG = {
             priorityBoost: 100, // Score boost for node operators (higher = more visible)
             verificationInterval: 3600000, // Re-verify node status every hour
             trustedNodes: [] // Manually verified node operator wallet addresses
+        }
+    },
+    serverPolicies: {
+        primaryServerUrl: 'https://voicelink.devinecreations.net',
+        autoPairPrimaryServer: true,
+        autoPullUpdatesFromPrimary: true,
+        autoInstallRequiredModules: true,
+        autoInstallOptionalModules: false,
+        updatePushMode: 'manual', // manual | staged | automatic
+        updateCheckIntervalMinutes: 30,
+        bootstrapFederationOnInstall: true,
+        bootstrapFederationMinutes: 15,
+        deploymentAutomation: {
+            enabled: false,
+            allowManualServerConfig: true,
+            allowAutoSetup: false,
+            requireRemoteCredentials: true,
+            allowSshKeyAuth: true,
+            allowPasswordAuth: true
+        },
+        visibility: {
+            desktop: true,
+            ios: true,
+            web: true,
+            frontendOpen: true
+        },
+        visibilityOverride: {
+            active: false,
+            reason: '',
+            setBy: '',
+            setAt: null,
+            expiresAt: null,
+            visibility: null
+        },
+        moduleGovernance: {
+            required: [],
+            optional: [],
+            revoked: [],
+            allowedByServer: {},
+            ownerAutoUpdateModules: false,
+            ownerUpdateChannel: 'manual' // manual | staged | automatic
+        },
+        networkTrust: {
+            level: 1, // 1-100
+            role: 'visitor', // visitor | community_server | trusted_moderator | trusted_owner
+            isCommunityServer: false,
+            isTrustedModerator: false,
+            isTrustedOwner: false
         }
     },
     mastodon: {

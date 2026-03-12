@@ -118,8 +118,10 @@ class VoiceLinkLocalServer {
         this.directMessages = new Map();
         this.botConversationState = new Map();
         this.botResponseMemory = new Map();
+        this.botOllamaHealth = { checkedAt: 0, available: null };
         this.directMessageVisibility = new Map();
         this.directMessagePurgeRequests = new Map();
+        this.clientAssetSyncNotifications = new Map();
         this.serverStartedAt = Date.now();
         this.restartNoticeSentAtByRoom = new Map();
         // Guest message expiry (24 hours in milliseconds)
@@ -1237,6 +1239,73 @@ class VoiceLinkLocalServer {
         };
     }
 
+    getClientUploadRoot() {
+        const uploadRoot = path.join(__dirname, '../../data/uploads');
+        fs.mkdirSync(uploadRoot, { recursive: true });
+        return uploadRoot;
+    }
+
+    resolveClientUploadPath(requestPath = '') {
+        const cleaned = String(requestPath || '')
+            .trim()
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+        const normalized = path.posix.normalize(`/${cleaned}`);
+        const normalizedRelative = normalized.replace(/^\/+/, '');
+        if (!normalizedRelative || normalizedRelative.startsWith('..')) {
+            return null;
+        }
+        const storageRelativePath = normalizedRelative.startsWith('uploads/')
+            ? normalizedRelative.slice('uploads/'.length)
+            : normalizedRelative;
+        if (!storageRelativePath || storageRelativePath.startsWith('..')) {
+            return null;
+        }
+
+        const uploadRoot = this.getClientUploadRoot();
+        const absolutePath = path.join(uploadRoot, storageRelativePath);
+        const relativeFsPath = path.relative(uploadRoot, absolutePath);
+        if (!relativeFsPath || relativeFsPath.startsWith('..') || path.isAbsolute(relativeFsPath)) {
+            return null;
+        }
+
+        return {
+            absolutePath,
+            relativePath: storageRelativePath,
+            publicPath: normalized.startsWith('/uploads/') ? normalized : `/uploads/${storageRelativePath}`
+        };
+    }
+
+    getRequestPublicBaseUrl(req) {
+        const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+        const proto = forwardedProto || req.protocol || 'https';
+        const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+        const fallback = this.getCopyPartyExportConfig().baseUrl;
+        if (!host) {
+            return fallback;
+        }
+        return `${proto}://${host}`.replace(/\/+$/, '');
+    }
+
+    createClientUploadShareLink(req, requestPath, keepForever = false, expiresAt = null) {
+        const resolved = this.resolveClientUploadPath(requestPath);
+        if (!resolved || !fs.existsSync(resolved.absolutePath)) {
+            return null;
+        }
+        const encodedPath = encodeURIComponent(resolved.publicPath);
+
+        return {
+            success: true,
+            id: uuidv4(),
+            filePath: resolved.publicPath,
+            url: `${this.getRequestPublicBaseUrl(req)}/api/files/content?path=${encodedPath}`,
+            token: null,
+            keepForever: !!keepForever,
+            expiresAt: expiresAt || null,
+            createdAt: new Date().toISOString()
+        };
+    }
+
     async createJsonZipArchive(payload, { prefix = 'voicelink-export' } = {}) {
         const exportDir = path.join(__dirname, '../../data/exports');
         fs.mkdirSync(exportDir, { recursive: true });
@@ -1648,6 +1717,58 @@ class VoiceLinkLocalServer {
             maxUsers: room.maxUsers || 50,
             locked: room.locked || false
         };
+    }
+
+    buildClientRoomListPayload() {
+        return Array.from(this.rooms.values()).map((room) => {
+            const createdAt = room.createdAt ? new Date(room.createdAt) : null;
+            const uptimeSeconds = createdAt
+                ? Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 1000))
+                : null;
+            const liveUsers = this.normalizeRoomUsers(room.id);
+            const lastActiveAt = liveUsers.length > 0
+                ? liveUsers
+                    .map((u) => (u?.lastActiveAt ? new Date(u.lastActiveAt) : null))
+                    .filter(Boolean)
+                    .sort((a, b) => b - a)[0]
+                : null;
+            const lastActiveUser = liveUsers.length > 0
+                ? [...liveUsers].sort((a, b) => {
+                    const left = a?.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
+                    const right = b?.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
+                    return right - left;
+                })[0]
+                : null;
+
+            return {
+                createdAt: createdAt ? createdAt.toISOString() : null,
+                uptimeSeconds,
+                lastActivityAt: lastActiveAt ? lastActiveAt.toISOString() : null,
+                lastActiveUsername: lastActiveUser?.name || null,
+                id: room.id,
+                name: room.name,
+                description: room.description || '',
+                welcomeMessage: room.welcomeMessage || null,
+                userCount: liveUsers.length,
+                users: liveUsers.map((u) => ({
+                    id: u.id,
+                    name: u.name,
+                    isAuthenticated: u.isAuthenticated || false
+                })),
+                maxUsers: room.maxUsers || 50,
+                hasPassword: !!room.password,
+                visibility: room.visibility || 'public',
+                visibleToGuests: room.visibleToGuests !== false,
+                isDefault: room.isDefault || false,
+                locked: room.locked || false
+            };
+        });
+    }
+
+    emitRoomListToClients() {
+        const roomList = this.buildClientRoomListPayload();
+        this.io.emit('room-list', roomList);
+        return roomList;
     }
 
     ensureTransferTargetRoom({
@@ -2426,6 +2547,7 @@ class VoiceLinkLocalServer {
     setupMiddleware() {
         this.app.use(cors());
         this.app.use(express.json());
+        this.app.use('/uploads', express.static(this.getClientUploadRoot()));
         this.app.use(express.static(path.join(__dirname, '..', '..', 'client')));
         this.app.use("/api/file-transfer", fileTransferRoutes);
     }
@@ -2574,9 +2696,15 @@ class VoiceLinkLocalServer {
             reason: room.lockReason,
             message: 'This room is locked.'
         });
+        this.emitRoomSystemMessage(
+            roomId,
+            `${room.name || 'This room'} was locked${room.lockReason ? `: ${room.lockReason}` : '.'}`,
+            { lockedBy: room.lockedBy }
+        );
 
         // Broadcast to federated servers
         this.federation.broadcastRoomChange('locked', room);
+        this.emitRoomListToClients();
 
         console.log(`[Room] ${roomId} locked by ${lockedBy}`);
         return { success: true, message: 'Room locked', locked: true };
@@ -2606,9 +2734,15 @@ class VoiceLinkLocalServer {
             unlockedBy: unlockedBy || 'system',
             message: 'This room is not locked, and can be joined.'
         });
+        this.emitRoomSystemMessage(
+            roomId,
+            `${room.name || 'This room'} was unlocked.`,
+            { unlockedBy: unlockedBy || 'system' }
+        );
 
         // Broadcast to federated servers
         this.federation.broadcastRoomChange('unlocked', room);
+        this.emitRoomListToClients();
 
         console.log(`[Room] ${roomId} unlocked by ${unlockedBy}`);
         return { success: true, message: 'Room unlocked', locked: false };
@@ -2813,12 +2947,58 @@ class VoiceLinkLocalServer {
         this.io.emit('system-action-notification', payload);
     }
 
+    emitAdminScopedNotification({
+        type = 'system_action',
+        title = 'VoiceLink System',
+        message = '',
+        severity = 'info',
+        metadata = {}
+    } = {}) {
+        if (!this.io) return;
+        const payload = {
+            id: uuidv4(),
+            type: String(type || 'system_action'),
+            title: String(title || 'VoiceLink System'),
+            message: String(message || ''),
+            severity: String(severity || 'info'),
+            timestamp: new Date().toISOString(),
+            ...((metadata && typeof metadata === 'object') ? metadata : {})
+        };
+
+        const adminTargets = new Set();
+        for (const [socketId, user] of this.users.entries()) {
+            const role = String(user?.role || user?.authInfo?.role || '').toLowerCase();
+            const isAdminLike = Boolean(user?.isAdmin || user?.isModerator || ['owner', 'admin', 'staff'].includes(role));
+            if (isAdminLike) {
+                adminTargets.add(socketId || user?.id);
+            }
+        }
+
+        if (!adminTargets.size) {
+            this.emitSystemActionNotification({
+                type,
+                title,
+                message,
+                severity,
+                metadata
+            });
+            return;
+        }
+
+        for (const target of adminTargets) {
+            if (!target) continue;
+            this.io.to(target).emit('admin-notification', payload);
+            this.io.to(target).emit('system-action-notification', payload);
+        }
+    }
+
     getConfiguredBackgroundStreamForRoom(room = {}) {
         const backgroundConfig = deployConfig.get('backgroundStreams') || {};
         if (backgroundConfig.enabled === false) return null;
         const streams = Array.isArray(backgroundConfig.streams) ? backgroundConfig.streams : [];
         const roomId = String(room.id || '').trim();
         const roomName = String(room.name || '').trim();
+        const matchedStreams = [];
 
         const wildcardToRegex = (pattern = '') => new RegExp(`^${String(pattern)
             .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
@@ -2840,16 +3020,33 @@ class VoiceLinkLocalServer {
 
             const streamUrl = String(stream.streamUrl || stream.url || '').trim();
             if (!streamUrl) continue;
-            return {
+            matchedStreams.push({
                 id: String(stream.id || '').trim() || `background:${roomId || roomName}`,
                 name: String(stream.name || 'Background Stream').trim() || 'Background Stream',
                 streamUrl,
                 volume: Number.isFinite(Number(stream.volume)) ? Number(stream.volume) : (Number.isFinite(Number(backgroundConfig.defaultVolume)) ? Number(backgroundConfig.defaultVolume) : null),
                 hidden: !!stream.hidden
-            };
+            });
         }
 
-        return null;
+        if (matchedStreams.length === 0) {
+            return null;
+        }
+
+        if (backgroundConfig.shuffleEnabled !== true || matchedStreams.length === 1) {
+            return matchedStreams[0];
+        }
+
+        const intervalMinutes = Math.max(1, Number(backgroundConfig.shuffleIntervalMinutes) || 15);
+        const slot = Math.floor(Date.now() / (intervalMinutes * 60 * 1000));
+        const roomSeed = `${roomId}|${roomName}`;
+        let hash = 0;
+        for (let i = 0; i < roomSeed.length; i += 1) {
+            hash = ((hash << 5) - hash) + roomSeed.charCodeAt(i);
+            hash |= 0;
+        }
+        const index = Math.abs(hash + slot) % matchedStreams.length;
+        return matchedStreams[index];
     }
 
     getMessageSettingsConfig() {
@@ -3233,6 +3430,148 @@ class VoiceLinkLocalServer {
             .toLowerCase()
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    getBotConversationMemory(roomId, userId, limit = 8) {
+        const key = this.getBotConversationKey(roomId, userId);
+        const state = this.botConversationState.get(key);
+        if (!state || !Array.isArray(state.history)) return [];
+        return state.history.slice(-Math.max(1, limit));
+    }
+
+    rememberBotTurn(roomId, userId, role, content) {
+        const key = this.getBotConversationKey(roomId, userId);
+        const existing = this.botConversationState.get(key) || {};
+        const history = Array.isArray(existing.history) ? existing.history.slice(-11) : [];
+        const trimmed = String(content || '').trim();
+        if (!trimmed) return;
+        history.push({
+            role: role === 'assistant' ? 'assistant' : 'user',
+            content: trimmed,
+            at: Date.now()
+        });
+        this.botConversationState.set(key, {
+            ...existing,
+            lastAddressedAt: Date.now(),
+            lastPrompt: role === 'user' ? trimmed : existing.lastPrompt,
+            history
+        });
+    }
+
+    getBotOllamaConfig() {
+        return {
+            host: String(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').trim().replace(/\/+$/, ''),
+            enabled: String(process.env.VOICELINK_BOT_OLLAMA_ENABLED || 'true').trim().toLowerCase() !== 'false',
+            conversationModel: String(process.env.VOICELINK_BOT_OLLAMA_CONVERSATION_MODEL || 'qwen2.5:7b').trim(),
+            codingModel: String(process.env.VOICELINK_BOT_OLLAMA_CODING_MODEL || 'qwen2.5:7b').trim(),
+            researchModel: String(process.env.VOICELINK_BOT_OLLAMA_RESEARCH_MODEL || 'gpt-oss:20b').trim(),
+            timeoutMs: Math.max(4000, Number(process.env.VOICELINK_BOT_OLLAMA_TIMEOUT_MS) || 15000)
+        };
+    }
+
+    classifyBotPromptIntent(source = '') {
+        const lowered = String(source || '').toLowerCase();
+        const codingPatterns = [
+            'code', 'coding', 'debug', 'bug', 'stack trace', 'exception', 'swift', 'javascript', 'typescript',
+            'python', 'php', 'node', 'api', 'endpoint', 'json', 'yaml', 'regex', 'compile', 'build error',
+            'function', 'class ', 'sql', 'schema', 'docker', 'nginx', 'pm2', 'git ', 'commit', 'patch'
+        ];
+        const researchPatterns = [
+            'research', 'compare', 'explain', 'how does', 'how do', 'what is', 'why does', 'summarize',
+            'walk me through', 'teach me', 'best way', 'recommend', 'pros and cons'
+        ];
+        if (codingPatterns.some((pattern) => lowered.includes(pattern))) return 'coding';
+        if (researchPatterns.some((pattern) => lowered.includes(pattern))) return 'research';
+        return 'conversation';
+    }
+
+    selectOllamaModelForBotPrompt(source = '') {
+        const config = this.getBotOllamaConfig();
+        const intent = this.classifyBotPromptIntent(source);
+        if (intent === 'coding') return { intent, model: config.codingModel || config.conversationModel };
+        if (intent === 'research') return { intent, model: config.researchModel || config.conversationModel };
+        return { intent, model: config.conversationModel };
+    }
+
+    async isBotOllamaAvailable(force = false) {
+        const config = this.getBotOllamaConfig();
+        if (!config.enabled) return false;
+        const now = Date.now();
+        if (!force && this.botOllamaHealth.available !== null && (now - this.botOllamaHealth.checkedAt) < 30000) {
+            return this.botOllamaHealth.available;
+        }
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), Math.min(config.timeoutMs, 5000));
+            const response = await fetch(`${config.host}/api/tags`, { method: 'GET', signal: controller.signal });
+            clearTimeout(timer);
+            this.botOllamaHealth = { checkedAt: now, available: response.ok };
+            return response.ok;
+        } catch (error) {
+            this.botOllamaHealth = { checkedAt: now, available: false };
+            return false;
+        }
+    }
+
+    buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory }) {
+        const userName = user?.name || user?.username || 'User';
+        const roomName = room?.name || 'this room';
+        const memoryLines = memory.map((entry) => `${entry.role === 'assistant' ? 'VoiceLink Bot' : userName}: ${entry.content}`);
+        const roomLines = recentContext.slice(-6);
+        return [
+            'You are VoiceLink Bot inside a live voice/chat room.',
+            'Be conversational, concise, and useful.',
+            'Do not use stiff fallback wording when a user starts a normal conversation.',
+            'Prefer answering normally first. Only offer next-step help after the main answer.',
+            'If the question is about coding, answer like a practical engineer.',
+            `Room: ${roomName}`,
+            `Room purpose: ${roomPurpose}`,
+            motd ? `Message of the day: ${motd}` : null,
+            roomLines.length ? `Recent room context:\n${roomLines.join('\n')}` : null,
+            memoryLines.length ? `Conversation memory:\n${memoryLines.join('\n')}` : null,
+            `Latest user message from ${userName}: ${String(source || '').trim()}`
+        ].filter(Boolean).join('\n\n');
+    }
+
+    async generateBotOllamaReply(user, roomId, source = '') {
+        const config = this.getBotOllamaConfig();
+        if (!config.enabled) return null;
+        const available = await this.isBotOllamaAvailable();
+        if (!available) return null;
+
+        const room = this.rooms.get(roomId);
+        const deploy = deployConfig.getConfig() || {};
+        const motd = typeof deploy.server?.motd === 'string' ? deploy.server.motd.trim() : '';
+        const roomDescription = typeof room?.description === 'string' ? room.description.trim() : '';
+        const serverName = deploy.server?.name || 'VoiceLink';
+        const roomPurpose = roomDescription || `${room?.name || 'This room'} is part of ${serverName}.`;
+        const recentContext = this.getRecentRoomConversationContext(roomId, 6);
+        const memory = this.getBotConversationMemory(roomId, user?.id || user?.userId || user?.socketId || user?.name, 8);
+        const { model, intent } = this.selectOllamaModelForBotPrompt(source);
+        const prompt = this.buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory });
+
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+            const response = await fetch(`${config.host}/api/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                    model,
+                    prompt,
+                    stream: false,
+                    options: { temperature: intent === 'coding' ? 0.2 : 0.5 }
+                })
+            });
+            clearTimeout(timer);
+            if (!response.ok) return null;
+            const data = await response.json().catch(() => ({}));
+            const reply = String(data?.response || '').trim();
+            return reply || null;
+        } catch (error) {
+            return null;
+        }
     }
 
     rememberBotReply(roomId, userId, prompt, reply) {
@@ -3775,6 +4114,13 @@ class VoiceLinkLocalServer {
         const roomPurpose = roomDescription || `${room?.name || 'This room'} is part of ${serverName}.`;
         const recentContext = this.getRecentRoomConversationContext(roomId);
         const lowered = String(source || '').trim().toLowerCase();
+        const conversationalGreeting = lowered
+            .replace(/@voicelink\b/g, '')
+            .replace(/@voicelink\s+bot\b/g, '')
+            .replace(/voicelink\s+bot\b/g, '')
+            .replace(/[!,.?]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
         const sourceLinks = this.extractURLsFromText(source || '');
 
         const asksClawX =
@@ -3827,7 +4173,7 @@ class VoiceLinkLocalServer {
             return `Latest VoiceLink updates: ${highlights.join(' ')} ${roomStatus} ${mediaStatus} ${motdLine}`;
         }
 
-        if (!lowered || lowered === 'hi' || lowered === 'hello' || lowered === 'hey') {
+        if (!conversationalGreeting || conversationalGreeting === 'hi' || conversationalGreeting === 'hello' || conversationalGreeting === 'hey') {
             const contextParts = [roomPurpose];
             if (motd) {
                 contextParts.push(`Message of the day: ${motd}`);
@@ -3902,11 +4248,15 @@ class VoiceLinkLocalServer {
             }
             return `${roomPurpose} If you want, I can tell you how to work with this room's subject, the current media, server context, or a named topic like Composr.`;
         }
-        if (recentContext.length) {
-            return `${room?.name || 'This room'} is part of ${serverName}. I can continue from recent room context without repeating chat lines verbatim. If you want, I can help with the next step.`;
+        if (lowered === 'test' || lowered === 'testing' || lowered === 'ping') {
+            return `Message received. If you want, I can help with something in ${room?.name || 'this room'}.`;
         }
 
-        return `${room?.name || 'This room'} is part of ${serverName}. ${roomPurpose} If you want, I can tell you how to check room status, review users, control media, read the message of the day, or find server details.`;
+        if (recentContext.length) {
+            return `I got that. If you want, I can help with something in ${room?.name || 'this room'}.`;
+        }
+
+        return `I got your message. If you want, I can help with room status, users, media, or the next step here.`;
     }
 
     getDefaultLobbyWelcomeMessage() {
@@ -3937,6 +4287,20 @@ class VoiceLinkLocalServer {
             : null;
         const motd = typeof resolvedConfig.server?.motd === 'string' ? resolvedConfig.server.motd.trim() : '';
         const publicUrl = String(resolvedConfig.server?.publicUrl || '').replace(/\/+$/, '');
+        const supportLink = (() => {
+            if (!publicUrl) {
+                return '/docs/contact.html';
+            }
+            try {
+                const host = new URL(publicUrl).host?.toLowerCase() || '';
+                if (host === 'voicelink.devinecreations.net' || host === 'www.voicelink.devinecreations.net') {
+                    return 'https://devine-creations.com/contact';
+                }
+            } catch (_) {
+                // Ignore parse errors and fall back to the local support page.
+            }
+            return `${publicUrl}/docs/contact.html`;
+        })();
         return {
             user_name: user?.name || user?.displayName || 'Guest',
             display_name: user?.displayName || user?.name || 'Guest',
@@ -3950,7 +4314,7 @@ class VoiceLinkLocalServer {
             motd,
             build_version: this.appVersion || resolvedConfig.version || '1.0.0',
             platform: 'server',
-            support_link: publicUrl ? `${publicUrl}/docs/getting-started.html` : '/docs/getting-started.html'
+            support_link: supportLink
         };
     }
 
@@ -3994,6 +4358,12 @@ class VoiceLinkLocalServer {
             } else if (!parts.length) {
                 parts.push(motdText);
             }
+        }
+
+        if (!parts.length) {
+            const roomName = room?.name || 'this room';
+            const userName = user?.name || user?.authInfo?.displayName || user?.authInfo?.username || 'there';
+            parts.push(`Welcome to ${roomName}, ${userName}. If you want, I can help with this room.`);
         }
 
         return parts.filter(Boolean).join('\n\n').trim();
@@ -4211,6 +4581,12 @@ class VoiceLinkLocalServer {
                         maxDevices: entitlements.maxDevices,
                         mastodonHandle
                     });
+                    decorateUserWithCanonicalAccount(user, 'whmcs_admin', {
+                        externalId: bridgedAdmin.id,
+                        email: bridgedAdmin.email || '',
+                        username: user.username,
+                        displayName: user.displayName
+                    });
                     const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
                     persistLocalAuthUsers();
                     return res.json({
@@ -4303,6 +4679,12 @@ class VoiceLinkLocalServer {
                     deviceTier: entitlements.deviceTier,
                     maxDevices: entitlements.maxDevices,
                     mastodonHandle
+                });
+                decorateUserWithCanonicalAccount(user, 'whmcs', {
+                    externalId: clientDetails.id,
+                    email: clientDetails.email || email,
+                    username: syncedUsername || clientDetails.username || displayName,
+                    displayName
                 });
 
                 const session = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, remember);
@@ -4430,6 +4812,12 @@ class VoiceLinkLocalServer {
                         entitlements,
                         deviceTier: entitlements.deviceTier,
                         maxDevices: entitlements.maxDevices
+                    });
+                    decorateUserWithCanonicalAccount(user, 'whmcs', {
+                        externalId: clientDetails.id,
+                        email: clientDetails.email || email,
+                        username: syncedUsername || clientDetails.username || displayName,
+                        displayName
                     });
 
                     const created = this.createAuthSession(this.whmcsAuthSessions, 'whmcs', user, req.body.remember === true);
@@ -5477,14 +5865,45 @@ class VoiceLinkLocalServer {
             });
         });
 
+        const clientRootDir = path.join(__dirname, '..', '..', 'client');
+        const docsRootDir = path.join(__dirname, '..', '..', 'docs');
+        const directHtmlRoots = [
+            clientRootDir,
+            path.join(clientRootDir, 'docs'),
+            docsRootDir,
+            path.join(docsRootDir, 'public')
+        ];
+        const sendDirectHtmlFile = (req, res, next) => {
+            const requestPath = decodeURIComponent(req.path || '').replace(/\/+/g, '/');
+            if (!/\.html?$/i.test(requestPath)) {
+                return next();
+            }
+
+            const relativePath = requestPath.replace(/^\/+/, '');
+            for (const baseDir of directHtmlRoots) {
+                const basePath = path.resolve(baseDir);
+                const candidatePath = path.resolve(baseDir, relativePath);
+                if (!candidatePath.startsWith(`${basePath}${path.sep}`) && candidatePath !== basePath) {
+                    continue;
+                }
+                if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+                    return res.sendFile(candidatePath);
+                }
+            }
+
+            return next();
+        };
+
+        this.app.get(/.*\.html?$/i, sendDirectHtmlFile);
+
         // Serve the main client
         this.app.get('/', (req, res) => {
-            res.sendFile(path.join(__dirname, '..', '..', 'client', 'index.html'));
+            res.sendFile(path.join(clientRootDir, 'index.html'));
         });
 
         // Serve downloads page
         this.app.get('/downloads.html', (req, res) => {
-            res.sendFile(path.join(__dirname, '..', '..', 'client', 'downloads.html'));
+            res.sendFile(path.join(clientRootDir, 'downloads.html'));
         });
 
         // Setup federation API routes
@@ -5677,6 +6096,7 @@ class VoiceLinkLocalServer {
 
             this.rooms.delete(roomId);
             this.federation.broadcastRoomChange('deleted', { id: roomId });
+            this.emitRoomListToClients();
 
             this.saveRoomsToDisk(); // Auto-save after deletion
             res.json({ success: true, message: 'Room deleted' });
@@ -5739,6 +6159,7 @@ class VoiceLinkLocalServer {
             }
             this.rooms.set(roomId, room);
             this.federation.broadcastRoomChange('updated', room);
+            this.emitRoomListToClients();
             this.saveRoomsToDisk();
 
             res.json({ success: true, room });
@@ -6359,6 +6780,81 @@ class VoiceLinkLocalServer {
             }
             return null;
         };
+        const buildLinkedAuthRecord = (provider = '', payload = {}) => ({
+            provider: String(provider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
+            email: normalizeEmail(payload.email || ''),
+            username: normalizeUsername(payload.username || payload.displayName || ''),
+            externalId: String(payload.externalId || payload.id || '').trim() || null,
+            linkedAt: payload.linkedAt || new Date().toISOString(),
+            lastUsedAt: new Date().toISOString()
+        });
+        const mergeLinkedAuthMethods = (user, provider = '', payload = {}) => {
+            if (!user) return user;
+            const next = buildLinkedAuthRecord(provider, payload);
+            const methods = Array.isArray(user.linkedAuthMethods) ? [...user.linkedAuthMethods] : [];
+            const existingIndex = methods.findIndex((entry) =>
+                String(entry?.provider || '').trim().toLowerCase() === next.provider
+                && (
+                    (next.email && normalizeEmail(entry?.email || '') === next.email)
+                    || (next.username && normalizeUsername(entry?.username || '') === next.username)
+                    || (next.externalId && String(entry?.externalId || '').trim() === next.externalId)
+                )
+            );
+            if (existingIndex >= 0) {
+                methods[existingIndex] = {
+                    ...methods[existingIndex],
+                    ...next,
+                    linkedAt: methods[existingIndex].linkedAt || next.linkedAt,
+                    lastUsedAt: next.lastUsedAt
+                };
+            } else {
+                methods.push(next);
+            }
+            user.linkedAuthMethods = methods;
+            return user;
+        };
+        const linkCanonicalAccountByEmail = (provider = '', payload = {}) => {
+            const email = normalizeEmail(payload.email || '');
+            const username = normalizeUsername(payload.username || payload.displayName || '');
+            if (!email && !username) return null;
+            const localUser = findLocalUserByIdentity(email || username);
+            if (!localUser) return null;
+            mergeLinkedAuthMethods(localUser, provider, payload);
+            if (email && !normalizeEmail(localUser.email)) {
+                localUser.email = email;
+            }
+            if (username && !normalizeUsername(localUser.username)) {
+                localUser.username = username;
+            }
+            if (!String(localUser.displayName || '').trim() && String(payload.displayName || '').trim()) {
+                localUser.displayName = String(payload.displayName || '').trim();
+            }
+            localUser.updatedAt = new Date().toISOString();
+            this.localAuthUsers.set(localUser.id, localUser);
+            persistLocalAuthUsers();
+            return localUser;
+        };
+        const decorateUserWithCanonicalAccount = (user, provider = '', payload = {}) => {
+            if (!user) return user;
+            const canonical = linkCanonicalAccountByEmail(provider, {
+                id: payload.id || user.id,
+                email: payload.email || user.email,
+                username: payload.username || user.username,
+                displayName: payload.displayName || user.displayName,
+                externalId: payload.externalId || user.whmcsClientId || user.whmcsAdminId || user.id
+            });
+            if (!canonical) {
+                user.linkedAuthMethods = Array.isArray(user.linkedAuthMethods) ? user.linkedAuthMethods : [];
+                return user;
+            }
+            user.accountId = canonical.id;
+            user.canonicalAccountId = canonical.id;
+            user.canonicalEmail = canonical.email || user.email || null;
+            user.linkedLocalUserId = canonical.id;
+            user.linkedAuthMethods = Array.isArray(canonical.linkedAuthMethods) ? canonical.linkedAuthMethods : [];
+            user.displayName = user.displayName || canonical.displayName || canonical.username || user.username;
+            return user;
+        };
         const getLocal2FAState = (user) => {
             if (!user?.id || !this.modules.twoFactorAuth) {
                 return { required: false, enabled: false, methods: [] };
@@ -6437,7 +6933,8 @@ class VoiceLinkLocalServer {
             isAdmin: ['owner', 'admin'].includes(normalizeUserRole(user.role)),
             isModerator: normalizeUserRole(user.role) === 'staff',
             isVerified: !!user.isVerified,
-            createdAt: user.createdAt
+            createdAt: user.createdAt,
+            linkedAuthMethods: Array.isArray(user.linkedAuthMethods) ? user.linkedAuthMethods : []
         });
 
         // Local credential auth (email + username + password)
@@ -6493,6 +6990,7 @@ class VoiceLinkLocalServer {
                 username,
                 displayName: displayName || username,
                 email,
+                linkedAuthMethods: [buildLinkedAuthRecord('local', { email, username, displayName, externalId: username })],
                 passwordSalt: salt,
                 passwordHash: hash,
                 role: assignedRole,
@@ -6503,6 +7001,12 @@ class VoiceLinkLocalServer {
                 updatedAt: new Date().toISOString()
             };
 
+            mergeLinkedAuthMethods(user, 'local', {
+                email: user.email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
             this.localAuthUsers.set(user.id, user);
             persistLocalAuthUsers();
             const accessToken = issueLocalAuthToken(user.id);
@@ -6537,6 +7041,13 @@ class VoiceLinkLocalServer {
             if (this.localAuthVerificationRequired && !user.isVerified) {
                 return res.status(403).json({ error: 'Account is not verified' });
             }
+
+            mergeLinkedAuthMethods(user, 'local', {
+                email: user.email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
 
             const twoFactorState = getLocal2FAState(user);
             if (twoFactorState.required) {
@@ -7080,6 +7591,27 @@ class VoiceLinkLocalServer {
                 const whmcsIdentity = this.resolveWhmcsIdentity(identity);
                 principal.email = principal.email || normalizeEmail(whmcsIdentity.email);
                 principal.username = principal.username || normalizeUsername(whmcsIdentity.username);
+            }
+
+            if (principal.email || principal.username) {
+                const linkedLocalUser = findLocalUserByIdentity(principal.email || principal.username);
+                if (linkedLocalUser) {
+                    mergeLinkedAuthMethods(linkedLocalUser, principal.authProvider || 'local', {
+                        email: principal.email,
+                        username: principal.username,
+                        displayName: principal.displayName,
+                        externalId: principal.id
+                    });
+                    linkedLocalUser.updatedAt = new Date().toISOString();
+                    this.localAuthUsers.set(linkedLocalUser.id, linkedLocalUser);
+                    persistLocalAuthUsers();
+                    principal.id = principal.id || linkedLocalUser.id;
+                    principal.email = principal.email || normalizeEmail(linkedLocalUser.email);
+                    principal.username = principal.username || normalizeUsername(linkedLocalUser.username);
+                    principal.displayName = principal.displayName || linkedLocalUser.displayName || linkedLocalUser.username || null;
+                    principal.role = normalizeUserRole(linkedLocalUser.role || principal.role);
+                    principal.entitlements = principal.entitlements || linkedLocalUser.entitlements || null;
+                }
             }
 
             principal.identityKey = normalizeLicenseIdentityKey(principal);
@@ -7909,9 +8441,9 @@ class VoiceLinkLocalServer {
                 || Boolean(adminBridge.enabled && adminBridge.configPath);
             res.json({
                 providers: [
-                    { id: 'email', name: 'Email/Username + Password', enabled: true, default: true },
-                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true, default: false },
-                    { id: 'whmcs', name: 'WHMCS Account', enabled: whmcsEnabled, default: false }
+                    { id: 'email', name: 'Sign In', enabled: true, default: true },
+                    { id: 'mastodon', name: 'Mastodon', enabled: true, default: false },
+                    { id: 'whmcs', name: 'Client Portal', enabled: whmcsEnabled, default: false }
                 ]
             });
         });
@@ -7919,7 +8451,7 @@ class VoiceLinkLocalServer {
         this.app.get('/api/auth/oauth/providers', (_req, res) => {
             res.json({
                 providers: [
-                    { id: 'mastodon', name: 'Mastodon OAuth', enabled: true }
+                    { id: 'mastodon', name: 'Mastodon', enabled: true }
                 ]
             });
         });
@@ -8284,14 +8816,14 @@ class VoiceLinkLocalServer {
                 clientId,
                 clientName,
                 createdAt: new Date(),
-                expiresAt: new Date(Date.now() + 300000), // 5 minutes
+                expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
                 attempts: 0
             });
 
             // Auto-cleanup after expiry
             setTimeout(() => {
                 this.emailVerificationCodes.delete(email);
-            }, 300000);
+            }, 15 * 60 * 1000);
 
             // Try to send email if nodemailer is configured
             try {
@@ -8301,7 +8833,7 @@ class VoiceLinkLocalServer {
                         from: supportAddress,
                         to: email,
                         subject: 'VoiceLink Sign-in Verification Code',
-                        text: `VoiceLink verification code: ${code}\n\nThis code expires in 5 minutes.\n\nIf you did not request this code, you can safely ignore this message.\n\nNeed help? Contact ${supportAddress}`,
+                        text: `VoiceLink verification code: ${code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this code, you can safely ignore this message.\n\nNeed help? Contact ${supportAddress}`,
                         html: `
                             <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
                                 <h2 style="color: #6366f1;">VoiceLink Sign-in Verification</h2>
@@ -8309,7 +8841,7 @@ class VoiceLinkLocalServer {
                                 <div style="font-size: 32px; font-weight: bold; letter-spacing: 4px; padding: 20px; background: #f3f4f6; border-radius: 8px; text-align: center;">
                                     ${code}
                                 </div>
-                                <p style="color: #666; font-size: 14px;">This code expires in 5 minutes.</p>
+                                <p style="color: #666; font-size: 14px;">This code expires in 15 minutes.</p>
                                 <p style="color: #999; font-size: 12px;">If you did not request this code, you can ignore this message.</p>
                                 <p style="color: #999; font-size: 12px;">Support: ${supportAddress}</p>
                             </div>
@@ -8853,6 +9385,9 @@ class VoiceLinkLocalServer {
             if (!this.isLibraryAllowedForRoom(room, serverId, libraryId, requester)) {
                 return res.status(403).json({ error: 'Selected library is not allowed in this room' });
             }
+            if (this.modules.mediaRooms?.isRoomMediaEnabled && !this.modules.mediaRooms.isRoomMediaEnabled(roomId)) {
+                this.modules.mediaRooms.setRoomMediaEnabled(roomId, true);
+            }
 
             // Store active stream info
             this.roomMediaStreams.set(roomId, {
@@ -8905,8 +9440,50 @@ class VoiceLinkLocalServer {
             res.json({ success: true, message: 'Stream stopped' });
         });
 
+        this.app.put('/api/rooms/:roomId/media-enabled', (req, res) => {
+            const room = this.rooms.get(req.params.roomId);
+            if (!room) return res.status(404).json({ error: 'Room not found' });
+            if (!this.modules.mediaRooms) {
+                return res.status(500).json({ error: 'Media module not loaded' });
+            }
+            const requester = this.getRequesterContext(req);
+            if (!this.canManageRoomJellyfin(room, requester)) {
+                return res.status(403).json({ error: 'Only admins or room owner can update room media playback' });
+            }
+
+            const enabled = req.body?.enabled !== false;
+            const state = this.modules.mediaRooms.setRoomMediaEnabled(room.id, enabled);
+            if (!enabled) {
+                this.roomMediaStreams.delete(room.id);
+                this.io.to(room.id).emit('media-stream-stopped', { roomId: room.id, disabled: true });
+                this.io.to(room.id).emit('room-media-updated', {
+                    roomId: room.id,
+                    mediaEnabled: false,
+                    updatedBy: requester.name || requester.username || 'administrator'
+                });
+            } else {
+                this.io.to(room.id).emit('room-media-updated', {
+                    roomId: room.id,
+                    mediaEnabled: true,
+                    updatedBy: requester.name || requester.username || 'administrator'
+                });
+            }
+
+            res.json({
+                success: true,
+                roomId: room.id,
+                mediaEnabled: state.mediaEnabled !== false
+            });
+        });
+
         // Get active stream for a room
         this.app.get('/api/jellyfin/room-stream/:roomId', (req, res) => {
+            const mediaEnabled = this.modules.mediaRooms?.isRoomMediaEnabled
+                ? this.modules.mediaRooms.isRoomMediaEnabled(req.params.roomId)
+                : true;
+            if (!mediaEnabled) {
+                return res.json({ active: false, disabled: true, mediaEnabled: false, message: 'Room media is disabled' });
+            }
             const stream = this.roomMediaStreams.get(req.params.roomId);
             if (!stream) {
                 const room = this.rooms.get(req.params.roomId);
@@ -8914,6 +9491,7 @@ class VoiceLinkLocalServer {
                 if (configuredBackgroundStream) {
                     return res.json({
                         active: true,
+                        mediaEnabled: true,
                         type: 'audio',
                         streamUrl: configuredBackgroundStream.streamUrl,
                         startedAt: null,
@@ -8934,6 +9512,7 @@ class VoiceLinkLocalServer {
 
             res.json({
                 active: true,
+                mediaEnabled: true,
                 type: stream.type,
                 streamUrl,
                 startedAt: stream.startedAt,
@@ -9389,18 +9968,55 @@ class VoiceLinkLocalServer {
             }
             try {
                 const appRoot = path.join(__dirname, '../..');
+                const pm2Home = process.env.PM2_HOME || path.join(os.homedir(), '.pm2');
                 const candidatePaths = [
+                    path.join(pm2Home, 'logs', 'voicelink-primary-error.log'),
+                    path.join(pm2Home, 'logs', 'voicelink-primary-out.log'),
+                    path.join(pm2Home, 'logs', 'voicelink-hubnode-gateway-error.log'),
+                    path.join(pm2Home, 'logs', 'voicelink-hubnode-gateway-out.log'),
+                    path.join(pm2Home, 'logs', 'voicelink-local-api-error.log'),
+                    path.join(pm2Home, 'logs', 'voicelink-local-api-out.log'),
                     path.join(appRoot, 'logs', 'server.log'),
                     path.join(appRoot, 'server.log'),
                     path.join(appRoot, 'logs', 'combined.log')
                 ];
-                const existing = candidatePaths.find(p => fs.existsSync(p));
-                if (!existing) {
+                const existing = candidatePaths.filter(p => fs.existsSync(p));
+                const lines = existing.flatMap((filePath) => {
+                    const text = fs.readFileSync(filePath, 'utf8');
+                    return text
+                        .split(/\r?\n/)
+                        .filter(Boolean)
+                        .slice(-120)
+                        .map((line) => `[${path.basename(filePath)}] ${line}`);
+                });
+                const bugFile = path.join(appRoot, 'data', 'bug-reports.json');
+                const bugLines = fs.existsSync(bugFile)
+                    ? (() => {
+                        try {
+                            const reports = JSON.parse(fs.readFileSync(bugFile, 'utf8') || '[]');
+                            return (Array.isArray(reports) ? reports : [])
+                                .slice(0, 25)
+                                .map((report) => {
+                                    const who = report.accountEmail || report.username || report.submittedBy || 'anonymous';
+                                    const clientId = report.clientId || 'unknown-client';
+                                    const room = report.currentRoom || 'no-room';
+                                    const title = report.title || 'Untitled bug report';
+                                    return `[bug-reports] ${report.submittedAt || new Date().toISOString()} ${who} ${clientId} room=${room} severity=${report.severity || 'normal'} category=${report.category || 'general'} title=${title}`;
+                                });
+                        } catch {
+                            return [];
+                        }
+                    })()
+                    : [];
+                const combinedLines = [...bugLines, ...lines].slice(-300);
+                if (existing.length === 0 && bugLines.length === 0) {
                     return res.json({ success: true, source: null, lines: [] });
                 }
-                const text = fs.readFileSync(existing, 'utf8');
-                const lines = text.split(/\r?\n/).filter(Boolean).slice(-300);
-                res.json({ success: true, source: existing, lines });
+                res.json({
+                    success: true,
+                    source: [...existing.map((filePath) => path.basename(filePath)), bugLines.length > 0 ? 'bug-reports.json' : null].filter(Boolean).join(', '),
+                    lines: combinedLines
+                });
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
             }
@@ -10649,6 +11265,55 @@ class VoiceLinkLocalServer {
             return res.json({ success: true });
         });
 
+        this.app.post('/api/client/assets/synced', (req, res) => {
+            const body = req.body || {};
+            const assetName = String(body.assetName || '').trim();
+            const assetType = String(body.assetType || 'asset').trim() || 'asset';
+            const assetPath = String(body.assetPath || assetName || '').trim();
+            if (!assetName || !assetPath) {
+                return res.status(400).json({ error: 'assetName and assetPath are required' });
+            }
+
+            const username = String(body.username || 'User').trim() || 'User';
+            const clientPlatform = String(body.clientPlatform || 'desktop-client').trim() || 'desktop-client';
+            const roomName = String(body.roomName || '').trim();
+            const serverName = String(body.serverName || deployConfig.get('server.name') || 'VoiceLink Server').trim() || 'VoiceLink Server';
+            const dedupeKey = [
+                assetType.toLowerCase(),
+                assetPath.toLowerCase(),
+                assetName.toLowerCase(),
+                username.toLowerCase(),
+                clientPlatform.toLowerCase()
+            ].join('::');
+            const now = Date.now();
+            const lastSeenAt = this.clientAssetSyncNotifications.get(dedupeKey) || 0;
+            if (now - lastSeenAt < 10 * 60 * 1000) {
+                return res.json({ success: true, deduped: true });
+            }
+            this.clientAssetSyncNotifications.set(dedupeKey, now);
+
+            const roomSuffix = roomName ? ` for ${roomName}` : '';
+            const message = `${username}'s ${clientPlatform} synced missing ${assetType.replace(/_/g, ' ')} asset ${assetName}${roomSuffix} on ${serverName}.`;
+            this.emitAdminScopedNotification({
+                type: 'client_asset_sync',
+                title: 'Client asset sync completed',
+                message,
+                severity: 'info',
+                metadata: {
+                    assetType,
+                    assetName,
+                    assetPath,
+                    username,
+                    clientPlatform,
+                    roomId: body.roomId || null,
+                    roomName: roomName || null,
+                    serverName
+                }
+            });
+
+            return res.json({ success: true });
+        });
+
         // Get documentation status
         this.app.get('/api/docs/status', (req, res) => {
             const docsDir = path.join(__dirname, '../../docs');
@@ -10872,6 +11537,91 @@ class VoiceLinkLocalServer {
         // Serve release packages for installer downloads
         this.app.use('/releases', express.static(path.join(__dirname, '../../releases')));
         this.app.use('/exports', express.static(path.join(__dirname, '../../data/exports')));
+
+        const handleClientUploadShareLink = (req, res) => {
+            const requestPath = String(req.body?.path || req.body?.filePath || '').trim();
+            const keepForever = this.parseBool(req.body?.keepForever, false);
+            const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt).toISOString() : null;
+            if (!requestPath) {
+                return res.status(400).json({ success: false, error: 'path is required' });
+            }
+            const link = this.createClientUploadShareLink(req, requestPath, keepForever, expiresAt);
+            if (!link) {
+                return res.status(404).json({ success: false, error: 'File not found for share link' });
+            }
+            return res.json(link);
+        };
+
+        this.app.put(/^\/uploads\/.+/, express.raw({ type: '*/*', limit: '250mb' }), (req, res) => {
+            try {
+                const requestPath = decodeURIComponent(req.path || '');
+                const resolved = this.resolveClientUploadPath(requestPath);
+                if (!resolved) {
+                    return res.status(400).json({ error: 'Invalid upload path' });
+                }
+                if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+                    return res.status(400).json({ error: 'Upload body is empty' });
+                }
+                fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
+                fs.writeFileSync(resolved.absolutePath, req.body);
+                const stats = fs.statSync(resolved.absolutePath);
+                return res.status(201).json({
+                    success: true,
+                    path: resolved.publicPath,
+                    size: stats.size,
+                    url: `${this.getRequestPublicBaseUrl(req)}${resolved.publicPath}`
+                });
+            } catch (error) {
+                console.error('[Uploads] Failed to store client upload:', error.message);
+                return res.status(500).json({ error: 'Failed to store uploaded file' });
+            }
+        });
+
+        this.app.post('/api/files/upload', express.raw({ type: '*/*', limit: '250mb' }), (req, res) => {
+            try {
+                const requestPath = String(req.query?.path || req.headers['x-upload-path'] || req.body?.path || '').trim();
+                const resolved = this.resolveClientUploadPath(requestPath);
+                if (!resolved) {
+                    return res.status(400).json({ error: 'Invalid upload path' });
+                }
+                if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+                    return res.status(400).json({ error: 'Upload body is empty' });
+                }
+                fs.mkdirSync(path.dirname(resolved.absolutePath), { recursive: true });
+                fs.writeFileSync(resolved.absolutePath, req.body);
+                const stats = fs.statSync(resolved.absolutePath);
+                return res.status(201).json({
+                    success: true,
+                    path: resolved.publicPath,
+                    size: stats.size,
+                    url: `${this.getRequestPublicBaseUrl(req)}/api/files/content?path=${encodeURIComponent(resolved.publicPath)}`
+                });
+            } catch (error) {
+                console.error('[Uploads] Failed to store API upload:', error.message);
+                return res.status(500).json({ error: 'Failed to store uploaded file' });
+            }
+        });
+
+        this.app.get('/api/files/content', (req, res) => {
+            try {
+                const requestPath = String(req.query?.path || '').trim();
+                const resolved = this.resolveClientUploadPath(requestPath);
+                if (!resolved || !fs.existsSync(resolved.absolutePath)) {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                return res.sendFile(resolved.absolutePath);
+            } catch (error) {
+                console.error('[Uploads] Failed to serve uploaded file:', error.message);
+                return res.status(500).json({ error: 'Failed to serve uploaded file' });
+            }
+        });
+
+        this.app.post([
+            '/api/files/share-link',
+            '/api/copyparty/share-link',
+            '/api/share-link',
+            '/api/share/create'
+        ], handleClientUploadShareLink);
 
         // Generate a share link using OpenLink/CopyParty with automatic provider fallback.
         this.app.post('/api/links/generate', async (req, res) => {
@@ -11729,6 +12479,164 @@ class VoiceLinkLocalServer {
             }
             next();
         };
+        const supportStaffRoles = new Set(['owner', 'admin', 'staff', 'support', 'moderator']);
+        const getSupportActor = (req) => {
+            const authUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
+            if (authUser) {
+                const role = normalizeUserRole(authUser.role);
+                return {
+                    id: String(authUser.id || '').trim(),
+                    name: authUser.displayName || authUser.username || authUser.email || 'User',
+                    email: authUser.email || '',
+                    role,
+                    isAuthenticated: true,
+                    isStaff: supportStaffRoles.has(role),
+                    isAdmin: ['owner', 'admin'].includes(role),
+                    source: authUser.authProvider || 'local'
+                };
+            }
+
+            const token = this.extractTokenFromRequest(req);
+            if (token) {
+                const principalResult = this.resolvePrincipalFromToken(token, req);
+                if (principalResult?.valid && principalResult.principal) {
+                    const principal = principalResult.principal;
+                    const roleContext = principal.roleContext || {};
+                    const role = normalizeUserRole(roleContext.primaryRole || (principal.isAdmin ? 'admin' : 'user'));
+                    return {
+                        id: String(principal.userId || '').trim(),
+                        name: principal.userName || principal.name || 'API User',
+                        email: principal.metadata?.email || '',
+                        role,
+                        isAuthenticated: true,
+                        isStaff: Boolean(principal.isAdmin || roleContext.isModerator || supportStaffRoles.has(role)),
+                        isAdmin: Boolean(principal.isAdmin || ['owner', 'admin'].includes(role)),
+                        source: principal.tokenType || 'token',
+                        principal
+                    };
+                }
+            }
+
+            return null;
+        };
+        const requireSupportActor = (req, res, next) => {
+            const actor = getSupportActor(req);
+            if (!actor) {
+                return res.status(401).json({ error: 'Authentication required for support access' });
+            }
+            req.supportActor = actor;
+            next();
+        };
+        const requireSupportStaff = (req, res, next) => {
+            const actor = getSupportActor(req);
+            if (!actor || !actor.isStaff) {
+                return res.status(403).json({ error: 'Support staff access required' });
+            }
+            req.supportActor = actor;
+            next();
+        };
+        const supportActorOwnsTicket = (actor, ticket) => {
+            if (!actor || !ticket) return false;
+            const actorId = String(actor.id || '').trim().toLowerCase();
+            const ticketUserId = String(ticket.userId || '').trim().toLowerCase();
+            const actorEmail = String(actor.email || '').trim().toLowerCase();
+            const ticketEmail = String(ticket.userEmail || '').trim().toLowerCase();
+            return Boolean(
+                (actorId && ticketUserId && actorId === ticketUserId) ||
+                (actorEmail && ticketEmail && actorEmail === ticketEmail)
+            );
+        };
+        const canGuestOpenSupportRequest = (req) => {
+            const name = String(req.body?.userName || '').trim();
+            const email = String(req.body?.userEmail || '').trim();
+            const issue = String(req.body?.issue || req.body?.description || '').trim();
+            return Boolean(name && email && issue);
+        };
+        const createHiddenSupportRoom = ({ sessionId, userName, issue, ownerName }) => {
+            const roomId = `support-${sessionId}`;
+            const trimmedUser = String(userName || 'User').trim() || 'User';
+            const room = {
+                id: roomId,
+                name: `Support: ${trimmedUser}`,
+                description: issue ? `Private support chat for ${trimmedUser}: ${String(issue).slice(0, 120)}` : `Private support chat for ${trimmedUser}`,
+                roomType: 'support',
+                password: null,
+                hasPassword: false,
+                maxUsers: 8,
+                users: [],
+                backgroundStream: null,
+                visibility: 'private',
+                visibleToGuests: false,
+                accessType: 'hidden',
+                allowEmbed: false,
+                showInApp: false,
+                privacyLevel: 'private',
+                encrypted: false,
+                creatorHandle: ownerName || 'support-system',
+                createdBy: ownerName || 'support-system',
+                isDefault: false,
+                template: 'support-session',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                updatedBy: ownerName || 'support-system',
+                previousNames: [],
+                expiresAt: null,
+                locked: false,
+                lockedAt: null,
+                lockedBy: null,
+                autoLock: null,
+                autoLockScheduled: null,
+                autoplayMusic: false,
+                autoplayPlaylist: null,
+                jellyfinAccess: {
+                    enabled: false,
+                    adminCanAccessAll: true,
+                    allowRoomOwnerUploads: false,
+                    allowAuthenticatedUploads: false,
+                    allowedServerIds: [],
+                    allowedLibraryIdsByServer: {},
+                    roomUserPermissions: {}
+                },
+                supportSession: {
+                    enabled: true,
+                    sessionId
+                }
+            };
+            this.rooms.set(roomId, room);
+            this.saveRoomsToDisk();
+            return room;
+        };
+        const postSupportRoomSystemMessage = (roomId, content, metadata = {}) => {
+            if (!roomId || !content) return null;
+            const message = {
+                id: uuidv4(),
+                userId: 'system:support',
+                userName: 'System',
+                message: content,
+                timestamp: new Date(),
+                isAuthenticated: true,
+                metadata: {
+                    type: 'support-session',
+                    ...metadata
+                }
+            };
+            this.storeRoomMessage(roomId, message);
+            this.io.to(roomId).emit('chat-message', message);
+            return message;
+        };
+        const closeSupportRoom = (roomId, reason = 'Support session closed', redirectUrl = null) => {
+            if (!roomId) return false;
+            const room = this.rooms.get(roomId);
+            if (!room) return false;
+            this.io.to(roomId).emit('room-deleted', { reason, roomId, redirectUrl });
+            this.rooms.delete(roomId);
+            this.federation.broadcastRoomChange('deleted', { id: roomId });
+            this.saveRoomsToDisk();
+            return true;
+        };
+        const resolveWhmcsSupportDepartmentId = (body = {}) => {
+            return body.departmentId || this.moduleRegistry?.getModule('whmcs-integration')?.config?.supportDepartmentId || '';
+        };
 
         // Get support availability
         this.app.get('/api/support/status', requireSupportModule, (req, res) => {
@@ -11742,12 +12650,31 @@ class VoiceLinkLocalServer {
 
         // Create ticket
         this.app.post('/api/support/tickets', requireSupportModule, async (req, res) => {
-            const result = await this.modules.supportSystem.tickets.createTicket(req.body);
+            const actor = getSupportActor(req);
+            if (!actor && !canGuestOpenSupportRequest(req)) {
+                return res.status(401).json({ error: 'Authentication required or provide name, email, and description' });
+            }
+            const payload = {
+                ...req.body,
+                userId: req.body?.userId || actor?.id || `guest:${uuidv4()}`,
+                userName: req.body?.userName || actor?.name || 'Guest',
+                userEmail: req.body?.userEmail || actor?.email || '',
+                channel: req.body?.channel || (actor ? 'voicelink' : 'web'),
+                metadata: {
+                    ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+                    createdBySource: actor?.source || 'guest',
+                    createdByRole: actor?.role || 'guest'
+                }
+            };
+            const result = await this.modules.supportSystem.tickets.createTicket(payload);
             res.json(result);
         });
 
         // Get user's tickets
-        this.app.get('/api/support/tickets/user/:userId', requireSupportModule, (req, res) => {
+        this.app.get('/api/support/tickets/user/:userId', requireSupportModule, requireSupportActor, (req, res) => {
+            if (!req.supportActor.isStaff && String(req.supportActor.id || '') !== String(req.params.userId || '')) {
+                return res.status(403).json({ error: 'You can only view your own tickets' });
+            }
             const tickets = this.modules.supportSystem.tickets.getUserTickets(
                 req.params.userId,
                 req.query
@@ -11756,25 +12683,40 @@ class VoiceLinkLocalServer {
         });
 
         // Get ticket by ID
-        this.app.get('/api/support/tickets/:ticketId', requireSupportModule, (req, res) => {
+        this.app.get('/api/support/tickets/:ticketId', requireSupportModule, requireSupportActor, (req, res) => {
             const ticket = this.modules.supportSystem.tickets.getTicket(req.params.ticketId);
             if (!ticket) {
                 return res.status(404).json({ error: 'Ticket not found' });
+            }
+            if (!req.supportActor.isStaff && !supportActorOwnsTicket(req.supportActor, ticket)) {
+                return res.status(403).json({ error: 'You do not have access to this ticket' });
             }
             res.json(ticket);
         });
 
         // Add reply to ticket
-        this.app.post('/api/support/tickets/:ticketId/reply', requireSupportModule, async (req, res) => {
+        this.app.post('/api/support/tickets/:ticketId/reply', requireSupportModule, requireSupportActor, async (req, res) => {
+            const ticket = this.modules.supportSystem.tickets.getTicket(req.params.ticketId);
+            if (!ticket) {
+                return res.status(404).json({ error: 'Ticket not found' });
+            }
+            if (!req.supportActor.isStaff && !supportActorOwnsTicket(req.supportActor, ticket)) {
+                return res.status(403).json({ error: 'You do not have access to this ticket' });
+            }
             const result = await this.modules.supportSystem.tickets.addReply(
                 req.params.ticketId,
-                req.body
+                {
+                    ...req.body,
+                    userId: req.body?.userId || req.supportActor.id,
+                    userName: req.body?.userName || req.supportActor.name,
+                    isAgent: req.body?.isAgent === true ? req.supportActor.isStaff : req.supportActor.isStaff
+                }
             );
             res.json(result);
         });
 
         // Update ticket status
-        this.app.put('/api/support/tickets/:ticketId/status', requireSupportModule, (req, res) => {
+        this.app.put('/api/support/tickets/:ticketId/status', requireSupportModule, requireSupportStaff, (req, res) => {
             const result = this.modules.supportSystem.tickets.updateStatus(
                 req.params.ticketId,
                 req.body.status,
@@ -11784,7 +12726,14 @@ class VoiceLinkLocalServer {
         });
 
         // Rate ticket
-        this.app.post('/api/support/tickets/:ticketId/rate', requireSupportModule, (req, res) => {
+        this.app.post('/api/support/tickets/:ticketId/rate', requireSupportModule, requireSupportActor, (req, res) => {
+            const ticket = this.modules.supportSystem.tickets.getTicket(req.params.ticketId);
+            if (!ticket) {
+                return res.status(404).json({ error: 'Ticket not found' });
+            }
+            if (!req.supportActor.isStaff && !supportActorOwnsTicket(req.supportActor, ticket)) {
+                return res.status(403).json({ error: 'You do not have access to this ticket' });
+            }
             const result = this.modules.supportSystem.tickets.addRating(
                 req.params.ticketId,
                 req.body.rating,
@@ -11794,13 +12743,13 @@ class VoiceLinkLocalServer {
         });
 
         // Admin: Get all tickets
-        this.app.get('/api/support/admin/tickets', requireSupportModule, (req, res) => {
+        this.app.get('/api/support/admin/tickets', requireSupportModule, requireSupportStaff, (req, res) => {
             const result = this.modules.supportSystem.tickets.getAllTickets(req.query);
             res.json(result);
         });
 
         // Admin: Assign ticket
-        this.app.post('/api/support/admin/tickets/:ticketId/assign', requireSupportModule, (req, res) => {
+        this.app.post('/api/support/admin/tickets/:ticketId/assign', requireSupportModule, requireSupportStaff, (req, res) => {
             const result = this.modules.supportSystem.tickets.assignTicket(
                 req.params.ticketId,
                 req.body.agentId,
@@ -11810,42 +12759,346 @@ class VoiceLinkLocalServer {
         });
 
         // Admin: Get statistics
-        this.app.get('/api/support/admin/stats', requireSupportModule, (req, res) => {
+        this.app.get('/api/support/admin/stats', requireSupportModule, requireSupportStaff, (req, res) => {
             res.json(this.modules.supportSystem.getStatistics());
         });
 
         // Admin: Manage agents
-        this.app.get('/api/support/admin/agents', requireSupportModule, (req, res) => {
+        this.app.get('/api/support/admin/agents', requireSupportModule, requireSupportStaff, (req, res) => {
             res.json(this.modules.supportSystem.tickets.getAgents());
         });
 
-        this.app.post('/api/support/admin/agents', requireSupportModule, (req, res) => {
+        this.app.post('/api/support/admin/agents', requireSupportModule, requireSupportStaff, (req, res) => {
             const result = this.modules.supportSystem.tickets.addAgent(req.body);
             res.json(result);
         });
 
-        this.app.delete('/api/support/admin/agents/:agentId', requireSupportModule, (req, res) => {
+        this.app.delete('/api/support/admin/agents/:agentId', requireSupportModule, requireSupportStaff, (req, res) => {
             const result = this.modules.supportSystem.tickets.removeAgent(req.params.agentId);
             res.json(result);
         });
 
         // Live chat endpoints
         this.app.post('/api/support/chat/join', requireSupportModule, (req, res) => {
+            const actor = getSupportActor(req);
+            if (!actor && !canGuestOpenSupportRequest(req)) {
+                return res.status(401).json({ error: 'Authentication required or provide name, email, and issue' });
+            }
             const result = this.modules.supportSystem.liveChat.joinQueue(
-                req.body.userId,
-                req.body.userName,
-                req.body.issue
+                req.body.userId || actor?.id || `guest:${uuidv4()}`,
+                req.body.userName || actor?.name || 'Guest',
+                req.body.issue,
+                {
+                    userEmail: req.body.userEmail || actor?.email || '',
+                    ticketId: req.body.ticketId || null,
+                    whmcsTicketId: req.body.whmcsTicketId || null,
+                    roomId: req.body.roomId || null,
+                    roomName: req.body.roomName || null,
+                    channel: req.body.channel || (actor ? 'voicelink' : 'web'),
+                    hiddenRoomId: req.body.hiddenRoomId || null,
+                    supportPinRequired: req.body.supportPinRequired === true,
+                    supportPinValidated: req.body.supportPinValidated === true,
+                    metadata: {
+                        ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+                        requesterRole: actor?.role || 'guest'
+                    }
+                }
             );
             res.json(result);
         });
 
-        this.app.post('/api/support/chat/leave', requireSupportModule, (req, res) => {
+        this.app.post('/api/support/chat/leave', requireSupportModule, requireSupportActor, (req, res) => {
             this.modules.supportSystem.liveChat.leaveQueue(req.body.queueId);
             res.json({ success: true });
         });
 
         this.app.get('/api/support/chat/status', requireSupportModule, (req, res) => {
             res.json(this.modules.supportSystem.liveChat.getQueueStatus());
+        });
+
+        // Support session endpoints
+        this.app.get('/api/support/sessions', requireSupportModule, requireSupportStaff, (req, res) => {
+            const sessions = this.modules.supportSystem.listSupportSessions(req.query || {});
+            res.json({ success: true, sessions });
+        });
+
+        this.app.get('/api/support/sessions/:sessionId', requireSupportModule, requireSupportActor, (req, res) => {
+            const session = this.modules.supportSystem.getSupportSession(req.params.sessionId);
+            if (!session) {
+                return res.status(404).json({ error: 'Support session not found' });
+            }
+            const ownsSession = String(session.userId || '') === String(req.supportActor.id || '')
+                || (req.supportActor.email && session.userEmail && String(req.supportActor.email).toLowerCase() === String(session.userEmail).toLowerCase());
+            if (!req.supportActor.isStaff && !ownsSession) {
+                return res.status(403).json({ error: 'You do not have access to this support session' });
+            }
+            res.json({ success: true, session });
+        });
+
+        this.app.post('/api/support/sessions', requireSupportModule, async (req, res) => {
+            const actor = getSupportActor(req);
+            if (!actor && !canGuestOpenSupportRequest(req)) {
+                return res.status(401).json({ error: 'Authentication required or provide name, email, and issue' });
+            }
+
+            const supportPinRequired = req.body?.supportPinRequired === true;
+            const room = createHiddenSupportRoom({
+                sessionId: uuidv4(),
+                userName: req.body?.userName || actor?.name || 'Guest',
+                issue: req.body?.issue || req.body?.description || '',
+                ownerName: actor?.name || 'support-system'
+            });
+
+            const existingInternalTicket = this.modules.supportSystem.tickets.findReusableTicket({
+                userId: req.body?.userId || actor?.id || `guest:${uuidv4()}`,
+                userEmail: req.body?.userEmail || actor?.email || '',
+                subject: req.body?.subject || `Live support request: ${req.body?.issue || 'Support'}`,
+                description: req.body?.description || req.body?.issue || 'Live support requested'
+            });
+            const builtInTicket = existingInternalTicket
+                ? this.modules.supportSystem.tickets.getTicket(existingInternalTicket.id)
+                : null;
+
+            let whmcsTicketId = null;
+            let whmcsTicketNumber = null;
+            let thankYouUrl = '/docs/support-thank-you.html';
+            if (this.modules.whmcsIntegration?.getStatistics().configured) {
+                thankYouUrl = this.modules.whmcsIntegration.getSupportThankYouUrl?.() || thankYouUrl;
+            }
+
+            const created = this.modules.supportSystem.createSupportSession({
+                userId: req.body?.userId || actor?.id || `guest:${uuidv4()}`,
+                userName: req.body?.userName || actor?.name || 'Guest',
+                userEmail: req.body?.userEmail || actor?.email || '',
+                issue: req.body?.issue || req.body?.description || '',
+                roomId: req.body?.roomId || null,
+                roomName: req.body?.roomName || null,
+                hiddenRoomId: room.id,
+                hiddenRoomName: room.name,
+                ticketId: builtInTicket?.ticketId || null,
+                whmcsTicketId,
+                whmcsTicketNumber,
+                channel: req.body?.channel || (actor ? 'voicelink' : 'web'),
+                supportPinRequired,
+                pinDelivery: req.body?.pinDelivery || 'none',
+                metadata: {
+                    requestedByRole: actor?.role || 'guest',
+                    requestedBySource: actor?.source || 'guest',
+                    existingTicketAttached: Boolean(builtInTicket),
+                    thankYouUrl
+                }
+            });
+
+            room.supportSession = {
+                enabled: true,
+                sessionId: created.session.id,
+                ticketId: builtInTicket?.ticketId || null,
+                whmcsTicketId,
+                whmcsTicketNumber
+            };
+            this.rooms.set(room.id, room);
+            this.saveRoomsToDisk();
+
+            postSupportRoomSystemMessage(
+                room.id,
+                `Private support session created for ${created.session.userName}.`,
+                { sessionId: created.session.id, ticketId: builtInTicket?.ticketId || null, whmcsTicketId }
+            );
+
+            res.json({
+                success: true,
+                session: created.session,
+                hiddenRoom: {
+                    id: room.id,
+                    name: room.name
+                },
+                supportPin: created.supportPin,
+                ticketId: builtInTicket?.ticketId || null,
+                whmcsTicketId,
+                whmcsTicketNumber,
+                thankYouUrl
+            });
+        });
+
+        this.app.post('/api/support/sessions/:sessionId/pickup', requireSupportModule, requireSupportStaff, async (req, res) => {
+            const result = this.modules.supportSystem.assignSupportSession(req.params.sessionId, {
+                id: req.supportActor.id,
+                name: req.supportActor.name
+            });
+            if (!result.success) {
+                return res.status(404).json(result);
+            }
+            if (result.session.hiddenRoomId) {
+                postSupportRoomSystemMessage(
+                    result.session.hiddenRoomId,
+                    `${req.supportActor.name} joined this support session.`,
+                    { sessionId: result.session.id, event: 'pickup' }
+                );
+            }
+            res.json(result);
+        });
+
+        this.app.post('/api/support/sessions/:sessionId/pin/verify', requireSupportModule, requireSupportActor, (req, res) => {
+            const result = this.modules.supportSystem.validateSupportPin(req.params.sessionId, req.body?.pin || '');
+            if (!result.success) {
+                return res.status(400).json(result);
+            }
+            res.json(result);
+        });
+
+        this.app.post('/api/support/sessions/:sessionId/message', requireSupportModule, requireSupportActor, async (req, res) => {
+            const session = this.modules.supportSystem.getSupportSession(req.params.sessionId);
+            if (!session) {
+                return res.status(404).json({ error: 'Support session not found' });
+            }
+            const ownsSession = String(session.userId || '') === String(req.supportActor.id || '')
+                || (req.supportActor.email && session.userEmail && String(req.supportActor.email).toLowerCase() === String(session.userEmail).toLowerCase());
+            if (!req.supportActor.isStaff && !ownsSession) {
+                return res.status(403).json({ error: 'You do not have access to this support session' });
+            }
+            if (session.supportPinRequired && !session.supportPinValidated && !req.supportActor.isStaff) {
+                return res.status(403).json({ error: 'Support PIN verification required before continuing' });
+            }
+
+            const content = String(req.body?.content || '').trim();
+            if (!content) {
+                return res.status(400).json({ error: 'Message content is required' });
+            }
+
+            const appended = this.modules.supportSystem.appendSupportSessionMessage(req.params.sessionId, {
+                from: req.supportActor.isStaff ? 'agent' : 'user',
+                userId: req.supportActor.id,
+                userName: req.supportActor.name,
+                content,
+                metadata: req.body?.metadata || {}
+            });
+            if (!appended.success) {
+                return res.status(400).json(appended);
+            }
+
+            if (session.hiddenRoomId) {
+                const message = {
+                    id: uuidv4(),
+                    userId: req.supportActor.id || `support:${req.params.sessionId}`,
+                    userName: req.supportActor.isStaff ? `Support: ${req.supportActor.name}` : req.supportActor.name,
+                    message: content,
+                    timestamp: new Date(),
+                    isAuthenticated: true,
+                    metadata: {
+                        type: 'support-session-message',
+                        sessionId: req.params.sessionId
+                    }
+                };
+                this.storeRoomMessage(session.hiddenRoomId, message);
+                this.io.to(session.hiddenRoomId).emit('chat-message', message);
+            }
+
+            if (session.whmcsTicketId && this.modules.whmcsIntegration?.getStatistics().configured) {
+                try {
+                    if (req.supportActor.isStaff) {
+                        await this.modules.whmcsIntegration.addTicketNote(
+                            session.whmcsTicketId,
+                            `[VoiceLink Live Chat] ${req.supportActor.name}: ${content}`
+                        );
+                    }
+                } catch (error) {
+                    console.warn('[Support] Failed to append support ticket note from support session:', error.message);
+                }
+            }
+
+            res.json(appended);
+        });
+
+        this.app.put('/api/support/sessions/:sessionId/status', requireSupportModule, requireSupportStaff, async (req, res) => {
+            const session = this.modules.supportSystem.getSupportSession(req.params.sessionId);
+            if (!session) {
+                return res.status(404).json({ error: 'Support session not found' });
+            }
+            const nextStatus = String(req.body?.status || 'active').trim().toLowerCase();
+            const updated = this.modules.supportSystem.updateSupportSession(req.params.sessionId, {
+                status: nextStatus,
+                metadata: {
+                    updatedBy: req.supportActor.name
+                }
+            });
+            if (!updated.success) {
+                return res.status(400).json(updated);
+            }
+
+            if (session.ticketId) {
+                this.modules.supportSystem.tickets.updateStatus(session.ticketId, nextStatus === 'closed' ? 'closed' : 'in_progress', req.body?.note || null);
+            }
+            if (session.whmcsTicketId && this.modules.whmcsIntegration?.getStatistics().configured && req.body?.whmcsStatus) {
+                try {
+                    await this.modules.whmcsIntegration.updateTicketStatus(session.whmcsTicketId, req.body.whmcsStatus);
+                } catch (error) {
+                    console.warn('[Support] Failed to update support ticket status from support session:', error.message);
+                }
+            }
+            if (session.hiddenRoomId && req.body?.note) {
+                postSupportRoomSystemMessage(session.hiddenRoomId, req.body.note, { sessionId: session.id, event: 'status-update' });
+            }
+            if (nextStatus === 'closed' && session.hiddenRoomId) {
+                closeSupportRoom(session.hiddenRoomId, 'Support session closed', session.metadata?.thankYouUrl || '/docs/support-thank-you.html');
+            }
+            res.json(updated);
+        });
+
+        this.app.post('/api/support/sessions/:sessionId/attach-whmcs-ticket', requireSupportModule, requireSupportStaff, async (req, res) => {
+            const session = this.modules.supportSystem.getSupportSession(req.params.sessionId);
+            if (!session) {
+                return res.status(404).json({ error: 'Support session not found' });
+            }
+            if (!this.modules.whmcsIntegration?.getStatistics().configured) {
+                return res.status(503).json({ error: 'Support ticket integration is not configured' });
+            }
+            try {
+                const whmcsTicket = await this.modules.whmcsIntegration.openSupportTicket({
+                    clientId: req.body?.whmcsClientId || '',
+                    departmentId: resolveWhmcsSupportDepartmentId(req.body || {}),
+                    subject: req.body?.subject || `Support session for ${session.userName}`,
+                    message: req.body?.message || session.issue || 'Live support session attached from Support',
+                    priority: req.body?.priority || 'Medium',
+                    name: session.userName,
+                    email: session.userEmail
+                });
+                const updated = this.modules.supportSystem.updateSupportSession(req.params.sessionId, {
+                    whmcsTicketId: whmcsTicket.ticketId || null,
+                    whmcsTicketNumber: whmcsTicket.ticketNumber || null
+                });
+                res.json({
+                    success: true,
+                    session: updated.session,
+                    whmcsTicketId: whmcsTicket.ticketId || null,
+                    whmcsTicketNumber: whmcsTicket.ticketNumber || null
+                });
+            } catch (error) {
+                res.status(500).json({ error: error.message || 'Failed to attach support ticket' });
+            }
+        });
+
+        this.app.post('/api/support/sessions/:sessionId/end', requireSupportModule, requireSupportStaff, (req, res) => {
+            const result = this.modules.supportSystem.endSupportSession(
+                req.params.sessionId,
+                req.body?.reason || 'completed',
+                req.body?.status || 'closed'
+            );
+            if (!result.success) {
+                return res.status(404).json(result);
+            }
+            if (result.session.hiddenRoomId) {
+                postSupportRoomSystemMessage(
+                    result.session.hiddenRoomId,
+                    `Support session ended by ${req.supportActor.name}.`,
+                    { sessionId: result.session.id, event: 'end' }
+                );
+                closeSupportRoom(
+                    result.session.hiddenRoomId,
+                    'Support session ended',
+                    result.session.metadata?.thankYouUrl || '/docs/support-thank-you.html'
+                );
+            }
+            res.json(result);
         });
 
         // ============================================
@@ -12429,6 +13682,10 @@ class VoiceLinkLocalServer {
                 userId: socketId,
                 userName: liveUser?.name || liveUser?.authInfo?.displayName || liveUser?.authInfo?.username || 'User'
             });
+            this.emitRoomSystemMessage(
+                roomId,
+                `${liveUser?.name || liveUser?.authInfo?.displayName || liveUser?.authInfo?.username || 'User'} left the room.`
+            );
             this.emitRoomUsersSnapshot(roomId);
             return true;
         };
@@ -13007,7 +14264,15 @@ class VoiceLinkLocalServer {
                     mastodonHandle: report.mastodonHandle || null,
                     appVersion: report.appVersion || null,
                     platform: report.platform || null,
-                    submittedAt: new Date().toISOString(),
+                    accountEmail: report.accountEmail || null,
+                    displayName: report.displayName || null,
+                    username: report.username || null,
+                    clientId: report.clientId || req.headers['x-client-id'] || null,
+                    currentRoom: report.currentRoom || null,
+                    diagnosticsSummary: report.diagnosticsSummary || null,
+                    localMonitorDiagnostics: report.localMonitorDiagnostics || null,
+                    recentCrashReports: Array.isArray(report.recentCrashReports) ? report.recentCrashReports : [],
+                    submittedAt: report.submittedAt || new Date().toISOString(),
                     ip: req.ip
                 };
 
@@ -13020,6 +14285,12 @@ class VoiceLinkLocalServer {
                 const reports = Array.isArray(existing) ? existing : [];
                 reports.unshift(bugReport);
                 fs.writeFileSync(bugFile, JSON.stringify(reports.slice(0, 1000), null, 2));
+                console.log(
+                    `[BugReport] id=${bugReport.id} account=${bugReport.accountEmail || bugReport.displayName || bugReport.username || bugReport.submittedBy || 'anonymous'} client=${bugReport.clientId || 'unknown'} room=${bugReport.currentRoom || 'none'} severity=${bugReport.severity} category=${bugReport.category} title=${bugReport.title}`
+                );
+                if (bugReport.localMonitorDiagnostics) {
+                    console.log(`[BugReport][LocalMonitor] ${String(bugReport.localMonitorDiagnostics).replace(/\r?\n/g, ' | ')}`);
+                }
 
                 return res.json({
                     success: true,
@@ -14514,50 +15785,7 @@ class VoiceLinkLocalServer {
 
             // Get room list for desktop/mobile apps
             socket.on('get-rooms', () => {
-                const roomList = Array.from(this.rooms.values()).map(room => ({
-                    ...(() => {
-                        const createdAt = room.createdAt ? new Date(room.createdAt) : null;
-                        const uptimeSeconds = createdAt
-                            ? Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 1000))
-                            : null;
-                        const lastActiveAt = Array.isArray(room.users) && room.users.length > 0
-                            ? room.users
-                                .map((u) => (u?.lastActiveAt ? new Date(u.lastActiveAt) : null))
-                                .filter(Boolean)
-                                .sort((a, b) => b - a)[0]
-                            : null;
-                        const lastActiveUser = Array.isArray(room.users) && room.users.length > 0
-                            ? [...room.users]
-                                .sort((a, b) => {
-                                    const left = a?.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
-                                    const right = b?.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
-                                    return right - left;
-                                })[0]
-                            : null;
-                        return {
-                            createdAt: createdAt ? createdAt.toISOString() : null,
-                            uptimeSeconds,
-                            lastActivityAt: lastActiveAt ? lastActiveAt.toISOString() : null,
-                            lastActiveUsername: lastActiveUser?.name || null
-                        };
-                    })(),
-                    id: room.id,
-                    name: room.name,
-                    description: room.description || '',
-                    welcomeMessage: room.welcomeMessage || null,
-                    userCount: this.normalizeRoomUsers(room.id).length,
-                    users: this.normalizeRoomUsers(room.id).map(u => ({
-                        id: u.id,
-                        name: u.name,
-                        isAuthenticated: u.isAuthenticated || false
-                    })),
-                    maxUsers: room.maxUsers || 50,
-                    hasPassword: !!room.password,
-                    visibility: room.visibility || 'public',
-                    visibleToGuests: room.visibleToGuests !== false,
-                    isDefault: room.isDefault || false,
-                    locked: room.locked || false
-                }));
+                const roomList = this.buildClientRoomListPayload();
                 console.log('[Socket] Sending room-list with ' + roomList.length + ' rooms');
                 socket.emit('room-list', roomList);
             });
@@ -14617,6 +15845,10 @@ class VoiceLinkLocalServer {
                             userId: socket.id,
                             userName: existingSession.name
                         });
+                        this.emitRoomSystemMessage(
+                            existingSession.roomId,
+                            `${existingSession.name} left the room.`
+                        );
                         this.emitRoomUsersSnapshot(existingSession.roomId);
                     }
                     socket.leave(existingSession.roomId);
@@ -14691,9 +15923,15 @@ class VoiceLinkLocalServer {
 
                 socket.emit('joined-room', { room: roomState, user });
                 socket.to(roomId).emit('user-joined', user);
+                this.emitRoomSystemMessage(
+                    roomId,
+                    `${user.name} joined the room.`,
+                    { joinedUserId: user.id }
+                );
 
                 // Broadcast updated user count to all in room
                 this.emitRoomUsersSnapshot(roomId);
+                this.emitRoomListToClients();
 
                 const roomWelcome = this.buildRoomWelcomeMessage({ user, room });
                 if (roomWelcome) {
@@ -14921,10 +16159,17 @@ class VoiceLinkLocalServer {
                             return;
                         }
                         this.updateBotConversationState(user.roomId, socket.id, source);
+                        this.rememberBotTurn(user.roomId, socket.id, 'user', source);
                         const commandResult = await this.executeRoomBotCommand(user, user.roomId, source);
                         let reply = commandResult.handled
                             ? commandResult.reply
                             : await this.buildBotTextReply(user, user.roomId, source);
+                        if (!commandResult.handled) {
+                            const generatedReply = await this.generateBotOllamaReply(user, user.roomId, source);
+                            if (generatedReply) {
+                                reply = generatedReply;
+                            }
+                        }
                         const attachmentReply = sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL
                             ? await this.buildBotAttachmentReply(user, sanitizedMessage)
                             : null;
@@ -14951,6 +16196,7 @@ class VoiceLinkLocalServer {
                             attachmentURL: commandResult.attachmentURL || null,
                             reactions: []
                         };
+                        this.rememberBotTurn(user.roomId, socket.id, 'assistant', reply);
                         this.storeRoomMessage(user.roomId, botMessage);
                         setTimeout(() => {
                             this.io.to(user.roomId).emit('chat-message', botMessage);
@@ -15004,7 +16250,20 @@ class VoiceLinkLocalServer {
 
                     if (targetUserId.startsWith('bot:')) {
                         const roomId = targetUserId.slice(4);
+                        if (message.attachmentName || message.attachmentURL) {
+                            console.log('[Bot Attachment] DM attachment received for bot', {
+                                roomId,
+                                sender: user.name,
+                                attachmentName: message.attachmentName || null,
+                                attachmentURL: message.attachmentURL || null
+                            });
+                        }
+                        this.rememberBotTurn(roomId, socket.id, 'user', msgContent);
                         let reply = await this.buildBotTextReply(user, roomId, msgContent);
+                        const generatedReply = await this.generateBotOllamaReply(user, roomId, msgContent);
+                        if (generatedReply) {
+                            reply = generatedReply;
+                        }
                         const attachmentReply = message.attachmentName || message.attachmentURL
                             ? await this.buildBotAttachmentReply(user, message)
                             : null;
@@ -15028,6 +16287,7 @@ class VoiceLinkLocalServer {
                             reactions: [],
                             read: false
                         };
+                        this.rememberBotTurn(roomId, socket.id, 'assistant', reply);
                         this.storeDirectMessage(targetUserId, socket.id, botReply);
                         socket.emit('direct-message', botReply);
                     } else {
@@ -15249,6 +16509,10 @@ class VoiceLinkLocalServer {
                             userId: socket.id,
                             userName: userName
                         });
+                        this.emitRoomSystemMessage(
+                            user.roomId,
+                            `${userName} left the room.`
+                        );
 
                     // Broadcast updated user count
                     this.emitRoomUsersSnapshot(user.roomId);
@@ -15264,6 +16528,8 @@ class VoiceLinkLocalServer {
                             this.rooms.delete(user.roomId);
                             console.log(`Room ${room.name} deleted (empty)`);
                         }
+
+                        this.emitRoomListToClients();
                     }
 
                     this.users.delete(socket.id);
@@ -15301,6 +16567,29 @@ class VoiceLinkLocalServer {
         const messages = this.roomMessages.get(roomId);
         messages.push(message);
         this.trimMessagesToCap(messages, settings.roomMessageCap);
+    }
+
+    createRoomSystemMessage(roomId, message, overrides = {}) {
+        return {
+            id: uuidv4(),
+            userId: `system:${roomId}`,
+            userName: 'System',
+            message,
+            timestamp: new Date(),
+            isAuthenticated: true,
+            isBot: true,
+            type: 'system',
+            reactions: [],
+            ...overrides
+        };
+    }
+
+    emitRoomSystemMessage(roomId, message, overrides = {}) {
+        if (!roomId || !message) return null;
+        const systemMessage = this.createRoomSystemMessage(roomId, message, overrides);
+        this.storeRoomMessage(roomId, systemMessage);
+        this.io.to(roomId).emit('chat-message', systemMessage);
+        return systemMessage;
     }
 
     /**

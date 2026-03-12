@@ -6,6 +6,10 @@ import Security
 // MARK: - Authentication Manager
 class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     static let shared = AuthenticationManager()
+    static let preferredMastodonInstance = "mastodon.devinecreations.net"
+    static let mastodonFallbacks: [String: String] = [
+        "md.tappedin.fm": "mastodon.devinecreations.net"
+    ]
     private let authDefaultsKey = "voicelink.authUser"
 
     @Published var currentUser: AuthenticatedUser?
@@ -85,7 +89,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
     func authenticateWithMastodon(instance: String, completion: @escaping (Bool, String?) -> Void) {
         authState = .authenticating
-        mastodonInstance = instance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        mastodonInstance = Self.normalizedMastodonInstance(instance)
 
         // Step 1: Register OAuth app with the instance
         registerMastodonApp { [weak self] success, error in
@@ -99,6 +103,16 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             // Step 2: Open OAuth authorization URL
             self?.openMastodonAuth(completion: completion)
         }
+    }
+
+    static func normalizedMastodonInstance(_ instance: String) -> String {
+        var normalized = instance
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        normalized = normalized.replacingOccurrences(of: "https://", with: "")
+        normalized = normalized.replacingOccurrences(of: "http://", with: "")
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return normalized.isEmpty ? preferredMastodonInstance : normalized
     }
 
     private func registerMastodonApp(completion: @escaping (Bool, String?) -> Void) {
@@ -128,8 +142,22 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 }
 
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    if http.statusCode == 502,
+                       let current = self?.mastodonInstance,
+                       let fallback = Self.mastodonFallbacks[current],
+                       fallback != current {
+                        self?.mastodonInstance = fallback
+                        self?.registerMastodonApp(completion: completion)
+                        return
+                    }
+
                     let bodyText = data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let message = (bodyText?.isEmpty == false ? bodyText! : "HTTP \(http.statusCode)")
+                    let message: String
+                    if http.statusCode == 502 {
+                        message = "The selected Mastodon instance is unavailable right now (502 Bad Gateway). Try \(Self.preferredMastodonInstance)."
+                    } else {
+                        message = (bodyText?.isEmpty == false ? bodyText! : "HTTP \(http.statusCode)")
+                    }
                     completion(false, "Failed to register with Mastodon instance: \(message)")
                     return
                 }
@@ -179,7 +207,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 if let error = error {
                     // Check if user cancelled
                     if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                        self?.authState = .unauthenticated
+                        self?.authState = self?.currentUser == nil ? .unauthenticated : .authenticated
                         self?.pendingMastodonCompletion?(false, "Authentication cancelled")
                         self?.pendingMastodonCompletion = nil
                     } else {
@@ -362,7 +390,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 }
 
                 self?.pendingEmailVerification = email
-                self?.emailVerificationExpiry = Date().addingTimeInterval(300) // 5 minutes
+                self?.emailVerificationExpiry = Date().addingTimeInterval(15 * 60) // 15 minutes
                 completion(true, nil)
             }
         }.resume()
@@ -598,77 +626,127 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         twoFactorCode: String = "",
         completion: @escaping (Bool, String?, Bool) -> Void
     ) {
-        guard let url = URL(string: "\(serverURL)/api/auth/\(provider.rawValue)/login") else {
-            completion(false, "Invalid server URL", false)
-            return
-        }
-
         authState = .authenticating
         authError = nil
+        let providersToTry: [AccountAuthProvider] = provider == .local ? [.local, .whmcs] : [provider]
+        let isSmartAccountSignIn = provider == .local
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        var body: [String: Any] = [
-            "identity": identity,
-            "password": password
-        ]
-        if !twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            body["twoFactorCode"] = twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        func isRetryablePortalFallbackMessage(_ message: String) -> Bool {
+            let lowered = message.lowercased()
+            return lowered.contains("invalid credentials")
+                || lowered.contains("account not found")
+                || lowered.contains("user not found")
+                || lowered.contains("unknown user")
         }
-        if provider == .whmcs {
-            body["portalSite"] = "devine-creations.com"
-        }
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    self?.authState = .error
-                    self?.authError = error.localizedDescription
-                    completion(false, error.localizedDescription, false)
-                    return
+        func normalizeAccountSignInError(_ message: String, provider: AccountAuthProvider) -> String {
+            let lowered = message.lowercased()
+            if provider == .whmcs {
+                if lowered.contains("api credentials not configured")
+                    || lowered.contains("license")
+                    || lowered.contains("temporarily unavailable")
+                    || lowered.contains("bad gateway")
+                    || lowered.contains("internal server error")
+                    || lowered.contains("service unavailable") {
+                    return "Client Portal sign-in is temporarily unavailable. Use your VoiceLink account, Email Code, or Mastodon for now."
                 }
-
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    self?.authState = .error
-                    self?.authError = "Authentication failed"
-                    completion(false, "Authentication failed", false)
-                    return
-                }
-
-                if let requires2FA = json["requires2FA"] as? Bool, requires2FA {
-                    self?.authState = .unauthenticated
-                    let message = json["error"] as? String ?? json["message"] as? String ?? "Two-factor authentication code required"
-                    completion(false, message, true)
-                    return
-                }
-
-                guard let success = json["success"] as? Bool, success else {
-                    let message = json["error"] as? String ?? json["message"] as? String ?? "Authentication failed"
-                    self?.authState = .error
-                    self?.authError = message
-                    completion(false, message, false)
-                    return
-                }
-
-                guard let user = self?.parseAuthenticatedUser(
-                    from: json["user"] as? [String: Any],
-                    accessTokenFallback: (json["token"] as? String) ?? (json["accessToken"] as? String),
-                    authMethod: provider == .local ? .email : .whmcs
-                ) else {
-                    self?.authState = .error
-                    self?.authError = "Invalid user payload"
-                    completion(false, "Invalid user payload", false)
-                    return
-                }
-
-                self?.applyAuthenticatedUser(user)
-                completion(true, nil, false)
             }
-        }.resume()
+            return message
+        }
+
+        func attempt(_ remainingProviders: ArraySlice<AccountAuthProvider>) {
+            guard let activeProvider = remainingProviders.first else {
+                self.authState = .error
+                completion(false, self.authError ?? "Authentication failed", false)
+                return
+            }
+
+            guard let url = URL(string: "\(serverURL)/api/auth/\(activeProvider.rawValue)/login") else {
+                completion(false, "Invalid server URL", false)
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            var body: [String: Any] = [
+                "identity": identity,
+                "password": password
+            ]
+            if !twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                body["twoFactorCode"] = twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if activeProvider == .whmcs {
+                body["portalSite"] = "devine-creations.com"
+            }
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                DispatchQueue.main.async {
+                    guard let self else {
+                        completion(false, "Authentication unavailable", false)
+                        return
+                    }
+
+                    if let error = error {
+                        self.authState = .error
+                        self.authError = error.localizedDescription
+                        completion(false, error.localizedDescription, false)
+                        return
+                    }
+
+                    guard let data = data,
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        self.authState = .error
+                        self.authError = "Authentication failed"
+                        completion(false, "Authentication failed", false)
+                        return
+                    }
+
+                    if let requires2FA = json["requires2FA"] as? Bool, requires2FA {
+                        self.authState = .unauthenticated
+                        let message = json["error"] as? String ?? json["message"] as? String ?? "Two-factor authentication code required"
+                        completion(false, message, true)
+                        return
+                    }
+
+                    guard let success = json["success"] as? Bool, success else {
+                        let message = json["error"] as? String ?? json["message"] as? String ?? "Authentication failed"
+                        let shouldTryNext = activeProvider == .local
+                            && !remainingProviders.dropFirst().isEmpty
+                            && isRetryablePortalFallbackMessage(message)
+                        if shouldTryNext {
+                            attempt(remainingProviders.dropFirst())
+                            return
+                        }
+                        self.authState = .error
+                        let visibleMessage = isSmartAccountSignIn
+                            ? normalizeAccountSignInError(message, provider: activeProvider)
+                            : message
+                        self.authError = visibleMessage
+                        completion(false, visibleMessage, false)
+                        return
+                    }
+
+                    guard let user = self.parseAuthenticatedUser(
+                        from: json["user"] as? [String: Any],
+                        accessTokenFallback: (json["token"] as? String) ?? (json["accessToken"] as? String),
+                        authMethod: activeProvider == .local ? .email : .whmcs
+                    ) else {
+                        self.authState = .error
+                        self.authError = "Invalid user payload"
+                        completion(false, "Invalid user payload", false)
+                        return
+                    }
+
+                    self.applyAuthenticatedUser(user)
+                    completion(true, nil, false)
+                }
+            }.resume()
+        }
+
+        attempt(ArraySlice(providersToTry))
     }
 
     // MARK: - Session Management
@@ -685,7 +763,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         guard let data = try? JSONEncoder().encode(user) else { return }
 
         // Always keep a local fallback to avoid SecurityAgent prompt loops.
-        UserDefaults.standard.set(data, forKey: authDefaultsKey)
+        UserDefaults().set(data, forKey: authDefaultsKey)
 
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -706,7 +784,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     }
 
     private func loadFromUserDefaults() -> Bool {
-        guard let data = UserDefaults.standard.data(forKey: authDefaultsKey),
+        guard let data = UserDefaults().data(forKey: authDefaultsKey),
               let user = decodeStoredUser(data) else {
             return false
         }
@@ -733,12 +811,12 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
            let data = result as? Data,
            let user = decodeStoredUser(data) {
             applyAuthenticatedUser(user)
-            UserDefaults.standard.set(data, forKey: authDefaultsKey)
+            UserDefaults().set(data, forKey: authDefaultsKey)
         }
     }
 
     private func clearStoredAuth() {
-        UserDefaults.standard.removeObject(forKey: authDefaultsKey)
+        UserDefaults().removeObject(forKey: authDefaultsKey)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -750,11 +828,11 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     }
 
     private func getClientId() -> String {
-        if let clientId = UserDefaults.standard.string(forKey: "clientId") {
+        if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
         }
         let newId = UUID().uuidString
-        UserDefaults.standard.set(newId, forKey: "clientId")
+        UserDefaults().set(newId, forKey: "clientId")
         return newId
     }
 
@@ -787,6 +865,17 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             accessToken: accessToken,
             avatarURL: json["avatarURL"] as? String ?? json["avatar"] as? String
         )
+        if let directGender = json["gender"] as? String, !directGender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            user.gender = directGender
+        } else if let directGender = json["sex"] as? String, !directGender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            user.gender = directGender
+        } else if let profile = json["profile"] as? [String: Any] {
+            if let profileGender = profile["gender"] as? String, !profileGender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                user.gender = profileGender
+            } else if let profileGender = profile["sex"] as? String, !profileGender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                user.gender = profileGender
+            }
+        }
         user.role = json["role"] as? String
         user.authProvider = json["authProvider"] as? String
         user.permissions = json["permissions"] as? [String] ?? []
@@ -817,6 +906,7 @@ struct AuthenticatedUser: Codable, Identifiable {
     let avatarURL: String?
     var role: String?
     var authProvider: String?
+    var gender: String?
     var permissions: [String] = []
     var entitlements: [String: AnyCodable] = [:]
 
@@ -1041,9 +1131,12 @@ struct LinkedDevice: Codable, Identifiable {
         if isRevoked {
             return "Revoked"
         }
+        if Date().timeIntervalSince(lastSeen) <= 300 {
+            return "Online and reachable via API"
+        }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return "Active \(formatter.localizedString(for: lastSeen, relativeTo: Date()))"
+        return "Offline • last seen \(formatter.localizedString(for: lastSeen, relativeTo: Date()))"
     }
 }
 
@@ -1106,7 +1199,10 @@ class DeviceRevocationManager: ObservableObject {
             return
         }
 
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        var request = URLRequest(url: url)
+        applyAuthHeaders(to: &request)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 self?.isLoading = false
 
@@ -1167,6 +1263,7 @@ class DeviceRevocationManager: ObservableObject {
         if let reason = reason {
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["reason": reason])
         }
+        applyAuthHeaders(to: &request)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -1202,6 +1299,7 @@ class DeviceRevocationManager: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        applyAuthHeaders(to: &request)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -1224,13 +1322,23 @@ class DeviceRevocationManager: ObservableObject {
             }
         }.resume()
     }
+
+    private func applyAuthHeaders(to request: inout URLRequest) {
+        guard let currentUser = AuthenticationManager.shared.currentUser else { return }
+        request.setValue("Bearer \(currentUser.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(currentUser.id, forHTTPHeaderField: "X-User-Id")
+        request.setValue(currentUser.username, forHTTPHeaderField: "X-User-Name")
+        request.setValue(currentUser.role, forHTTPHeaderField: "X-User-Role")
+        request.setValue(currentUser.authProvider ?? currentUser.authMethod.rawValue, forHTTPHeaderField: "X-Auth-Provider")
+        request.setValue(currentUser.authMethod.rawValue, forHTTPHeaderField: "X-Auth-Method")
+    }
 }
 
 // MARK: - Authentication Views
 
 struct MastodonAuthView: View {
     @ObservedObject private var authManager = AuthenticationManager.shared
-    @State private var instanceInput: String = ""
+    @State private var instanceInput: String = AuthenticationManager.preferredMastodonInstance
     @State private var isAuthenticating = false
     @Binding var isPresented: Bool
     var onSuccess: (() -> Void)?
@@ -1255,6 +1363,18 @@ struct MastodonAuthView: View {
                     .textFieldStyle(.roundedBorder)
             }
             .frame(width: 300)
+
+            HStack(spacing: 10) {
+                Button("DevineCreations") {
+                    instanceInput = AuthenticationManager.preferredMastodonInstance
+                }
+                .buttonStyle(.bordered)
+
+                Button("TappedIn") {
+                    instanceInput = "md.tappedin.fm"
+                }
+                .buttonStyle(.bordered)
+            }
 
             if let error = authManager.authError {
                 Text(error)
@@ -1288,11 +1408,19 @@ struct MastodonAuthView: View {
         }
         .padding(30)
         .frame(width: 400, height: 350)
+        .onAppear {
+            if let existing = authManager.currentUser?.mastodonInstance?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !existing.isEmpty {
+                instanceInput = existing
+            } else if instanceInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                instanceInput = AuthenticationManager.preferredMastodonInstance
+            }
+        }
     }
 
     private func authenticate() {
         isAuthenticating = true
-        authManager.authenticateWithMastodon(instance: instanceInput) { success, error in
+        authManager.authenticateWithMastodon(instance: instanceInput) { success, _ in
             isAuthenticating = false
             if success {
                 isPresented = false
@@ -1306,6 +1434,7 @@ struct AccountPasswordAuthView: View {
     @ObservedObject private var authManager = AuthenticationManager.shared
     @Binding var isPresented: Bool
     let serverURL: String
+    var initialProvider: AccountAuthProvider = .local
     var onSuccess: (() -> Void)?
 
     @State private var provider: AccountAuthProvider = .local
@@ -1326,14 +1455,12 @@ struct AccountPasswordAuthView: View {
                 .font(.title2)
                 .fontWeight(.bold)
 
-            Picker("Provider", selection: $provider) {
-                ForEach(AccountAuthProvider.allCases) { option in
-                    Text(option.displayName).tag(option)
-                }
-            }
-            .pickerStyle(.segmented)
+            Text("Enter your account name. VoiceLink will use your username or email in the background and resolve the correct account type automatically.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
 
-            TextField("Email or Username", text: $identityInput)
+            TextField("Username", text: $identityInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
 
@@ -1375,6 +1502,9 @@ struct AccountPasswordAuthView: View {
         }
         .padding(30)
         .frame(width: 420)
+        .onAppear {
+            provider = initialProvider
+        }
     }
 
     private func signIn() {
@@ -1652,6 +1782,23 @@ struct CreateAdminInviteView: View {
 
     private let availableRoles = ["moderator", "admin", "owner"]
 
+    private var expirySummaryText: String {
+        let days = expiresMinutes / (24 * 60)
+        let hours = (expiresMinutes % (24 * 60)) / 60
+        let minutes = expiresMinutes % 60
+        var parts: [String] = []
+        if days > 0 {
+            parts.append("\(days) day\(days == 1 ? "" : "s")")
+        }
+        if hours > 0 {
+            parts.append("\(hours) hour\(hours == 1 ? "" : "s")")
+        }
+        if minutes > 0 || parts.isEmpty {
+            parts.append("\(minutes) minute\(minutes == 1 ? "" : "s")")
+        }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "envelope.badge")
@@ -1673,9 +1820,14 @@ struct CreateAdminInviteView: View {
             }
             .pickerStyle(.segmented)
 
-            Stepper(value: $expiresMinutes, in: 5...1440, step: 5) {
-                Text("Expires in \(expiresMinutes) minutes")
+            Stepper(value: $expiresMinutes, in: 5...(24 * 30 * 60), step: 5) {
+                Text("This invite will expire in \(expirySummaryText).")
             }
+
+            Text("After that, the recipient will need a new invite link.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if !generatedInviteURL.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1764,7 +1916,7 @@ struct CreateAdminInviteView: View {
             isSubmitting = false
             if success {
                 generatedInviteURL = inviteURL ?? ""
-                statusMessage = "Invite created. Email send was requested from the server."
+                statusMessage = "Invite created. An email invite was requested from the server for \(emailInput.trimmingCharacters(in: .whitespacesAndNewlines)). This invite will expire in \(expirySummaryText)."
             } else {
                 statusMessage = error ?? "Failed to create invite."
             }

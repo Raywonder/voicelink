@@ -7,9 +7,53 @@ struct LoginView: View {
     @State private var mastodonInstance: String = ""
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
+    @State private var selectedMethod: SignInMethod = .account
     @State private var showAccountAuthSheet = false
     @State private var showEmailAuthSheet = false
     @State private var showAdminInviteSheet = false
+
+    private enum SignInMethod: String, CaseIterable, Identifiable {
+        case account
+        case emailCode
+        case mastodon
+        case google
+        case apple
+        case github
+        case adminInvite
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .account: return "Sign In"
+            case .emailCode: return "Email Code"
+            case .mastodon: return "Mastodon"
+            case .google: return "Google"
+            case .apple: return "Apple"
+            case .github: return "GitHub"
+            case .adminInvite: return "Admin Invite"
+            }
+        }
+
+        var helpText: String {
+            switch self {
+            case .account:
+                return "Use your VoiceLink, Client Portal, WHM, cPanel, or related account credentials. The app resolves the account type automatically."
+            case .emailCode:
+                return "Request a sign-in code by email. Codes stay valid for 15 minutes."
+            case .mastodon:
+                return "Sign in with your Mastodon account on the instance you enter below."
+            case .google:
+                return "Sign in with your linked Google account in the browser."
+            case .apple:
+                return "Sign in with your linked Apple account in the browser."
+            case .github:
+                return "Sign in with your linked GitHub account in the browser."
+            case .adminInvite:
+                return "Use an admin invite link or token that was sent to you."
+            }
+        }
+    }
 
     private var effectiveAuthServerURL: String {
         if let pending = authManager.pendingAdminInviteServerURL?
@@ -36,7 +80,7 @@ struct LoginView: View {
                     .font(.title)
                     .fontWeight(.bold)
 
-                Text("Connect with your Mastodon account")
+                Text("Choose a sign-in method for this server")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -44,58 +88,39 @@ struct LoginView: View {
 
             // Login Form
             VStack(spacing: 16) {
-                // Mastodon Instance Input
-                VStack(alignment: .leading, spacing: 8) {
+                Picker("Sign-in Method", selection: $selectedMethod) {
+                    ForEach(SignInMethod.allCases) { method in
+                        Text(method.label).tag(method)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(selectedMethod.helpText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button(selectedMethod.label) {
+                    continueWithSelectedMethod()
+                }
+                .buttonStyle(.borderedProminent)
+
+                if selectedMethod == .mastodon {
+                    VStack(alignment: .leading, spacing: 8) {
                     Text("Mastodon Instance")
                         .font(.headline)
                         .foregroundColor(.white)
 
-                    TextField("mastodon.social", text: $mastodonInstance)
+                    TextField("md.tappedin.fm", text: $mastodonInstance)
                         .textFieldStyle(.roundedBorder)
                         .disableAutocorrection(true)
                         .disabled(isLoading)
 
-                    Text("Enter your Mastodon instance domain (e.g., mastodon.social)")
+                    Text("Use this only when signing in with Mastodon.")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-
-                // Login Button
-                Button(action: handleLogin) {
-                    HStack {
-                        if isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "person.fill.checkmark")
-                        }
-                        Text(isLoading ? "Authenticating..." : "Login with Mastodon")
-                            .fontWeight(.semibold)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(isLoading ? Color.gray : Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                }
-                .disabled(mastodonInstance.isEmpty || isLoading)
-
-                HStack(spacing: 10) {
-                    Button("Account Sign-In") {
-                        showAccountAuthSheet = true
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Email Code") {
-                        showEmailAuthSheet = true
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Admin Invite") {
-                        showAdminInviteSheet = true
-                    }
-                    .buttonStyle(.bordered)
                 }
 
                 // Error Message
@@ -137,7 +162,10 @@ struct LoginView: View {
             }
         }
         .sheet(isPresented: $showAccountAuthSheet) {
-            AccountPasswordAuthView(isPresented: $showAccountAuthSheet, serverURL: effectiveAuthServerURL) {
+            AccountPasswordAuthView(
+                isPresented: $showAccountAuthSheet,
+                serverURL: effectiveAuthServerURL
+            ) {
                 appState.currentScreen = .mainMenu
             }
         }
@@ -169,6 +197,35 @@ struct LoginView: View {
                 }
             }
         }
+    }
+
+    private func continueWithSelectedMethod() {
+        errorMessage = nil
+        switch selectedMethod {
+        case .account:
+            showAccountAuthSheet = true
+        case .emailCode:
+            showEmailAuthSheet = true
+        case .mastodon:
+            handleLogin()
+        case .google:
+            openWebAuth(path: "google")
+        case .apple:
+            openWebAuth(path: "apple")
+        case .github:
+            openWebAuth(path: "github")
+        case .adminInvite:
+            showAdminInviteSheet = true
+        }
+    }
+
+    private func openWebAuth(path: String) {
+        let base = effectiveAuthServerURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(base)/auth/\(path)") else {
+            errorMessage = "Unable to open the selected sign-in method."
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }
 
