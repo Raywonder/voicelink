@@ -306,21 +306,6 @@ struct VoiceLinkApp: App {
                         appState.currentScreen = .login
                     }
                     .keyboardShortcut("l", modifiers: .command)
-                    Button("Sign In with Google") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    Button("Sign In with Apple") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    Button("Sign In with GitHub") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
                 }
 
                 Divider()
@@ -906,6 +891,7 @@ class AppState: ObservableObject {
         setupHandoffObservers()
         refreshAdminCapabilities()
         observeAuthenticationState()
+        refreshRooms()
     }
 
     private func observeAuthenticationState() {
@@ -918,6 +904,7 @@ class AppState: ObservableObject {
                     self.pendingGuestJoinRequest = nil
                     self.showGuestNamePrompt = false
                 }
+                self.refreshRooms()
             }
             .store(in: &cancellables)
     }

@@ -651,6 +651,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     return "Client Portal sign-in is temporarily unavailable. Use your VoiceLink account, Email Code, or Mastodon for now."
                 }
             }
+            if provider == .local && isSmartAccountSignIn {
+                if lowered.contains("whmcs")
+                    || lowered.contains("cpanel")
+                    || lowered.contains("client portal")
+                    || lowered.contains("api credentials not configured") {
+                    return "Sign In is temporarily unavailable for that account right now. Use your VoiceLink account, Email Code, or Mastodon for now."
+                }
+            }
             return message
         }
 

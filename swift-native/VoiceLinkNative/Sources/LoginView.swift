@@ -16,9 +16,6 @@ struct LoginView: View {
         case account
         case emailCode
         case mastodon
-        case google
-        case apple
-        case github
         case adminInvite
 
         var id: String { rawValue }
@@ -28,9 +25,6 @@ struct LoginView: View {
             case .account: return "Sign In"
             case .emailCode: return "Email Code"
             case .mastodon: return "Mastodon"
-            case .google: return "Google"
-            case .apple: return "Apple"
-            case .github: return "GitHub"
             case .adminInvite: return "Admin Invite"
             }
         }
@@ -38,17 +32,11 @@ struct LoginView: View {
         var helpText: String {
             switch self {
             case .account:
-                return "Use your VoiceLink, Client Portal, WHM, cPanel, or related account credentials. The app resolves the account type automatically."
+                return "Use your VoiceLink account credentials. The app resolves supported linked account types automatically in the background."
             case .emailCode:
                 return "Request a sign-in code by email. Codes stay valid for 15 minutes."
             case .mastodon:
                 return "Sign in with your Mastodon account on the instance you enter below."
-            case .google:
-                return "Sign in with your linked Google account in the browser."
-            case .apple:
-                return "Sign in with your linked Apple account in the browser."
-            case .github:
-                return "Sign in with your linked GitHub account in the browser."
             case .adminInvite:
                 return "Use an admin invite link or token that was sent to you."
             }
@@ -208,24 +196,9 @@ struct LoginView: View {
             showEmailAuthSheet = true
         case .mastodon:
             handleLogin()
-        case .google:
-            openWebAuth(path: "google")
-        case .apple:
-            openWebAuth(path: "apple")
-        case .github:
-            openWebAuth(path: "github")
         case .adminInvite:
             showAdminInviteSheet = true
         }
-    }
-
-    private func openWebAuth(path: String) {
-        let base = effectiveAuthServerURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "\(base)/auth/\(path)") else {
-            errorMessage = "Unable to open the selected sign-in method."
-            return
-        }
-        NSWorkspace.shared.open(url)
     }
 }
 
