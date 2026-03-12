@@ -11,26 +11,20 @@ struct ContentView: View {
             HomeTab(
                 serverURL: $serverURL,
                 roomState: roomState,
-                openMessagesTab: { selectedTab = .messages }
+                openMessagesTab: { selectedTab = .profile }
             )
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
                 .tag(Tab.home)
 
-            FederationTab(serverURL: $serverURL)
-                .tabItem {
-                    Label("Federation", systemImage: "network")
-                }
-                .tag(Tab.federation)
-
             MessagesTab(serverURL: $serverURL, roomState: roomState)
                 .tabItem {
-                    Label("Messages", systemImage: "bubble.left.and.bubble.right.fill")
+                    Label("Profile", systemImage: "person.crop.circle.fill")
                 }
-                .tag(Tab.messages)
+                .tag(Tab.profile)
 
-            SettingsTab()
+            SettingsTab(roomState: roomState)
                 .tabItem {
                     Label("Settings", systemImage: "slider.horizontal.3")
                 }
@@ -38,19 +32,18 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosOpenMessagesTab)) { notification in
             roomState.handleOpenMessagesRequest(notification.userInfo)
-            selectedTab = .messages
+            selectedTab = .profile
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosShowUserProfile)) { notification in
             roomState.handleProfileRequest(notification.userInfo)
-            selectedTab = .messages
+            selectedTab = .profile
         }
     }
 }
 
 private enum Tab {
     case home
-    case federation
-    case messages
+    case profile
     case settings
 }
 
@@ -367,6 +360,7 @@ private struct ClientVisibilitySettings: Equatable {
 
 private struct HomeTab: View {
     @Environment(\.openURL) private var openURL
+    @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
     let openMessagesTab: () -> Void
@@ -375,13 +369,26 @@ private struct HomeTab: View {
     @State private var errorMessage = ""
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
+    @State private var selectedRoomForDetails: RoomSummary?
     @State private var isAdmin = false
     @State private var showAdmin = false
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
+    @State private var searchText = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
     private var roomsEndpoint: String { "\(normalizedBaseURL)/api/rooms?source=app&sort=\(roomSortMode.rawValue)" }
+    private var filteredRooms: [RoomSummary] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return rooms }
+        return rooms.filter { room in
+            room.name.lowercased().contains(query)
+            || room.description.lowercased().contains(query)
+            || room.serverTitle.lowercased().contains(query)
+            || room.serverDomain.lowercased().contains(query)
+            || room.serverSource.lowercased().contains(query)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -397,7 +404,7 @@ private struct HomeTab: View {
                     if roomState.isInRoom {
                         Text("Active room: \(roomState.activeRoomName.isEmpty ? "Unknown Room" : roomState.activeRoomName)")
                         HStack {
-                            Button("Open Messages") {
+                            Button("Open Profile") {
                                 openMessagesTab()
                             }
                             .buttonStyle(.borderedProminent)
@@ -413,33 +420,39 @@ private struct HomeTab: View {
                     }
                 }
 
-                Section("Client Access") {
-                    if clientVisibility.ios {
-                        Text("iOS client access is enabled for this server.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("This server has iOS visibility disabled by server policy.")
-                            .foregroundStyle(.orange)
-                    }
+                if showWebFrontendShortcutOnHome {
+                    Section("Client Access") {
+                        if clientVisibility.ios {
+                            Text("iOS client access is enabled for this server.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("This server has iOS visibility disabled by server policy.")
+                                .foregroundStyle(.orange)
+                        }
 
-                    HStack {
-                        Text("Web Frontend")
-                        Spacer()
-                        Text(clientVisibility.frontendOpen ? "Open" : "Closed")
-                            .foregroundStyle(clientVisibility.frontendOpen ? .green : .secondary)
-                    }
+                        HStack {
+                            Text("Web Frontend")
+                            Spacer()
+                            Text(clientVisibility.frontendOpen ? "Open" : "Closed")
+                                .foregroundStyle(clientVisibility.frontendOpen ? .green : .secondary)
+                        }
 
-                    Button("Open Web Frontend") {
-                        guard let url = URL(string: normalizedBaseURL) else { return }
-                        openURL(url)
+                        Button("Open Web Frontend") {
+                            guard let url = URL(string: normalizedBaseURL) else { return }
+                            openURL(url)
+                        }
+                        .disabled(!clientVisibility.frontendOpen)
                     }
-                    .disabled(!clientVisibility.frontendOpen)
                 }
 
                 Section("Rooms") {
-                    Text("Tap a room to join. Use the info button for room details.")
+                    Text("Search by room name, server name, or server domain. Tap a room to join. VoiceOver actions are available for details, preview, and share.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    TextField("Search rooms or server names", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Search rooms or servers")
 
                     Picker("Sort Rooms", selection: $roomSortMode) {
                         ForEach(RoomSortMode.allCases) { mode in
@@ -457,39 +470,34 @@ private struct HomeTab: View {
                             Text("Loading rooms…")
                                 .foregroundStyle(.secondary)
                         }
-                    } else if rooms.isEmpty {
+                    } else if filteredRooms.isEmpty {
                         Text("No rooms found yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(rooms) { room in
-                            HStack(spacing: 10) {
-                                Button {
-                                    openRoom(room, action: "join")
-                                } label: {
-                                    RoomRow(room: room)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityHint("Tap to join this room.")
-
-                                Spacer(minLength: 0)
-
-                                NavigationLink(value: room) {
-                                    Image(systemName: "info.circle")
-                                        .imageScale(.large)
-                                }
-                                .accessibilityLabel("Room details")
-                                .accessibilityHint("Opens room details and settings.")
+                        ForEach(filteredRooms) { room in
+                            Button {
+                                openRoom(room, action: "join")
+                            } label: {
+                                RoomRow(room: room)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Double tap to join. Actions are available for details, preview, and sharing.")
+                            .accessibilityAction(named: Text("Join")) { openRoom(room, action: "join") }
+                            .accessibilityAction(named: Text("Details")) {
+                                selectedRoomForDetails = room
+                            }
+                            .accessibilityAction(named: Text("Preview")) { openRoom(room, action: "preview") }
+                            .accessibilityAction(named: Text("Share")) { shareRoom(room) }
                         }
                     }
                 }
             }
             .navigationTitle("VoiceLink")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search rooms, servers, or domains")
             .navigationDestination(for: RoomSummary.self) { room in
                 RoomDetailView(
                     room: room,
-                    baseURL: normalizedBaseURL,
                     onJoin: { openRoom(room, action: "join") },
                     onPreview: { openRoom(room, action: "preview") }
                 )
@@ -524,6 +532,13 @@ private struct HomeTab: View {
             .sheet(item: $activePreview) { preview in
                 RoomPreviewView(destination: preview)
             }
+            .sheet(item: $selectedRoomForDetails) { room in
+                RoomDetailView(
+                    room: room,
+                    onJoin: { openRoom(room, action: "join") },
+                    onPreview: { openRoom(room, action: "preview") }
+                )
+            }
             .sheet(isPresented: $showAdmin) {
                 AdminTabView(serverURL: $serverURL)
             }
@@ -554,6 +569,14 @@ private struct HomeTab: View {
         )
     }
 
+    private func shareRoom(_ room: RoomSummary) {
+        let shareBase = room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? normalizedBaseURL
+            : "https://\(room.serverDomain)"
+        guard let url = URL(string: "\(shareBase)/?room=\(room.id)") else { return }
+        openURL(url)
+    }
+
     @MainActor
     private func refreshRooms() async {
         clientVisibility = await fetchClientVisibility(baseURL: normalizedBaseURL)
@@ -568,7 +591,9 @@ private struct HomeTab: View {
             rooms = []
             return
         }
-        isLoading = true
+        if !isLoading {
+            isLoading = true
+        }
         errorMessage = ""
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
@@ -578,13 +603,67 @@ private struct HomeTab: View {
                 errorMessage = "Server returned status \(http.statusCode)."
                 rooms = []
             } else {
-                rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+                let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+                rooms = deduplicateHomeRooms(decodedRooms, fallbackBase: normalizedBaseURL)
             }
         } catch {
             rooms = []
             errorMessage = "Could not load rooms. Check server URL and network."
         }
         isLoading = false
+    }
+
+    private func deduplicateHomeRooms(_ allRooms: [RoomSummary], fallbackBase: String) -> [RoomSummary] {
+        var dedupedByExactKey: [String: RoomSummary] = [:]
+        for room in allRooms {
+            let resolvedBase = room.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(room.serverApiBase)
+            let exactKey = "\(canonicalRoomName(room.name))|\(resolvedBase)|\(room.id)"
+            let existing = dedupedByExactKey[exactKey]
+            if existing == nil || homeRoomScore(room, fallbackBase: fallbackBase) >= homeRoomScore(existing!, fallbackBase: fallbackBase) {
+                dedupedByExactKey[exactKey] = room
+            }
+        }
+
+        let grouped = Dictionary(grouping: Array(dedupedByExactKey.values)) { room in
+            canonicalRoomName(room.name)
+        }
+
+        return grouped.compactMap { _, candidates in
+            candidates.max { lhs, rhs in
+                let lhsUserCount = lhs.userCount
+                let rhsUserCount = rhs.userCount
+                if lhsUserCount == rhsUserCount {
+                    let lhsScore = homeRoomScore(lhs, fallbackBase: fallbackBase)
+                    let rhsScore = homeRoomScore(rhs, fallbackBase: fallbackBase)
+                    if lhsScore == rhsScore {
+                        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                    }
+                    return lhsScore < rhsScore
+                }
+                return lhsUserCount < rhsUserCount
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.userCount == rhs.userCount {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.userCount > rhs.userCount
+        }
+    }
+
+    private func homeRoomScore(_ room: RoomSummary, fallbackBase: String) -> Int {
+        var score = 0
+        let resolvedBase = room.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(room.serverApiBase)
+        if resolvedBase == normalizedBaseURL {
+            score += 4
+        }
+        if room.serverSource.localizedCaseInsensitiveContains("main") || room.serverTitle.localizedCaseInsensitiveContains("main") {
+            score += 2
+        }
+        if room.visibility.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "public" {
+            score += 1
+        }
+        return score
     }
 
     @MainActor
@@ -640,14 +719,8 @@ private struct RoomRow: View {
 
 private struct RoomDetailView: View {
     let room: RoomSummary
-    let baseURL: String
     let onJoin: () -> Void
     let onPreview: () -> Void
-    @AppStorage("voicelink.authToken") private var authToken = ""
-    @State private var federatedEnabled = false
-    @State private var federationTier = "standard"
-    @State private var federationStatus = ""
-    @State private var isSavingFederation = false
 
     var body: some View {
         List {
@@ -678,88 +751,16 @@ private struct RoomDetailView: View {
             }
 
             Section("Actions") {
-                Button("Join Room", action: onJoin)
+                Button("Join", action: onJoin)
                     .buttonStyle(.borderedProminent)
-                Button("Preview Room", action: onPreview)
+                Button("Preview", action: onPreview)
                     .buttonStyle(.bordered)
-            }
-
-            Section("Federation") {
-                Toggle("Show This Room Across Federated Servers", isOn: $federatedEnabled)
-
-                Picker("Federation Tier", selection: $federationTier) {
-                    Text("None").tag("none")
-                    Text("Standard").tag("standard")
-                    Text("Promoted").tag("promoted")
-                }
-                .disabled(!federatedEnabled)
-
-                Button(isSavingFederation ? "Saving…" : "Save Federation Settings") {
-                    Task { await saveFederationSettings() }
-                }
-                .disabled(isSavingFederation)
-
-                if !federationStatus.isEmpty {
-                    Text(federationStatus)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             }
         }
         .navigationTitle(room.name)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            federatedEnabled = room.federated
-            federationTier = room.federated ? (room.federationTier.isEmpty ? "standard" : room.federationTier) : "none"
-            federationStatus = ""
-        }
-        .accessibilityAction(named: Text("Join Room"), onJoin)
-        .accessibilityAction(named: Text("Preview Room"), onPreview)
-    }
-
-    @MainActor
-    private func saveFederationSettings() async {
-        guard let url = URL(string: "\(baseURL)/api/rooms/\(room.id)/federation") else {
-            federationStatus = "Invalid server URL."
-            return
-        }
-        isSavingFederation = true
-        defer { isSavingFederation = false }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = 12
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let token = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue(token, forHTTPHeaderField: "x-session-token")
-        }
-
-        let payload: [String: Any] = [
-            "federated": federatedEnabled,
-            "federationTier": federatedEnabled ? federationTier : "none"
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                federationStatus = "Unknown server response."
-                return
-            }
-            if (200...299).contains(http.statusCode) {
-                federationStatus = federatedEnabled
-                    ? "Federation enabled for this room (\(federationTier))."
-                    : "Federation disabled for this room."
-            } else {
-                let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-                federationStatus = message ?? "Could not save federation settings (HTTP \(http.statusCode))."
-            }
-        } catch {
-            federationStatus = "Could not save federation settings right now."
-        }
+        .accessibilityAction(named: Text("Join"), onJoin)
+        .accessibilityAction(named: Text("Preview"), onPreview)
     }
 }
 
@@ -1025,38 +1026,19 @@ private struct MessagesTab: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Room Messages") {
-                    if roomState.isInRoom {
-                        if roomState.roomMessages.isEmpty {
-                            Text("No room messages yet.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(roomState.roomMessages.suffix(150).reversed()) { message in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(message.author)
-                                            .font(.subheadline.weight(.semibold))
-                                        Spacer()
-                                        Text(message.roomName)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Text(message.body)
-                                        .font(.body)
-                                    Text(message.timestamp.formatted(date: .omitted, time: .shortened))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 2)
-                            }
-                        }
+                Section("Current User") {
+                    if let profile = roomState.selectedProfileName {
+                        Text(profile)
+                        Text("User actions in the room open profiles here and prepare direct messages.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     } else {
-                        Text("Not in a room. Tap a room to join.")
+                        Text("Tap a user in a room to view their profile here.")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                Section(roomState.isInRoom ? "Direct Message User" : "Direct Message Contacts") {
+                Section(roomState.isInRoom ? "Direct Messages" : "Contacts") {
                     if roomState.directTargets.isEmpty {
                         Text("No direct-message contacts available yet.")
                             .foregroundStyle(.secondary)
@@ -1104,10 +1086,9 @@ private struct MessagesTab: View {
                     }
                 }
 
-                if let profile = roomState.selectedProfileName {
-                    Section("Profile") {
-                        Text(profile)
-                        Text("Profile actions are shown from room user actions.")
+                if roomState.isInRoom {
+                    Section("Room Chat") {
+                        Text("Room chat stays in the joined room view. Use Show Chat there to read and send messages.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -1121,7 +1102,7 @@ private struct MessagesTab: View {
                     }
                 }
             }
-            .navigationTitle("Messages")
+            .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -1259,6 +1240,7 @@ private struct AdminTabView: View {
 
 private struct SettingsTab: View {
     @Environment(\.openURL) private var openURL
+    @ObservedObject var roomState: IOSRoomMessagingState
     @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
@@ -1266,6 +1248,13 @@ private struct SettingsTab: View {
     @AppStorage("allowVoiceInRoomPreview") private var allowVoiceInRoomPreview = true
     @AppStorage("systemActionNotifications") private var systemActionNotificationsEnabled = true
     @AppStorage("systemActionNotificationSound") private var systemActionNotificationSoundEnabled = true
+    @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
+    @AppStorage("voicelink.authToken") private var authToken = ""
+    @AppStorage("voicelink.displayName") private var displayName = ""
+    @AppStorage("voicelink.autoSendDiagnostics") private var autoSendDiagnostics = true
+    @AppStorage("voicelink.shareCrashReports") private var shareCrashReports = true
+    @State private var diagnosticsStatus = ""
+    @State private var submittingDiagnostics = false
 
     var body: some View {
         NavigationStack {
@@ -1285,6 +1274,7 @@ private struct SettingsTab: View {
                 Section("Interface") {
                     Toggle("Show User Statuses in Room Lists", isOn: $showUserStatusesInRoomList)
                     Toggle("Allow My Voice in Room Preview", isOn: $allowVoiceInRoomPreview)
+                    Toggle("Show Web Frontend Shortcut on Home", isOn: $showWebFrontendShortcutOnHome)
                     Text("Room screens support VoiceOver actions. In a room, use two-finger double-tap to hear who is speaking.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1300,7 +1290,42 @@ private struct SettingsTab: View {
                     Toggle("Play Sound for System Action Notifications", isOn: $systemActionNotificationSoundEnabled)
                 }
 
+                Section("Diagnostics") {
+                    Toggle("Auto-send diagnostics with bug reports", isOn: $autoSendDiagnostics)
+                    Toggle("Include recent crash/session reports", isOn: $shareCrashReports)
+                    Button(submittingDiagnostics ? "Sending…" : "Send Diagnostics Report") {
+                        submitDiagnosticsReport()
+                    }
+                    .disabled(submittingDiagnostics)
+                    if !diagnosticsStatus.isEmpty {
+                        Text(diagnosticsStatus)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Account") {
+                    Button("Sign In") {
+                        openAuthAction("login")
+                    }
+                    Button("Client Portal") {
+                        openAuthAction("client-portal")
+                    }
+                    Button("Mastodon") {
+                        openAuthAction("mastodon")
+                    }
+                    Button("Admin Invite") {
+                        openAuthAction("admin-invite")
+                    }
+                    Text("VoiceLink keeps supported login methods linked to one account and resolves provider details in the background.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Help and Policies") {
+                    if let webURL = URL(string: "https://voicelink.devinecreations.net") {
+                        Link("Open Web Frontend", destination: webURL)
+                    }
                     Link("Privacy Policy", destination: URL(string: "https://voicelink.devinecreations.net/docs/privacy-policy.html")!)
                     Link("User Privacy Choices", destination: URL(string: "https://voicelink.devinecreations.net/docs/user-privacy-choices.html")!)
                     Link("Support and Contact", destination: URL(string: "https://voicelink.devinecreations.net/docs/contact.html")!)
@@ -1321,6 +1346,38 @@ private struct SettingsTab: View {
         center.getNotificationSettings { settings in
             if settings.authorizationStatus == .notDetermined {
                 center.requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
+            }
+        }
+    }
+
+    private func openAuthAction(_ action: String) {
+        guard let encoded = action.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://voicelink.devinecreations.net/?open=\(encoded)") else {
+            return
+        }
+        openURL(url)
+    }
+
+    private func submitDiagnosticsReport() {
+        submittingDiagnostics = true
+        diagnosticsStatus = ""
+        IOSDiagnosticsManager.shared.submitBugReport(
+            serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"),
+            title: "iOS diagnostics report",
+            description: "Manual diagnostics report submitted from iOS settings.",
+            category: "diagnostics",
+            severity: "medium",
+            anonymous: false,
+            currentRoom: roomState.activeRoomName.isEmpty ? nil : roomState.activeRoomName,
+            sessionStatus: roomState.statusText,
+            displayName: displayName
+        ) { result in
+            submittingDiagnostics = false
+            switch result {
+            case .success:
+                diagnosticsStatus = "Diagnostics report sent."
+            case .failure(let error):
+                diagnosticsStatus = "Failed to send diagnostics: \(error.localizedDescription)"
             }
         }
     }
