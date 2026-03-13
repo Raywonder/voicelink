@@ -7,6 +7,9 @@ EXPORT_PATH="$ROOT_DIR/build/export-testflight"
 IPA_PATH="$EXPORT_PATH/VoiceLink.ipa"
 MANUAL_IPA_DIR="$ROOT_DIR/build/manual-ipa"
 MANUAL_IPA_PATH="$ROOT_DIR/build/VoiceLink-manual.ipa"
+TESTFLIGHT_DIR="$ROOT_DIR/TestFlight"
+WHAT_TO_TEST_FILE="$TESTFLIGHT_DIR/WhatToTest.en-US.txt"
+NOTES_SOURCE_FILE="${NOTES_SOURCE_FILE:-/Users/admin/dev/appstore/VOICELINK_TESTFLIGHT_WHAT_TO_TEST_2026-03-06.txt}"
 APPLE_ID_EMAIL="${APPLE_ID_EMAIL:-}"
 APP_SPECIFIC_PASSWORD="${APP_SPECIFIC_PASSWORD:-}"
 ITC_PROVIDER="${ITC_PROVIDER:-G5232LU4Z7}"
@@ -30,6 +33,14 @@ fi
 
 cd "$ROOT_DIR"
 
+mkdir -p "$TESTFLIGHT_DIR"
+if [[ -f "$NOTES_SOURCE_FILE" ]]; then
+  cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
+  echo "Synced TestFlight notes: $WHAT_TO_TEST_FILE"
+else
+  echo "TestFlight notes source not found: $NOTES_SOURCE_FILE"
+fi
+
 xcodegen generate
 
 xcodebuild \
@@ -39,6 +50,7 @@ xcodebuild \
   -destination 'generic/platform=iOS' \
   -archivePath "$ARCHIVE_PATH" \
   archive \
+  CODE_SIGNING_ALLOWED=NO \
   CODE_SIGN_STYLE=Automatic \
   DEVELOPMENT_TEAM=G5232LU4Z7 \
   PRODUCT_BUNDLE_IDENTIFIER=com.devinecreations.voicelink \

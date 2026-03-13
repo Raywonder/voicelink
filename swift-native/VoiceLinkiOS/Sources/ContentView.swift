@@ -5,26 +5,23 @@ struct ContentView: View {
     @Binding var serverURL: String
     @State private var selectedTab: Tab = .home
     @StateObject private var roomState = IOSRoomMessagingState()
+    @State private var showProfile = false
+    @State private var showServers = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
             HomeTab(
                 serverURL: $serverURL,
                 roomState: roomState,
-                openMessagesTab: { selectedTab = .profile }
+                openProfile: { showProfile = true },
+                openServers: { showServers = true }
             )
                 .tabItem {
-                    Label("Home", systemImage: "house.fill")
+                    Label("Main", systemImage: "house.fill")
                 }
                 .tag(Tab.home)
 
-            MessagesTab(serverURL: $serverURL, roomState: roomState)
-                .tabItem {
-                    Label("Profile", systemImage: "person.crop.circle.fill")
-                }
-                .tag(Tab.profile)
-
-            SettingsTab(roomState: roomState)
+            SettingsTab(roomState: roomState, openServers: { showServers = true })
                 .tabItem {
                     Label("Settings", systemImage: "slider.horizontal.3")
                 }
@@ -32,18 +29,23 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosOpenMessagesTab)) { notification in
             roomState.handleOpenMessagesRequest(notification.userInfo)
-            selectedTab = .profile
+            showProfile = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosShowUserProfile)) { notification in
             roomState.handleProfileRequest(notification.userInfo)
-            selectedTab = .profile
+            showProfile = true
+        }
+        .sheet(isPresented: $showProfile) {
+            MessagesTab(serverURL: $serverURL, roomState: roomState)
+        }
+        .sheet(isPresented: $showServers) {
+            FederationTab(serverURL: $serverURL)
         }
     }
 }
 
 private enum Tab {
     case home
-    case profile
     case settings
 }
 
@@ -363,7 +365,8 @@ private struct HomeTab: View {
     @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
-    let openMessagesTab: () -> Void
+    let openProfile: () -> Void
+    let openServers: () -> Void
     @State private var rooms: [RoomSummary] = []
     @State private var isLoading = false
     @State private var errorMessage = ""
@@ -404,10 +407,15 @@ private struct HomeTab: View {
                     if roomState.isInRoom {
                         Text("Active room: \(roomState.activeRoomName.isEmpty ? "Unknown Room" : roomState.activeRoomName)")
                         HStack {
-                            Button("Open Profile") {
-                                openMessagesTab()
+                            Button("Profile") {
+                                openProfile()
                             }
                             .buttonStyle(.borderedProminent)
+
+                            Button("Servers") {
+                                openServers()
+                            }
+                            .buttonStyle(.bordered)
 
                             Button("Leave Room") {
                                 roomState.requestLeaveActiveRoom()
@@ -446,13 +454,25 @@ private struct HomeTab: View {
                 }
 
                 Section("Rooms") {
-                    Text("Search by room name, server name, or server domain. Tap a room to join. VoiceOver actions are available for details, preview, and share.")
+                    Text("Search by room name, server name, or server domain. Tap a room to join. Use Servers to browse connected or federated servers, or connect to a private server manually.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
                     TextField("Search rooms or server names", text: $searchText)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Search rooms or servers")
+
+                    HStack {
+                        Button("Servers") {
+                            openServers()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Profile") {
+                            openProfile()
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     Picker("Sort Rooms", selection: $roomSortMode) {
                         ForEach(RoomSortMode.allCases) { mode in
@@ -494,7 +514,6 @@ private struct HomeTab: View {
             }
             .navigationTitle("VoiceLink")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search rooms, servers, or domains")
             .navigationDestination(for: RoomSummary.self) { room in
                 RoomDetailView(
                     room: room,
@@ -772,6 +791,9 @@ private struct FederationTab: View {
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
+    @State private var trustedServers: [String] = []
+    @State private var manualServerInput = ""
+    @State private var manualCodeInput = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
 
@@ -783,6 +805,38 @@ private struct FederationTab: View {
                         Text(errorMessage)
                             .foregroundStyle(.red)
                     }
+                }
+
+                Section("Servers") {
+                    LabeledContent("Current Server", value: normalizedBaseURL)
+                    LabeledContent("Authentication", value: currentAuthenticationStatus())
+                    LabeledContent("Connected Servers", value: "\(trustedServers.count + 1)")
+
+                    if trustedServers.isEmpty {
+                        Text("No additional public servers are connected right now.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(trustedServers, id: \.self) { server in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(server)
+                                Text("Public server available for connection")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section("Private Server") {
+                    TextField("Server domain", text: $manualServerInput)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    TextField("Pairing or invite code (optional)", text: $manualCodeInput)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    Text("Use this when a private server is not listed publicly. Server admins can provide a pairing or invite code from their server settings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 if isLoading {
@@ -873,6 +927,7 @@ private struct FederationTab: View {
 
         do {
             let bases = await fetchFederationBases()
+            trustedServers = bases.filter { $0 != normalizedBaseURL }
             let allRooms = try await fetchRoomsAcrossServers(bases: bases)
             roomGroups = groupRooms(allRooms: allRooms, fallbackBase: normalizedBaseURL)
         } catch {
@@ -901,6 +956,12 @@ private struct FederationTab: View {
             // Keep base list with current server only.
         }
         return Array(Set(bases)).sorted()
+    }
+
+    private func currentAuthenticationStatus() -> String {
+        let token = (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? "Guest or signed out" : "Signed in"
     }
 
     private func fetchRoomsAcrossServers(bases: [String]) async throws -> [(RoomSummary, String)] {
@@ -1241,6 +1302,7 @@ private struct AdminTabView: View {
 private struct SettingsTab: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject var roomState: IOSRoomMessagingState
+    let openServers: () -> Void
     @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
@@ -1255,6 +1317,7 @@ private struct SettingsTab: View {
     @AppStorage("voicelink.shareCrashReports") private var shareCrashReports = true
     @State private var diagnosticsStatus = ""
     @State private var submittingDiagnostics = false
+    @State private var showAuthOptions = false
 
     var body: some View {
         NavigationStack {
@@ -1305,17 +1368,8 @@ private struct SettingsTab: View {
                 }
 
                 Section("Account") {
-                    Button("Sign In") {
-                        openAuthAction("login")
-                    }
-                    Button("Client Portal") {
-                        openAuthAction("client-portal")
-                    }
-                    Button("Mastodon") {
-                        openAuthAction("mastodon")
-                    }
-                    Button("Admin Invite") {
-                        openAuthAction("admin-invite")
+                    Button("Quick Pair or Sign In") {
+                        showAuthOptions = true
                     }
                     Text("VoiceLink keeps supported login methods linked to one account and resolves provider details in the background.")
                         .font(.footnote)
@@ -1338,6 +1392,23 @@ private struct SettingsTab: View {
 
             }
             .navigationTitle("Settings")
+            .confirmationDialog("Choose a sign-in method", isPresented: $showAuthOptions, titleVisibility: .visible) {
+                Button("Quick Pair") {
+                    openServers()
+                }
+                Button("Sign In") {
+                    openAuthAction("login")
+                }
+                Button("Mastodon") {
+                    openAuthAction("mastodon")
+                }
+                Button("Admin Invite") {
+                    openAuthAction("admin-invite")
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Quick Pair lets you link this device to another signed-in device or enter a server pairing or invite code from a server admin.")
+            }
         }
     }
 
