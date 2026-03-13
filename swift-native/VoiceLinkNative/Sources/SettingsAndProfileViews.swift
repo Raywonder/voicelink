@@ -150,10 +150,10 @@ struct UserProfileSheet: View {
             GroupBox("Actions") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
-                        Button("Send Direct Message") {
+                        Button(isCurrentUser ? "Open Saved Items" : "Send Direct Message") {
                             onDirectMessage()
                         }
-                        Button("Send File...") {
+                        Button(isCurrentUser ? "Save File for Later..." : "Send File...") {
                             onSendFile()
                         }
                         Button("Copy User ID") {
@@ -468,7 +468,7 @@ class SettingsManager: ObservableObject {
     // Sync Settings
     @Published var syncMode: SyncMode = .all {
         didSet {
-            UserDefaults.standard.set(syncMode.rawValue, forKey: "syncMode")
+            UserDefaults().set(syncMode.rawValue, forKey: "syncMode")
             NotificationCenter.default.post(name: .syncModeChanged, object: syncMode)
         }
     }
@@ -493,6 +493,8 @@ class SettingsManager: ObservableObject {
     @Published var desktopNotifications: Bool = true
     @Published var notifyOnJoin: Bool = true
     @Published var notifyOnLeave: Bool = true
+    @Published var systemActionNotifications: Bool = true
+    @Published var systemActionNotificationSound: Bool = true
 
     // Privacy
     @Published var showOnlineStatus: Bool = true
@@ -523,6 +525,8 @@ class SettingsManager: ObservableObject {
         case rejoinLastRoom = "rejoinLastRoom"
     }
     @Published var startupBehavior: StartupBehavior = .openMainWindow
+    @Published var startupAmbienceEnabled: Bool = true
+    @Published var suppressSelfMonitoringPrompt: Bool = false
     @Published var confirmBeforeQuit: Bool = false
     @Published var confirmBeforeDeletingRooms: Bool = true
     @Published var showRoomDescriptions: Bool = true
@@ -549,6 +553,7 @@ class SettingsManager: ObservableObject {
 
     // Profile Settings
     @Published var userNickname: String = ""
+    @Published var userGender: String = "Prefer not to say"
     @Published var userProfileLinks: [String] = []
 
     // Available devices
@@ -568,120 +573,129 @@ class SettingsManager: ObservableObject {
     }
 
     func loadSettings() {
-        if let mode = UserDefaults.standard.string(forKey: "syncMode"),
+        if let mode = UserDefaults().string(forKey: "syncMode"),
            let syncMode = SyncMode(rawValue: mode) {
             self.syncMode = syncMode
         }
-        showPrivateMemberRooms = UserDefaults.standard.object(forKey: "showPrivateMemberRooms") as? Bool ?? true
-        showFederatedRooms = UserDefaults.standard.object(forKey: "showFederatedRooms") as? Bool ?? true
-        showLocalOnlyRooms = UserDefaults.standard.object(forKey: "showLocalOnlyRooms") as? Bool ?? true
-        if let stored = UserDefaults.standard.string(forKey: "handoffPromptMode"),
+        showPrivateMemberRooms = UserDefaults().object(forKey: "showPrivateMemberRooms") as? Bool ?? true
+        showFederatedRooms = UserDefaults().object(forKey: "showFederatedRooms") as? Bool ?? true
+        showLocalOnlyRooms = UserDefaults().object(forKey: "showLocalOnlyRooms") as? Bool ?? true
+        if let stored = UserDefaults().string(forKey: "handoffPromptMode"),
            let parsed = HandoffPromptMode(rawValue: stored) {
             handoffPromptMode = parsed
         } else {
             handoffPromptMode = .serverRecommended
         }
-        if let data = UserDefaults.standard.data(forKey: "customFederationServers"),
+        if let data = UserDefaults().data(forKey: "customFederationServers"),
            let decoded = try? JSONDecoder().decode([CustomFederationServer].self, from: data) {
             customFederationServers = decoded
         } else {
             customFederationServers = []
         }
 
-        if let savedInputDevice = UserDefaults.standard.string(forKey: "inputDevice"), !savedInputDevice.isEmpty {
+        if let savedInputDevice = UserDefaults().string(forKey: "inputDevice"), !savedInputDevice.isEmpty {
             inputDevice = savedInputDevice
         }
 
-        if let savedOutputDevice = UserDefaults.standard.string(forKey: "outputDevice"), !savedOutputDevice.isEmpty {
+        if let savedOutputDevice = UserDefaults().string(forKey: "outputDevice"), !savedOutputDevice.isEmpty {
             outputDevice = savedOutputDevice
         }
 
-        inputVolume = UserDefaults.standard.double(forKey: "inputVolume")
+        inputVolume = UserDefaults().double(forKey: "inputVolume")
         if inputVolume == 0 { inputVolume = 0.8 }
 
-        outputVolume = UserDefaults.standard.double(forKey: "outputVolume")
+        outputVolume = UserDefaults().double(forKey: "outputVolume")
         if outputVolume == 0 { outputVolume = 0.8 }
-        confirmBeforeDeletingRooms = UserDefaults.standard.object(forKey: "confirmBeforeDeletingRooms") as? Bool ?? true
+        confirmBeforeDeletingRooms = UserDefaults().object(forKey: "confirmBeforeDeletingRooms") as? Bool ?? true
 
-        noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
-        echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
-        autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
-        autoConnect = UserDefaults.standard.bool(forKey: "autoConnect")
-        preferLocalServer = UserDefaults.standard.bool(forKey: "preferLocalServer")
-        pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
-        spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
+        noiseSuppression = UserDefaults().bool(forKey: "noiseSuppression")
+        echoCancellation = UserDefaults().bool(forKey: "echoCancellation")
+        autoGainControl = UserDefaults().bool(forKey: "autoGainControl")
+        autoConnect = UserDefaults().bool(forKey: "autoConnect")
+        preferLocalServer = UserDefaults().bool(forKey: "preferLocalServer")
+        pttEnabled = UserDefaults().bool(forKey: "pttEnabled")
+        spatialAudioEnabled = UserDefaults().bool(forKey: "spatialAudioEnabled")
 
         // UI settings
-        showAudioControlsOnStartup = UserDefaults.standard.object(forKey: "showAudioControlsOnStartup") as? Bool ?? true
-        if let value = UserDefaults.standard.string(forKey: "closeButtonBehavior"),
+        showAudioControlsOnStartup = UserDefaults().object(forKey: "showAudioControlsOnStartup") as? Bool ?? true
+        if let value = UserDefaults().string(forKey: "closeButtonBehavior"),
            let parsed = CloseButtonBehavior(rawValue: value) {
             closeButtonBehavior = parsed
         } else {
             closeButtonBehavior = .goToMainThenHide
         }
-        if let value = UserDefaults.standard.string(forKey: "startupBehavior"),
+        if let value = UserDefaults().string(forKey: "startupBehavior"),
            let parsed = StartupBehavior(rawValue: value) {
             startupBehavior = parsed
-        } else if UserDefaults.standard.object(forKey: "openMainWindowOnLaunch") as? Bool == false {
+        } else if UserDefaults().object(forKey: "openMainWindowOnLaunch") as? Bool == false {
             startupBehavior = .restoreCurrentRoom
         } else {
             startupBehavior = .openMainWindow
         }
-        confirmBeforeQuit = UserDefaults.standard.object(forKey: "confirmBeforeQuit") as? Bool ?? false
-        showRoomDescriptions = UserDefaults.standard.object(forKey: "showRoomDescriptions") as? Bool ?? true
-        showUserStatusesInRoomList = UserDefaults.standard.object(forKey: "showUserStatusesInRoomList") as? Bool ?? true
-        if let stored = UserDefaults.standard.object(forKey: "allowVoiceInRoomPreview") as? Bool {
+        startupAmbienceEnabled = UserDefaults().object(forKey: "startupAmbienceEnabled") as? Bool ?? true
+        suppressSelfMonitoringPrompt = UserDefaults().object(forKey: "suppressSelfMonitoringPrompt") as? Bool ?? false
+        confirmBeforeQuit = UserDefaults().object(forKey: "confirmBeforeQuit") as? Bool ?? false
+        showRoomDescriptions = UserDefaults().object(forKey: "showRoomDescriptions") as? Bool ?? true
+        showUserStatusesInRoomList = UserDefaults().object(forKey: "showUserStatusesInRoomList") as? Bool ?? true
+        if let stored = UserDefaults().object(forKey: "allowVoiceInRoomPreview") as? Bool {
             allowVoiceInRoomPreview = stored
         } else {
-            allowVoiceInRoomPreview = UserDefaults.standard.object(forKey: "allowPreviewWhenMediaActive") as? Bool ?? true
+            allowVoiceInRoomPreview = UserDefaults().object(forKey: "allowPreviewWhenMediaActive") as? Bool ?? true
         }
-        previewSoundCuesEnabled = UserDefaults.standard.object(forKey: "previewSoundCuesEnabled") as? Bool ?? true
-        roomPreviewPolicyByRoom = UserDefaults.standard.dictionary(forKey: "roomPreviewPolicyByRoom") as? [String: Bool] ?? [:]
-        if let value = UserDefaults.standard.string(forKey: "defaultRoomPrimaryAction"),
+        previewSoundCuesEnabled = UserDefaults().object(forKey: "previewSoundCuesEnabled") as? Bool ?? true
+        roomPreviewPolicyByRoom = UserDefaults().dictionary(forKey: "roomPreviewPolicyByRoom") as? [String: Bool] ?? [:]
+        if let value = UserDefaults().string(forKey: "defaultRoomPrimaryAction"),
            let parsed = RoomPrimaryAction(rawValue: value) {
             defaultRoomPrimaryAction = parsed
         } else {
             defaultRoomPrimaryAction = .joinOrShow
         }
-        if !UserDefaults.standard.bool(forKey: "migratedDefaultRoomActionToJoin"),
+        if !UserDefaults().bool(forKey: "migratedDefaultRoomActionToJoin"),
            defaultRoomPrimaryAction == .openDetails {
             defaultRoomPrimaryAction = .joinOrShow
-            UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
-            UserDefaults.standard.set(true, forKey: "migratedDefaultRoomActionToJoin")
+            UserDefaults().set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
+            UserDefaults().set(true, forKey: "migratedDefaultRoomActionToJoin")
         }
-        adminGodModeEnabled = UserDefaults.standard.object(forKey: "adminGodModeEnabled") as? Bool ?? false
-        adminInvisibleMode = UserDefaults.standard.object(forKey: "adminInvisibleMode") as? Bool ?? false
-        debugLoggingEnabled = UserDefaults.standard.object(forKey: "debugLoggingEnabled") as? Bool ?? false
-        showConnectionStats = UserDefaults.standard.object(forKey: "showConnectionStats") as? Bool ?? true
-        autoSendDiagnostics = UserDefaults.standard.object(forKey: "autoSendDiagnostics") as? Bool ?? true
-        shareCrashReports = UserDefaults.standard.object(forKey: "shareCrashReports") as? Bool ?? true
-        preferredAudioCodec = UserDefaults.standard.string(forKey: "preferredAudioCodec") ?? "Opus"
+        adminGodModeEnabled = UserDefaults().object(forKey: "adminGodModeEnabled") as? Bool ?? false
+        adminInvisibleMode = UserDefaults().object(forKey: "adminInvisibleMode") as? Bool ?? false
+        debugLoggingEnabled = UserDefaults().object(forKey: "debugLoggingEnabled") as? Bool ?? false
+        showConnectionStats = UserDefaults().object(forKey: "showConnectionStats") as? Bool ?? true
+        autoSendDiagnostics = UserDefaults().object(forKey: "autoSendDiagnostics") as? Bool ?? true
+        shareCrashReports = UserDefaults().object(forKey: "shareCrashReports") as? Bool ?? true
+        preferredAudioCodec = UserDefaults().string(forKey: "preferredAudioCodec") ?? "Opus"
 
         // Profile settings
-        userNickname = UserDefaults.standard.string(forKey: "userNickname") ?? ""
-        userProfileLinks = UserDefaults.standard.stringArray(forKey: "userProfileLinks") ?? []
+        userNickname = UserDefaults().string(forKey: "userNickname") ?? ""
+        userGender = UserDefaults().string(forKey: "userGender") ?? "Prefer not to say"
+        userProfileLinks = UserDefaults().stringArray(forKey: "userProfileLinks") ?? []
 
         // File sharing settings
-        if let mode = UserDefaults.standard.string(forKey: "fileReceiveMode"),
+        if let mode = UserDefaults().string(forKey: "fileReceiveMode"),
            let receiveMode = FileReceiveMode(rawValue: mode) {
             self.fileReceiveMode = receiveMode
         }
-        autoReceiveTimeLimit = UserDefaults.standard.integer(forKey: "autoReceiveTimeLimit")
+        autoReceiveTimeLimit = UserDefaults().integer(forKey: "autoReceiveTimeLimit")
         if autoReceiveTimeLimit == 0 { autoReceiveTimeLimit = 30 }
-        maxAutoReceiveSize = UserDefaults.standard.integer(forKey: "maxAutoReceiveSize")
+        maxAutoReceiveSize = UserDefaults().integer(forKey: "maxAutoReceiveSize")
         if maxAutoReceiveSize == 0 { maxAutoReceiveSize = 100 }
-        if let savePath = UserDefaults.standard.string(forKey: "saveReceivedFilesTo") {
+        if let savePath = UserDefaults().string(forKey: "saveReceivedFilesTo") {
             saveReceivedFilesTo = savePath
         }
 
         // Mastodon settings
-        useMastodonForDM = UserDefaults.standard.bool(forKey: "useMastodonForDM")
-        autoCreateThreads = UserDefaults.standard.bool(forKey: "autoCreateThreads")
-        storeMastodonDMsLocally = UserDefaults.standard.bool(forKey: "storeMastodonDMsLocally")
-        useMastodonForFileStorage = UserDefaults.standard.bool(forKey: "useMastodonForFileStorage")
+        useMastodonForDM = UserDefaults().bool(forKey: "useMastodonForDM")
+        autoCreateThreads = UserDefaults().bool(forKey: "autoCreateThreads")
+        storeMastodonDMsLocally = UserDefaults().bool(forKey: "storeMastodonDMsLocally")
+        useMastodonForFileStorage = UserDefaults().bool(forKey: "useMastodonForFileStorage")
+        soundNotifications = UserDefaults().object(forKey: "soundNotifications") as? Bool ?? true
+        desktopNotifications = UserDefaults().object(forKey: "desktopNotifications") as? Bool ?? true
+        notifyOnJoin = UserDefaults().object(forKey: "notifyOnJoin") as? Bool ?? true
+        notifyOnLeave = UserDefaults().object(forKey: "notifyOnLeave") as? Bool ?? true
+        systemActionNotifications = UserDefaults().object(forKey: "systemActionNotifications") as? Bool ?? true
+        systemActionNotificationSound = UserDefaults().object(forKey: "systemActionNotificationSound") as? Bool ?? true
 
         // Defaults that should be true
-        if !UserDefaults.standard.bool(forKey: "settingsInitialized") {
+        if !UserDefaults().bool(forKey: "settingsInitialized") {
             noiseSuppression = true
             echoCancellation = true
             autoGainControl = true
@@ -691,6 +705,8 @@ class SettingsManager: ObservableObject {
             desktopNotifications = true
             notifyOnJoin = true
             notifyOnLeave = true
+            systemActionNotifications = true
+            systemActionNotificationSound = true
             showOnlineStatus = true
             allowDirectMessages = true
             showPrivateMemberRooms = true
@@ -701,6 +717,8 @@ class SettingsManager: ObservableObject {
             showAudioControlsOnStartup = true
             closeButtonBehavior = .goToMainThenHide
             startupBehavior = .openMainWindow
+            startupAmbienceEnabled = true
+            suppressSelfMonitoringPrompt = false
             confirmBeforeQuit = false
             showRoomDescriptions = true
             showUserStatusesInRoomList = true
@@ -714,66 +732,75 @@ class SettingsManager: ObservableObject {
             autoSendDiagnostics = true
             shareCrashReports = true
             preferredAudioCodec = "Opus"
-            UserDefaults.standard.set(true, forKey: "settingsInitialized")
+            UserDefaults().set(true, forKey: "settingsInitialized")
         }
     }
 
     func saveSettings() {
-        UserDefaults.standard.set(syncMode.rawValue, forKey: "syncMode")
-        UserDefaults.standard.set(showPrivateMemberRooms, forKey: "showPrivateMemberRooms")
-        UserDefaults.standard.set(showFederatedRooms, forKey: "showFederatedRooms")
-        UserDefaults.standard.set(showLocalOnlyRooms, forKey: "showLocalOnlyRooms")
-        UserDefaults.standard.set(handoffPromptMode.rawValue, forKey: "handoffPromptMode")
+        UserDefaults().set(syncMode.rawValue, forKey: "syncMode")
+        UserDefaults().set(showPrivateMemberRooms, forKey: "showPrivateMemberRooms")
+        UserDefaults().set(showFederatedRooms, forKey: "showFederatedRooms")
+        UserDefaults().set(showLocalOnlyRooms, forKey: "showLocalOnlyRooms")
+        UserDefaults().set(handoffPromptMode.rawValue, forKey: "handoffPromptMode")
         if let customData = try? JSONEncoder().encode(customFederationServers) {
-            UserDefaults.standard.set(customData, forKey: "customFederationServers")
+            UserDefaults().set(customData, forKey: "customFederationServers")
         }
-        UserDefaults.standard.set(inputDevice, forKey: "inputDevice")
-        UserDefaults.standard.set(outputDevice, forKey: "outputDevice")
-        UserDefaults.standard.set(inputVolume, forKey: "inputVolume")
-        UserDefaults.standard.set(outputVolume, forKey: "outputVolume")
-        UserDefaults.standard.set(confirmBeforeDeletingRooms, forKey: "confirmBeforeDeletingRooms")
-        UserDefaults.standard.set(noiseSuppression, forKey: "noiseSuppression")
-        UserDefaults.standard.set(echoCancellation, forKey: "echoCancellation")
-        UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
-        UserDefaults.standard.set(autoConnect, forKey: "autoConnect")
-        UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer")
-        UserDefaults.standard.set(pttEnabled, forKey: "pttEnabled")
-        UserDefaults.standard.set(spatialAudioEnabled, forKey: "spatialAudioEnabled")
+        UserDefaults().set(inputDevice, forKey: "inputDevice")
+        UserDefaults().set(outputDevice, forKey: "outputDevice")
+        UserDefaults().set(inputVolume, forKey: "inputVolume")
+        UserDefaults().set(outputVolume, forKey: "outputVolume")
+        UserDefaults().set(confirmBeforeDeletingRooms, forKey: "confirmBeforeDeletingRooms")
+        UserDefaults().set(noiseSuppression, forKey: "noiseSuppression")
+        UserDefaults().set(echoCancellation, forKey: "echoCancellation")
+        UserDefaults().set(autoGainControl, forKey: "autoGainControl")
+        UserDefaults().set(autoConnect, forKey: "autoConnect")
+        UserDefaults().set(preferLocalServer, forKey: "preferLocalServer")
+        UserDefaults().set(pttEnabled, forKey: "pttEnabled")
+        UserDefaults().set(spatialAudioEnabled, forKey: "spatialAudioEnabled")
 
         // UI settings
-        UserDefaults.standard.set(showAudioControlsOnStartup, forKey: "showAudioControlsOnStartup")
-        UserDefaults.standard.set(closeButtonBehavior.rawValue, forKey: "closeButtonBehavior")
-        UserDefaults.standard.set(startupBehavior.rawValue, forKey: "startupBehavior")
-        UserDefaults.standard.set(confirmBeforeQuit, forKey: "confirmBeforeQuit")
-        UserDefaults.standard.set(showRoomDescriptions, forKey: "showRoomDescriptions")
-        UserDefaults.standard.set(showUserStatusesInRoomList, forKey: "showUserStatusesInRoomList")
-        UserDefaults.standard.set(allowVoiceInRoomPreview, forKey: "allowVoiceInRoomPreview")
-        UserDefaults.standard.set(previewSoundCuesEnabled, forKey: "previewSoundCuesEnabled")
-        UserDefaults.standard.set(roomPreviewPolicyByRoom, forKey: "roomPreviewPolicyByRoom")
-        UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
-        UserDefaults.standard.set(adminGodModeEnabled, forKey: "adminGodModeEnabled")
-        UserDefaults.standard.set(adminInvisibleMode, forKey: "adminInvisibleMode")
-        UserDefaults.standard.set(debugLoggingEnabled, forKey: "debugLoggingEnabled")
-        UserDefaults.standard.set(showConnectionStats, forKey: "showConnectionStats")
-        UserDefaults.standard.set(autoSendDiagnostics, forKey: "autoSendDiagnostics")
-        UserDefaults.standard.set(shareCrashReports, forKey: "shareCrashReports")
-        UserDefaults.standard.set(preferredAudioCodec, forKey: "preferredAudioCodec")
+        UserDefaults().set(showAudioControlsOnStartup, forKey: "showAudioControlsOnStartup")
+        UserDefaults().set(closeButtonBehavior.rawValue, forKey: "closeButtonBehavior")
+        UserDefaults().set(startupBehavior.rawValue, forKey: "startupBehavior")
+        UserDefaults().set(startupAmbienceEnabled, forKey: "startupAmbienceEnabled")
+        UserDefaults().set(suppressSelfMonitoringPrompt, forKey: "suppressSelfMonitoringPrompt")
+        UserDefaults().set(confirmBeforeQuit, forKey: "confirmBeforeQuit")
+        UserDefaults().set(showRoomDescriptions, forKey: "showRoomDescriptions")
+        UserDefaults().set(showUserStatusesInRoomList, forKey: "showUserStatusesInRoomList")
+        UserDefaults().set(allowVoiceInRoomPreview, forKey: "allowVoiceInRoomPreview")
+        UserDefaults().set(previewSoundCuesEnabled, forKey: "previewSoundCuesEnabled")
+        UserDefaults().set(roomPreviewPolicyByRoom, forKey: "roomPreviewPolicyByRoom")
+        UserDefaults().set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
+        UserDefaults().set(adminGodModeEnabled, forKey: "adminGodModeEnabled")
+        UserDefaults().set(adminInvisibleMode, forKey: "adminInvisibleMode")
+        UserDefaults().set(debugLoggingEnabled, forKey: "debugLoggingEnabled")
+        UserDefaults().set(showConnectionStats, forKey: "showConnectionStats")
+        UserDefaults().set(autoSendDiagnostics, forKey: "autoSendDiagnostics")
+        UserDefaults().set(shareCrashReports, forKey: "shareCrashReports")
+        UserDefaults().set(preferredAudioCodec, forKey: "preferredAudioCodec")
 
         // Profile settings
-        UserDefaults.standard.set(userNickname, forKey: "userNickname")
-        UserDefaults.standard.set(userProfileLinks, forKey: "userProfileLinks")
+        UserDefaults().set(userNickname, forKey: "userNickname")
+        UserDefaults().set(userGender, forKey: "userGender")
+        UserDefaults().set(userProfileLinks, forKey: "userProfileLinks")
 
         // File sharing settings
-        UserDefaults.standard.set(fileReceiveMode.rawValue, forKey: "fileReceiveMode")
-        UserDefaults.standard.set(autoReceiveTimeLimit, forKey: "autoReceiveTimeLimit")
-        UserDefaults.standard.set(maxAutoReceiveSize, forKey: "maxAutoReceiveSize")
-        UserDefaults.standard.set(saveReceivedFilesTo, forKey: "saveReceivedFilesTo")
+        UserDefaults().set(fileReceiveMode.rawValue, forKey: "fileReceiveMode")
+        UserDefaults().set(autoReceiveTimeLimit, forKey: "autoReceiveTimeLimit")
+        UserDefaults().set(maxAutoReceiveSize, forKey: "maxAutoReceiveSize")
+        UserDefaults().set(saveReceivedFilesTo, forKey: "saveReceivedFilesTo")
 
         // Mastodon settings
-        UserDefaults.standard.set(useMastodonForDM, forKey: "useMastodonForDM")
-        UserDefaults.standard.set(autoCreateThreads, forKey: "autoCreateThreads")
-        UserDefaults.standard.set(storeMastodonDMsLocally, forKey: "storeMastodonDMsLocally")
-        UserDefaults.standard.set(useMastodonForFileStorage, forKey: "useMastodonForFileStorage")
+        UserDefaults().set(useMastodonForDM, forKey: "useMastodonForDM")
+        UserDefaults().set(autoCreateThreads, forKey: "autoCreateThreads")
+        UserDefaults().set(storeMastodonDMsLocally, forKey: "storeMastodonDMsLocally")
+        UserDefaults().set(useMastodonForFileStorage, forKey: "useMastodonForFileStorage")
+        UserDefaults().set(soundNotifications, forKey: "soundNotifications")
+        UserDefaults().set(desktopNotifications, forKey: "desktopNotifications")
+        UserDefaults().set(notifyOnJoin, forKey: "notifyOnJoin")
+        UserDefaults().set(notifyOnLeave, forKey: "notifyOnLeave")
+        UserDefaults().set(systemActionNotifications, forKey: "systemActionNotifications")
+        UserDefaults().set(systemActionNotificationSound, forKey: "systemActionNotificationSound")
 
         // Apply selected devices so audio routing follows settings in active sessions.
         applySelectedAudioDevices()
@@ -805,6 +832,8 @@ class SettingsManager: ObservableObject {
         desktopNotifications = true
         notifyOnJoin = true
         notifyOnLeave = true
+        systemActionNotifications = true
+        systemActionNotificationSound = true
         showOnlineStatus = true
         allowDirectMessages = true
         fileReceiveMode = .askAlways
@@ -820,6 +849,8 @@ class SettingsManager: ObservableObject {
         showAudioControlsOnStartup = true
         closeButtonBehavior = .goToMainThenHide
         startupBehavior = .openMainWindow
+        startupAmbienceEnabled = true
+        suppressSelfMonitoringPrompt = false
         confirmBeforeQuit = false
         confirmBeforeDeletingRooms = true
         showRoomDescriptions = true
@@ -923,7 +954,7 @@ class SettingsManager: ObservableObject {
         if roomPreviewPolicyByRoom[roomId] == false {
             return false
         }
-        return userCount > 0 || hasActiveMedia
+        return true
     }
 
     func mergeProfileLinks(_ incoming: [String], replaceExisting: Bool = false) {
@@ -1050,6 +1081,17 @@ class SettingsManager: ObservableObject {
 
         if didChange {
             print("[Settings] Audio device inventory changed. Inputs=\(availableInputDevices) Outputs=\(availableOutputDevices)")
+            NotificationCenter.default.post(
+                name: .audioDevicesChanged,
+                object: nil,
+                userInfo: [
+                    "reason": "inventoryChanged",
+                    "inputDevice": inputDevice,
+                    "outputDevice": outputDevice,
+                    "availableInputs": availableInputDevices,
+                    "availableOutputs": availableOutputDevices
+                ]
+            )
         }
 
         if didChange && applySelectionIfNeeded && hasCompletedInitialAudioSetup {
@@ -1069,7 +1111,7 @@ class SettingsManager: ObservableObject {
         }
     }
 
-    func applySelectedAudioDevices() {
+    func applySelectedAudioDevices(notifyChange: Bool = true) {
         guard !isApplyingAudioDeviceSelection else { return }
         isApplyingAudioDeviceSelection = true
         defer { isApplyingAudioDeviceSelection = false }
@@ -1087,6 +1129,18 @@ class SettingsManager: ObservableObject {
             }
             let resolvedOutput = currentDefaultDeviceName(isInput: false)
             print("[Settings] Effective output device after apply: \(resolvedOutput)")
+        }
+
+        if notifyChange {
+            NotificationCenter.default.post(
+                name: .audioDevicesChanged,
+                object: nil,
+                userInfo: [
+                    "reason": "selectionApplied",
+                    "inputDevice": inputDevice,
+                    "outputDevice": outputDevice
+                ]
+            )
         }
     }
 
@@ -1264,6 +1318,7 @@ class SettingsManager: ObservableObject {
 extension Notification.Name {
     static let syncModeChanged = Notification.Name("syncModeChanged")
     static let settingsDidAutoSave = Notification.Name("settingsDidAutoSave")
+    static let audioDevicesChanged = Notification.Name("audioDevicesChanged")
 }
 
 // MARK: - Settings View
@@ -1275,6 +1330,13 @@ struct SettingsView: View {
     @State private var showMastodonAuthSheet = false
     @State private var isSoundTestPlaying = false
     @State private var lastSavedAt: Date?
+    private let genderOptions: [String] = [
+        "Prefer not to say",
+        "Male",
+        "Female",
+        "Non-binary",
+        "Other"
+    ]
 
     enum SettingsTab: String, CaseIterable {
         case general = "General"
@@ -1362,7 +1424,7 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                         .foregroundColor(selectedTab == tab ? .white : .white.opacity(0.7))
                         .accessibilityLabel(tab.rawValue)
-                        .accessibilityValue(selectedTab == tab ? "Selected" : "Not selected")
+                        .accessibilityValue(selectedTab == tab ? "Selected" : "")
                         .accessibilityHint("Opens the \(tab.rawValue) settings section.")
                     }
                     Spacer()
@@ -1468,6 +1530,12 @@ struct SettingsView: View {
             Toggle("Play sound cues when preview starts and stops", isOn: $settings.previewSoundCuesEnabled)
                 .onChange(of: settings.previewSoundCuesEnabled) { _ in settings.saveSettings() }
                 .accessibilityHint("Plays the configured preview in/out sounds when toggling room preview.")
+            Toggle("Play ambient background sound before joining a room", isOn: $settings.startupAmbienceEnabled)
+                .onChange(of: settings.startupAmbienceEnabled) { _ in
+                    settings.saveSettings()
+                    AppSoundManager.shared.syncStartupAmbience(hasActiveRoom: appState.hasActiveRoom)
+                }
+                .accessibilityHint("Loops a low-volume ambient background sound in the main app until you join a room.")
             Picker("Default room button action", selection: $settings.defaultRoomPrimaryAction) {
                 Text("Open Details").tag(SettingsManager.RoomPrimaryAction.openDetails)
                 Text("Join or Show Room").tag(SettingsManager.RoomPrimaryAction.joinOrShow)
@@ -1501,7 +1569,7 @@ struct SettingsView: View {
                     .tint(selectedProfileSubtab == tab ? .accentColor : nil)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel(tab.rawValue)
-                    .accessibilityValue(selectedProfileSubtab == tab ? "Selected" : "Not selected")
+                    .accessibilityValue(selectedProfileSubtab == tab ? "Selected" : "")
                 }
                 Spacer()
             }
@@ -1539,6 +1607,22 @@ struct SettingsView: View {
                         settings.saveSettings()
                     }
                 Text("This nickname will be displayed to other users in voice rooms")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                Text("Gender")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Picker("Gender", selection: $settings.userGender) {
+                    ForEach(genderOptions, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: settings.userGender) { _ in
+                    settings.saveSettings()
+                }
+                Text("This is optional and can be changed anytime.")
                     .font(.caption)
                     .foregroundColor(.gray)
 
@@ -1634,6 +1718,7 @@ struct SettingsView: View {
                         accountInfoRow("Provider", value: providerDisplayName(for: user))
                         accountInfoRow("Username", value: user.username)
                         accountInfoRow("Email", value: user.email)
+                        accountInfoRow("Gender", value: user.gender)
                         accountInfoRow("Role", value: effectiveRoleSummary(for: user))
                         if user.authMethod == .mastodon {
                             accountInfoRow("Instance", value: user.mastodonInstance)
@@ -1751,6 +1836,11 @@ struct SettingsView: View {
             }
         }
 
+        if let remoteGender = user.gender?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remoteGender.isEmpty {
+            settings.userGender = normalizedGenderOption(from: remoteGender)
+        }
+
         var links: [String] = []
 
         if let email = user.email?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
@@ -1774,6 +1864,22 @@ struct SettingsView: View {
 
         settings.mergeProfileLinks(links)
         settings.saveSettings()
+    }
+
+    private func normalizedGenderOption(from rawValue: String) -> String {
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "male", "man", "m":
+            return "Male"
+        case "female", "woman", "f":
+            return "Female"
+        case "non-binary", "nonbinary", "non binary", "nb":
+            return "Non-binary"
+        case "prefer not to say", "private", "none", "n/a", "na":
+            return "Prefer not to say"
+        default:
+            return "Other"
+        }
     }
 
     // MARK: - Audio Settings
@@ -1914,6 +2020,16 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                 }
             }
+        }
+
+        SettingsSection(title: "Monitoring") {
+            Toggle("Skip self-monitoring warning", isOn: $settings.suppressSelfMonitoringPrompt)
+                .onChange(of: settings.suppressSelfMonitoringPrompt) { _ in
+                    settings.saveSettings()
+                }
+            Text("When enabled, turning self monitoring on starts immediately without asking again. Change this here any time.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -2185,8 +2301,13 @@ extension SettingsView {
     var notificationSettings: some View {
         SettingsSection(title: "Sound Notifications") {
             Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
+                .onChange(of: settings.soundNotifications) { _ in settings.saveSettings() }
             Toggle("Play sound when user joins", isOn: $settings.notifyOnJoin)
+                .onChange(of: settings.notifyOnJoin) { _ in settings.saveSettings() }
             Toggle("Play sound when user leaves", isOn: $settings.notifyOnLeave)
+                .onChange(of: settings.notifyOnLeave) { _ in settings.saveSettings() }
+            Toggle("Play sound for system action notifications", isOn: $settings.systemActionNotificationSound)
+                .onChange(of: settings.systemActionNotificationSound) { _ in settings.saveSettings() }
         }
 
         SettingsSection(title: "Maintenance and Failover Handoff") {
@@ -2204,6 +2325,9 @@ extension SettingsView {
 
         SettingsSection(title: "Desktop Notifications") {
             Toggle("Enable desktop notifications", isOn: $settings.desktopNotifications)
+                .onChange(of: settings.desktopNotifications) { _ in settings.saveSettings() }
+            Toggle("Enable system action push notifications", isOn: $settings.systemActionNotifications)
+                .onChange(of: settings.systemActionNotifications) { _ in settings.saveSettings() }
 
             Button("Test Notification") {
                 let notification = NSUserNotification()
@@ -2316,7 +2440,7 @@ extension SettingsView {
                         }
                         Spacer()
                         Button("Logout") {
-                            authManager.logout()
+                            NotificationCenter.default.post(name: .requestLogoutConfirmation, object: nil)
                         }
                         .buttonStyle(.bordered)
                     }
@@ -2415,9 +2539,6 @@ extension SettingsView {
         }
 
         SettingsSection(title: "Network") {
-            Text("Local IP: \(appState.localIP)")
-                .font(.caption)
-                .foregroundColor(.gray)
             if settings.showConnectionStats {
                 Text("Server URL: \(appState.serverManager.baseURL ?? "Not connected")")
                     .font(.caption)
@@ -2441,26 +2562,7 @@ extension SettingsView {
     }
 
     private var diagnosticsSummary: String {
-        let authManager = AuthenticationManager.shared
-        let user = authManager.currentUser
-        let license = LicensingManager.shared
-        let roleText = user.map(effectiveRoleSummary(for:)) ?? "visitor"
-        let nickname = settings.userNickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [
-            "VoiceLink Diagnostics",
-            "Nickname: \(nickname.isEmpty ? "Not set" : nickname)",
-            "Account: \(user?.email ?? user?.username ?? "Not signed in")",
-            "Role: \(roleText)",
-            "License Key: \(license.licenseKey ?? "Not assigned")",
-            "License Status: \(license.licenseStatus.rawValue)",
-            "Current Device: \(license.currentDeviceName)",
-            "Platform: \(license.currentDevicePlatform)",
-            "Server URL: \(appState.serverManager.baseURL ?? "Not connected")",
-            "Server Status: \(appState.serverStatus == .online ? "Connected" : appState.serverStatus == .connecting ? "Connecting" : "Offline")",
-            "Audio Status: \(appState.serverManager.audioTransmissionStatus)",
-            "Rooms Loaded: \(appState.rooms.count)",
-            "Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")"
-        ].joined(separator: "\n")
+        AnnouncementsManager.diagnosticsSummaryText(appState: appState, settings: settings)
     }
 }
 
@@ -2576,7 +2678,7 @@ struct AccountManagementPanel: View {
                             }
 
                             Button("Sign Out") {
-                                authManager.logout()
+                                NotificationCenter.default.post(name: .requestLogoutConfirmation, object: nil)
                             }
                             .buttonStyle(.bordered)
                         }
@@ -2784,4 +2886,3 @@ struct LicensingScreenView: View {
         }
     }
 }
-

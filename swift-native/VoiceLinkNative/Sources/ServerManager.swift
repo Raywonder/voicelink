@@ -48,6 +48,9 @@ class ServerManager: ObservableObject {
     private var previewStreamURL: URL?
     private var previewStreamKeepAliveTimer: Timer?
     private var previewStreamEndObserver: NSObjectProtocol?
+    private var previewRestoreWorkItem: DispatchWorkItem?
+    private var previewRoomDuckVolume: Float = 0.06
+    private var previewCrossfadeDuration: TimeInterval = 0.28
     private var lastSystemNotificationFingerprint: String?
     private var lastSystemNotificationAt: Date?
     private let defaultRoomStreamURLString = "https://chrismixradio.com"
@@ -237,8 +240,6 @@ class ServerManager: ObservableObject {
 
     private func presentSystemActionNotification(_ payload: [String: Any]) {
         let settings = SettingsManager.shared
-        guard settings.systemActionNotifications else { return }
-
         let title = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let message = (payload["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedTitle = (title?.isEmpty == false) ? title! : "VoiceLink System"
@@ -247,6 +248,25 @@ class ServerManager: ObservableObject {
         let timestamp = (payload["timestamp"] as? String) ?? ""
         let fingerprint = "\(type)|\(resolvedTitle)|\(resolvedMessage)|\(timestamp)"
         guard shouldAcceptSystemNotification(fingerprint: fingerprint) else { return }
+
+        if let roomId = (payload["roomId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !roomId.isEmpty,
+           roomId == activeRoomId {
+            NotificationCenter.default.post(
+                name: .incomingChatMessage,
+                object: nil,
+                userInfo: [
+                    "senderId": "system",
+                    "senderName": "System",
+                    "content": resolvedMessage,
+                    "type": "system",
+                    "messageId": payload["id"] as? String ?? UUID().uuidString,
+                    "timestamp": payload["timestamp"] as Any
+                ]
+            )
+        }
+
+        guard settings.systemActionNotifications else { return }
 
         DispatchQueue.main.async {
             NotificationCenter.default.post(
@@ -1456,14 +1476,25 @@ class ServerManager: ObservableObject {
                 }
 
                 let isActive = json["active"] as? Bool ?? false
+                let mediaEnabled = json["mediaEnabled"] as? Bool ?? !(json["disabled"] as? Bool ?? false)
                 let streamUrl = (json["streamUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard isActive, !streamUrl.isEmpty else {
-                    tryCandidate(at: index + 1)
+                    DispatchQueue.main.async {
+                        completion(RoomMediaState(
+                            active: false,
+                            mediaEnabled: mediaEnabled,
+                            title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                            streamURL: "",
+                            type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                            volume: json["volume"] as? Int
+                        ))
+                    }
                     return
                 }
 
                 let mediaState = RoomMediaState(
                     active: isActive,
+                    mediaEnabled: mediaEnabled,
                     title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                     streamURL: streamUrl,
                     type: (json["type"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1482,6 +1513,11 @@ class ServerManager: ObservableObject {
             guard let self else { return }
             guard let mediaState else {
                 self.currentRoomMedia = nil
+                self.stopRoomStreamPlayback(explicit: false)
+                return
+            }
+            guard mediaState.active, !mediaState.streamURL.isEmpty else {
+                self.currentRoomMedia = mediaState
                 self.stopRoomStreamPlayback(explicit: false)
                 return
             }
@@ -1542,17 +1578,41 @@ class ServerManager: ObservableObject {
         roomStreamKeepAliveTimer?.invalidate()
         roomStreamKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
             guard let self else { return }
-            guard self.activeRoomId != nil else { return }
+            guard let activeRoomId = self.activeRoomId else { return }
             guard !self.roomStreamDidStopExplicitly else { return }
-            guard let player = self.roomStreamPlayer else { return }
-            player.volume = self.effectiveRoomPlaybackVolume
-            player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
-            if player.currentItem == nil, let current = self.currentRoomStreamURL {
-                self.startRoomStreamPlayback(from: current.absoluteString)
-                return
-            }
-            if player.timeControlStatus != .playing {
-                player.playImmediately(atRate: 1.0)
+            self.fetchRoomStreamState(for: activeRoomId) { [weak self] mediaState in
+                guard let self else { return }
+                guard !self.roomStreamDidStopExplicitly else { return }
+                guard let mediaState else {
+                    self.stopRoomStreamPlayback(explicit: false)
+                    return
+                }
+
+                self.currentRoomMedia = mediaState
+                guard mediaState.active, !mediaState.streamURL.isEmpty else {
+                    self.stopRoomStreamPlayback(explicit: false)
+                    return
+                }
+                let nextURL = mediaState.streamURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                let currentURL = self.currentRoomStreamURL?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if nextURL.caseInsensitiveCompare(currentURL) != .orderedSame {
+                    self.startRoomStreamPlayback(from: nextURL)
+                    return
+                }
+
+                guard let player = self.roomStreamPlayer else {
+                    self.startRoomStreamPlayback(from: nextURL)
+                    return
+                }
+                player.volume = self.effectiveRoomPlaybackVolume
+                player.isMuted = self.isCurrentRoomMediaMuted || self.outputMuted
+                if player.currentItem == nil {
+                    self.startRoomStreamPlayback(from: nextURL)
+                    return
+                }
+                if player.timeControlStatus != .playing {
+                    player.playImmediately(atRate: 1.0)
+                }
             }
         }
     }
@@ -1571,10 +1631,14 @@ class ServerManager: ObservableObject {
     private func startPreviewStreamPlayback(from rawURL: String) {
         guard let url = normalizedMediaStreamURL(from: rawURL) else { return }
         DispatchQueue.main.async {
+            self.previewRestoreWorkItem?.cancel()
+            self.previewRestoreWorkItem = nil
+            self.duckCurrentRoomForPreview()
             if self.previewStreamURL == url, let player = self.previewStreamPlayer {
-                player.volume = self.effectiveRoomPlaybackVolume
+                player.volume = 0
                 player.isMuted = self.outputMuted
                 player.playImmediately(atRate: 1.0)
+                self.fadePlayerVolume(player, to: self.effectiveRoomPlaybackVolume, duration: self.previewCrossfadeDuration)
                 self.ensurePreviewStreamKeepAlive()
                 return
             }
@@ -1596,16 +1660,18 @@ class ServerManager: ObservableObject {
 
             if let player = self.previewStreamPlayer {
                 player.replaceCurrentItem(with: item)
-                player.volume = self.effectiveRoomPlaybackVolume
+                player.volume = 0
                 player.isMuted = self.outputMuted
                 player.playImmediately(atRate: 1.0)
+                self.fadePlayerVolume(player, to: self.effectiveRoomPlaybackVolume, duration: self.previewCrossfadeDuration)
             } else {
                 let player = AVPlayer(playerItem: item)
                 player.automaticallyWaitsToMinimizeStalling = false
-                player.volume = self.effectiveRoomPlaybackVolume
+                player.volume = 0
                 player.isMuted = self.outputMuted
                 self.previewStreamPlayer = player
                 player.playImmediately(atRate: 1.0)
+                self.fadePlayerVolume(player, to: self.effectiveRoomPlaybackVolume, duration: self.previewCrossfadeDuration)
             }
             self.ensurePreviewStreamKeepAlive()
         }
@@ -1635,10 +1701,24 @@ class ServerManager: ObservableObject {
                 NotificationCenter.default.removeObserver(observer)
                 self.previewStreamEndObserver = nil
             }
-            self.previewStreamPlayer?.pause()
-            self.previewStreamPlayer?.replaceCurrentItem(with: nil)
-            self.previewStreamPlayer = nil
-            self.previewStreamURL = nil
+            let outgoingPlayer = self.previewStreamPlayer
+            let restoreDelay = SettingsManager.shared.previewSoundCuesEnabled ? 0.32 : 0.0
+            if let outgoingPlayer {
+                self.fadePlayerVolume(outgoingPlayer, to: 0, duration: self.previewCrossfadeDuration)
+            }
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                outgoingPlayer?.pause()
+                outgoingPlayer?.replaceCurrentItem(with: nil)
+                if self.previewStreamPlayer === outgoingPlayer {
+                    self.previewStreamPlayer = nil
+                }
+                self.previewStreamURL = nil
+                self.restoreCurrentRoomAfterPreview()
+            }
+            self.previewRestoreWorkItem?.cancel()
+            self.previewRestoreWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(restoreDelay, self.previewCrossfadeDuration), execute: workItem)
         }
     }
 
@@ -1668,8 +1748,99 @@ class ServerManager: ObservableObject {
         }
     }
 
+    private func duckCurrentRoomForPreview() {
+        guard let player = roomStreamPlayer else { return }
+        if player.timeControlStatus != .playing {
+            player.playImmediately(atRate: 1.0)
+        }
+        player.isMuted = outputMuted
+        fadePlayerVolume(player, to: min(previewRoomDuckVolume, effectiveRoomPlaybackVolume), duration: previewCrossfadeDuration)
+    }
+
+    private func restoreCurrentRoomAfterPreview() {
+        guard let player = roomStreamPlayer else { return }
+        player.isMuted = isCurrentRoomMediaMuted || outputMuted
+        if player.currentItem != nil, !player.isMuted {
+            player.playImmediately(atRate: 1.0)
+        }
+        fadePlayerVolume(player, to: effectiveRoomPlaybackVolume, duration: previewCrossfadeDuration)
+    }
+
+    private func fadePlayerVolume(_ player: AVPlayer, to target: Float, duration: TimeInterval) {
+        let start = player.volume
+        let delta = target - start
+        guard abs(delta) > 0.001 else {
+            player.volume = target
+            return
+        }
+        let steps = max(1, Int(duration / 0.04))
+        for step in 1...steps {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (duration * Double(step) / Double(steps))) {
+                player.volume = start + (delta * Float(step) / Float(steps))
+            }
+        }
+    }
+
     func toggleCurrentRoomMediaMuted() {
         setCurrentRoomMediaMuted(!isCurrentRoomMediaMuted)
+    }
+
+    func stopCurrentRoomMedia() {
+        stopRoomStreamPlayback(explicit: true)
+    }
+
+    func setRoomMediaEnabled(_ enabled: Bool, completion: ((Bool) -> Void)? = nil) {
+        guard let roomId = activeRoomId?.trimmingCharacters(in: .whitespacesAndNewlines), !roomId.isEmpty else {
+            completion?(false)
+            return
+        }
+
+        guard let body = try? JSONSerialization.data(withJSONObject: ["enabled": enabled]) else {
+            completion?(false)
+            return
+        }
+
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
+
+        func tryCandidate(at index: Int) {
+            guard index < candidates.count else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+            guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let url = APIEndpointResolver.url(base: candidates[index], path: "/api/rooms/\(encodedRoomId)/media-enabled") else {
+                tryCandidate(at: index + 1)
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.timeoutInterval = 8
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+                guard let self else { return }
+                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                    DispatchQueue.main.async {
+                        if enabled {
+                            AccessibilityManager.shared.announceStatus("Room stream enabled for this room.")
+                            self.roomStreamDidStopExplicitly = false
+                            self.refreshCurrentRoomMedia()
+                        } else {
+                            self.roomStreamDidStopExplicitly = true
+                            self.stopRoomStreamPlayback(explicit: true)
+                            AccessibilityManager.shared.announceStatus("Room stream disabled for this room.")
+                        }
+                        completion?(true)
+                    }
+                    return
+                }
+                tryCandidate(at: index + 1)
+            }.resume()
+        }
+
+        tryCandidate(at: 0)
     }
 
     private func normalizedMediaStreamURL(from rawValue: String) -> URL? {
@@ -1800,7 +1971,7 @@ class ServerManager: ObservableObject {
         guard !isTransmitting else { return }
 
         // Ensure selected devices are applied before opening capture path.
-        SettingsManager.shared.applySelectedAudioDevices()
+        SettingsManager.shared.applySelectedAudioDevices(notifyChange: false)
         do {
             try SpatialAudioEngine.shared.start()
         } catch {
@@ -1819,6 +1990,7 @@ class ServerManager: ObservableObject {
         let selectedInput = SettingsManager.shared.inputDevice
         audioTransmitCaptureToken = SelectedAudioInputCapture.shared.start(deviceName: selectedInput) { [weak self] buffer in
             guard let self = self, self.isTransmitting else { return }
+            LocalMonitorManager.shared.ingestSharedTransmissionBuffer(buffer)
 
             // Convert PCM buffer to Data
             guard let channelData = buffer.floatChannelData else { return }
@@ -1848,6 +2020,7 @@ class ServerManager: ObservableObject {
         }
 
         isTransmitting = true
+        LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStarted")
         DispatchQueue.main.async {
             self.isAudioTransmitting = true
             self.audioTransmissionStatus = "Transmitting"
@@ -1868,6 +2041,7 @@ class ServerManager: ObservableObject {
                 audioTransmitCaptureToken = nil
             }
             isTransmitting = false
+            LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStopped")
         }
         DispatchQueue.main.async {
             self.isAudioTransmitting = false
@@ -2076,6 +2250,7 @@ struct ServerRoom: Identifiable {
 
 struct RoomMediaState: Equatable {
     let active: Bool
+    let mediaEnabled: Bool
     let title: String?
     let streamURL: String
     let type: String?
@@ -2094,6 +2269,21 @@ struct PublicFederationStatus: Equatable {
 }
 
 struct RoomUser: Identifiable {
+    enum InteractionMode: String {
+        case text
+        case audio
+        case textAndAudio
+
+        var supportsAudio: Bool {
+            switch self {
+            case .text:
+                return false
+            case .audio, .textAndAudio:
+                return true
+            }
+        }
+    }
+
     let id: String
     let odId: String
     let username: String
@@ -2107,6 +2297,7 @@ struct RoomUser: Identifiable {
     let email: String?
     let serverTitle: String?
     let isBot: Bool
+    let interactionMode: InteractionMode
     let hasAudioControls: Bool
     let statusMessage: String?
     let joinedAt: Date?
@@ -2147,7 +2338,8 @@ struct RoomUser: Identifiable {
             ?? dict["serverDisplayName"] as? String
             ?? dict["instanceName"] as? String
         self.isBot = dict["isBot"] as? Bool ?? false
-        self.hasAudioControls = dict["hasAudioControls"] as? Bool ?? !(dict["isBot"] as? Bool ?? false)
+        self.interactionMode = RoomUser.parseInteractionMode(from: dict, isBot: self.isBot)
+        self.hasAudioControls = dict["hasAudioControls"] as? Bool ?? (self.isBot ? self.interactionMode.supportsAudio : true)
         self.statusMessage = dict["statusMessage"] as? String
             ?? dict["botStatus"] as? String
             ?? dict["statusText"] as? String
@@ -2200,6 +2392,29 @@ struct RoomUser: Identifiable {
             return isoFormatter.date(from: trimmed)
         default:
             return nil
+        }
+    }
+
+    private static func parseInteractionMode(from dict: [String: Any], isBot: Bool) -> InteractionMode {
+        let rawValue = (
+            dict["interactionMode"] as? String
+            ?? dict["botType"] as? String
+            ?? dict["botCapability"] as? String
+            ?? dict["mediaCapability"] as? String
+            ?? dict["capabilityType"] as? String
+        )?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+
+        switch rawValue {
+        case "audio":
+            return .audio
+        case "text+audio", "text_audio", "audio+text", "audio_text", "both":
+            return .textAndAudio
+        case "text":
+            return .text
+        default:
+            return isBot ? .text : .textAndAudio
         }
     }
 }

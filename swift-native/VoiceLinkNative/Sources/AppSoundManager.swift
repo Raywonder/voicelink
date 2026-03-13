@@ -1,16 +1,22 @@
 import Foundation
 import AVFoundation
 import AppKit
+import SwiftUI
+import Combine
 
 /// Centralized sound manager for VoiceLink app
 /// Uses actual sound files from Resources/sounds directory
-class AppSoundManager: ObservableObject {
+class AppSoundManager: NSObject, ObservableObject, AVAudioPlayerDelegate {
     static let shared = AppSoundManager()
     struct SoundDownloadNotice: Identifiable {
         let id = UUID()
         let title: String
         let message: String
         let isReminder: Bool
+    }
+    private enum StartupAmbienceSource {
+        case remoteStream(String)
+        case localAsset(URL)
     }
     private let remoteSoundBaseURLDefaults = [
         "https://im.tappedin.fm/copyparty/assets/sounds",
@@ -139,12 +145,17 @@ class AppSoundManager: ObservableObject {
     @Published var soundsEnabled: Bool = true
     @Published var volume: Float = 0.7
     @Published var startupIntroEnabled: Bool = true
+    @Published var startupAmbienceEnabled: Bool = true
     @Published var activeSoundDownloadNotice: SoundDownloadNotice?
 
     // Audio players cache
     private var audioPlayers: [SoundType: AVAudioPlayer] = [:]
     private var systemSounds: [SoundType: NSSound] = [:]
     private var startupIntroPlayer: AVAudioPlayer?
+    private var startupAmbiencePlayer: AVAudioPlayer?
+    private var startupAmbienceStreamPlayer: AVPlayer?
+    private var startupAmbienceStreamObserver: Any?
+    private var startupAmbienceStreamURL: String?
     private var indexedSounds: [IndexedSound] = []
     private var soundsRootURL: URL?
     private var isInitialized = false
@@ -157,8 +168,16 @@ class AppSoundManager: ObservableObject {
     private let verboseLogs = false
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
     private var didPublishDownloadNoticeThisLaunch = false
+    private let startupAmbienceVolume: Float = 0.18
+    private let startupAmbienceStartDelay: TimeInterval = 2.5
+    private let startupAmbienceFadeDuration: TimeInterval = 2.0
+    private var inFlightStartupAmbienceDownloads: Set<String> = []
+    private var startupAmbienceDownloadFailures: Set<String> = []
+    private var reportedStartupAssetSyncKeys: Set<String> = []
+    private var pendingStartupAmbienceWorkItem: DispatchWorkItem?
 
-    init() {
+    override init() {
+        super.init()
         loadSettings()
         isInitialized = true
         scheduleDeferredWarmup()
@@ -572,21 +591,25 @@ class AppSoundManager: ObservableObject {
     // MARK: - Settings
 
     private func loadSettings() {
-        if let enabled = UserDefaults.standard.object(forKey: "appSoundsEnabled") as? Bool {
+        if let enabled = UserDefaults().object(forKey: "appSoundsEnabled") as? Bool {
             soundsEnabled = enabled
         }
-        if let vol = UserDefaults.standard.object(forKey: "appSoundsVolume") as? Float {
+        if let vol = UserDefaults().object(forKey: "appSoundsVolume") as? Float {
             volume = vol
         }
-        if let startupEnabled = UserDefaults.standard.object(forKey: "startupIntroEnabled") as? Bool {
+        if let startupEnabled = UserDefaults().object(forKey: "startupIntroEnabled") as? Bool {
             startupIntroEnabled = startupEnabled
+        }
+        if let ambienceEnabled = UserDefaults().object(forKey: "startupAmbienceEnabled") as? Bool {
+            startupAmbienceEnabled = ambienceEnabled
         }
     }
 
     func saveSettings() {
-        UserDefaults.standard.set(soundsEnabled, forKey: "appSoundsEnabled")
-        UserDefaults.standard.set(volume, forKey: "appSoundsVolume")
-        UserDefaults.standard.set(startupIntroEnabled, forKey: "startupIntroEnabled")
+        UserDefaults().set(soundsEnabled, forKey: "appSoundsEnabled")
+        UserDefaults().set(volume, forKey: "appSoundsVolume")
+        UserDefaults().set(startupIntroEnabled, forKey: "startupIntroEnabled")
+        UserDefaults().set(startupAmbienceEnabled, forKey: "startupAmbienceEnabled")
 
         // Update volume on all players
         for player in audioPlayers.values {
@@ -596,6 +619,7 @@ class AppSoundManager: ObservableObject {
             sound.volume = volume
         }
         startupIntroPlayer?.volume = volume
+        startupAmbiencePlayer?.volume = startupAmbienceVolume
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -606,6 +630,247 @@ class AppSoundManager: ObservableObject {
     func setVolume(_ newVolume: Float) {
         volume = max(0, min(1, newVolume))
         saveSettings()
+    }
+
+    func syncStartupAmbience(hasActiveRoom: Bool) {
+        guard startupAmbienceEnabled, !hasActiveRoom else {
+            stopStartupAmbience()
+            return
+        }
+        startStartupAmbienceIfNeeded()
+    }
+
+    func startStartupAmbienceIfNeeded() {
+        guard startupAmbienceEnabled else { return }
+        guard !isStartupAmbienceBlockedByServerPolicy else {
+            stopStartupAmbience()
+            return
+        }
+        pendingStartupAmbienceWorkItem?.cancel()
+        if startupIntroPlayer?.isPlaying == true {
+            let remaining = max(0.2, (startupIntroPlayer?.duration ?? 0) - (startupIntroPlayer?.currentTime ?? 0) + startupAmbienceStartDelay)
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.startStartupAmbienceIfNeeded()
+            }
+            pendingStartupAmbienceWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: workItem)
+            return
+        }
+        if startupAmbiencePlayer?.isPlaying == true || startupAmbienceStreamPlayer != nil { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.beginStartupAmbiencePlayback()
+        }
+        pendingStartupAmbienceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + startupAmbienceStartDelay, execute: workItem)
+    }
+
+    private func beginStartupAmbiencePlayback() {
+        guard startupAmbienceEnabled else { return }
+        guard !isStartupAmbienceBlockedByServerPolicy else {
+            stopStartupAmbience()
+            return
+        }
+        pendingStartupAmbienceWorkItem = nil
+        if startupAmbiencePlayer?.isPlaying == true || startupAmbienceStreamPlayer != nil { return }
+        if let configuredSource = resolveConfiguredStartupAmbienceSource() {
+            switch configuredSource {
+            case .remoteStream(let remoteURL):
+                startStartupAmbienceStream(remoteURL)
+                return
+            case .localAsset(let localURL):
+                if startupAmbiencePlayer == nil || startupAmbiencePlayer?.url != localURL {
+                    startupAmbiencePlayer = loadAudioPlayer(url: localURL, volume: startupAmbienceVolume, loops: -1)
+                }
+            }
+        }
+        if startupAmbiencePlayer == nil {
+            startupAmbiencePlayer = loadStartupAmbiencePlayer()
+        }
+        startupAmbiencePlayer?.currentTime = 0
+        startupAmbiencePlayer?.volume = 0
+        startupAmbiencePlayer?.numberOfLoops = -1
+        startupAmbiencePlayer?.prepareToPlay()
+        if startupAmbiencePlayer?.play() == true {
+            fadeStartupAmbiencePlayer(to: startupAmbienceVolume)
+        }
+    }
+
+    func stopStartupAmbience() {
+        pendingStartupAmbienceWorkItem?.cancel()
+        pendingStartupAmbienceWorkItem = nil
+        startupAmbiencePlayer?.stop()
+        startupAmbiencePlayer?.currentTime = 0
+        startupAmbienceStreamPlayer?.pause()
+        startupAmbienceStreamPlayer = nil
+    }
+
+    private func resolveConfiguredStartupAmbienceSource() -> StartupAmbienceSource? {
+        guard let backgroundConfig = ServerManager.shared.serverConfig?.backgroundStreams,
+              backgroundConfig.enabled,
+              backgroundConfig.preJoinEnabled else {
+            return nil
+        }
+
+        guard let selectedId = backgroundConfig.preJoinStreamId,
+              let stream = backgroundConfig.streams.first(where: { $0.id == selectedId }) else {
+            return nil
+        }
+
+        let resolved = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? stream.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            : stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolved.isEmpty else { return nil }
+        if isRemoteAudioReference(resolved) {
+            return .remoteStream(resolved)
+        }
+        if let localURL = resolveLocalSoundAssetURL(reference: resolved) {
+            return .localAsset(localURL)
+        }
+        queueStartupAmbienceAssetDownload(reference: resolved, displayName: stream.name)
+        return nil
+    }
+
+    private var isStartupAmbienceBlockedByServerPolicy: Bool {
+        guard let backgroundConfig = ServerManager.shared.serverConfig?.backgroundStreams else {
+            return false
+        }
+        return !backgroundConfig.enabled || !backgroundConfig.preJoinEnabled
+    }
+
+    private func startStartupAmbienceStream(_ rawURL: String) {
+        guard let url = URL(string: rawURL) else { return }
+        if startupAmbienceStreamURL == rawURL, startupAmbienceStreamPlayer != nil {
+            startupAmbienceStreamPlayer?.volume = startupAmbienceVolume
+            startupAmbienceStreamPlayer?.play()
+            return
+        }
+
+        if let startupAmbienceStreamObserver {
+            NotificationCenter.default.removeObserver(startupAmbienceStreamObserver)
+            self.startupAmbienceStreamObserver = nil
+        }
+
+        startupAmbiencePlayer?.stop()
+        startupAmbiencePlayer?.currentTime = 0
+
+        let item = AVPlayerItem(url: url)
+        let player = AVPlayer(playerItem: item)
+        player.volume = 0
+        startupAmbienceStreamPlayer = player
+        startupAmbienceStreamURL = rawURL
+        startupAmbienceStreamObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: nil
+        ) { [weak self, weak player] _ in
+            DispatchQueue.main.async {
+                player?.seek(to: .zero)
+                player?.play()
+                self?.startupAmbienceStreamPlayer?.volume = self?.startupAmbienceVolume ?? 0.18
+            }
+        }
+        player.play()
+        fadeStartupAmbienceStream(to: startupAmbienceVolume)
+    }
+
+    private func fadeStartupAmbiencePlayer(to targetVolume: Float) {
+        guard let player = startupAmbiencePlayer else { return }
+        let steps = max(1, Int(startupAmbienceFadeDuration / 0.1))
+        for index in 1...steps {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (Double(index) * 0.1)) { [weak self, weak player] in
+                guard let self, let player, player.isPlaying else { return }
+                player.volume = min(targetVolume, (targetVolume / Float(steps)) * Float(index))
+            }
+        }
+    }
+
+    private func fadeStartupAmbienceStream(to targetVolume: Float) {
+        let steps = max(1, Int(startupAmbienceFadeDuration / 0.1))
+        for index in 1...steps {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (Double(index) * 0.1)) { [weak self] in
+                guard let self, let player = self.startupAmbienceStreamPlayer else { return }
+                player.volume = min(targetVolume, (targetVolume / Float(steps)) * Float(index))
+            }
+        }
+    }
+
+    private func loadStartupAmbiencePlayer() -> AVAudioPlayer? {
+        for directory in ambienceDirectories() {
+            if let entries = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                let playable = entries.filter { url in
+                    ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"].contains(url.pathExtension.lowercased())
+                }
+                if let selected = playable.randomElement(),
+                   let player = loadAudioPlayer(url: selected, volume: startupAmbienceVolume, loops: -1) {
+                    return player
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func loadAudioPlayer(url: URL, volume: Float, loops: Int) -> AVAudioPlayer? {
+        guard let player = try? AVAudioPlayer(contentsOf: url) else {
+            return nil
+        }
+        player.numberOfLoops = loops
+        player.volume = volume
+        player.prepareToPlay()
+        return player
+    }
+
+    private func ambienceDirectories() -> [URL] {
+        var roots: [URL] = []
+        for root in candidateSoundRoots(preferred: soundsRootURL) {
+            roots.append(root)
+            roots.append(root.appendingPathComponent("ambience", isDirectory: true))
+            roots.append(root.appendingPathComponent("sounds/ambience", isDirectory: true))
+            roots.append(root.appendingPathComponent("assets/sounds/ambience", isDirectory: true))
+        }
+        var seen = Set<String>()
+        return roots.filter { url in
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            return seen.insert(url.path).inserted
+        }
+    }
+
+    private func isRemoteAudioReference(_ reference: String) -> Bool {
+        let lowered = reference.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lowered.hasPrefix("http://") || lowered.hasPrefix("https://")
+    }
+
+    private func resolveLocalSoundAssetURL(reference: String) -> URL? {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty, !isRemoteAudioReference(trimmed) else { return nil }
+        if indexedSounds.isEmpty {
+            buildSoundLibraryIndex()
+        }
+
+        let normalized = trimmed.lowercased()
+        let normalizedBase = URL(fileURLWithPath: trimmed).deletingPathExtension().lastPathComponent.lowercased()
+        let normalizedFileName = URL(fileURLWithPath: trimmed).lastPathComponent.lowercased()
+        if let direct = indexedSounds.first(where: { item in
+            item.relativePathLower == normalized
+                || item.relativePathLower.hasSuffix("/\(normalized)")
+                || item.fileNameLower == normalizedFileName
+                || item.baseNameLower == normalizedBase
+        }) {
+            return direct.url
+        }
+
+        for directory in ambienceDirectories() {
+            let candidate = directory.appendingPathComponent(URL(fileURLWithPath: trimmed).lastPathComponent)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     // MARK: - Test
@@ -627,7 +892,7 @@ class AppSoundManager: ObservableObject {
     ) async -> Bool {
         if let overrideBase = ProcessInfo.processInfo.environment["VOICELINK_SOUND_TEST_BASE_URL"],
            !overrideBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            UserDefaults.standard.set(overrideBase, forKey: "voicelinkSoundBaseURL")
+            UserDefaults().set(overrideBase, forKey: "voicelinkSoundBaseURL")
         }
         print("AppSoundManager self-test: starting for \(soundType.rawValue)")
         removeDownloadedVariants(for: soundType)
@@ -684,6 +949,7 @@ class AppSoundManager: ObservableObject {
                 print("AppSoundManager: Startup intro did not begin playback for \(introURL.lastPathComponent)")
                 return false
             }
+            player.delegate = self
             startupIntroPlayer = player
             startupIntroPlayed = true
             print("AppSoundManager: Playing startup intro \(introURL.lastPathComponent)")
@@ -706,6 +972,10 @@ class AppSoundManager: ObservableObject {
                 return
             }
 
+            // Final fallback: use a softer notification-style startup cue.
+            self.playSound(.notification, force: true)
+            self.startupIntroPlayed = true
+            print("AppSoundManager: Startup intro fallback played via notification cue")
         }
     }
 
@@ -717,6 +987,7 @@ class AppSoundManager: ObservableObject {
             player.prepareToPlay()
             let didStart = player.play()
             guard didStart else { return false }
+            player.delegate = self
             startupIntroPlayer = player
             startupIntroPlayed = true
             return true
@@ -729,6 +1000,20 @@ class AppSoundManager: ObservableObject {
         let preferredBaseNames = [
             "01-voicelink-intro",
             "02-voicelink-intro",
+            "02-voicelink-intro-alt",
+            "02-voicelink-intro-v2",
+            "02-voicelink-intro-voice",
+            "02-voicelink-intro-voicelink",
+            "02-voicelink-intro2",
+            "02-voicelink-intro-new",
+            "02-voicelink-intro-welcome",
+            "02-voicelink-intro-startup",
+            "02-voicelink-intro-main",
+            "02-voicelink-intro-default",
+            "02-voicelink-intro-mix",
+            "02-voicelink-intro-02",
+            "02-voicelink-intro-final",
+            "02-voiceLink-intro",
             "03-voicelink-faster",
             "04-voicelink-vynal"
         ]
@@ -756,12 +1041,47 @@ class AppSoundManager: ObservableObject {
             if let match = matches.randomElement() {
                 return match
             }
+
+            let fuzzyMatches = rootEntries.filter { entry in
+                let base = entry.deletingPathExtension().lastPathComponent.lowercased()
+                return base.contains("voicelink") && (base.contains("intro") || base.contains("vynal") || base.contains("vinyl"))
+            }
+            if let match = fuzzyMatches.randomElement() {
+                return match
+            }
         }
 
         return nil
     }
 
-    private func pickRandomStartupIntroURL() -> URL? { nil }
+    private func pickRandomStartupIntroURL() -> URL? {
+        let allowedExtensions: Set<String> = ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"]
+
+        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            let matches = entries.filter { entry in
+                guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey]),
+                      values.isRegularFile == true else { return false }
+                let base = entry.deletingPathExtension().lastPathComponent.lowercased()
+                let ext = entry.pathExtension.lowercased()
+                guard allowedExtensions.contains(ext) else { return false }
+                return base.contains("voicelink") && (base.contains("intro") || base.contains("vynal") || base.contains("vinyl"))
+            }
+
+            if let match = matches.randomElement() {
+                return match
+            }
+        }
+
+        return nil
+    }
 
     private func candidateResourceBundles() -> [Bundle] {
         var bundles: [Bundle] = [Bundle.main, Bundle.module]
@@ -790,14 +1110,43 @@ class AppSoundManager: ObservableObject {
             if let resourceURL = bundle.resourceURL {
                 roots.append(resourceURL.appendingPathComponent("sounds", isDirectory: true))
                 roots.append(resourceURL.appendingPathComponent("sounds/ui-sounds", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources/sounds", isDirectory: true))
                 roots.append(resourceURL)
             }
+        }
+        let explicitRoots = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources/sounds", isDirectory: true),
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources", isDirectory: true),
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/sounds", isDirectory: true)
+        ]
+        roots.append(contentsOf: explicitRoots)
+        if let downloadedRoot = downloadedSoundsRoot() {
+            roots.append(downloadedRoot)
+            roots.append(downloadedRoot.appendingPathComponent("sounds", isDirectory: true))
         }
 
         var seen = Set<String>()
         return roots.filter { url in
             guard FileManager.default.fileExists(atPath: url.path) else { return false }
             return seen.insert(url.path).inserted
+        }
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if player === startupIntroPlayer {
+            startupIntroPlayer = nil
+            NotificationCenter.default.post(name: .startupIntroDidFinish, object: nil)
         }
     }
 
@@ -859,11 +1208,11 @@ class AppSoundManager: ObservableObject {
     }
 
     private func remoteSoundBaseURLs() -> [URL] {
-        let overrideRaw = (UserDefaults.standard.string(forKey: "voicelinkSoundBaseURLs") ?? "")
+        let overrideRaw = (UserDefaults().string(forKey: "voicelinkSoundBaseURLs") ?? "")
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let single = (UserDefaults.standard.string(forKey: "voicelinkSoundBaseURL") ?? "")
+        let single = (UserDefaults().string(forKey: "voicelinkSoundBaseURL") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let rawList =
             overrideRaw +
@@ -883,8 +1232,8 @@ class AppSoundManager: ObservableObject {
 
     private func serverDerivedSoundBaseURLStrings() -> [String] {
         let cpBaseRaw = [
-            UserDefaults.standard.string(forKey: "voicelinkCopypartyBaseURL") ?? "",
-            UserDefaults.standard.string(forKey: "copyPartyBaseURL") ?? ""
+            UserDefaults().string(forKey: "voicelinkCopypartyBaseURL") ?? "",
+            UserDefaults().string(forKey: "copyPartyBaseURL") ?? ""
         ]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -955,6 +1304,178 @@ class AppSoundManager: ObservableObject {
         ioQueue.async { [weak self] in
             self?.downloadMissingSound(soundType)
         }
+    }
+
+    private func startupAmbienceExtensionCandidates() -> [String] {
+        ["wav", "flac", "mp3", "m4a", "aiff", "aif", "aifc", "caf"]
+    }
+
+    private func queueStartupAmbienceAssetDownload(reference: String, displayName: String?) {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty, !isRemoteAudioReference(trimmed) else { return }
+        let key = trimmed.lowercased()
+        if inFlightStartupAmbienceDownloads.contains(key) || startupAmbienceDownloadFailures.contains(key) {
+            return
+        }
+        inFlightStartupAmbienceDownloads.insert(key)
+        ioQueue.async { [weak self] in
+            self?.downloadStartupAmbienceAsset(reference: trimmed, displayName: displayName)
+        }
+    }
+
+    private func downloadStartupAmbienceAsset(reference: String, displayName: String?) {
+        let key = reference.lowercased()
+        defer { inFlightStartupAmbienceDownloads.remove(key) }
+        guard let localRoot = downloadedSoundsRoot() else { return }
+
+        let baseURLs = remoteSoundBaseURLs()
+        let targetRelativeName = URL(fileURLWithPath: reference).lastPathComponent
+        let targetBaseName = URL(fileURLWithPath: reference).deletingPathExtension().lastPathComponent
+        let explicitExtension = URL(fileURLWithPath: reference).pathExtension.lowercased()
+        let extensions = explicitExtension.isEmpty ? startupAmbienceExtensionCandidates() : [explicitExtension]
+        let directories = [
+            "",
+            "ambience",
+            "sounds",
+            "sounds/ambience",
+            "assets/sounds",
+            "assets/sounds/ambience",
+            "voicelink/sounds",
+            "voicelink/sounds/ambience",
+            "apps/voicelink/sounds",
+            "apps/voicelink/sounds/ambience"
+        ]
+
+        let directCandidates = startupAmbienceRemoteCandidates(reference: reference)
+
+        for baseURL in baseURLs {
+            for relativePath in directCandidates {
+                guard let remoteURL = URL(string: relativePath, relativeTo: baseURL) else { continue }
+                if let localURL = fetchStartupAmbienceAsset(remoteURL: remoteURL, localRoot: localRoot, preferredName: targetRelativeName) {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.finishStartupAmbienceAssetDownload(localURL: localURL, reference: reference, displayName: displayName)
+                    }
+                    return
+                }
+            }
+
+            for directory in directories {
+                for ext in extensions {
+                    var relative = directory.isEmpty ? targetBaseName : "\(directory)/\(targetBaseName)"
+                    relative += ".\(ext)"
+                    guard let remoteURL = URL(string: relative, relativeTo: baseURL) else { continue }
+                    if let localURL = fetchStartupAmbienceAsset(remoteURL: remoteURL, localRoot: localRoot, preferredName: "\(targetBaseName).\(ext)") {
+                        DispatchQueue.main.async { [weak self] in
+                            self?.finishStartupAmbienceAssetDownload(localURL: localURL, reference: reference, displayName: displayName)
+                        }
+                        return
+                    }
+                }
+            }
+        }
+
+        startupAmbienceDownloadFailures.insert(key)
+    }
+
+    private func startupAmbienceRemoteCandidates(reference: String) -> [String] {
+        let trimmed = reference.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return [] }
+        var candidates = [trimmed]
+        if !trimmed.hasPrefix("sounds/") {
+            candidates.append("sounds/\(trimmed)")
+        }
+        if !trimmed.hasPrefix("assets/sounds/") {
+            candidates.append("assets/sounds/\(trimmed)")
+        }
+        if !trimmed.hasPrefix("sounds/ambience/") {
+            candidates.append("sounds/ambience/\(URL(fileURLWithPath: trimmed).lastPathComponent)")
+        }
+        if !trimmed.hasPrefix("assets/sounds/ambience/") {
+            candidates.append("assets/sounds/ambience/\(URL(fileURLWithPath: trimmed).lastPathComponent)")
+        }
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0).inserted }
+    }
+
+    private func fetchStartupAmbienceAsset(remoteURL: URL, localRoot: URL, preferredName: String) -> URL? {
+        var request = URLRequest(url: remoteURL)
+        request.timeoutInterval = 8
+        request.setValue("VoiceLinkNative/1.0", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, response) = try URLSession.shared.syncData(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else {
+                return nil
+            }
+            let ambienceRoot = localRoot.appendingPathComponent("ambience", isDirectory: true)
+            try FileManager.default.createDirectory(at: ambienceRoot, withIntermediateDirectories: true)
+            let fileName = preferredName.isEmpty ? UUID().uuidString : preferredName
+            let destination = ambienceRoot.appendingPathComponent(fileName)
+            try data.write(to: destination, options: .atomic)
+            return destination
+        } catch {
+            return nil
+        }
+    }
+
+    private func finishStartupAmbienceAssetDownload(localURL: URL, reference: String, displayName: String?) {
+        startupAmbienceDownloadFailures.remove(reference.lowercased())
+        buildSoundLibraryIndex()
+        publishBackgroundDownloadNoticeForAmbience(displayName: displayName, fileName: localURL.lastPathComponent)
+        reportStartupAmbienceAssetSync(reference: reference, fileName: localURL.lastPathComponent, displayName: displayName)
+        syncStartupAmbience(hasActiveRoom: ServerManager.shared.activeRoomId != nil)
+    }
+
+    private func publishBackgroundDownloadNoticeForAmbience(displayName: String?, fileName: String) {
+        let title = "Room ambience synced"
+        let message = {
+            if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "\(displayName) was missing on this client and was downloaded in the background."
+            }
+            return "\(fileName) was missing on this client and was downloaded in the background."
+        }()
+        DispatchQueue.main.async {
+            self.activeSoundDownloadNotice = SoundDownloadNotice(title: title, message: message, isReminder: false)
+        }
+    }
+
+    private func reportStartupAmbienceAssetSync(reference: String, fileName: String, displayName: String?) {
+        let fingerprint = "\(reference.lowercased())::\(fileName.lowercased())"
+        guard !reportedStartupAssetSyncKeys.contains(fingerprint) else { return }
+        reportedStartupAssetSyncKeys.insert(fingerprint)
+
+        guard let baseURL = ServerManager.shared.baseURL,
+              let url = APIEndpointResolver.url(base: baseURL, path: "/api/client/assets/synced") else {
+            return
+        }
+
+        var payload: [String: Any] = [
+            "assetType": "startup_ambience",
+            "assetPath": reference,
+            "assetName": fileName,
+            "clientPlatform": "macos-desktop",
+            "username": UserDefaults().string(forKey: "username") ?? "User"
+        ]
+        if let displayName, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["displayName"] = displayName
+        }
+        if let roomId = ServerManager.shared.activeRoomId {
+            payload["roomId"] = roomId
+            if let roomName = ServerManager.shared.rooms.first(where: { $0.id == roomId })?.name {
+                payload["roomName"] = roomName
+            }
+        }
+        if let serverName = ServerManager.shared.serverConfig?.serverName {
+            payload["serverName"] = serverName
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("VoiceLinkNative/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        URLSession.shared.dataTask(with: request).resume()
     }
 
     private func downloadMissingSound(_ soundType: SoundType) {

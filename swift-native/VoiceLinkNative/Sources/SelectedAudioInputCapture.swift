@@ -11,18 +11,24 @@ final class SelectedAudioInputCapture {
     private let sessionQueue = DispatchQueue(label: "voicelink.selected-input.session", qos: .userInitiated)
     private let callbackQueue = DispatchQueue(label: "voicelink.selected-input.callback", qos: .userInitiated)
     private var subscribers: [UUID: BufferHandler] = [:]
+    private var subscriberPreferredFormats: [UUID: AVAudioFormat] = [:]
     private var audioUnit: AudioUnit?
     private var currentDeviceID: AudioDeviceID = 0
     private var currentDeviceName: String?
     private var isRunning = false
-    private let outputFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)
+    private var streamFormat: AVAudioFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
 
     private init() {}
 
-    func start(deviceName: String?, handler: @escaping BufferHandler) -> UUID {
+    func start(deviceName: String?, preferredFormat: AVAudioFormat? = nil, handler: @escaping BufferHandler) -> UUID {
         let token = UUID()
         sessionQueue.async {
             self.subscribers[token] = handler
+            if let preferredFormat {
+                self.subscriberPreferredFormats[token] = preferredFormat
+            } else {
+                self.subscriberPreferredFormats.removeValue(forKey: token)
+            }
             self.startCaptureIfNeeded(deviceName: deviceName)
         }
         return token
@@ -31,8 +37,11 @@ final class SelectedAudioInputCapture {
     func stop(token: UUID) {
         sessionQueue.async {
             self.subscribers.removeValue(forKey: token)
+            self.subscriberPreferredFormats.removeValue(forKey: token)
             if self.subscribers.isEmpty {
                 self.stopCapture()
+            } else {
+                self.reconfigureFormatIfNeeded()
             }
         }
     }
@@ -43,8 +52,12 @@ final class SelectedAudioInputCapture {
             return
         }
 
-        if audioUnit == nil || currentDeviceID != targetDeviceID {
+        let desiredFormat = preferredStreamFormat()
+        let needsFormatChange = !formatsEquivalent(streamFormat, desiredFormat)
+
+        if audioUnit == nil || currentDeviceID != targetDeviceID || needsFormatChange {
             stopCapture()
+            streamFormat = desiredFormat
             guard configureAudioUnit(deviceID: targetDeviceID) else { return }
         }
 
@@ -56,6 +69,30 @@ final class SelectedAudioInputCapture {
         } else {
             print("[SelectedInputCapture] Failed to start capture. status=\(status)")
         }
+    }
+
+    private func reconfigureFormatIfNeeded() {
+        guard currentDeviceID != 0 else { return }
+        let desiredFormat = preferredStreamFormat()
+        guard !formatsEquivalent(streamFormat, desiredFormat) else { return }
+        let deviceName = currentDeviceName
+        stopCapture()
+        streamFormat = desiredFormat
+        startCaptureIfNeeded(deviceName: deviceName)
+    }
+
+    private func preferredStreamFormat() -> AVAudioFormat {
+        if let preferred = subscriberPreferredFormats.values.first {
+            return preferred
+        }
+        return AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2) ?? streamFormat
+    }
+
+    private func formatsEquivalent(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
+        lhs.sampleRate == rhs.sampleRate &&
+        lhs.channelCount == rhs.channelCount &&
+        lhs.commonFormat == rhs.commonFormat &&
+        lhs.isInterleaved == rhs.isInterleaved
     }
 
     private func stopCapture() {
@@ -138,10 +175,7 @@ final class SelectedAudioInputCapture {
             return false
         }
 
-        guard let outputFormat else {
-            AudioComponentInstanceDispose(unit)
-            return false
-        }
+        let outputFormat = streamFormat
         let asbd = outputFormat.streamDescription.pointee
         var streamDescription = asbd
         guard AudioUnitSetProperty(
@@ -194,7 +228,8 @@ final class SelectedAudioInputCapture {
         inBusNumber: UInt32,
         inNumberFrames: UInt32
     ) -> OSStatus {
-        guard let audioUnit, let outputFormat else { return noErr }
+        let outputFormat = streamFormat
+        guard let audioUnit else { return noErr }
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: inNumberFrames),
               let channelData = pcmBuffer.floatChannelData else {
             return noErr

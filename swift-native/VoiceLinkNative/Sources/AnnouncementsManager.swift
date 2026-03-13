@@ -35,6 +35,21 @@ struct BugReport: Codable {
     let mastodonHandle: String?
     let appVersion: String
     let platform: String
+    let accountEmail: String?
+    let displayName: String?
+    let username: String?
+    let clientId: String?
+    let currentRoom: String?
+    let diagnosticsSummary: String?
+    let localMonitorDiagnostics: String?
+    let recentCrashReports: [CrashReportSummary]?
+    let submittedAt: String?
+}
+
+struct CrashReportSummary: Codable {
+    let fileName: String
+    let modifiedAt: String
+    let preview: String
 }
 
 // MARK: - Announcements Manager
@@ -81,7 +96,7 @@ class AnnouncementsManager: ObservableObject {
 
     // MARK: - Check for Unread
     private func checkForUnread() {
-        guard let lastRead = UserDefaults.standard.string(forKey: lastReadDateKey),
+        guard let lastRead = UserDefaults().string(forKey: lastReadDateKey),
               let lastReadDate = ISO8601DateFormatter().date(from: lastRead) else {
             hasUnreadAnnouncements = !announcements.isEmpty
             return
@@ -100,7 +115,7 @@ class AnnouncementsManager: ObservableObject {
 
     // MARK: - Mark as Read
     func markAsRead() {
-        UserDefaults.standard.set(ISO8601DateFormatter().string(from: Date()), forKey: lastReadDateKey)
+        UserDefaults().set(ISO8601DateFormatter().string(from: Date()), forKey: lastReadDateKey)
         hasUnreadAnnouncements = false
     }
 
@@ -152,6 +167,77 @@ class AnnouncementsManager: ObservableObject {
         } else if let url = URL(string: "\(serverURL)/bugtracker/") {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+@MainActor
+extension AnnouncementsManager {
+    static func diagnosticsSummaryText(appState: AppState, settings: SettingsManager = .shared) -> String {
+        let authManager = AuthenticationManager.shared
+        let user = authManager.currentUser
+        let license = LicensingManager.shared
+        let roleText = user.map { effectiveRoleSummaryStatic(for: $0) } ?? "visitor"
+        let nickname = settings.userNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let monitorDetails = LocalMonitorManager.shared.diagnosticsSnapshot().multilineSummary
+        return [
+            "VoiceLink Diagnostics",
+            "Nickname: \(nickname.isEmpty ? "Not set" : nickname)",
+            "Account: \(user?.email ?? user?.username ?? "Not signed in")",
+            "Role: \(roleText)",
+            "License Key: \(license.licenseKey ?? "Not assigned")",
+            "License Status: \(license.licenseStatus.rawValue)",
+            "Current Device: \(license.currentDeviceName)",
+            "Platform: \(license.currentDevicePlatform)",
+            "Server URL: \(appState.serverManager.baseURL ?? "Not connected")",
+            "Server Status: \(appState.serverStatus == .online ? "Connected" : appState.serverStatus == .connecting ? "Connecting" : "Offline")",
+            "Audio Status: \(appState.serverManager.audioTransmissionStatus)",
+            "Rooms Loaded: \(appState.rooms.count)",
+            "Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")",
+            monitorDetails
+        ].joined(separator: "\n")
+    }
+
+    static func collectRecentCrashReports(limit: Int = 3) -> [CrashReportSummary] {
+        let reportsDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: reportsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        let matching = files
+            .filter { $0.lastPathComponent.hasPrefix("VoiceLink") && $0.pathExtension == "ips" }
+            .sorted {
+                let lhsDate = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let rhsDate = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return lhsDate > rhsDate
+            }
+            .prefix(limit)
+
+        let formatter = ISO8601DateFormatter()
+        return matching.compactMap { url in
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let preview = (try? String(contentsOf: url, encoding: .utf8)
+                .replacingOccurrences(of: "\u{0}", with: ""))
+                .map { String($0.prefix(2000)) }
+                ?? ""
+            return CrashReportSummary(
+                fileName: url.lastPathComponent,
+                modifiedAt: formatter.string(from: date),
+                preview: preview
+            )
+        }
+    }
+}
+
+private extension AnnouncementsManager {
+    static func effectiveRoleSummaryStatic(for user: AuthenticatedUser) -> String {
+        let role = user.role?.isEmpty == false ? user.role! : "member"
+        let permissionSummary = user.permissions.isEmpty ? "standard" : user.permissions.joined(separator: ", ")
+        return "\(role) | \(permissionSummary)"
     }
 }
 
@@ -315,6 +401,7 @@ struct AnnouncementCard: View {
 // MARK: - Bug Report View
 struct BugReportView: View {
     @StateObject private var manager = AnnouncementsManager.shared
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
 
     @State private var title = ""
@@ -390,6 +477,18 @@ struct BugReportView: View {
     private func submitReport() {
         isSubmitting = true
         errorMessage = nil
+        let settings = SettingsManager.shared
+        let authManager = AuthenticationManager.shared
+        let user = authManager.currentUser
+        let diagnosticsSummary = settings.autoSendDiagnostics
+            ? AnnouncementsManager.diagnosticsSummaryText(appState: appState, settings: settings)
+            : nil
+        let monitorDiagnostics = settings.autoSendDiagnostics
+            ? LocalMonitorManager.shared.diagnosticsSnapshot().multilineSummary
+            : nil
+        let crashReports = (settings.autoSendDiagnostics && settings.shareCrashReports)
+            ? AnnouncementsManager.collectRecentCrashReports()
+            : nil
 
         let report = BugReport(
             title: title,
@@ -400,7 +499,16 @@ struct BugReportView: View {
             submittedBy: isAnonymous ? nil : NSFullUserName(),
             mastodonHandle: isAnonymous ? nil : mastodonHandle,
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
-            platform: "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
+            platform: "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            accountEmail: isAnonymous ? nil : user?.email,
+            displayName: isAnonymous ? nil : (user?.displayName ?? user?.username),
+            username: isAnonymous ? nil : user?.username,
+            clientId: isAnonymous ? nil : UserDefaults().string(forKey: "clientId"),
+            currentRoom: (appState.currentRoom ?? appState.minimizedRoom)?.name,
+            diagnosticsSummary: diagnosticsSummary,
+            localMonitorDiagnostics: monitorDiagnostics,
+            recentCrashReports: crashReports,
+            submittedAt: ISO8601DateFormatter().string(from: Date())
         )
 
         manager.submitBugReport(report) { result in

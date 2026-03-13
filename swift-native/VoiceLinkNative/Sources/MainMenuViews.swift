@@ -188,22 +188,27 @@ struct MainMenuView: View {
             let matchesServer = selectedServerFilter == "All Servers" || roomServerLabel == selectedServerFilter
             let lowerServerLabel = roomServerLabel.lowercased()
             let isLocalOnlyRoom = lowerServerLabel.contains("localhost") || lowerServerLabel.contains("local server")
-            let matchesVisibility = (!room.isPrivate || SettingsManager.shared.showPrivateMemberRooms)
-                && (SettingsManager.shared.showLocalOnlyRooms || !isLocalOnlyRoom)
-                && (SettingsManager.shared.showFederatedRooms || !SettingsManager.shared.isVisibleFederationHost(roomServerLabel))
-                && SettingsManager.shared.isVisibleFederationHost(roomServerLabel)
+            let matchesVisibility: Bool = {
+                if !isAuthenticatedForRoomAccess {
+                    return !room.isPrivate
+                }
+                return (!room.isPrivate || SettingsManager.shared.showPrivateMemberRooms)
+                    && (SettingsManager.shared.showLocalOnlyRooms || !isLocalOnlyRoom)
+                    && (SettingsManager.shared.showFederatedRooms || !SettingsManager.shared.isVisibleFederationHost(roomServerLabel))
+                    && SettingsManager.shared.isVisibleFederationHost(roomServerLabel)
+            }()
             let matchesScope: Bool
             switch roomScopeFilter {
             case .all:
-                matchesScope = true
+                matchesScope = !isAuthenticatedForRoomAccess ? !room.isPrivate : true
             case .publicOnly:
                 matchesScope = !room.isPrivate
             case .privateOnly:
-                matchesScope = room.isPrivate
+                matchesScope = isAuthenticatedForRoomAccess && room.isPrivate
             case .activeUsers:
-                matchesScope = room.userCount > 0
+                matchesScope = room.userCount > 0 && (!room.isPrivate || isAuthenticatedForRoomAccess)
             case .mediaActive:
-                matchesScope = appState.roomHasActiveMusic[room.id] == true
+                matchesScope = appState.roomHasActiveMusic[room.id] == true && (!room.isPrivate || isAuthenticatedForRoomAccess)
             }
             return matchesServer && matchesVisibility && matchesScope
         }
@@ -444,7 +449,7 @@ struct MainMenuView: View {
             }
 
             HStack(spacing: 10) {
-                Button("Sign In") { showAccountAuthSheet = true }
+                Button("Quick Pair or Sign In") { appState.currentScreen = .login }
                     .buttonStyle(.borderedProminent)
             }
         }
@@ -790,16 +795,16 @@ struct MainMenuView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        Button("Open Registration") {
-                            openRegistrationPortal()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
                         HStack(spacing: 10) {
-                            ActionButton(title: "Sign In", icon: "person.crop.circle.badge.checkmark", color: .blue) {
+                            ActionButton(title: "Quick Pair or Sign In", icon: "person.crop.circle.badge.checkmark", color: .blue) {
                                 appState.currentScreen = .login
                             }
+
+                            Button("Create Account") {
+                                openRegistrationPortal()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
                     }
                 }

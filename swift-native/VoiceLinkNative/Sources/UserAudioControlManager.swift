@@ -296,7 +296,7 @@ class UserAudioControlManager: ObservableObject {
 
     func setMasterVolume(_ volume: Float) {
         masterVolume = max(0.0, min(1.5, volume))
-        UserDefaults.standard.set(Double(masterVolume), forKey: "outputVolume")
+        UserDefaults().set(Double(masterVolume), forKey: "outputVolume")
         let settings = SettingsManager.shared
         if abs(settings.outputVolume - Double(masterVolume)) > 0.0001 {
             settings.outputVolume = Double(masterVolume)
@@ -328,25 +328,25 @@ class UserAudioControlManager: ObservableObject {
     // MARK: - Persistence
 
     private func loadSettings() {
-        if let volumeData = UserDefaults.standard.dictionary(forKey: "userVolumes") as? [String: Float] {
+        if let volumeData = UserDefaults().dictionary(forKey: "userVolumes") as? [String: Float] {
             userVolumes = volumeData
         }
-        if let muteData = UserDefaults.standard.dictionary(forKey: "userMuted") as? [String: Bool] {
+        if let muteData = UserDefaults().dictionary(forKey: "userMuted") as? [String: Bool] {
             userMuted = muteData
         }
-        if let panData = UserDefaults.standard.dictionary(forKey: "userPan") as? [String: Float] {
+        if let panData = UserDefaults().dictionary(forKey: "userPan") as? [String: Float] {
             userPan = panData
-        } else if let panData = UserDefaults.standard.dictionary(forKey: "userPan") as? [String: Double] {
+        } else if let panData = UserDefaults().dictionary(forKey: "userPan") as? [String: Double] {
             userPan = panData.mapValues(Float.init)
         }
-        if let soloData = UserDefaults.standard.dictionary(forKey: "userSolo") as? [String: Bool] {
+        if let soloData = UserDefaults().dictionary(forKey: "userSolo") as? [String: Bool] {
             userSolo = soloData
         }
-        if let storedMaster = UserDefaults.standard.object(forKey: "masterVolume") as? Float {
+        if let storedMaster = UserDefaults().object(forKey: "masterVolume") as? Float {
             masterVolume = storedMaster
-        } else if let storedMaster = UserDefaults.standard.object(forKey: "masterVolume") as? Double {
+        } else if let storedMaster = UserDefaults().object(forKey: "masterVolume") as? Double {
             masterVolume = Float(storedMaster)
-        } else if let storedOutput = UserDefaults.standard.object(forKey: "outputVolume") as? Double {
+        } else if let storedOutput = UserDefaults().object(forKey: "outputVolume") as? Double {
             masterVolume = Float(storedOutput)
         } else {
             masterVolume = 1.0
@@ -355,12 +355,12 @@ class UserAudioControlManager: ObservableObject {
     }
 
     private func saveSettings() {
-        UserDefaults.standard.set(userVolumes, forKey: "userVolumes")
-        UserDefaults.standard.set(userPan, forKey: "userPan")
-        UserDefaults.standard.set(userMuted, forKey: "userMuted")
-        UserDefaults.standard.set(userSolo, forKey: "userSolo")
-        UserDefaults.standard.set(masterVolume, forKey: "masterVolume")
-        UserDefaults.standard.set(Double(masterVolume), forKey: "outputVolume")
+        UserDefaults().set(userVolumes, forKey: "userVolumes")
+        UserDefaults().set(userPan, forKey: "userPan")
+        UserDefaults().set(userMuted, forKey: "userMuted")
+        UserDefaults().set(userSolo, forKey: "userSolo")
+        UserDefaults().set(masterVolume, forKey: "masterVolume")
+        UserDefaults().set(Double(masterVolume), forKey: "outputVolume")
     }
 
     // MARK: - Cleanup
