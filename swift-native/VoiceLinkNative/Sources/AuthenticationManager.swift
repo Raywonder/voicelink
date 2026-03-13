@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AuthenticationServices
 import Security
+import UserNotifications
 
 // MARK: - Authentication Manager
 class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
@@ -15,12 +16,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     @Published var currentUser: AuthenticatedUser?
     @Published var authState: AuthState = .unauthenticated
     @Published var authError: String?
+    @Published var passkeyRecommendationPending = false
 
     // Mastodon OAuth state
     @Published var mastodonInstance: String = ""
     private var mastodonClientId: String?
     private var mastodonClientSecret: String?
     private var authSession: ASWebAuthenticationSession?
+    private var passkeyRecommendationWorkItem: DispatchWorkItem?
 
     // Email verification state
     @Published var pendingEmailVerification: String?
@@ -51,6 +54,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         currentUser = user
         authState = .authenticated
         saveAuth(user: user)
+        schedulePasskeyRecommendationIfNeeded(for: user)
 
         Task { @MainActor in
             await LicensingManager.shared.syncEntitlementsFromCurrentUser()
@@ -760,9 +764,63 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     // MARK: - Session Management
 
     func logout() {
+        passkeyRecommendationWorkItem?.cancel()
+        passkeyRecommendationWorkItem = nil
+        passkeyRecommendationPending = false
         currentUser = nil
         authState = .unauthenticated
         clearStoredAuth()
+    }
+
+    private func passkeyRecommendationSuppressed(for user: AuthenticatedUser) -> Bool {
+        let defaults = UserDefaults()
+        return defaults.bool(forKey: "voicelink.passkey.suppressed.user.\(user.id)")
+            || defaults.bool(forKey: "voicelink.passkey.suppressed.identity.\(user.email ?? user.username)")
+    }
+
+    func suppressPasskeyRecommendation(for user: AuthenticatedUser) {
+        let defaults = UserDefaults()
+        defaults.set(true, forKey: "voicelink.passkey.suppressed.user.\(user.id)")
+        defaults.set(true, forKey: "voicelink.passkey.suppressed.identity.\(user.email ?? user.username)")
+        passkeyRecommendationPending = false
+    }
+
+    func clearPasskeyRecommendation() {
+        passkeyRecommendationPending = false
+    }
+
+    private func schedulePasskeyRecommendationIfNeeded(for user: AuthenticatedUser) {
+        passkeyRecommendationWorkItem?.cancel()
+        passkeyRecommendationPending = false
+        guard user.passkey.supported,
+              user.passkey.eligible,
+              !user.passkey.registered,
+              !passkeyRecommendationSuppressed(for: user) else {
+            return
+        }
+
+        let delaySeconds = max(60, user.passkey.recommendedAfterMinutes * 60)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.currentUser?.id == user.id else { return }
+            self.passkeyRecommendationPending = true
+            AccessibilityManager.shared.announceStatus("VoiceLink recommends adding a passkey for faster secure sign-in.")
+            let center = UNUserNotificationCenter.current()
+            center.getNotificationSettings { settings in
+                guard settings.authorizationStatus == .authorized else { return }
+                let content = UNMutableNotificationContent()
+                content.title = "Set up a passkey"
+                content.body = "Add a passkey to your VoiceLink account for faster secure sign-in."
+                content.sound = .default
+                let request = UNNotificationRequest(
+                    identifier: "voicelink.passkey.recommendation.\(user.id)",
+                    content: content,
+                    trigger: nil
+                )
+                center.add(request)
+            }
+        }
+        passkeyRecommendationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delaySeconds), execute: workItem)
     }
 
     // MARK: - Persistence (UserDefaults first, Keychain best-effort/no-UI)
@@ -890,6 +948,15 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         if let entitlements = json["entitlements"] as? [String: Any] {
             user.entitlements = entitlements.mapValues(AnyCodable.init)
         }
+        if let passkey = json["passkey"] as? [String: Any] {
+            user.passkey = AuthenticatedUser.PasskeyState(
+                supported: passkey["supported"] as? Bool ?? false,
+                eligible: passkey["eligible"] as? Bool ?? false,
+                registered: passkey["registered"] as? Bool ?? false,
+                count: passkey["count"] as? Int ?? 0,
+                recommendedAfterMinutes: passkey["recommendedAfterMinutes"] as? Int ?? 10
+            )
+        }
         return user
     }
 
@@ -904,6 +971,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 // MARK: - Models
 
 struct AuthenticatedUser: Codable, Identifiable {
+    struct PasskeyState: Codable {
+        var supported: Bool = false
+        var eligible: Bool = false
+        var registered: Bool = false
+        var count: Int = 0
+        var recommendedAfterMinutes: Int = 10
+    }
+
     let id: String
     let username: String
     let displayName: String
@@ -917,6 +992,7 @@ struct AuthenticatedUser: Codable, Identifiable {
     var gender: String?
     var permissions: [String] = []
     var entitlements: [String: AnyCodable] = [:]
+    var passkey: PasskeyState = PasskeyState()
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0

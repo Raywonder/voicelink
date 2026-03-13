@@ -6936,6 +6936,36 @@ class VoiceLinkLocalServer {
                 methods: availableMethods
             };
         };
+        const describePasskeyState = (user) => {
+            const supported = !!this.modules.twoFactorAuth;
+            if (!supported || !user) {
+                return {
+                    supported,
+                    eligible: false,
+                    registered: false,
+                    count: 0,
+                    recommendedAfterMinutes: 10
+                };
+            }
+
+            const linkedLocalUser = (user.linkedLocalUserId && this.localAuthUsers.get(user.linkedLocalUserId))
+                || (user.canonicalAccountId && this.localAuthUsers.get(user.canonicalAccountId))
+                || findLocalUserByIdentity(user.email || user.username || '');
+            const targetUser = linkedLocalUser || user;
+            const settings = targetUser?.id ? this.modules.twoFactorAuth.getUserSettings(targetUser.id) : null;
+            const credentials = settings?.methods?.passkey?.credentials || [];
+            const registered = credentials.length > 0;
+            const normalizedRole = normalizeUserRole(targetUser?.role || user.role);
+            const eligible = Boolean(targetUser?.id && (targetUser?.email || targetUser?.username) && normalizedRole !== 'guest');
+
+            return {
+                supported,
+                eligible,
+                registered,
+                count: credentials.length,
+                recommendedAfterMinutes: 10
+            };
+        };
         const publicLocalUser = (user) => ({
             id: user.id,
             username: user.username,
@@ -6950,7 +6980,8 @@ class VoiceLinkLocalServer {
             isModerator: normalizeUserRole(user.role) === 'staff',
             isVerified: !!user.isVerified,
             createdAt: user.createdAt,
-            linkedAuthMethods: Array.isArray(user.linkedAuthMethods) ? user.linkedAuthMethods : []
+            linkedAuthMethods: Array.isArray(user.linkedAuthMethods) ? user.linkedAuthMethods : [],
+            passkey: describePasskeyState(user)
         });
 
         // Local credential auth (email + username + password)
@@ -8456,6 +8487,10 @@ class VoiceLinkLocalServer {
                 || Boolean(whmcsConfig.identifier && whmcsConfig.secret)
                 || Boolean(adminBridge.enabled && adminBridge.configPath);
             res.json({
+                passkey: {
+                    supported: !!this.modules.twoFactorAuth,
+                    recommendedAfterMinutes: 10
+                },
                 providers: [
                     { id: 'email', name: 'Sign In', enabled: true, default: true },
                     { id: 'mastodon', name: 'Mastodon', enabled: true, default: false },
