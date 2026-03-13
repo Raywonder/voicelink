@@ -12,6 +12,21 @@ class DatabaseStorageManager {
         return this.deployConfig.get('database') || {};
     }
 
+    getStoragePolicy(kind) {
+        const config = this.getDatabaseConfig();
+        const storage = config?.storage || {};
+        return storage[kind] || storage.defaultMode || 'default';
+    }
+
+    shouldMirror(kind = 'default') {
+        const config = this.getDatabaseConfig();
+        const provider = config?.provider || 'sqlite';
+        const policy = this.getStoragePolicy(kind);
+        if (provider !== 'sqlite') return false;
+        if (!this.sqliteAvailable()) return false;
+        return policy === 'default' || policy === 'database';
+    }
+
     getSqlitePath() {
         const config = this.getDatabaseConfig();
         const configured = config?.sqlite?.path || path.join(this.appRoot, 'data', 'voicelink.db');
@@ -30,7 +45,7 @@ class DatabaseStorageManager {
     runSql(sql) {
         const dbPath = this.getSqlitePath();
         fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-        execFileSync('sqlite3', [dbPath, sql], { stdio: 'pipe' });
+        execFileSync('sqlite3', [dbPath], { input: sql, stdio: ['pipe', 'pipe', 'pipe'] });
         return dbPath;
     }
 
@@ -86,6 +101,29 @@ ON CONFLICT(kind, entry_key) DO UPDATE SET
 `);
     }
 
+    mirrorSnapshot(kind, entryKey, payload, sourceFile = null) {
+        if (!this.shouldMirror(kind)) {
+            return { mirrored: false, reason: 'database mirroring disabled for this kind' };
+        }
+        const dbPath = this.ensureSchema();
+        this.upsertSnapshot(kind, entryKey, payload, sourceFile);
+        this.runSql("INSERT INTO voicelink_meta(key, value, updated_at) VALUES('last_mirror', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP;");
+        return { mirrored: true, dbPath };
+    }
+
+    mirrorJsonFile(kind, entryKey, filePath, fallback = null) {
+        const payload = this.readJson(filePath);
+        return this.mirrorSnapshot(kind, entryKey, payload ?? fallback, filePath);
+    }
+
+    mirrorDirectoryListing(kind, entryKey, dirPath) {
+        const payload = {
+            path: dirPath,
+            files: fs.existsSync(dirPath) ? fs.readdirSync(dirPath).sort() : []
+        };
+        return this.mirrorSnapshot(kind, entryKey, payload, dirPath);
+    }
+
     migrateDefaults() {
         const dbPath = this.ensureSchema();
         const dataDir = path.join(this.appRoot, 'data');
@@ -112,11 +150,13 @@ ON CONFLICT(kind, entry_key) DO UPDATE SET
         const exists = fs.existsSync(dbPath);
         const sizeBytes = exists ? fs.statSync(dbPath).size : 0;
         let lastMigration = null;
+        let lastMirror = null;
         let snapshotCounts = {};
 
         if (exists && this.sqliteAvailable()) {
             try {
                 lastMigration = execFileSync('sqlite3', [dbPath, "SELECT value FROM voicelink_meta WHERE key='last_migration' LIMIT 1;"], { encoding: 'utf8' }).trim() || null;
+                lastMirror = execFileSync('sqlite3', [dbPath, "SELECT value FROM voicelink_meta WHERE key='last_mirror' LIMIT 1;"], { encoding: 'utf8' }).trim() || null;
                 const raw = execFileSync('sqlite3', [dbPath, "SELECT kind || ':' || COUNT(*) FROM voicelink_snapshots GROUP BY kind ORDER BY kind;"], { encoding: 'utf8' }).trim();
                 snapshotCounts = (raw ? raw.split('\n') : []).reduce((acc, line) => {
                     const [kind, count] = line.split(':');
@@ -134,6 +174,7 @@ ON CONFLICT(kind, entry_key) DO UPDATE SET
             exists,
             sizeBytes,
             lastMigration,
+            lastMirror,
             snapshotCounts
         };
     }

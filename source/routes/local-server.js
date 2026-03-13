@@ -35,7 +35,15 @@ const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
 const fileTransferRoutes = require("./file-transfer");
 const execFileAsync = promisify(execFile);
-const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '..') });
+const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') });
+try {
+    if (databaseStorage.sqliteAvailable()) {
+        databaseStorage.ensureSchema();
+        databaseStorage.migrateDefaults();
+    }
+} catch (databaseBootstrapError) {
+    console.warn('[Database] Bootstrap mirror skipped:', databaseBootstrapError.message);
+}
 
 // Stripe integration - lazy loaded if configured
 let stripe = null;
@@ -6531,7 +6539,13 @@ class VoiceLinkLocalServer {
             try {
                 const users = Array.from(this.localAuthUsers.values());
                 const whmcsAliases = Object.fromEntries(Array.from(this.whmcsIdentityAliases.entries()).sort(([a], [b]) => a.localeCompare(b)));
-                fs.writeFileSync(localAuthDataPath, JSON.stringify({ users, whmcsAliases }, null, 2));
+                const payload = { users, whmcsAliases };
+                fs.writeFileSync(localAuthDataPath, JSON.stringify(payload, null, 2));
+                try {
+                    databaseStorage.mirrorJsonFile('accounts', 'local-auth-users', localAuthDataPath, payload);
+                } catch (mirrorError) {
+                    console.warn('[Auth] Database mirror skipped:', mirrorError.message);
+                }
             } catch (error) {
                 console.error('[Auth] Failed to persist local auth users:', error.message);
             }
@@ -14287,6 +14301,11 @@ class VoiceLinkLocalServer {
                 const reports = Array.isArray(existing) ? existing : [];
                 reports.unshift(bugReport);
                 fs.writeFileSync(bugFile, JSON.stringify(reports.slice(0, 1000), null, 2));
+                try {
+                    databaseStorage.mirrorJsonFile('diagnostics', 'bug-reports', bugFile, reports.slice(0, 1000));
+                } catch (mirrorError) {
+                    console.warn('[BugReport] Database mirror skipped:', mirrorError.message);
+                }
                 console.log(
                     `[BugReport] id=${bugReport.id} account=${bugReport.accountEmail || bugReport.displayName || bugReport.username || bugReport.submittedBy || 'anonymous'} client=${bugReport.clientId || 'unknown'} room=${bugReport.currentRoom || 'none'} severity=${bugReport.severity} category=${bugReport.category} title=${bugReport.title}`
                 );
@@ -17003,6 +17022,11 @@ class VoiceLinkLocalServer {
                 JSON.stringify(roomsData, null, 2),
                 'utf8'
             );
+            try {
+                databaseStorage.mirrorJsonFile('rooms', 'rooms', path.join(dataDir, 'rooms.json'), roomsData);
+            } catch (mirrorError) {
+                console.warn('[Rooms] Database mirror skipped:', mirrorError.message);
+            }
             console.log(`[Rooms] Saved ${roomsData.length} rooms to storage`);
         } catch (error) {
             console.error('[Rooms] Failed to save rooms:', error.message);

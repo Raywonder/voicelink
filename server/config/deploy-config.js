@@ -658,6 +658,13 @@ class DeploymentConfig {
             this.config.lastModified = new Date().toISOString();
             const data = JSON.stringify(this.config, null, 2);
             fs.writeFileSync(this.configPath, data, 'utf8');
+            try {
+                const { DatabaseStorageManager } = require('../services/database-storage');
+                const databaseStorage = new DatabaseStorageManager({ deployConfig: this, appRoot: path.join(__dirname, '../..') });
+                databaseStorage.mirrorSnapshot('serverConfig', 'deploy-config', this.config, this.configPath);
+            } catch (mirrorError) {
+                console.warn('[DeployConfig] Database mirror skipped:', mirrorError.message);
+            }
             console.log('[DeployConfig] Saved configuration');
             return true;
         } catch (error) {

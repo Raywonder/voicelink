@@ -13,6 +13,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { deployConfig } = require('../../config/deploy-config');
+const { DatabaseStorageManager } = require('../../services/database-storage');
+const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') });
 
 // Ticket statuses
 const TICKET_STATUS = {
@@ -88,6 +91,11 @@ class SupportTicketSystem {
             tickets: Array.from(this.ticketIndex.values())
         };
         fs.writeFileSync(indexFile, JSON.stringify(data, null, 2));
+        try {
+            databaseStorage.mirrorJsonFile('support', 'ticket-index', indexFile, data);
+        } catch (mirrorError) {
+            console.warn('[Support] Database mirror skipped for ticket index:', mirrorError.message);
+        }
     }
 
     indexByUser(userId, ticketId) {
@@ -111,6 +119,51 @@ class SupportTicketSystem {
         return `TKT-${dateStr}-${random}`;
     }
 
+    normalizeTicketText(value) {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim();
+    }
+
+    findReusableTicket({ userId, userEmail, subject, description }) {
+        const normalizedSubject = this.normalizeTicketText(subject);
+        const normalizedDescription = this.normalizeTicketText(description);
+        const normalizedEmail = String(userEmail || '').trim().toLowerCase();
+        const normalizedUserId = String(userId || '').trim();
+        if (!normalizedSubject && !normalizedDescription) {
+            return null;
+        }
+
+        const candidates = Array.from(this.ticketIndex.values())
+            .filter((entry) => {
+                if (normalizedUserId && String(entry.userId || '').trim() === normalizedUserId) return true;
+                if (normalizedEmail && String(entry.userEmail || '').trim().toLowerCase() === normalizedEmail) return true;
+                return false;
+            })
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+        for (const entry of candidates) {
+            const ticket = this.getTicket(entry.id);
+            if (!ticket) continue;
+            const ticketSubject = this.normalizeTicketText(ticket.subject);
+            const ticketDescription = this.normalizeTicketText(ticket.description);
+            const subjectMatches = normalizedSubject && ticketSubject && (
+                normalizedSubject.includes(ticketSubject)
+                || ticketSubject.includes(normalizedSubject)
+            );
+            const descriptionMatches = normalizedDescription && ticketDescription && (
+                normalizedDescription.includes(ticketDescription)
+                || ticketDescription.includes(normalizedDescription)
+            );
+            if (subjectMatches || descriptionMatches) {
+                return ticket;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Create a new support ticket
      */
@@ -123,8 +176,54 @@ class SupportTicketSystem {
             description,
             category = 'general',
             priority = TICKET_PRIORITY.MEDIUM,
-            attachments = []
+            attachments = [],
+            metadata = {},
+            linkedChatSessionId = null,
+            externalTicket = null,
+            channel = 'voicelink'
         } = data;
+
+        const reusableTicket = this.findReusableTicket({ userId, userEmail, subject, description });
+        if (reusableTicket) {
+            const now = Date.now();
+            const reopening = reusableTicket.status === TICKET_STATUS.CLOSED || reusableTicket.status === TICKET_STATUS.RESOLVED;
+            reusableTicket.userName = userName || reusableTicket.userName;
+            reusableTicket.userEmail = userEmail || reusableTicket.userEmail;
+            reusableTicket.subject = subject || reusableTicket.subject;
+            reusableTicket.description = description || reusableTicket.description;
+            reusableTicket.category = category || reusableTicket.category;
+            reusableTicket.priority = priority || reusableTicket.priority;
+            reusableTicket.channel = channel || reusableTicket.channel;
+            reusableTicket.metadata = {
+                ...(reusableTicket.metadata || {}),
+                ...(metadata || {})
+            };
+            reusableTicket.linkedChatSessionId = linkedChatSessionId || reusableTicket.linkedChatSessionId || null;
+            reusableTicket.externalTicket = externalTicket || reusableTicket.externalTicket || null;
+            reusableTicket.status = reopening ? TICKET_STATUS.OPEN : reusableTicket.status;
+            reusableTicket.updatedAt = now;
+            reusableTicket.closedAt = reopening ? null : reusableTicket.closedAt;
+            reusableTicket.resolvedAt = reopening ? null : reusableTicket.resolvedAt;
+            reusableTicket.messages.push({
+                id: `msg-${now}`,
+                type: 'system',
+                from: 'system',
+                userId,
+                userName,
+                content: reopening
+                    ? 'Ticket reopened from a new support request for the same issue.'
+                    : 'New support request attached to the existing ticket for the same issue.',
+                timestamp: now
+            });
+            this.saveTicket(reusableTicket);
+            return {
+                success: true,
+                reused: true,
+                reopened: reopening,
+                ticketId: reusableTicket.id,
+                ticket: reusableTicket
+            };
+        }
 
         const ticketId = this.generateTicketId();
         const now = Date.now();
@@ -141,6 +240,10 @@ class SupportTicketSystem {
             status: TICKET_STATUS.OPEN,
             assignedTo: null,
             attachments,
+            metadata,
+            linkedChatSessionId,
+            externalTicket,
+            channel,
             messages: [{
                 id: `msg-${now}`,
                 type: 'initial',
@@ -168,6 +271,7 @@ class SupportTicketSystem {
             id: ticketId,
             userId,
             userName,
+            userEmail,
             subject,
             category,
             priority,
@@ -728,7 +832,7 @@ class LiveChatSupport {
     /**
      * User joins support queue
      */
-    joinQueue(userId, userName, issue) {
+    joinQueue(userId, userName, issue, options = {}) {
         const maxQueue = this.config.liveChat?.maxQueueSize || 10;
 
         if (this.chatQueue.length >= maxQueue) {
@@ -742,7 +846,17 @@ class LiveChatSupport {
             id: crypto.randomBytes(8).toString('hex'),
             userId,
             userName,
+            userEmail: options.userEmail || '',
             issue,
+            ticketId: options.ticketId || null,
+            whmcsTicketId: options.whmcsTicketId || null,
+            roomId: options.roomId || null,
+            roomName: options.roomName || null,
+            channel: options.channel || 'voicelink',
+            hiddenRoomId: options.hiddenRoomId || null,
+            supportPinRequired: options.supportPinRequired === true,
+            supportPinValidated: options.supportPinValidated === true,
+            metadata: options.metadata && typeof options.metadata === 'object' ? options.metadata : {},
             joinedAt: Date.now(),
             position: this.chatQueue.length + 1
         };
@@ -781,8 +895,18 @@ class LiveChatSupport {
             id: sessionId,
             userId: queueEntry.userId,
             userName: queueEntry.userName,
+            userEmail: queueEntry.userEmail || '',
             agentId,
             issue: queueEntry.issue,
+            ticketId: queueEntry.ticketId || null,
+            whmcsTicketId: queueEntry.whmcsTicketId || null,
+            roomId: queueEntry.roomId || null,
+            roomName: queueEntry.roomName || null,
+            channel: queueEntry.channel || 'voicelink',
+            hiddenRoomId: queueEntry.hiddenRoomId || null,
+            supportPinRequired: queueEntry.supportPinRequired === true,
+            supportPinValidated: queueEntry.supportPinValidated === true,
+            metadata: queueEntry.metadata && typeof queueEntry.metadata === 'object' ? queueEntry.metadata : {},
             startedAt: Date.now(),
             messages: []
         };
@@ -921,6 +1045,186 @@ class SupportSystemModule {
             config: this.config,
             io: this.io
         });
+
+        this.supportSessions = new Map();
+        this.supportSessionStateFile = path.join(this.dataDir, 'support-sessions.json');
+        this.loadSupportSessions();
+    }
+
+    loadSupportSessions() {
+        try {
+            if (!fs.existsSync(this.supportSessionStateFile)) return;
+            const parsed = JSON.parse(fs.readFileSync(this.supportSessionStateFile, 'utf8'));
+            const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+            for (const session of sessions) {
+                if (!session?.id) continue;
+                this.supportSessions.set(session.id, session);
+            }
+        } catch (error) {
+            console.error('[Support] Failed to load support sessions:', error.message);
+        }
+    }
+
+    saveSupportSessions() {
+        const payload = {
+            updatedAt: Date.now(),
+            sessions: Array.from(this.supportSessions.values())
+        };
+        fs.writeFileSync(this.supportSessionStateFile, JSON.stringify(payload, null, 2));
+        try {
+            databaseStorage.mirrorJsonFile('support', 'support-sessions', this.supportSessionStateFile, payload);
+        } catch (mirrorError) {
+            console.warn('[Support] Database mirror skipped for support sessions:', mirrorError.message);
+        }
+    }
+
+    generateSupportPin(length = 6) {
+        const digits = [];
+        for (let index = 0; index < length; index += 1) {
+            digits.push(String(crypto.randomInt(0, 10)));
+        }
+        return digits.join('');
+    }
+
+    hashSupportPin(pin = '') {
+        return crypto.createHash('sha256').update(String(pin)).digest('hex');
+    }
+
+    createSupportSession(data = {}) {
+        const sessionId = data.id || `support_${crypto.randomBytes(8).toString('hex')}`;
+        const now = Date.now();
+        const supportPin = data.supportPinRequired ? (data.supportPin || this.generateSupportPin()) : null;
+        const session = {
+            id: sessionId,
+            userId: data.userId || '',
+            userName: data.userName || 'Guest',
+            userEmail: data.userEmail || '',
+            issue: data.issue || '',
+            roomId: data.roomId || null,
+            roomName: data.roomName || null,
+            hiddenRoomId: data.hiddenRoomId || null,
+            hiddenRoomName: data.hiddenRoomName || null,
+            ticketId: data.ticketId || null,
+            whmcsTicketId: data.whmcsTicketId || null,
+            whmcsTicketNumber: data.whmcsTicketNumber || null,
+            assignedAgentId: data.assignedAgentId || null,
+            assignedAgentName: data.assignedAgentName || null,
+            status: data.status || 'pending',
+            channel: data.channel || 'voicelink',
+            metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
+            supportPinRequired: data.supportPinRequired === true,
+            supportPinHash: supportPin ? this.hashSupportPin(supportPin) : null,
+            supportPinValidated: data.supportPinRequired === true ? data.supportPinValidated === true : true,
+            pinDelivery: data.pinDelivery || 'none',
+            createdAt: now,
+            updatedAt: now,
+            startedAt: null,
+            endedAt: null,
+            endReason: null,
+            messages: Array.isArray(data.messages) ? data.messages : []
+        };
+
+        this.supportSessions.set(sessionId, session);
+        this.saveSupportSessions();
+
+        return {
+            session,
+            supportPin
+        };
+    }
+
+    getSupportSession(sessionId) {
+        return this.supportSessions.get(sessionId) || null;
+    }
+
+    listSupportSessions(options = {}) {
+        const status = options.status ? String(options.status) : null;
+        const sessions = Array.from(this.supportSessions.values())
+            .filter((session) => !status || session.status === status)
+            .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+        return sessions;
+    }
+
+    updateSupportSession(sessionId, patch = {}) {
+        const existing = this.supportSessions.get(sessionId);
+        if (!existing) {
+            return { success: false, error: 'Support session not found' };
+        }
+
+        const next = {
+            ...existing,
+            ...patch,
+            metadata: {
+                ...(existing.metadata && typeof existing.metadata === 'object' ? existing.metadata : {}),
+                ...(patch.metadata && typeof patch.metadata === 'object' ? patch.metadata : {})
+            },
+            updatedAt: Date.now()
+        };
+        this.supportSessions.set(sessionId, next);
+        this.saveSupportSessions();
+        return { success: true, session: next };
+    }
+
+    assignSupportSession(sessionId, agent = {}) {
+        const existing = this.getSupportSession(sessionId);
+        if (!existing) {
+            return { success: false, error: 'Support session not found' };
+        }
+        const startedAt = existing.startedAt || Date.now();
+        return this.updateSupportSession(sessionId, {
+            assignedAgentId: agent.id || existing.assignedAgentId,
+            assignedAgentName: agent.name || existing.assignedAgentName,
+            status: 'active',
+            startedAt
+        });
+    }
+
+    validateSupportPin(sessionId, pin = '') {
+        const existing = this.getSupportSession(sessionId);
+        if (!existing) {
+            return { success: false, error: 'Support session not found' };
+        }
+        if (!existing.supportPinRequired) {
+            return { success: true, session: existing, validated: true };
+        }
+        const valid = this.hashSupportPin(pin) === existing.supportPinHash;
+        if (!valid) {
+            return { success: false, error: 'Invalid support PIN' };
+        }
+        return this.updateSupportSession(sessionId, {
+            supportPinValidated: true
+        });
+    }
+
+    appendSupportSessionMessage(sessionId, message = {}) {
+        const existing = this.getSupportSession(sessionId);
+        if (!existing) {
+            return { success: false, error: 'Support session not found' };
+        }
+        const entry = {
+            id: message.id || `support-msg-${Date.now()}`,
+            type: message.type || 'message',
+            from: message.from || 'user',
+            userId: message.userId || '',
+            userName: message.userName || 'User',
+            content: message.content || '',
+            timestamp: message.timestamp || Date.now(),
+            metadata: message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+        };
+        const messages = Array.isArray(existing.messages) ? [...existing.messages, entry] : [entry];
+        return this.updateSupportSession(sessionId, { messages });
+    }
+
+    endSupportSession(sessionId, reason = 'completed', status = 'closed') {
+        const existing = this.getSupportSession(sessionId);
+        if (!existing) {
+            return { success: false, error: 'Support session not found' };
+        }
+        return this.updateSupportSession(sessionId, {
+            status,
+            endedAt: Date.now(),
+            endReason: reason
+        });
     }
 
     /**
@@ -929,7 +1233,12 @@ class SupportSystemModule {
     getStatistics() {
         return {
             tickets: this.tickets.getStatistics(),
-            liveChat: this.liveChat.getQueueStatus()
+            liveChat: this.liveChat.getQueueStatus(),
+            supportSessions: {
+                total: this.supportSessions.size,
+                active: Array.from(this.supportSessions.values()).filter((session) => session.status === 'active').length,
+                pending: Array.from(this.supportSessions.values()).filter((session) => session.status === 'pending').length
+            }
         };
     }
 

@@ -7,6 +7,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const { URL } = require('url');
+const { deployConfig } = require('../config/deploy-config');
+const { DatabaseStorageManager } = require('../services/database-storage');
+
+const MODULE_BUNDLE_API_PATH = '/api/modules';
+const MODULE_SYNC_TIMEOUT_MS = 10000;
+const MODULE_FILE_SIZE_LIMIT_BYTES = 2 * 1024 * 1024;
+const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') });
 
 // Module categories
 const CATEGORIES = {
@@ -19,13 +27,29 @@ const CATEGORIES = {
 };
 
 const CORE_MODULE_IDS = new Set([
-    'media-rooms',
     'updater',
     'internal-scheduler'
 ]);
 
+const REQUIRED_MODULE_IDS = new Set([
+    'updater',
+    'internal-scheduler',
+    'copyparty-file-transfer',
+    'deployment-manager',
+    'two-factor-auth',
+    'support-system',
+    'vm-manager',
+    'whmcs-integration'
+]);
+
 const DEFAULT_INSTALL_MODULE_IDS = new Set([
-    'deployment-manager'
+    'copyparty-file-transfer',
+    'deployment-manager',
+    'media-rooms',
+    'two-factor-auth',
+    'support-system',
+    'vm-manager',
+    'whmcs-integration'
 ]);
 
 // Available modules registry
@@ -390,6 +414,36 @@ const AVAILABLE_MODULES = {
         }
     },
 
+    'copyparty-file-transfer': {
+        id: 'copyparty-file-transfer',
+        name: 'CopyParty File Transfers',
+        description: 'Default HTTPS file transfer provider with resumable link sharing, pause/resume controls, and transfer reminders',
+        version: '1.0.0',
+        category: CATEGORIES.COMMUNICATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'CopyParty-backed HTTPS file share links',
+            'Pause and resume transfer workflows',
+            'Pending transfer reminders',
+            'Protected links for direct and room sharing'
+        ],
+        defaultConfig: {
+            enabled: true,
+            provider: 'copyparty',
+            allowFallbackProviders: true,
+            resumableTransfers: true,
+            reminders: {
+                enabled: true,
+                firstReminderMinutes: 45,
+                repeatEveryMinutes: 120
+            }
+        }
+    },
+
     'deployment-manager': {
         id: 'deployment-manager',
         name: 'Deployment Manager',
@@ -423,7 +477,7 @@ const AVAILABLE_MODULES = {
     'media-rooms': {
         id: 'media-rooms',
         name: 'Media Rooms',
-        description: 'Core room media state, now-playing metadata, and playback coordination',
+        description: 'Optional room media state, now-playing metadata, and playback coordination when server-side streaming is enabled',
         version: '1.0.0',
         category: CATEGORIES.MEDIA,
         author: 'VoiceLink',
@@ -431,7 +485,6 @@ const AVAILABLE_MODULES = {
         popular: true,
         dependencies: [],
         configurable: true,
-        core: true,
         features: [
             'Per-room now playing state',
             'Background media routing',
@@ -439,7 +492,7 @@ const AVAILABLE_MODULES = {
             'Room media coordination'
         ],
         defaultConfig: {
-            enabled: true,
+            enabled: false,
             watchdog: {
                 enabled: false,
                 intervalMinutes: 5,
@@ -534,6 +587,11 @@ class ModuleRegistry {
                 fs.mkdirSync(this.configDir, { recursive: true });
             }
             fs.writeFileSync(this.modulesConfigFile, JSON.stringify(this.installedModules, null, 2));
+            try {
+                databaseStorage.mirrorJsonFile('modules', 'modules-config', this.modulesConfigFile, this.installedModules);
+            } catch (mirrorError) {
+                console.warn('[ModuleRegistry] Database mirror skipped:', mirrorError.message);
+            }
         } catch (e) {
             console.error('[ModuleRegistry] Error saving modules config:', e.message);
         }
@@ -578,14 +636,31 @@ class ModuleRegistry {
         for (const moduleId of DEFAULT_INSTALL_MODULE_IDS) {
             const module = AVAILABLE_MODULES[moduleId];
             if (!module) continue;
-            if (this.installedModules.installed[moduleId]) continue;
+            const required = REQUIRED_MODULE_IDS.has(moduleId);
 
-            this.installedModules.installed[moduleId] = {
-                installedAt: new Date().toISOString(),
-                config: { ...module.defaultConfig }
-            };
-            this.installedModules.installOrder.push(moduleId);
-            changed = true;
+            if (!this.installedModules.installed[moduleId]) {
+                this.installedModules.installed[moduleId] = {
+                    installedAt: new Date().toISOString(),
+                    config: { ...module.defaultConfig, enabled: required ? true : (module.defaultConfig?.enabled ?? false) }
+                };
+                this.installedModules.installOrder.push(moduleId);
+                changed = true;
+                continue;
+            }
+
+            if (required && this.installedModules.installed[moduleId]?.config?.enabled !== true) {
+                this.installedModules.installed[moduleId].config = {
+                    ...module.defaultConfig,
+                    ...this.installedModules.installed[moduleId].config,
+                    enabled: true
+                };
+                changed = true;
+            }
+
+            if (!this.installedModules.installOrder.includes(moduleId)) {
+                this.installedModules.installOrder.push(moduleId);
+                changed = true;
+            }
         }
 
         if (changed) {
@@ -609,6 +684,7 @@ class ModuleRegistry {
         // Add installed status
         modules = modules.map(m => ({
             ...m,
+            required: REQUIRED_MODULE_IDS.has(m.id),
             installed: CORE_MODULE_IDS.has(m.id) || !!this.installedModules.installed[m.id],
             config: this.installedModules.installed[m.id]?.config || m.defaultConfig
         }));
@@ -660,6 +736,7 @@ class ModuleRegistry {
                 return {
                     ...module,
                     ...installed,
+                    required: REQUIRED_MODULE_IDS.has(id),
                     enabled: installed?.config?.enabled ?? module.defaultConfig?.enabled ?? false,
                     installed: true
                 };
@@ -676,6 +753,7 @@ class ModuleRegistry {
 
         return {
             ...module,
+            required: REQUIRED_MODULE_IDS.has(moduleId),
             installed: !!this.installedModules.installed[moduleId],
             config: this.installedModules.installed[moduleId]?.config || module.defaultConfig
         };
@@ -717,6 +795,10 @@ class ModuleRegistry {
      * Uninstall a module
      */
     uninstallModule(moduleId) {
+        if (REQUIRED_MODULE_IDS.has(moduleId)) {
+            return { success: false, error: 'Required modules cannot be removed' };
+        }
+
         if (!this.installedModules.installed[moduleId]) {
             return { success: false, error: 'Module not installed' };
         }
@@ -757,6 +839,9 @@ class ModuleRegistry {
      * Enable/disable a module
      */
     setModuleEnabled(moduleId, enabled) {
+        if (REQUIRED_MODULE_IDS.has(moduleId) && !enabled) {
+            return { success: false, error: 'Required modules cannot be disabled' };
+        }
         return this.updateModuleConfig(moduleId, { enabled });
     }
 
@@ -766,6 +851,205 @@ class ModuleRegistry {
     isModuleEnabled(moduleId) {
         const installed = this.installedModules.installed[moduleId];
         return installed?.config?.enabled || false;
+    }
+
+    getModuleDirectory(moduleId) {
+        if (!moduleId) return null;
+        const moduleDir = path.join(__dirname, moduleId);
+        if (!fs.existsSync(moduleDir)) return null;
+        if (!fs.statSync(moduleDir).isDirectory()) return null;
+        return moduleDir;
+    }
+
+    buildModuleBundle(moduleId) {
+        const moduleDir = this.getModuleDirectory(moduleId);
+        if (!moduleDir) {
+            return { success: false, error: `Module files not found for ${moduleId}` };
+        }
+
+        const files = [];
+        const walk = (dir, relativeBase = '') => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.DS_Store') {
+                    continue;
+                }
+                const absolutePath = path.join(dir, entry.name);
+                const relativePath = path.posix.join(relativeBase, entry.name);
+                if (entry.isDirectory()) {
+                    walk(absolutePath, relativePath);
+                    continue;
+                }
+                if (!entry.isFile()) {
+                    continue;
+                }
+                const stat = fs.statSync(absolutePath);
+                if (stat.size > MODULE_FILE_SIZE_LIMIT_BYTES) {
+                    continue;
+                }
+                const raw = fs.readFileSync(absolutePath);
+                files.push({
+                    path: relativePath,
+                    encoding: 'base64',
+                    content: raw.toString('base64'),
+                    size: stat.size
+                });
+            }
+        };
+        walk(moduleDir);
+
+        if (!files.length) {
+            return { success: false, error: `No module files found for ${moduleId}` };
+        }
+
+        return {
+            success: true,
+            bundle: {
+                moduleId,
+                generatedAt: new Date().toISOString(),
+                files
+            }
+        };
+    }
+
+    installModuleBundle(moduleId, bundle, metadata = {}) {
+        if (!bundle || typeof bundle !== 'object') {
+            return { success: false, error: 'Invalid module bundle payload' };
+        }
+        const files = Array.isArray(bundle.files) ? bundle.files : [];
+        if (!files.length) {
+            return { success: false, error: 'Module bundle is empty' };
+        }
+
+        const moduleDir = path.join(__dirname, moduleId);
+        fs.mkdirSync(moduleDir, { recursive: true });
+
+        let written = 0;
+        for (const file of files) {
+            if (!file || typeof file !== 'object' || typeof file.path !== 'string') {
+                continue;
+            }
+            const cleanPath = file.path.replace(/\\/g, '/').replace(/^\/+/, '');
+            if (!cleanPath || cleanPath.includes('..')) {
+                continue;
+            }
+            const absolutePath = path.join(moduleDir, cleanPath);
+            const insideModuleDir = absolutePath.startsWith(moduleDir + path.sep) || absolutePath === moduleDir;
+            if (!insideModuleDir) {
+                continue;
+            }
+            fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+            const encoding = String(file.encoding || '').toLowerCase();
+            if (encoding === 'base64') {
+                fs.writeFileSync(absolutePath, Buffer.from(String(file.content || ''), 'base64'));
+            } else {
+                fs.writeFileSync(absolutePath, String(file.content || ''), 'utf8');
+            }
+            written += 1;
+        }
+
+        if (!written) {
+            return { success: false, error: 'No valid files written from module bundle' };
+        }
+
+        const knownModule = AVAILABLE_MODULES[moduleId];
+        if (knownModule && !this.installedModules.installed[moduleId]) {
+            this.installedModules.installed[moduleId] = {
+                installedAt: new Date().toISOString(),
+                config: { ...knownModule.defaultConfig, enabled: true },
+                syncedFrom: metadata.sourceUrl || null,
+                syncedAt: new Date().toISOString()
+            };
+        } else if (this.installedModules.installed[moduleId]) {
+            this.installedModules.installed[moduleId].syncedFrom = metadata.sourceUrl || this.installedModules.installed[moduleId].syncedFrom || null;
+            this.installedModules.installed[moduleId].syncedAt = new Date().toISOString();
+        }
+
+        if (!this.installedModules.installOrder.includes(moduleId)) {
+            this.installedModules.installOrder.push(moduleId);
+        }
+        this.saveInstalledModules();
+
+        return { success: true, moduleId, filesWritten: written, sourceUrl: metadata.sourceUrl || null };
+    }
+
+    static normalizeSourceUrls(sources = []) {
+        const out = [];
+        const seen = new Set();
+        for (const source of sources) {
+            const raw = typeof source === 'string'
+                ? source
+                : (source && typeof source.url === 'string' ? source.url : '');
+            if (!raw) continue;
+            const candidate = raw.trim();
+            if (!candidate) continue;
+            const withProtocol = candidate.startsWith('http://') || candidate.startsWith('https://')
+                ? candidate
+                : `https://${candidate}`;
+            try {
+                const normalized = new URL(withProtocol).toString().replace(/\/+$/, '');
+                if (seen.has(normalized)) continue;
+                seen.add(normalized);
+                out.push(normalized);
+            } catch {
+                continue;
+            }
+        }
+        return out;
+    }
+
+    async syncModuleFromNetwork(moduleId, options = {}) {
+        const sources = ModuleRegistry.normalizeSourceUrls(options.sources || []);
+        const timeoutMs = Number(options.timeoutMs || MODULE_SYNC_TIMEOUT_MS);
+        const adminKey = typeof options.adminKey === 'string' ? options.adminKey.trim() : '';
+        if (!sources.length) {
+            return { success: false, error: 'No module sources provided' };
+        }
+
+        const failures = [];
+        for (const baseUrl of sources) {
+            const requestUrl = `${baseUrl}${MODULE_BUNDLE_API_PATH}/${encodeURIComponent(moduleId)}/bundle`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(requestUrl, {
+                    method: 'GET',
+                    headers: adminKey ? { 'x-admin-key': adminKey } : undefined,
+                    signal: controller.signal
+                });
+                if (!response.ok) {
+                    failures.push(`${requestUrl} -> HTTP ${response.status}`);
+                    continue;
+                }
+                const payload = await response.json().catch(() => null);
+                const bundle = payload?.bundle || (payload?.files ? payload : null);
+                if (!bundle || !Array.isArray(bundle.files)) {
+                    failures.push(`${requestUrl} -> invalid bundle payload`);
+                    continue;
+                }
+                const installResult = this.installModuleBundle(moduleId, bundle, { sourceUrl: baseUrl });
+                if (installResult.success) {
+                    console.log(`[ModuleRegistry] Synced module "${moduleId}" from ${baseUrl}`);
+                    return {
+                        success: true,
+                        moduleId,
+                        sourceUrl: baseUrl,
+                        filesWritten: installResult.filesWritten
+                    };
+                }
+                failures.push(`${requestUrl} -> ${installResult.error || 'install failed'}`);
+            } catch (error) {
+                failures.push(`${requestUrl} -> ${error.message}`);
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
+
+        return {
+            success: false,
+            error: `Unable to sync module "${moduleId}" from configured sources`,
+            failures
+        };
     }
 
     /**
