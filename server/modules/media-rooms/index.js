@@ -395,6 +395,7 @@ class MediaRoomsModule {
         const state = this.roomMediaState.get(roomId) || {
             type: 'standard',
             autoPlay: false,
+            mediaEnabled: true,
             currentMedia: null,
             queue: [],
             audioDescTrack: null,
@@ -415,6 +416,7 @@ class MediaRoomsModule {
         return this.roomMediaState.get(roomId) || {
             type: 'standard',
             autoPlay: false,
+            mediaEnabled: true,
             currentMedia: null,
             queue: [],
             audioDescTrack: null,
@@ -480,6 +482,7 @@ class MediaRoomsModule {
     addToQueue(roomId, item) {
         const state = this.roomMediaState.get(roomId) || {
             type: 'standard',
+            mediaEnabled: true,
             queue: []
         };
 
@@ -583,6 +586,13 @@ class MediaRoomsModule {
      */
     getNowPlaying(roomId) {
         const state = this.roomMediaState.get(roomId);
+        if (state?.mediaEnabled === false) {
+            return {
+                playing: false,
+                disabled: true,
+                message: 'Room media is disabled'
+            };
+        }
         if (!state || !state.currentMedia) {
             return {
                 playing: false,
@@ -643,6 +653,7 @@ class MediaRoomsModule {
      */
     setPlaybackMode(roomId, mode, options = {}) {
         const state = this.roomMediaState.get(roomId) || {};
+        if (state.mediaEnabled === undefined) state.mediaEnabled = true;
 
         state.playbackMode = mode;
         state.allowOnDemand = options.allowOnDemand || false;
@@ -670,6 +681,7 @@ class MediaRoomsModule {
      */
     startScheduledPlayback(roomId, playlist, options = {}) {
         const state = this.roomMediaState.get(roomId) || {};
+        if (state.mediaEnabled === undefined) state.mediaEnabled = true;
 
         // Calculate where we should be in the playlist based on real time
         const totalDuration = playlist.reduce((sum, item) => sum + (item.duration || 0), 0);
@@ -695,6 +707,7 @@ class MediaRoomsModule {
         }
 
         state.playbackMode = 'scheduled';
+        state.mediaEnabled = true;
         state.currentMedia = playlist[currentIndex];
         state.playbackStartedAt = now - positionInMedia;
         state.playlist = playlist;
@@ -733,6 +746,7 @@ class MediaRoomsModule {
      */
     setCurrentMedia(roomId, media) {
         const state = this.roomMediaState.get(roomId) || {};
+        if (state.mediaEnabled === undefined) state.mediaEnabled = true;
 
         // Calculate duration - prefer direct duration, fall back to Jellyfin runTimeTicks
         let duration = media.duration || 0;
@@ -759,6 +773,7 @@ class MediaRoomsModule {
             genre: media.genres?.join(', ') || media.genre,
             runtime: media.runtime
         };
+        state.mediaEnabled = true;
         state.playbackStartedAt = Date.now();
 
         this.roomMediaState.set(roomId, state);
@@ -786,6 +801,7 @@ class MediaRoomsModule {
             playbackMode: state?.playbackMode || 'scheduled',
             allowOnDemand: this.allowsOnDemand(roomId),
             queueLength: state?.queue?.length || 0,
+            mediaEnabled: state?.mediaEnabled !== false,
             audioDescriptionAvailable: typeConfig.audioDescriptionEnabled,
             audioDescriptionEnabled: state?.audioDescTrack?.enabled || false,
             controlsConfig: {
@@ -793,6 +809,33 @@ class MediaRoomsModule {
                 autoPlay: typeConfig.autoPlay
             }
         };
+    }
+
+    isRoomMediaEnabled(roomId) {
+        const state = this.roomMediaState.get(roomId);
+        return state?.mediaEnabled !== false;
+    }
+
+    setRoomMediaEnabled(roomId, enabled) {
+        const state = this.roomMediaState.get(roomId) || {
+            type: 'standard',
+            autoPlay: false,
+            mediaEnabled: true,
+            currentMedia: null,
+            queue: [],
+            audioDescTrack: null,
+            lastIntro: null
+        };
+
+        state.mediaEnabled = enabled !== false;
+        if (state.mediaEnabled === false) {
+            state.currentMedia = null;
+            state.playbackStartedAt = null;
+        }
+
+        this.roomMediaState.set(roomId, state);
+        this.saveState();
+        return state;
     }
 }
 

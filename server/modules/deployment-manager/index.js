@@ -23,6 +23,7 @@ class DeploymentManagerModule {
         }
 
         this.watchdogStateFile = path.join(this.dataDir, 'watchdog-state.json');
+        this.historyFile = path.join(this.dataDir, 'deployment-history.json');
     }
 
     getStatus() {
@@ -35,8 +36,41 @@ class DeploymentManagerModule {
             supportedTransports: this.getSupportedTransports(),
             mailConfigured: !!this.mailer,
             defaultOwnerEmailTemplateEnabled: this.config.emailOwner?.enabled !== false,
-            watchdog
+            watchdog,
+            recentActions: this.getActionHistory(10)
         };
+    }
+
+    getActionHistory(limit = 50) {
+        try {
+            if (!fs.existsSync(this.historyFile)) return [];
+            const parsed = JSON.parse(fs.readFileSync(this.historyFile, 'utf8'));
+            const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+            return actions.slice(0, Math.max(1, Number(limit) || 50));
+        } catch {
+            return [];
+        }
+    }
+
+    recordDeploymentAction(action = {}) {
+        const nextEntry = {
+            id: `action_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+            at: new Date().toISOString(),
+            ...action
+        };
+        let actions = [];
+        try {
+            if (fs.existsSync(this.historyFile)) {
+                const parsed = JSON.parse(fs.readFileSync(this.historyFile, 'utf8'));
+                actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+            }
+        } catch {
+            actions = [];
+        }
+        actions.unshift(nextEntry);
+        if (actions.length > 500) actions = actions.slice(0, 500);
+        fs.writeFileSync(this.historyFile, JSON.stringify({ actions }, null, 2), 'utf8');
+        return nextEntry;
     }
 
     loadWatchdogState() {
@@ -344,10 +378,14 @@ class DeploymentManagerModule {
             const currentTrusted = Array.isArray(mergedConfig.federation?.trustedServers)
                 ? mergedConfig.federation.trustedServers
                 : [];
+            const primaryServerUrl = this.deployConfig?.get?.('serverPolicies', 'primaryServerUrl')
+                || this.deployConfig?.get?.('server', 'publicUrl')
+                || 'https://voicelink.devinecreations.net';
             mergedConfig.federation = {
                 ...(mergedConfig.federation || {}),
                 enabled: true,
                 trustedServers: Array.from(new Set([
+                    primaryServerUrl,
                     ...currentTrusted,
                     ...trustedServers
                 ].filter(Boolean)))
@@ -417,6 +455,8 @@ class DeploymentManagerModule {
         const remoteUrl = this.buildTransportUrl(target);
         const args = ['--fail', '--silent', '--show-error', '--upload-file', zipPath];
         if (target.username) args.push('--user', `${target.username}:${target.password || ''}`);
+        if (target.privateKeyPath) args.push('--key', String(target.privateKeyPath));
+        if (target.privateKeyPassphrase) args.push('--pass', String(target.privateKeyPassphrase));
         if (target.method && ['POST', 'PUT'].includes(String(target.method).toUpperCase())) {
             args.push('-X', String(target.method).toUpperCase());
         }
@@ -448,6 +488,42 @@ class DeploymentManagerModule {
         const portPart = target.port ? `:${Number(target.port)}` : '';
         const pathPart = remotePath ? `/${remotePath}` : '';
         return `${scheme}://${host}${portPart}${pathPart}`;
+    }
+
+    hasUploadCredentials(target = {}) {
+        const hasUserPass = !!String(target.username || '').trim() && (target.password !== undefined);
+        const hasKeyAuth = !!String(target.privateKeyPath || '').trim();
+        const hasUploadUrl = !!String(target.uploadUrl || '').trim();
+        return hasUserPass || hasKeyAuth || hasUploadUrl;
+    }
+
+    hasBootstrapCredentials(target = {}) {
+        const hasApiToken = !!String(target.apiToken || '').trim();
+        const hasSharedSecret = !!String(target.sharedSecret || '').trim();
+        const hasBasicAuth = !!String(target.username || '').trim() && (target.password !== undefined);
+        return hasApiToken || hasSharedSecret || hasBasicAuth;
+    }
+
+    validateDeploymentTarget(target = {}, options = {}) {
+        const {
+            requireRemoteCredentials = false,
+            requireBootstrapCredentials = false
+        } = options;
+
+        const transport = String(target.transport || '').trim().toLowerCase();
+        if (!['sftp', 'smb', 'http', 'https'].includes(transport)) {
+            return { ok: false, error: 'Unsupported transport' };
+        }
+
+        if (requireRemoteCredentials && !this.hasUploadCredentials(target)) {
+            return { ok: false, error: 'Missing remote credentials. Provide SFTP/SSH details (user+password or SSH key) or upload URL.' };
+        }
+
+        if (requireBootstrapCredentials && !this.hasBootstrapCredentials(target)) {
+            return { ok: false, error: 'Missing API bootstrap credentials. Provide apiToken, sharedSecret, or API basic auth credentials.' };
+        }
+
+        return { ok: true };
     }
 
     async bootstrapRemoteInstall(target = {}, deployConfigPayload = {}) {

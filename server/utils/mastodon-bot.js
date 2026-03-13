@@ -21,6 +21,7 @@ class MastodonBotManager {
         this.configPath = path.join(__dirname, '..', '..', 'config', 'mastodon-bots.json');
         this.adminUsers = new Set(); // Mastodon handles of admin users
         this.pollingIntervals = new Map();
+        this.recentNotificationIds = new Map(); // instance -> Set(notificationId)
 
         // Default bot configurations
         this.defaultInstances = [
@@ -85,6 +86,7 @@ class MastodonBotManager {
                         instance: bot.instance,
                         accessToken: bot.accessToken,
                         username: bot.username,
+                        accountId: bot.accountId || null,
                         enabled: bot.enabled !== false,
                         lastNotificationId: bot.lastNotificationId || null
                     });
@@ -146,6 +148,7 @@ class MastodonBotManager {
             const bot = {
                 instance: instanceUrl,
                 accessToken: accessToken,
+                accountId: account.id || null,
                 username: account.username,
                 displayName: account.display_name,
                 enabled: true
@@ -905,14 +908,29 @@ class MastodonBotManager {
             if (!response.ok) return;
 
             const notifications = await response.json();
+            const processedSet = this.recentNotificationIds.get(bot.instance) || new Set();
 
             // Process in reverse order (oldest first)
             for (const notif of notifications.reverse()) {
                 if (notif.type !== 'mention') continue;
+                if (!notif.id || processedSet.has(notif.id)) continue;
 
                 const status = notif.status;
+                if (!status) {
+                    processedSet.add(notif.id);
+                    continue;
+                }
                 const content = this.stripHtml(status.content);
                 const userHandle = `@${notif.account.acct}`;
+
+                // Ignore mentions from this bot account (or any account matching bot username).
+                const actorAcct = String(notif.account?.acct || '').toLowerCase();
+                const actorUsername = actorAcct.split('@')[0];
+                const botUsername = String(bot.username || '').toLowerCase();
+                if ((bot.accountId && notif.account?.id === bot.accountId) || (actorUsername && actorUsername === botUsername)) {
+                    processedSet.add(notif.id);
+                    continue;
+                }
 
                 // Parse command
                 const command = this.parseCommand(content);
@@ -932,7 +950,18 @@ class MastodonBotManager {
 
                 // Update last notification ID
                 bot.lastNotificationId = notif.id;
+                processedSet.add(notif.id);
+                if (processedSet.size > 250) {
+                    const toDrop = processedSet.size - 250;
+                    let dropped = 0;
+                    for (const id of processedSet) {
+                        processedSet.delete(id);
+                        dropped += 1;
+                        if (dropped >= toDrop) break;
+                    }
+                }
             }
+            this.recentNotificationIds.set(bot.instance, processedSet);
 
             // Save updated config
             if (notifications.length > 0) {

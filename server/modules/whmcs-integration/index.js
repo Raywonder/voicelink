@@ -219,6 +219,95 @@ class WHMCSIntegrationModule {
         }
     }
 
+    // ==========================================
+    // Support Ticket Integration
+    // ==========================================
+
+    async openSupportTicket(data = {}) {
+        const payload = {
+            clientid: data.clientId || '',
+            deptid: data.departmentId || '',
+            subject: data.subject || 'VoiceLink Support Request',
+            message: data.message || data.description || '',
+            priority: data.priority || 'Medium',
+            name: data.name || '',
+            email: data.email || ''
+        };
+
+        Object.keys(payload).forEach((key) => {
+            if (payload[key] === '' || payload[key] == null) {
+                delete payload[key];
+            }
+        });
+
+        const result = await this.apiRequest('OpenTicket', payload);
+        return {
+            success: true,
+            raw: result,
+            ticketId: result.ticketid || result.id || null,
+            ticketNumber: result.tid || result.ticket || result.ticketno || null,
+            departmentId: result.deptid || payload.deptid || null,
+            thankYouUrl: this.getSupportThankYouUrl()
+        };
+    }
+
+    getSupportThankYouUrl() {
+        if (this.config.supportThankYouUrl) {
+            return this.config.supportThankYouUrl;
+        }
+        if (!this.whmcsUrl) {
+            return null;
+        }
+        return new URL('/supporttickets.php', this.whmcsUrl).toString();
+    }
+
+    async addTicketReply(ticketId, data = {}) {
+        const result = await this.apiRequest('AddTicketReply', {
+            ticketid: ticketId,
+            message: data.message || '',
+            clientid: data.clientId || '',
+            adminusername: data.adminUsername || '',
+            name: data.name || '',
+            email: data.email || ''
+        });
+        return {
+            success: true,
+            raw: result
+        };
+    }
+
+    async addTicketNote(ticketId, note = '') {
+        const result = await this.apiRequest('AddTicketNote', {
+            ticketid: ticketId,
+            message: note
+        });
+        return {
+            success: true,
+            raw: result,
+            noteId: result.noteid || null
+        };
+    }
+
+    async updateTicketStatus(ticketId, status) {
+        const result = await this.apiRequest('UpdateTicket', {
+            ticketid: ticketId,
+            status
+        });
+        return {
+            success: true,
+            raw: result
+        };
+    }
+
+    async getSupportStatuses() {
+        const result = await this.apiRequest('GetSupportStatuses');
+        return {
+            success: true,
+            raw: result,
+            statuses: result.statuses?.status || result.supportstatuses?.status || []
+        };
+    }
+
     /**
      * Find WHMCS service by VM name
      */

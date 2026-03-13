@@ -30,6 +30,8 @@ class VMManagerModule {
         // Tracked VMs
         this.trackedVMs = new Map();
         this.vmAssignments = new Map(); // vmId -> { userId, moduleId, serviceId }
+        this.lastListErrorSignature = '';
+        this.lastListErrorAt = 0;
 
         // Initialize
         if (!fs.existsSync(this.dataDir)) {
@@ -90,15 +92,35 @@ class VMManagerModule {
                 let responseData = '';
                 res.on('data', chunk => responseData += chunk);
                 res.on('end', () => {
+                    const rawBody = String(responseData || '');
+                    const body = rawBody.trim();
+                    const statusCode = Number(res.statusCode || 0);
+                    const contentType = String(res.headers['content-type'] || '').toLowerCase();
+
+                    if (statusCode >= 400) {
+                        const summary = body
+                            ? body.replace(/\s+/g, ' ').slice(0, 240)
+                            : 'empty response body';
+                        reject(new Error(`HTTP ${statusCode} from VM manager: ${summary}`));
+                        return;
+                    }
+
+                    if (!body) {
+                        resolve({ success: true });
+                        return;
+                    }
+
                     try {
-                        const json = JSON.parse(responseData);
+                        const json = JSON.parse(body);
                         if (json.success === false) {
                             reject(new Error(json.error || 'API request failed'));
                         } else {
                             resolve(json);
                         }
                     } catch (e) {
-                        reject(new Error('Invalid JSON response'));
+                        const summary = body.replace(/\s+/g, ' ').slice(0, 240);
+                        const typeLabel = contentType || 'unknown content-type';
+                        reject(new Error(`Invalid JSON response (${typeLabel}): ${summary}`));
                     }
                 });
             });
@@ -122,9 +144,20 @@ class VMManagerModule {
     async listVMs() {
         try {
             const result = await this.apiRequest('GET', '/api/vms');
-            return result.vms || [];
+            if (Array.isArray(result)) return result;
+            if (Array.isArray(result?.vms)) return result.vms;
+            if (Array.isArray(result?.data)) return result.data;
+            return [];
         } catch (error) {
-            console.error('[VM Manager] List VMs error:', error.message);
+            const message = String(error?.message || 'Unknown error');
+            const now = Date.now();
+            const signature = `listVMs:${message}`;
+            const shouldLog = this.lastListErrorSignature !== signature || (now - this.lastListErrorAt) > (10 * 60 * 1000);
+            if (shouldLog) {
+                console.error('[VM Manager] List VMs error:', message);
+                this.lastListErrorSignature = signature;
+                this.lastListErrorAt = now;
+            }
             return [];
         }
     }
