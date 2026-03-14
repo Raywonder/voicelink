@@ -1,13 +1,16 @@
-VoiceLink TestFlight Build 27
+VoiceLink TestFlight Build 28
+
+This is a very important build to test.
 
 Primary focus for this build:
+- Join a room and confirm audio starts cleanly instead of buffering, chopping, or staying silent.
+- Watch device performance while opening the app and joining a room, including heat, battery drain, and general responsiveness.
+- Confirm microphone audio works after joining and that preview audio stops cleanly when the room opens.
 - Sign in with a normal VoiceLink account and confirm login stays on VoiceLink's internal auth path.
-- Open rooms from the Main tab and confirm the app does not crash.
-- Confirm room audio can be heard and microphone audio works after joining.
-- Test preview audio before joining and confirm it stops cleanly when the room opens.
-- With VoiceOver enabled, confirm room rows expose useful actions like Join, Details, Preview, and Share.
-- Confirm the app uses the two-tab layout: Main and Settings.
-- Confirm direct messages and profile actions still work from the current UI.
+- Join as a guest with a typed name and confirm the room opens correctly.
+- Confirm the app still uses the two-tab layout: Main and Settings.
+- Confirm the Profile sheet shows signed-in account state for logged-in users and Sign In / Device Pair actions for guests.
+- Confirm room activity and people lists update from the current room.
 - Open Support from Settings and confirm it goes to VoiceLink internal support first while WHMCS remains unavailable.
 
 Also verify:
@@ -15,10 +18,12 @@ Also verify:
 - Privacy, terms, and support pages load from the public VoiceLink site.
 - Guests do not see admin-only controls.
 - Returning to the app after backgrounding does not leave it stuck or blank.
+- If audio fails, include whether it buffered forever, chopped briefly, or never started at all.
+- If the phone gets warm, include how quickly that happened and whether it was only on open or also after joining a room.
 
 Please include in reports:
 - device model and iOS version
-- build number 27
+- build number 28
 - server used
 - exact steps
 - expected result vs actual result

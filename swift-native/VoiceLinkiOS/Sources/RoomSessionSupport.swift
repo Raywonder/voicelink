@@ -5,6 +5,7 @@ struct RoomSessionDestination: Identifiable, Hashable {
     let roomName: String
     let roomDescription: String
     let baseURL: String
+    let displayName: String
 
     var id: String { "\(baseURL)|\(roomId)|join" }
 }
@@ -39,7 +40,11 @@ struct RoomSessionView: View {
         NavigationStack {
             Group {
                 if let roomURL {
-                    VoiceLinkWebView(url: roomURL)
+                    VoiceLinkWebView(
+                        url: roomURL,
+                        displayName: destination.displayName,
+                        showChat: showChat
+                    )
                 } else {
                     VStack(spacing: 12) {
                         Image(systemName: "wifi.exclamationmark")
@@ -68,13 +73,22 @@ struct RoomSessionView: View {
             }
         }
         .onAppear {
+            IOSAudioSessionManager.shared.activateForRoomSession()
             NotificationCenter.default.post(
                 name: .iosRoomJoined,
                 object: nil,
                 userInfo: ["roomId": destination.roomId, "roomName": destination.roomName]
             )
         }
+        .onChange(of: showChat) { visible in
+            NotificationCenter.default.post(
+                name: .iosSetRoomChatVisibility,
+                object: nil,
+                userInfo: ["visible": visible]
+            )
+        }
         .onDisappear {
+            IOSAudioSessionManager.shared.deactivateRoomSessionIfPossible()
             NotificationCenter.default.post(
                 name: .iosRoomLeft,
                 object: nil,
@@ -134,6 +148,7 @@ extension Notification.Name {
     static let iosDirectMessageEvent = Notification.Name("iosDirectMessageEvent")
     static let iosRequestLeaveRoom = Notification.Name("iosRequestLeaveRoom")
     static let iosSendDirectMessage = Notification.Name("iosSendDirectMessage")
+    static let iosSetRoomChatVisibility = Notification.Name("iosSetRoomChatVisibility")
 }
 
 private func normalizedRoomBaseURL(_ raw: String) -> String {
