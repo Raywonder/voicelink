@@ -10486,12 +10486,32 @@ class VoiceLinkLocalServer {
                             const reports = JSON.parse(fs.readFileSync(bugFile, 'utf8') || '[]');
                             return (Array.isArray(reports) ? reports : [])
                                 .slice(0, 25)
-                                .map((report) => {
-                                    const who = report.accountEmail || report.username || report.submittedBy || 'anonymous';
+                                .flatMap((report) => {
+                                    const who = report.accountEmail || report.username || report.displayName || report.submittedBy || 'anonymous';
                                     const clientId = report.clientId || 'unknown-client';
                                     const room = report.currentRoom || 'no-room';
                                     const title = report.title || 'Untitled bug report';
-                                    return `[bug-reports] ${report.submittedAt || new Date().toISOString()} ${who} ${clientId} room=${room} severity=${report.severity || 'normal'} category=${report.category || 'general'} title=${title}`;
+                                    const summary = String(report.diagnosticsSummary || '').trim();
+                                    const crashPreview = Array.isArray(report.recentCrashReports)
+                                        ? report.recentCrashReports
+                                            .map((entry) => String(entry?.preview || '').trim())
+                                            .filter(Boolean)
+                                            .slice(0, 2)
+                                        : [];
+                                    const detailLines = [];
+                                    detailLines.push(
+                                        `[bug-reports] ${report.submittedAt || new Date().toISOString()} ${who} ${clientId} room=${room} severity=${report.severity || 'normal'} category=${report.category || 'general'} title=${title}`
+                                    );
+                                    if (summary) {
+                                        summary
+                                            .split(/\r?\n/)
+                                            .map((line) => line.trim())
+                                            .filter(Boolean)
+                                            .slice(0, 8)
+                                            .forEach((line) => detailLines.push(`[bug-reports][summary] ${line}`));
+                                    }
+                                    crashPreview.forEach((line) => detailLines.push(`[bug-reports][crash] ${line}`));
+                                    return detailLines;
                                 });
                         } catch {
                             return [];

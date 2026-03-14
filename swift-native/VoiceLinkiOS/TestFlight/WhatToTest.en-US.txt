@@ -1,146 +1,25 @@
-VoiceLink TestFlight - What to Test (Build 25)
-Date: 2026-03-12
-Build Focus: Build 25 is the current iOS verification pass. Focus on room opening, iOS audio setup and playback behavior, preview audio before joining, VoiceOver room actions, the new two-tab Main/Settings layout, inline room chat behavior, server browsing/search, browser/support link handling, and the new quick-pair-first sign-in routing. Older Build 9-24 issues are still useful for regression comparison if any prior build is still available.
+VoiceLink TestFlight Build 27
 
-Distribution Note
-- Testing details are now external-only and no longer shown inside the app Settings screen.
-- Build 25 is the current test target.
-- Builds 9-17 may be expired by now, but issue notes from those builds still apply for regression comparison if any earlier build is still available in TestFlight.
+Primary focus for this build:
+- Sign in with a normal VoiceLink account and confirm login stays on VoiceLink's internal auth path.
+- Open rooms from the Main tab and confirm the app does not crash.
+- Confirm room audio can be heard and microphone audio works after joining.
+- Test preview audio before joining and confirm it stops cleanly when the room opens.
+- With VoiceOver enabled, confirm room rows expose useful actions like Join, Details, Preview, and Share.
+- Confirm the app uses the two-tab layout: Main and Settings.
+- Confirm direct messages and profile actions still work from the current UI.
+- Open Support from Settings and confirm it goes to VoiceLink internal support first while WHMCS remains unavailable.
 
-Apple/TestFlight Review Links (Hosted Server Pages)
-- Main app: https://voicelink.devinecreations.net
-- Downloads page: https://voicelink.devinecreations.net/downloads/
-- Getting started: https://voicelink.devinecreations.net/docs/getting-started.html
-- Support URL: https://voicelink.devinecreations.net/docs/contact.html
-- Privacy Policy URL: https://voicelink.devinecreations.net/docs/privacy-policy.html
-- User Privacy Choices URL: https://voicelink.devinecreations.net/docs/user-privacy-choices.html
-- Terms URL: https://voicelink.devinecreations.net/docs/terms.html
-- Support fallback: https://devinecreations.com/contact
-- External ticket fallback: https://devinecreations.net/index.php?page=tickets
+Also verify:
+- Web frontend links open correctly from iOS.
+- Privacy, terms, and support pages load from the public VoiceLink site.
+- Guests do not see admin-only controls.
+- Returning to the app after backgrounding does not leave it stuck or blank.
 
-1) Build Validation
-- Confirm installed build number in TestFlight before testing.
-- Primary target is Build 25.
-- If any earlier build is still available, record whether an issue is new in Build 25 or already existed in those earlier builds.
-
-2) First Launch + Navigation
-- Open VoiceLink and confirm app launches to native UI (not web page overlay).
-- Confirm there are only two bottom tabs: `Main` and `Settings`.
-- Confirm tabs load and switch correctly.
-- Confirm the Home tab does not show the Web Frontend shortcut unless it is enabled in Settings.
-- Confirm no API/domain debug links are exposed in normal user UI.
-
-3) Room List + Join Behavior
-- Open Home rooms list.
-- Double-tap a room row and confirm the default action joins the room directly.
-- With VoiceOver enabled, confirm room rows expose custom actions for Join, Details, Preview, and Share.
-- Confirm there is not a second redundant button per room row.
-- Confirm room details open as a separate action, not the default room-row action.
-
-4) Room Open/Join + Audio Setup (Priority)
-- Join from Home and Federation.
-- Confirm native room session opens and remains stable (no crash on open/join).
-- Confirm the phone does not crash when opening a room.
-- Confirm the app does not show "Audio unavailable" or "Audio setup failed" when room audio is actually available.
-- If audio setup fails, note the exact message shown.
-- Confirm the room can still open even if audio falls back.
-- Confirm microphone transmission and output both activate correctly after joining.
-- Confirm preview audio can play before joining a room.
-- Confirm preview audio stops cleanly when joining a room.
-- In Home and Federation, quickly trigger room open actions multiple times (including VoiceOver actions).
-- Confirm only one room view/sheet opens at a time.
-- Confirm app does not crash or present overlapping room views.
-
-5) Main Tab vs Profile/Servers
-- Confirm `Profile` is no longer a bottom tab.
-- Confirm `Profile` opens from the Main tab when needed.
-- Confirm `Servers` opens from the Main tab and shows current server, connected public servers, and private-server entry fields.
-- Confirm there is only one room/server search field on the Main screen.
-
-6) In-Room Main Screen vs Messages
-- Join a room and confirm the main room screen focuses on room status, users, room actions, and room controls.
-- Confirm room chat is opened through the room's own chat/show-hide flow when available, and that returning from chat takes the user back to the room view.
-- Confirm the main room screen is not trying to be both full room UI and full chat thread at the same time.
-
-7) In-Room User Actions
-- In a joined room, tap a user.
-- Confirm user actions are available for that specific user.
-- Confirm direct messaging and profile viewing route correctly from those user actions.
-
-8) Profile + Direct Messages
-- Confirm direct-message users and current message threads route through Profile instead of a separate Messages tab.
-- When not in a room, confirm direct-message threads still remain accessible from Profile.
-- When in a room, confirm room chat and direct-message targets route correctly to Profile.
-- Confirm message history appears under the selected room/user thread.
-
-9) Media + In-Room Playback
-- Open a room with media/stream content and start playback.
-- Confirm media plays and does not crash room audio.
-- Confirm playback remains functional after navigating away/back.
-- Confirm preview/detail screens report now-playing information correctly when available.
-
-10) Browser/Web Frontend Coverage
-- From iOS, open the server web frontend in Safari.
-- Confirm browser mode opens the startup/auth surface instead of stalling on raw loading text.
-- Confirm Quick Navigation appears near the top.
-- Confirm Help & Docs is outside the collapsed Quick Navigation section.
-- Confirm browser room list appears with simple Join, Details, and Share actions.
-- Confirm the browser UI is readable and usable with VoiceOver.
-
-11) Link Preview + Message Rendering
-- Send `https://applevis.com` and confirm link preview appears (title/header text).
-- Send `applevis.com` (no scheme) and confirm preview still appears (https default, http fallback).
-- Confirm chat does not only show raw URL when preview metadata is available.
-- Confirm privacy/support links from settings open valid public pages instead of the main app shell.
-
-12) Guest vs Authenticated Behavior
-- As a guest or signed-out user, confirm room edit/admin controls are not visible.
-- Confirm guests do not get room start/stop stream controls.
-- Confirm guests can still use safe local controls like mute/unmute where allowed.
-
-13) Settings + Home Shortcut Behavior
-- In Settings, toggle "Show Web Frontend Shortcut on Home".
-- Confirm the Home tab updates to match that setting.
-- Confirm Settings links open working public pages.
-
-14) Admin/Permissions
-- Verify admin controls are visible only for accounts with admin permissions.
-- Verify non-admin users do not see admin-only controls.
-- Verify room and server changes refresh promptly after saving, without needing a client restart.
-
-15) Accessibility + Visual Controls
-- VoiceOver reads room list, room actions, and room detail controls with useful labels/hints.
-- Verify VoiceOver custom actions exist on room rows rather than redundant extra buttons.
-- Two-finger magic tap should not break room interaction.
-- Verify controls still expose accessible text while icon/visual feedback elements render correctly.
-
-16) App Store Connect Metadata Check
-- In archive/export validation, confirm `ITSAppUsesNonExemptEncryption` exists in app Info.plist.
-- Confirm App Store Connect no longer asks for missing encryption usage key.
-- Confirm the following public pages load directly:
-- Privacy Policy URL: https://voicelink.devinecreations.net/docs/privacy-policy.html
-- User Privacy Choices URL: https://voicelink.devinecreations.net/docs/user-privacy-choices.html
-
-17) File Upload + Message Refresh
-- Upload a small file to a room.
-- Confirm upload succeeds and does not return a 404 path error.
-- Confirm the sent message immediately refreshes in the chat list.
-- Confirm incoming messages refresh quickly without requiring a manual restart or full reconnect.
-
-18) Regression + Stability
-- Background/foreground app several times.
-- Reopen app and rejoin a room.
-- Confirm no blank screens, no stuck loading state, and no forced fall back to web UI.
-
-19) Client Visibility + Web Frontend Action
-- If the Home shortcut is disabled, confirm the Home tab does not show the web/frontend shortcut.
-- If the Home shortcut is enabled, confirm it opens the server web app in Safari.
-- If server policy disables iOS visibility, confirm iOS room lists are hidden and user sees policy status text instead of room actions.
-
-Issue Report Format
-- Device model + iOS version
-- Build number: 24
-- Server URL used
-- Exact steps
-- Expected vs actual result
-- Screenshot or screen recording
+Please include in reports:
+- device model and iOS version
+- build number 27
+- server used
+- exact steps
+- expected result vs actual result
+- screenshot or screen recording if available
