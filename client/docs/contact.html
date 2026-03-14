@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceLink Contact and Live Support</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f7fb; color: #16181d; }
+    main { max-width: 840px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1, h2 { color: #0f172a; }
+    p, li { line-height: 1.6; }
+    .card { background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0 8px; }
+    .button { display: inline-block; padding: 12px 16px; border-radius: 12px; background: #0a66c2; color: #fff; text-decoration: none; font-weight: 600; }
+    .button.secondary { background: #1f2937; }
+    .support-form { display: grid; gap: 12px; margin-top: 16px; }
+    .support-form label { display: grid; gap: 6px; font-weight: 600; }
+    .support-form input, .support-form textarea, .support-form select {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      color: #0f172a;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    .support-form textarea { min-height: 140px; resize: vertical; }
+    .status { min-height: 24px; font-weight: 600; color: #334155; }
+    .hint { color: #475569; font-size: 0.95rem; }
+    a { color: #0a66c2; }
+    code { background: #eef2ff; border-radius: 6px; padding: 2px 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>VoiceLink Contact and Live Support</h1>
+      <p>Use this page for live chat support, account help, billing questions, privacy requests, and content-rights requests.</p>
+
+      <h2 id="live-chat">Live Chat Support</h2>
+      <p>The preferred support path is the live support queue. This page starts a private support session first. Support staff can attach or create a ticket from the session if you do not already have one open.</p>
+      <div class="actions">
+        <a class="button secondary" href="https://devinecreations.net/index.php?page=tickets">Open External Ticket Page (Fallback)</a>
+      </div>
+      <form id="live-support-form" class="support-form">
+        <label>
+          Your name
+          <input id="support-name" name="name" type="text" autocomplete="name" required />
+        </label>
+        <label>
+          Email
+          <input id="support-email" name="email" type="email" autocomplete="email" required />
+        </label>
+        <label>
+          Subject
+          <input id="support-subject" name="subject" type="text" placeholder="What do you need help with?" />
+        </label>
+        <label>
+          Issue
+          <textarea id="support-issue" name="issue" placeholder="Include the problem, room/server, device, and any error text." required></textarea>
+        </label>
+        <label>
+          Platform
+          <select id="support-channel" name="channel">
+            <option value="web">Web browser</option>
+            <option value="ios">iPhone or iPad</option>
+            <option value="macos">macOS desktop</option>
+            <option value="windows">Windows desktop</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <p class="hint">If you already have an open issue, support can attach this chat to it instead of creating a duplicate ticket.</p>
+        <p id="support-status" class="status"></p>
+        <div class="actions" style="margin-top:0;">
+          <button class="button" type="submit">Start Support</button>
+        </div>
+      </form>
+
+      <h2>Support Channels</h2>
+      <ul>
+        <li>Main contact form: <a href="https://devinecreations.com/contact">https://devinecreations.com/contact</a></li>
+        <li>External fallback ticket page: <a href="https://devinecreations.net/index.php?page=tickets">https://devinecreations.net/index.php?page=tickets</a></li>
+        <li>WHMCS client area: <a href="https://devine-creations.com/clientarea.php">https://devine-creations.com/clientarea.php</a></li>
+      </ul>
+
+      <h2>Include in Your Request</h2>
+      <ul>
+        <li>App version and platform such as macOS, iOS, Windows, or web.</li>
+        <li>Server URL if you are using a self-hosted or alternate VoiceLink server.</li>
+        <li>Exact error message and steps to reproduce the problem.</li>
+        <li>Screenshots, logs, ticket ID, or room name when relevant.</li>
+      </ul>
+
+      <h2>Direct URLs</h2>
+      <p>Privacy Policy: <a href="https://voicelink.devinecreations.net/docs/privacy-policy.html">https://voicelink.devinecreations.net/docs/privacy-policy.html</a></p>
+      <p>User Privacy Choices: <a href="https://voicelink.devinecreations.net/docs/user-privacy-choices.html">https://voicelink.devinecreations.net/docs/user-privacy-choices.html</a></p>
+      <p>Terms: <a href="https://voicelink.devinecreations.net/docs/terms.html">https://voicelink.devinecreations.net/docs/terms.html</a></p>
+      <p>Live support anchor: <code>https://voicelink.devinecreations.net/docs/contact.html#live-chat</code></p>
+    </div>
+  </main>
+  <script>
+    (function () {
+      const form = document.getElementById('live-support-form');
+      const status = document.getElementById('support-status');
+      if (!form || !status) return;
+
+      const rememberedName = localStorage.getItem('voicelink_support_name') || '';
+      const rememberedEmail = localStorage.getItem('voicelink_support_email') || '';
+      document.getElementById('support-name').value = rememberedName;
+      document.getElementById('support-email').value = rememberedEmail;
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        const userName = String(document.getElementById('support-name').value || '').trim();
+        const userEmail = String(document.getElementById('support-email').value || '').trim();
+        const subject = String(document.getElementById('support-subject').value || '').trim();
+        const issue = String(document.getElementById('support-issue').value || '').trim();
+        const channel = String(document.getElementById('support-channel').value || 'web').trim();
+
+        if (!userName || !userEmail || !issue) {
+          status.textContent = 'Enter your name, email, and issue before starting support.';
+          status.style.color = '#b91c1c';
+          return;
+        }
+
+        status.textContent = 'Creating your support session...';
+        status.style.color = '#334155';
+
+        try {
+          const response = await fetch('/api/support/sessions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              userName,
+              userEmail,
+              subject: subject || 'Live support request',
+              issue,
+              description: issue,
+              channel,
+              attachSupportTicket: false
+            })
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Unable to start support');
+          }
+
+          localStorage.setItem('voicelink_support_name', userName);
+          localStorage.setItem('voicelink_support_email', userEmail);
+          sessionStorage.setItem('voicelink_support_session_id', result.session?.id || '');
+          sessionStorage.setItem('voicelink_support_hidden_room_id', result.hiddenRoom?.id || '');
+          sessionStorage.setItem('voicelink_support_ticket_id', result.ticketId || result.whmcsTicketNumber || result.whmcsTicketId || '');
+          sessionStorage.setItem('voicelink_support_thank_you_url', result.thankYouUrl || '/docs/support-thank-you.html');
+
+          status.textContent = 'Support started. Redirecting...';
+          status.style.color = '#166534';
+
+          const params = new URLSearchParams();
+          if (result.hiddenRoom?.id) params.set('room', result.hiddenRoom.id);
+          if (result.session?.id) params.set('session', result.session.id);
+          window.location.href = `/?${params.toString()}`;
+        } catch (error) {
+          status.textContent = error.message || 'Unable to start support.';
+          status.style.color = '#b91c1c';
+        }
+      });
+    }());
+  </script>
+</body>
+</html>

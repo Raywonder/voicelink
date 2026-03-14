@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Support Request Closed</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f7fb; color: #16181d; }
+    main { max-width: 760px; margin: 0 auto; padding: 40px 20px 56px; }
+    .card { background: #fff; border-radius: 18px; padding: 28px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+    h1 { margin-top: 0; color: #0f172a; }
+    p, li { line-height: 1.6; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+    .button { display: inline-block; padding: 12px 16px; border-radius: 12px; background: #0a66c2; color: #fff; text-decoration: none; font-weight: 600; }
+    .button.secondary { background: #1f2937; }
+    #ticket-reference { font-weight: 600; color: #0f172a; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Thank you</h1>
+      <p>Your support session has been closed.</p>
+      <p id="ticket-reference"></p>
+      <p>If you need more help with the same issue, come back through Support and the existing ticket can be reused or reopened instead of creating a duplicate.</p>
+      <div class="actions">
+        <a class="button" href="/docs/contact.html#live-chat">Open Support Again</a>
+        <a class="button secondary" href="/">Return to VoiceLink</a>
+      </div>
+    </div>
+  </main>
+  <script>
+    (function () {
+      const value = sessionStorage.getItem('voicelink_support_ticket_id') || '';
+      const target = document.getElementById('ticket-reference');
+      if (!target) return;
+      if (value) {
+        target.textContent = `Support ticket: ${value}`;
+      } else {
+        target.textContent = 'Your request has been recorded.';
+      }
+    }());
+  </script>
+</body>
+</html>

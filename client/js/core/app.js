@@ -5,6 +5,7 @@
 
 class VoiceLinkApp {
     constructor() {
+        this.browserAccessOpen = true;
         this.socket = null;
         this.audioEngine = null;
         this.spatialAudio = null;
@@ -12,6 +13,8 @@ class VoiceLinkApp {
 
         this.currentRoom = null;
         this.currentUser = null;
+        this.pendingOpenAction = null;
+        this.serverConfigCache = null;
         this.users = new Map();
         this.multiDeviceState = {
             activeDevices: [],
@@ -39,6 +42,7 @@ class VoiceLinkApp {
             currentScreen: 'loading-screen',
             screens: [
                 'loading-screen',
+                'startup-auth-screen',
                 'main-menu',
                 'create-room-screen',
                 'join-room-screen',
@@ -77,6 +81,62 @@ class VoiceLinkApp {
         return window.nativeAPI || null;
     }
 
+    isNativeApp() {
+        return !!this.getNativeAPI();
+    }
+
+    hasStoredAuthSession() {
+        return !!(
+            localStorage.getItem('mastodon_access_token') ||
+            sessionStorage.getItem('mastodon_access_token') ||
+            localStorage.getItem('voicelink_local_token') ||
+            sessionStorage.getItem('voicelink_local_token') ||
+            localStorage.getItem('voicelink_whmcs_token') ||
+            sessionStorage.getItem('voicelink_whmcs_token')
+        );
+    }
+
+    shouldShowStartupAuthGate() {
+        return !this.isNativeApp() && !this.currentUser && !this.hasStoredAuthSession();
+    }
+
+    getPendingOpenAction() {
+        if (this.pendingOpenAction) {
+            return this.pendingOpenAction;
+        }
+        const params = new URLSearchParams(window.location.search || '');
+        const openTarget = String(params.get('open') || '').trim().toLowerCase();
+        if (!openTarget) {
+            return null;
+        }
+        this.pendingOpenAction = openTarget;
+        return this.pendingOpenAction;
+    }
+
+    clearPendingOpenAction() {
+        this.pendingOpenAction = null;
+        const url = new URL(window.location.href);
+        url.searchParams.delete('open');
+        const nextSearch = url.searchParams.toString();
+        const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash || ''}`;
+        window.history.replaceState({}, document.title, nextUrl);
+    }
+
+    routeStartupExperience() {
+        this.startServerStatusMonitoring();
+        if (this.shouldShowStartupAuthGate()) {
+            this.showScreen('startup-auth-screen');
+        } else {
+            this.showScreen('main-menu');
+        }
+        this.ensureWebQuickNav();
+        this.handlePendingOpenAction();
+    }
+
+    ensureWebQuickNav() {
+        return;
+    }
+
     async openExternal(url) {
         const nativeAPI = this.getNativeAPI();
         if (nativeAPI?.openExternal) {
@@ -86,10 +146,199 @@ class VoiceLinkApp {
         return null;
     }
 
+    handlePendingOpenAction() {
+        const openTarget = this.getPendingOpenAction();
+        if (!openTarget) {
+            return;
+        }
+
+        if (openTarget === 'support-live-chat') {
+            setTimeout(() => this.openSupportLiveChatFlow(), 250);
+            return;
+        }
+
+        const authTargets = new Map([
+            ['login', 'local-login'],
+            ['signin', 'local-login'],
+            ['client-portal', 'whmcs-login'],
+            ['portal', 'whmcs-login'],
+            ['mastodon', 'mastodon-login'],
+            ['wallet', 'wallet-login']
+        ]);
+        const authTab = authTargets.get(openTarget);
+        if (authTab) {
+            setTimeout(() => this.showMastodonLoginModal(authTab), 250);
+            return;
+        }
+
+        if (openTarget === 'admin-invite') {
+            setTimeout(() => {
+                window.location.href = '/admin-invite.html';
+            }, 150);
+        }
+    }
+
+    async openSupportLiveChatFlow() {
+        const isMobileSafari = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        if (isMobileSafari) {
+            window.location.href = `${window.location.origin}/docs/contact.html#live-chat`;
+            return;
+        }
+
+        const existing = document.getElementById('support-live-chat-modal');
+        if (existing) {
+            existing.style.display = 'flex';
+            return;
+        }
+
+        const rememberedName = this.currentUser?.displayName || this.currentUser?.username || localStorage.getItem('voicelink_support_name') || '';
+        const rememberedEmail = this.currentUser?.email || localStorage.getItem('voicelink_support_email') || '';
+        const overlay = document.createElement('div');
+        overlay.id = 'support-live-chat-modal';
+        overlay.className = 'modal-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;z-index:10050;padding:20px;';
+        overlay.innerHTML = `
+            <section class="modal-content" style="width:min(680px,100%);max-height:90vh;overflow:auto;background:#121827;color:#eef2ff;border:1px solid rgba(148,163,184,.28);border-radius:18px;padding:22px;box-shadow:0 25px 80px rgba(0,0,0,.45);">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+                    <div>
+                        <h2 style="margin:0 0 8px;font-size:1.4rem;">VoiceLink Live Support</h2>
+                        <p style="margin:0;color:#cbd5e1;line-height:1.5;">Start a private support session. If staff are available, Support will open a hidden room for this conversation.</p>
+                    </div>
+                    <button type="button" id="support-live-chat-close" style="border:0;background:transparent;color:#cbd5e1;font-size:1.8rem;cursor:pointer;line-height:1;">&times;</button>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px;">
+                    <label style="display:flex;flex-direction:column;gap:6px;">
+                        <span>Your name</span>
+                        <input id="support-live-chat-name" type="text" value="${this.escapeHtml(rememberedName)}" style="padding:10px 12px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#eef2ff;">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:6px;">
+                        <span>Email</span>
+                        <input id="support-live-chat-email" type="email" value="${this.escapeHtml(rememberedEmail)}" style="padding:10px 12px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#eef2ff;">
+                    </label>
+                </div>
+                <label style="display:flex;flex-direction:column;gap:6px;margin-top:12px;">
+                    <span>Subject</span>
+                    <input id="support-live-chat-subject" type="text" placeholder="What do you need help with?" style="padding:10px 12px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#eef2ff;">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;margin-top:12px;">
+                    <span>Describe the issue</span>
+                    <textarea id="support-live-chat-issue" rows="6" placeholder="Include the problem, room/server, and any error text." style="padding:10px 12px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#eef2ff;resize:vertical;"></textarea>
+                </label>
+                <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;">
+                    <label style="display:flex;align-items:center;gap:8px;">
+                        <input id="support-live-chat-send-logs" type="checkbox" ${document.getElementById('send-support-logs-setting')?.checked ? 'checked' : ''}>
+                        <span>Send local diagnostic logs after support opens</span>
+                    </label>
+                </div>
+                <p id="support-live-chat-status" style="min-height:24px;margin:16px 0 0;color:#cbd5e1;"></p>
+                <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;">
+                    <button type="button" id="support-live-chat-ticket" style="border:1px solid #475569;background:#0f172a;color:#eef2ff;border-radius:10px;padding:10px 14px;cursor:pointer;">Open External Ticket Page</button>
+                    <button type="button" id="support-live-chat-start" style="border:0;background:#2563eb;color:#fff;border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer;">Start Live Support</button>
+                </div>
+            </section>
+        `;
+        document.body.appendChild(overlay);
+
+        const close = () => {
+            overlay.remove();
+            this.clearPendingOpenAction();
+        };
+        const setStatus = (message, color = '#cbd5e1') => {
+            const status = document.getElementById('support-live-chat-status');
+            if (status) {
+                status.textContent = message || '';
+                status.style.color = color;
+            }
+        };
+
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) {
+                close();
+            }
+        });
+        overlay.querySelector('#support-live-chat-close')?.addEventListener('click', close);
+        overlay.querySelector('#support-live-chat-ticket')?.addEventListener('click', async () => {
+            close();
+            await this.openExternal('https://devinecreations.net/index.php?page=tickets');
+        });
+        overlay.querySelector('#support-live-chat-start')?.addEventListener('click', async () => {
+            const userName = String(document.getElementById('support-live-chat-name')?.value || '').trim();
+            const userEmail = String(document.getElementById('support-live-chat-email')?.value || '').trim();
+            const subject = String(document.getElementById('support-live-chat-subject')?.value || '').trim();
+            const issue = String(document.getElementById('support-live-chat-issue')?.value || '').trim();
+            const sendLogs = Boolean(document.getElementById('support-live-chat-send-logs')?.checked);
+
+            if (!userName || !userEmail || !issue) {
+                setStatus('Enter your name, email, and issue before starting support.', '#fca5a5');
+                return;
+            }
+
+            try {
+                setStatus('Creating private support session...');
+                const authContext = this.getAuthContext ? this.getAuthContext() : null;
+                const token = authContext?.token
+                    || localStorage.getItem('voicelink_local_token')
+                    || sessionStorage.getItem('voicelink_local_token')
+                    || localStorage.getItem('voicelink_whmcs_token')
+                    || sessionStorage.getItem('voicelink_whmcs_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) {
+                    headers.Authorization = `Bearer ${token}`;
+                }
+
+                const response = await fetch(`${this.getApiBaseUrl()}/api/support/sessions`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        userId: this.currentUser?.id || null,
+                        userName,
+                        userEmail,
+                        subject: subject || 'Live support request',
+                        issue,
+                        description: issue,
+                        channel: this.currentUser ? 'voicelink' : 'web',
+                        attachSupportTicket: false
+                    })
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    throw new Error(result.error || 'Unable to create support session');
+                }
+
+                localStorage.setItem('voicelink_support_name', userName);
+                localStorage.setItem('voicelink_support_email', userEmail);
+
+                if (result.supportPin) {
+                    setStatus(`Support PIN: ${result.supportPin}. Give this code to support staff if asked. Joining room...`, '#86efac');
+                } else {
+                    setStatus('Support session created. Joining room...', '#86efac');
+                }
+
+                sessionStorage.setItem('voicelink_support_thank_you_url', result.thankYouUrl || '/docs/support-thank-you.html');
+
+                document.getElementById('user-name').value = userName;
+                document.getElementById('join-room-id').value = result.hiddenRoom?.id || '';
+                close();
+                this.quickJoinRoom(result.hiddenRoom?.id || '');
+                setTimeout(() => this.joinRoom(), 200);
+
+                if (sendLogs) {
+                    setTimeout(() => this.sendSupportLogs(true), 2000);
+                }
+            } catch (error) {
+                setStatus(error.message || 'Unable to start live support.', '#fca5a5');
+            }
+        });
+    }
+
     async init() {
         console.log('Initializing VoiceLink Local...');
         this.setupLogCapture();
         this.setupGlobalErrorLogHooks();
+
+        if (this.tryRenderAdminInviteRoute()) {
+            return;
+        }
 
         // IMMEDIATE: Hide platform-specific elements based on environment
         // This must run FIRST to prevent flash of unwanted content
@@ -139,6 +388,10 @@ class VoiceLinkApp {
                     console.log('User authenticated: showing auth-required elements');
                 }, { once: true });
             }
+
+            // Do not leave browser users stuck on the raw loading screen while
+            // network/audio initialization continues in the background.
+            this.routeStartupExperience();
         }
 
         try {
@@ -178,6 +431,7 @@ class VoiceLinkApp {
 
             // Load rooms
             await this.loadRooms();
+            this.handlePendingRoomJoinFromUrl();
 
             // Check for demo mode (interactive documentation testing)
             const urlParams = new URLSearchParams(window.location.search);
@@ -185,30 +439,26 @@ class VoiceLinkApp {
             const testFeature = urlParams.get('test'); // Specific feature to test (e.g., 'audio', '3d', 'media')
 
             if (isDemoMode) {
-                console.log('Demo mode activated - creating private test room');
-                // Auto-create and join a private test room for documentation testing
+                console.log('Demo mode activated');
+                // Keep room list stable; do not auto-create hidden test/demo rooms.
                 setTimeout(() => {
-                    this.createDemoRoom(testFeature);
+                    this.routeStartupExperience();
+                    if (testFeature) {
+                        this.showNotification(`Demo mode: ${testFeature}`, 'info');
+                    }
                 }, 2500);
             } else {
                 // Show main menu
                 setTimeout(() => {
-                    this.showScreen('main-menu');
-                    // Start periodic server status monitoring
-                    this.startServerStatusMonitoring();
+                    this.routeStartupExperience();
                 }, 2000);
             }
 
         } catch (error) {
             console.error('Failed to initialize VoiceLink:', error);
-            try {
-                await this.loadRooms();
-            } catch (roomError) {
-                console.warn('Room preload failed during fallback init:', roomError?.message || roomError);
-            }
             // Show main menu anyway - audio will initialize on first user interaction
             setTimeout(() => {
-                this.showScreen('main-menu');
+                this.routeStartupExperience();
                 // Don't show error - this is normal browser behavior
                 console.log('VoiceLink loaded. Audio features will activate when needed.');
             }, 2000);
@@ -438,6 +688,131 @@ class VoiceLinkApp {
         console.log('Advanced systems initialized');
     }
 
+    handlePendingRoomJoinFromUrl() {
+        const urlParams = new URLSearchParams(window.location.search || '');
+        const roomId = String(urlParams.get('room') || '').trim();
+        if (!roomId) {
+            return;
+        }
+
+        const existingJoinField = document.getElementById('join-room-id');
+        const existingNameField = document.getElementById('user-name');
+        const rememberedName = this.currentUser?.displayName
+            || this.currentUser?.username
+            || localStorage.getItem('voicelink_support_name')
+            || localStorage.getItem('username')
+            || '';
+
+        if (existingJoinField) {
+            existingJoinField.value = roomId;
+        }
+        if (existingNameField && rememberedName) {
+            existingNameField.value = rememberedName;
+        }
+
+        setTimeout(() => {
+            this.quickJoinRoom(roomId);
+            setTimeout(() => this.joinRoom(), 200);
+        }, 300);
+    }
+
+    tryRenderAdminInviteRoute() {
+        const pathname = String(window.location.pathname || '').toLowerCase();
+        const params = new URLSearchParams(window.location.search || '');
+        const token = params.get('token') || params.get('admin_invite');
+        const isInvitePath = pathname.includes('admin-invite');
+
+        if (!isInvitePath || !token) {
+            return false;
+        }
+
+        document.body.innerHTML = `
+            <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(1200px 700px at 20% -10%, #1d356b 0%, #0b1220 60%);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#e8eefc;">
+              <section style="width:min(640px,100%);background:linear-gradient(160deg,#101b33 0%,#152445 100%);border:1px solid #2a3d69;border-radius:14px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+                <h1 style="margin:0 0 8px;font-size:1.4rem;">VoiceLink Admin Invite</h1>
+                <p id="invite-meta" style="color:#95a6cd;margin-bottom:14px;line-height:1.45;">Checking invite details...</p>
+                <label for="invite-email" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Email</label>
+                <input id="invite-email" type="email" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-username" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Username</label>
+                <input id="invite-username" type="text" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-display" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Display Name</label>
+                <input id="invite-display" type="text" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <label for="invite-password" style="display:block;margin:8px 0 4px;color:#c7d4f1;font-size:.9rem;">Password</label>
+                <input id="invite-password" type="password" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #314a7d;background:#0d1730;color:#e8eefc;">
+                <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+                  <button id="invite-activate" style="border:0;border-radius:8px;padding:10px 14px;background:#3b82f6;color:#fff;font-weight:600;cursor:pointer;">Activate Admin Access</button>
+                  <button id="invite-open-desktop" style="border:0;border-radius:8px;padding:10px 14px;background:#21365f;color:#d9e5ff;font-weight:600;cursor:pointer;">Open in VoiceLink Desktop</button>
+                </div>
+                <p id="invite-status" style="margin-top:12px;color:#95a6cd;min-height:24px;"></p>
+              </section>
+            </main>
+        `;
+
+        const metaEl = document.getElementById('invite-meta');
+        const statusEl = document.getElementById('invite-status');
+        const setStatus = (text, color = '#95a6cd') => {
+            statusEl.textContent = text || '';
+            statusEl.style.color = color;
+        };
+
+        const loadInvite = async () => {
+            try {
+                const response = await fetch(`/api/auth/local/admin-invite/${encodeURIComponent(token)}`);
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    metaEl.textContent = result.error || 'Invalid or expired invite.';
+                    metaEl.style.color = '#ef4444';
+                    return;
+                }
+                metaEl.textContent = `Invited as ${result.role} by ${result.invitedBy || 'Server Admin'} - Expires ${new Date(result.expiresAt).toLocaleString()}`;
+                document.getElementById('invite-email').value = result.email || '';
+            } catch (_error) {
+                metaEl.textContent = 'Unable to load invite details.';
+                metaEl.style.color = '#ef4444';
+            }
+        };
+
+        document.getElementById('invite-open-desktop')?.addEventListener('click', () => {
+            const base = window.location.origin;
+            window.location.href = `vcl://admin-invite?token=${encodeURIComponent(token)}&server=${encodeURIComponent(base)}`;
+        });
+
+        document.getElementById('invite-activate')?.addEventListener('click', async () => {
+            const payload = {
+                token,
+                email: document.getElementById('invite-email').value.trim(),
+                username: document.getElementById('invite-username').value.trim(),
+                displayName: document.getElementById('invite-display').value.trim(),
+                password: document.getElementById('invite-password').value
+            };
+            setStatus('Activating invite...');
+            try {
+                const response = await fetch('/api/auth/local/admin-invite/accept', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    setStatus(result.error || 'Activation failed.', '#ef4444');
+                    return;
+                }
+                if (result.accessToken) {
+                    localStorage.setItem('voicelink_local_token', result.accessToken);
+                }
+                if (result.user) {
+                    localStorage.setItem('voicelink_local_user', JSON.stringify(result.user));
+                }
+                setStatus('Admin access activated. You can now sign in with your credentials.', '#22c55e');
+            } catch (_error) {
+                setStatus('Activation failed. Please try again.', '#ef4444');
+            }
+        });
+
+        loadInvite();
+        return true;
+    }
+
     initializePASystemAndTTS() {
         // Initialize PA System Manager (after WebRTC is ready)
         if (typeof PASystemManager !== 'undefined' && this.webrtcManager) {
@@ -467,15 +842,15 @@ class VoiceLinkApp {
             const pageHost = window.location.hostname || 'localhost';
             const pagePort = window.location.port;
             const pageProtocol = window.location.protocol;
+
             const isNativeApp = !!window.nativeAPI;
-            const isHostedWeb = !isNativeApp &&
-                pageHost !== 'localhost' &&
-                pageHost !== '127.0.0.1' &&
-                pageHost !== '::1';
+            const isWebProduction = !isNativeApp && (pageProtocol === 'https:' ||
+                pageHost.includes('voicelink.devinecreations.net') ||
+                pageHost.includes('voicelink.tappedin.fm'));
 
             // For production web, connect via the same origin (nginx proxy)
-            if (isHostedWeb) {
-                const url = window.location.origin || `${pageProtocol}//${pageHost}${pagePort ? `:${pagePort}` : ''}`;
+            if (isWebProduction) {
+                const url = `${pageProtocol}//${pageHost}`;
                 console.log(`Connecting via nginx proxy at ${url}`);
                 this.socket = io(url, {
                     timeout: 10000,
@@ -483,8 +858,17 @@ class VoiceLinkApp {
                     reconnectionAttempts: 5,
                     transports: ['websocket', 'polling']
                 });
+                const webConnectTimeoutId = setTimeout(() => {
+                    console.error('Timed out connecting to VoiceLink server via nginx proxy');
+                    this.updateServerStatus('offline');
+                    try {
+                        this.socket?.disconnect();
+                    } catch (_) {}
+                    reject(new Error('Timed out connecting to server'));
+                }, 12000);
 
                 this.socket.on('connect', () => {
+                    clearTimeout(webConnectTimeoutId);
                     console.log('Connected to VoiceLink server via nginx proxy');
                     this.updateServerStatus('online');
                     if (window.serverEncryptionManager) {
@@ -501,9 +885,10 @@ class VoiceLinkApp {
                 });
 
                 this.socket.on('connect_error', (error) => {
+                    clearTimeout(webConnectTimeoutId);
                     console.error('Failed to connect to server:', error.message);
                     this.updateServerStatus('offline');
-                    reject(new Error(`Server not available at ${url}`));
+                    reject(new Error('Server not available'));
                 });
                 return;
             }
@@ -640,6 +1025,10 @@ class VoiceLinkApp {
             this.handleRoomExpired(data);
         });
 
+        this.socket.on('room-deleted', (data) => {
+            this.handleRoomDeleted(data);
+        });
+
         this.socket.on('forced-leave', (data) => {
             this.handleForcedLeave(data);
         });
@@ -710,6 +1099,8 @@ class VoiceLinkApp {
     }
 
     getAuthContext() {
+        const localToken = localStorage.getItem('voicelink_local_token') ||
+            sessionStorage.getItem('voicelink_local_token');
         const whmcsToken = localStorage.getItem('voicelink_whmcs_token') ||
             sessionStorage.getItem('voicelink_whmcs_token');
         const ecriptoToken = localStorage.getItem('voicelink_ecripto_token') ||
@@ -718,6 +1109,9 @@ class VoiceLinkApp {
             sessionStorage.getItem('mastodon_access_token');
         const user = this.currentUser || window.mastodonAuth?.getUser() || null;
 
+        if (localToken) {
+            return { provider: 'email', token: localToken, user };
+        }
         if (whmcsToken) {
             return { provider: 'whmcs', token: whmcsToken, user };
         }
@@ -1273,6 +1667,24 @@ class VoiceLinkApp {
     }
 
     setupUIEventListeners() {
+        document.getElementById('startup-local-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('local-login');
+        });
+
+        document.getElementById('startup-whmcs-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('whmcs-login');
+        });
+
+        document.getElementById('startup-mastodon-login-btn')?.addEventListener('click', () => {
+            this.showMastodonLoginModal('mastodon-login');
+        });
+
+        document.getElementById('startup-guest-btn')?.addEventListener('click', () => {
+            this.showScreen('main-menu');
+            this.loadRooms();
+            this.showNotification('Browser mode enabled. Join a room to start chat and media features.', 'info');
+        });
+
         // Menu navigation
         document.getElementById('create-room-btn')?.addEventListener('click', () => {
             this.showScreen('create-room-screen');
@@ -2246,6 +2658,7 @@ class VoiceLinkApp {
     async loadRooms() {
         try {
             const apiBase = this.getApiBaseUrl();
+            await this.loadServerConfig();
 
             // Fetch rooms from local server (which now proxies main server rooms)
             let rooms = [];
@@ -2267,12 +2680,14 @@ class VoiceLinkApp {
                 console.error('Room fetch error:', e.message);
             }
 
+            const isNativeApp = !!window.nativeAPI;
             // Check if user is authenticated
             const isAuthenticated = window.mastodonAuth?.isAuthenticated() || false;
             const currentUser = window.mastodonAuth?.getUser();
+            let hiddenCount = 0;
 
             // Filter rooms based on authentication state
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Guests can only see rooms that are:
                 // 1. Marked as public/visible to visitors (or not explicitly private)
                 // 2. Default rooms (always visible)
@@ -2287,16 +2702,20 @@ class VoiceLinkApp {
                 );
             }
 
-            // Calculate how many rooms are hidden from guests
-            const totalServerRooms = rooms.length; // This is already filtered
-            let hiddenCount = 0;
-
-            if (!isAuthenticated) {
+            if (!isNativeApp && !isAuthenticated) {
                 // Show up to 50 rooms for guests (increased from 5 for better discovery)
                 const guestRoomLimit = 50;
                 if (rooms.length > guestRoomLimit) {
                     hiddenCount = rooms.length - guestRoomLimit;
                     rooms = rooms.slice(0, guestRoomLimit);
+                }
+            }
+
+            if (!isNativeApp) {
+                const browserRoomLimit = isAuthenticated ? 120 : rooms.length;
+                if (rooms.length > browserRoomLimit) {
+                    hiddenCount += rooms.length - browserRoomLimit;
+                    rooms = rooms.slice(0, browserRoomLimit);
                 }
             }
 
@@ -2317,9 +2736,41 @@ class VoiceLinkApp {
                            </div>`;
                     roomList.innerHTML = message;
                 } else {
-                    // Group rooms by category for better organization
-                    const groupedRooms = this.groupRoomsByCategory(rooms);
-                    let html = this.renderGroupedRooms(groupedRooms);
+                    let html = this.renderLobbyWelcomeMessage();
+                    if (!isNativeApp) {
+                        html += `
+                            <div class="user-rooms-section browser-room-section">
+                                <div class="section-header">
+                                    <h4>Available Rooms</h4>
+                                    <span class="section-count">${rooms.length} room${rooms.length !== 1 ? 's' : ''}</span>
+                                </div>
+                                <div class="startup-auth-notes browser-room-hint">
+                                    <p><strong>Browser tip:</strong> use Join to enter a room, or Details to inspect it first. When Safari asks, allow microphone access if you want voice chat.</p>
+                                </div>
+                                <div class="user-rooms browser-room-list">
+                                    ${rooms.map(room => this.renderBrowserRoomItem(room)).join('')}
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        try {
+                            const groupedRooms = this.groupRoomsByCategory(rooms);
+                            html += this.renderGroupedRooms(groupedRooms);
+                        } catch (renderError) {
+                            console.error('Grouped room render failed, falling back to simple list:', renderError);
+                            html += `
+                                <div class="user-rooms-section">
+                                    <div class="section-header">
+                                        <h4>Rooms</h4>
+                                        <span class="section-count">${rooms.length} room${rooms.length !== 1 ? 's' : ''}</span>
+                                    </div>
+                                    <div class="user-rooms">
+                                        ${rooms.map(room => this.renderRoomItem(room, false)).join('')}
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
 
                     // Add login prompt for guests if there are hidden rooms
                     if (!isAuthenticated && hiddenCount > 0) {
@@ -2329,6 +2780,13 @@ class VoiceLinkApp {
                                 <button class="auth-btn mastodon-btn small" onclick="document.getElementById('mastodon-login-btn')?.click()">
                                     Login to see all rooms
                                 </button>
+                            </div>
+                        `;
+                    } else if (!isNativeApp && hiddenCount > 0) {
+                        html += `
+                            <div class="login-to-see-more">
+                                <p>Showing the first ${rooms.length} rooms in the browser. ${hiddenCount} more room${hiddenCount > 1 ? 's are' : ' is'} available.</p>
+                                <p class="text-small">Use search, direct room links, or the desktop app for the full list.</p>
                             </div>
                         `;
                     } else if (!isAuthenticated) {
@@ -2432,6 +2890,43 @@ class VoiceLinkApp {
         return html;
     }
 
+    async loadServerConfig() {
+        try {
+            const response = await fetch(`${this.getApiBaseUrl()}/api/config`);
+            if (!response.ok) {
+                return this.serverConfigCache;
+            }
+            this.serverConfigCache = await response.json();
+        } catch (error) {
+            console.warn('Failed to load server config for lobby welcome message:', error);
+        }
+        return this.serverConfigCache;
+    }
+
+    renderLobbyWelcomeMessage() {
+        if (this.currentRoom) return '';
+        const template = this.serverConfigCache?.lobbyWelcomeMessage
+            || 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+        const messageHtml = String(template)
+            .split(/\n{2,}/)
+            .map((paragraph) => `<p>${this.escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+            .join('');
+        return `
+            <section class="room-list-welcome-message" aria-label="Server welcome message">
+                ${messageHtml}
+            </section>
+        `;
+    }
+
+    escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     renderRoomItem(room, isDefault = false) {
         const roomData = {
             id: room.id || room.roomId,
@@ -2477,27 +2972,21 @@ class VoiceLinkApp {
 
         const isCurrentRoom = !!this.currentRoom && (this.currentRoom.id === roomData.id || this.currentRoom.roomId === roomData.id);
         const canManageGlobalMedia = this.isCurrentUserAdmin();
-        const mediaStatusText = this.getRoomMediaStatusText(room, roomData);
-        const primaryActionLabel = isCurrentRoom ? 'Show Room' : 'Join Room';
-        const primaryActionHint = isCurrentRoom
-            ? `Open ${roomData.name} in the join panel`
-            : `Join ${roomData.name}`;
 
         // Action menu (accessible for keyboard/screen reader users)
         const previewAvailability = this.getRoomPreviewAvailability(roomData);
         const actionMenu = `
             <details class="room-actions-menu" onclick="event.stopPropagation();">
-                <summary class="room-actions-summary" title="Open room actions menu" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
+                <summary class="room-actions-summary" aria-label="Open actions for ${roomData.name}">⋯ Actions</summary>
                 <div class="room-actions-list" role="menu" onclick="event.stopPropagation();">
                     <button class="room-action-btn"
                             onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
-                            title="Open join panel for this room"
                             aria-label="Join ${roomData.name}">
                         🎧 Join
                     </button>
                     <button class="room-action-btn"
                             ${previewAvailability.enabled
-                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}')"`
+                                ? `onclick="event.stopPropagation(); app.requestRoomPreview('${roomData.id}', '${roomData.name}')"`
                                 : 'disabled'}
                             title="${previewAvailability.reason || 'Preview room audio'}"
                             aria-label="Preview room audio for ${roomData.name}">
@@ -2505,7 +2994,6 @@ class VoiceLinkApp {
                     </button>
                     <button class="room-action-btn"
                             onclick="event.stopPropagation(); app.shareRoom('${roomData.id}')"
-                            title="Copy room share link"
                             aria-label="Share ${roomData.name}">
                         🔗 Share
                     </button>
@@ -2530,11 +3018,12 @@ class VoiceLinkApp {
         return `
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
                  data-room-id="${roomData.id}"
+                 onclick="app.quickJoinRoom('${roomData.id}')"
                  oncontextmenu="app.openFocusedRoomContextMenu(event, '${roomData.id}')"
-                 onkeydown="app.handleRoomListItemKey(event, '${roomData.id}')"
+                 onkeydown="app.handleFocusedRoomContextKey(event, '${roomData.id}')"
                  role="button"
                  tabindex="0"
-                 aria-label="${roomData.name}. ${descriptionText}. ${userCountText} of ${roomData.maxUsers} max. Media: ${mediaStatusText}.">
+                 aria-label="${roomData.name}, ${descriptionText}, ${userCountText} of ${roomData.maxUsers} max">
                 <div class="room-header">
                     <div class="room-info">
                         <h5 class="room-name">${roomData.name}</h5>
@@ -2550,52 +3039,61 @@ class VoiceLinkApp {
                         ${roomData.hasPassword ? '<span class="password-protected">[Password Protected]</span>' : ''}
                         ${this.getRoomDurationDisplay(room)}
                     </div>
-                    <div class="room-metadata">
-                        <span class="room-meta-item room-meta-description">Description: ${descriptionText}</span>
-                        <span class="room-meta-item">Users: ${roomData.users}/${roomData.maxUsers}</span>
-                        <span class="room-meta-item">Media: ${mediaStatusText}</span>
-                    </div>
                     ${tags ? `<div class="room-tags">${tags}</div>` : ''}
-                    <div class="room-actions-row">
-                        <button class="room-primary-action-btn"
-                                onclick="event.stopPropagation(); app.quickJoinRoom('${roomData.id}')"
-                                title="${primaryActionHint}"
-                                aria-label="${primaryActionLabel} ${roomData.name}">
-                            ${isCurrentRoom ? '▶️' : '🎧'} ${primaryActionLabel}
-                        </button>
-                        ${actionMenu}
-                    </div>
+                    ${actionMenu}
                 </div>
             </div>
         `;
     }
 
-    isRoomMediaPlaying(room, roomData) {
-        const flags = [
-            room?.mediaPlaying,
-            room?.isPlaying,
-            room?.hasActiveMedia,
-            room?.jukeboxActive,
-            room?.activeMedia,
-            roomData?.mediaPlaying,
-            roomData?.hasActiveMedia
-        ];
+    renderBrowserRoomItem(room) {
+        const roomData = {
+            id: room.id || room.roomId,
+            name: room.name || 'Room',
+            description: room.description || '',
+            users: room.users || 0,
+            maxUsers: room.maxUsers || 0,
+            hasPassword: room.hasPassword || !!room.password
+        };
 
-        if (flags.some(value => value === true)) {
-            return true;
-        }
+        this.roomDataCache.set(roomData.id, {
+            ...room,
+            ...roomData
+        });
 
-        const textSignals = [
-            room?.nowPlaying,
-            room?.currentMedia,
-            room?.mediaTitle,
-            room?.jukeboxTrack
-        ];
-        return textSignals.some(value => typeof value === 'string' && value.trim().length > 0);
-    }
+        const userCountText = roomData.users === 0
+            ? 'Empty'
+            : roomData.users === 1
+                ? '1 user'
+                : `${roomData.users} users`;
+        const descriptionText = roomData.description && roomData.description.trim()
+            ? roomData.description
+            : 'No description for this room';
 
-    getRoomMediaStatusText(room, roomData) {
-        return this.isRoomMediaPlaying(room, roomData) ? 'Playing' : 'None';
+        return `
+            <div class="room-item user-room browser-room-item"
+                 data-room-id="${roomData.id}"
+                 role="group"
+                 aria-label="${roomData.name}, ${descriptionText}, ${userCountText}">
+                <div class="room-header">
+                    <div class="room-info">
+                        <h5 class="room-name">${roomData.name}</h5>
+                        <p class="room-description">${descriptionText}</p>
+                    </div>
+                </div>
+                <div class="room-details">
+                    <div class="room-stats">
+                        <span class="user-count">${userCountText}${roomData.maxUsers ? ` / ${roomData.maxUsers} max` : ''}</span>
+                        ${roomData.hasPassword ? '<span class="password-protected">[Password Protected]</span>' : ''}
+                    </div>
+                    <div class="download-buttons browser-room-actions">
+                        <button class="primary-btn" onclick="app.quickJoinRoom('${roomData.id}')">Join</button>
+                        <button class="secondary-btn" onclick="app.openRoomDetails('${roomData.id}')">Details</button>
+                        <button class="secondary-btn" onclick="app.shareRoom('${roomData.id}')">Share</button>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 
     getRoomPreviewAvailability(roomData) {
@@ -2737,15 +3235,6 @@ class VoiceLinkApp {
         const isContextKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
         if (!isContextKey) return;
         this.openFocusedRoomContextMenu(event, roomId);
-    }
-
-    handleRoomListItemKey(event, roomId) {
-        if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            this.quickJoinRoom(roomId);
-            return;
-        }
-        this.handleFocusedRoomContextKey(event, roomId);
     }
 
     openFocusedRoomContextMenu(event, roomId) {
@@ -3080,19 +3569,9 @@ class VoiceLinkApp {
                 this.spatialAudio
             );
 
-            let localStreamReady = false;
-            if (audioBehavior.autoEnableMic) {
-                const streamInitTimeoutMs = 8000;
-                await Promise.race([
-                    this.webrtcManager.initializeLocalStream({
-                        autoEnableMic: true
-                    }),
-                    new Promise((_, rejectTimeout) => {
-                        setTimeout(() => rejectTimeout(new Error('Local audio initialization timeout')), streamInitTimeoutMs);
-                    })
-                ]);
-                localStreamReady = true;
-            }
+            await this.webrtcManager.initializeLocalStream({
+                autoEnableMic: audioBehavior.autoEnableMic
+            });
 
             // Setup push-to-talk
             this.webrtcManager.setupPushToTalk('Space');
@@ -3107,28 +3586,18 @@ class VoiceLinkApp {
                 password
             });
 
-            if (!audioBehavior.autoEnableMic || !localStreamReady) {
+            if (!audioBehavior.autoEnableMic) {
                 this.showNotification('Joined in listen-only mode. Enable microphone in Audio settings to talk.', 'info');
             }
 
         } catch (error) {
             console.error('Failed to join room:', error);
             const errorName = error?.name || '';
-            const micOrTimeoutError = errorName === 'NotAllowedError' ||
-                errorName === 'SecurityError' ||
-                String(error?.message || '').toLowerCase().includes('timeout');
-
-            if (micOrTimeoutError) {
-                this.showNotification('Microphone was unavailable. Joining in listen-only mode.', 'info');
-                this.socket.emit('join-room', {
-                    roomId,
-                    userName,
-                    password
-                });
-                return;
+            if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
+                this.showError('Microphone permission is blocked. You can still join in listen-only mode or allow mic access in Safari/Chrome site settings.');
+            } else {
+                this.showError('Failed to join room');
             }
-
-            this.showError('Failed to join room');
         }
     }
 
@@ -3598,6 +4067,30 @@ class VoiceLinkApp {
         this.playUiSound('user-join.wav');
     }
 
+    handleRoomDeleted(data) {
+        const deletedRoomId = data?.roomId || data?.id || this.currentRoomId;
+        const activeSupportRoomId = sessionStorage.getItem('voicelink_support_hidden_room_id') || '';
+        const activeSupportSessionId = sessionStorage.getItem('voicelink_support_session_id') || '';
+
+        if (activeSupportRoomId && deletedRoomId && activeSupportRoomId === deletedRoomId) {
+            this.currentRoomId = null;
+            this.currentRoom = null;
+            this.showNotification('Support session closed. Redirecting...', 'info');
+            const params = new URLSearchParams();
+            if (activeSupportSessionId) {
+                params.set('session', activeSupportSessionId);
+            }
+            const preferred = data?.redirectUrl || sessionStorage.getItem('voicelink_support_thank_you_url') || '/docs/support-thank-you.html';
+            const separator = preferred.includes('?') ? '&' : '?';
+            const next = params.toString() ? `${preferred}${separator}${params.toString()}` : preferred;
+            window.location.href = next;
+            return;
+        }
+
+        this.showNotification('Room deleted', 'success');
+        this.loadRooms();
+    }
+
     handleUserLeft(userId) {
         const user = this.users.get(userId);
         if (user) {
@@ -3769,7 +4262,7 @@ class VoiceLinkApp {
                 <strong>${message.userName}</strong>
                 <span class="timestamp">${timestamp}</span>
             </div>
-            <div class="message-text">${this.escapeHtml(message.message)}</div>
+            <div class="message-text">${this.formatChatMessage(message.message)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
@@ -3786,23 +4279,31 @@ class VoiceLinkApp {
         messageElement.style.opacity = '0.8';
 
         messageElement.innerHTML = `
-            <div class="message-text">${this.escapeHtml(text)}</div>
+            <div class="message-text">${this.formatChatMessage(text)}</div>
         `;
 
         chatMessages.appendChild(messageElement);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
+    formatChatMessage(value) {
+        const escaped = this.escapeHtml(value || '');
+        return escaped
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, title, url) => {
+                const safeTitle = this.escapeHtml(title);
+                const safeUrl = this.escapeHtml(url);
+                return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`;
+            })
+            .replace(/\n/g, '<br>');
+    }
+
     playUiSound(filename, volume = 0.6) {
         try {
             const candidates = [
-                `/api/sounds/${encodeURIComponent(filename)}`,
                 `sounds/${filename}`,
                 `assets/sounds/${filename}`,
                 `client/sounds/${filename}`,
-                `source/assets/sounds/${filename}`,
-                `/downloads/voicelink/sounds/${filename}`,
-                `https://voicelink.devinecreations.net/downloads/voicelink/sounds/${filename}`
+                `source/assets/sounds/${filename}`
             ];
 
             const audio = new Audio();
@@ -4365,10 +4866,18 @@ class VoiceLinkApp {
             alwaysEnableMediaToggle.checked = audioBehavior.alwaysEnableMedia;
         }
         const sendLogsToggle = document.getElementById('send-support-logs-setting');
+        const sampleRateSelect = document.getElementById('sample-rate-select');
+        const bufferSizeSelect = document.getElementById('buffer-size-select');
         if (sendLogsToggle) {
             const enabled = localStorage.getItem('voicelink_send_support_logs') === 'true';
             sendLogsToggle.checked = enabled;
             this.logCaptureEnabled = enabled;
+        }
+        if (sampleRateSelect) {
+            sampleRateSelect.value = localStorage.getItem('voicelink_audio_sample_rate') || sampleRateSelect.value || '48000';
+        }
+        if (bufferSizeSelect) {
+            bufferSizeSelect.value = localStorage.getItem('voicelink_audio_buffer_size') || bufferSizeSelect.value || '512';
         }
         const savedDisplayName = localStorage.getItem('voicelink_auth_display_name') || '';
         const savedMastodonHandle = localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '';
@@ -4604,6 +5113,8 @@ class VoiceLinkApp {
         const autoEnableMic = document.getElementById('auto-enable-mic-setting')?.checked;
         const alwaysEnableMedia = document.getElementById('always-enable-media-setting')?.checked;
         const sendSupportLogs = document.getElementById('send-support-logs-setting')?.checked;
+        const sampleRate = document.getElementById('sample-rate-select')?.value || '48000';
+        const bufferSize = document.getElementById('buffer-size-select')?.value || '512';
         const authDisplayName = (document.getElementById('auth-display-name')?.value || '').trim();
         const authPreferredMastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || '').trim();
         this.setAudioBehaviorSettings({
@@ -4611,6 +5122,8 @@ class VoiceLinkApp {
             alwaysEnableMedia: typeof alwaysEnableMedia === 'boolean' ? alwaysEnableMedia : true
         });
         this.setSupportLogSendingEnabled(!!sendSupportLogs);
+        localStorage.setItem('voicelink_audio_sample_rate', sampleRate);
+        localStorage.setItem('voicelink_audio_buffer_size', bufferSize);
         localStorage.setItem('voicelink_auth_display_name', authDisplayName);
         localStorage.setItem('voicelink_auth_preferred_mastodon_handle', authPreferredMastodonHandle);
         this.applySavedIdentityPreferences();
@@ -4622,6 +5135,8 @@ class VoiceLinkApp {
         localStorage.removeItem('voicelink_audio_auto_enable_mic');
         localStorage.removeItem('voicelink_audio_always_enable_media');
         localStorage.removeItem('voicelink_send_support_logs');
+        localStorage.removeItem('voicelink_audio_sample_rate');
+        localStorage.removeItem('voicelink_audio_buffer_size');
         localStorage.removeItem('voicelink_auth_display_name');
         localStorage.removeItem('voicelink_auth_preferred_mastodon_handle');
         const authDisplayNameInput = document.getElementById('auth-display-name');
@@ -4958,18 +5473,39 @@ class VoiceLinkApp {
             });
         });
 
+        document.getElementById('local-login-form')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const identity = document.getElementById('local-login-identity')?.value?.trim();
+            const password = document.getElementById('local-login-password')?.value || '';
+            const twoFactorCode = document.getElementById('local-login-2fa')?.value || '';
+            const remember = document.getElementById('local-remember-me')?.checked === true;
+            if (identity && password) {
+                await this.handleLocalAccountLogin(identity, password, { remember, twoFactorCode });
+            }
+        });
+
+        document.getElementById('local-request-2fa-btn')?.addEventListener('click', async () => {
+            const identity = document.getElementById('local-login-identity')?.value?.trim();
+            const password = document.getElementById('local-login-password')?.value || '';
+            if (!identity || !password) {
+                this.showNotification('Enter your email or username and password first.', 'warning');
+                return;
+            }
+            await this.requestLocalTwoFactorChallenge(identity, password);
+        });
+
         // WHMCS Login Form Submit
         document.getElementById('whmcs-login-form')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             const portalSite = document.getElementById('whmcs-portal-site')?.value;
-            const email = document.getElementById('whmcs-login-email')?.value;
+            const identity = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const mastodonHandle = document.getElementById('whmcs-mastodon-handle')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
 
-            if (email && password) {
-                await this.handleWhmcsLogin(email, password, {
+            if (identity && password) {
+                await this.handleWhmcsLogin(identity, password, {
                     portalSite,
                     twoFactorCode,
                     mastodonHandle,
@@ -4980,11 +5516,11 @@ class VoiceLinkApp {
 
         document.getElementById('whmcs-sso-btn')?.addEventListener('click', async () => {
             const portalSite = document.getElementById('whmcs-portal-site')?.value;
-            const email = document.getElementById('whmcs-login-email')?.value;
+            const identity = document.getElementById('whmcs-login-email')?.value;
             const password = document.getElementById('whmcs-login-password')?.value;
             const twoFactorCode = document.getElementById('whmcs-login-2fa')?.value;
             const remember = document.getElementById('whmcs-remember-me')?.checked;
-            await this.handleWhmcsSsoLogin({ portalSite, email, password, twoFactorCode, remember });
+            await this.handleWhmcsSsoLogin({ portalSite, identity, password, twoFactorCode, remember });
         });
 
         document.getElementById('wp-sso-btn')?.addEventListener('click', async () => {
@@ -5044,15 +5580,16 @@ class VoiceLinkApp {
         if (window.mastodonAuth?.isAuthenticated()) {
             this.updateUIForAuthState(window.mastodonAuth.getUser());
         } else {
+            this.restoreLocalSession();
             this.restoreWhmcsSession();
         }
     }
 
-    showMastodonLoginModal() {
+    showMastodonLoginModal(tabId = 'local-login') {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
             modal.style.display = 'flex';
-            this.setActiveAuthTab('mastodon-login');
+            this.setActiveAuthTab(tabId);
         }
     }
 
@@ -5126,7 +5663,7 @@ class VoiceLinkApp {
     /**
      * Handle WHMCS (Client Portal) login
      */
-    async handleWhmcsLogin(email, password, options = {}) {
+    async handleWhmcsLogin(identity, password, options = {}) {
         try {
             this.showNotification('Logging in to client portal...', 'info');
             const apiBase = this.getApiBaseUrl();
@@ -5136,7 +5673,7 @@ class VoiceLinkApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     portalSite: this.normalizePortalSite(options.portalSite),
-                    email,
+                    identity,
                     password,
                     twoFactorCode: options.twoFactorCode || null,
                     remember: options.remember === true,
@@ -5170,6 +5707,75 @@ class VoiceLinkApp {
         }
     }
 
+    async handleLocalAccountLogin(identity, password, options = {}) {
+        try {
+            this.showNotification('Signing in...', 'info');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/auth/local/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    identity,
+                    password,
+                    twoFactorCode: options.twoFactorCode || null
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                if (data?.requires2FA) {
+                    this.showNotification('2FA required. Enter your code and try again, or request a code first.', 'warning');
+                    return;
+                }
+                throw new Error(data.error || 'Login failed');
+            }
+
+            const tokenKey = 'voicelink_local_token';
+            if (options.remember) {
+                localStorage.setItem(tokenKey, data.accessToken);
+                sessionStorage.removeItem(tokenKey);
+            } else {
+                sessionStorage.setItem(tokenKey, data.accessToken);
+                localStorage.removeItem(tokenKey);
+            }
+
+            this.hideMastodonLoginModal();
+            this.updateUIForAuthState(data.user);
+            this.showNotification('Welcome back, ' + (data.user?.displayName || data.user?.username || 'VoiceLink User') + '!', 'success');
+            window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user: data.user } }));
+        } catch (error) {
+            console.error('Local login failed:', error);
+            this.showNotification(error.message || 'Login failed', 'error');
+        }
+    }
+
+    async requestLocalTwoFactorChallenge(identity, password, method = 'email') {
+        try {
+            this.showNotification('Requesting verification code...', 'info');
+            const apiBase = this.getApiBaseUrl();
+            const response = await fetch(`${apiBase}/api/auth/local/2fa/challenge`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ identity, password, method })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to send verification code');
+            }
+
+            if (data?.requires2FA) {
+                const hint = data.hint ? ` (${data.hint})` : '';
+                this.showNotification(`Verification code sent${hint}`, 'success');
+            } else {
+                this.showNotification('2FA is not required for this account.', 'info');
+            }
+        } catch (error) {
+            console.error('Local 2FA challenge failed:', error);
+            this.showNotification(error.message || 'Unable to send verification code', 'error');
+        }
+    }
+
     async handleWhmcsSsoLogin(options = {}) {
         try {
             this.showNotification('Opening client portal...', 'info');
@@ -5180,7 +5786,7 @@ class VoiceLinkApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     portalSite: this.normalizePortalSite(options.portalSite),
-                    email: options.email,
+                    identity: options.identity,
                     password: options.password,
                     twoFactorCode: options.twoFactorCode || null,
                     remember: options.remember === true
@@ -5208,12 +5814,16 @@ class VoiceLinkApp {
 
     normalizePortalSite(site) {
         const raw = String(site || '').trim().toLowerCase();
-        if (!raw) return 'tappedin.fm';
+        if (!raw) return 'devine-creations.com';
         const withoutProtocol = raw.replace(/^https?:\/\//, '');
         const host = withoutProtocol.split('/')[0];
-        if (!host) return 'tappedin.fm';
+        if (!host) return 'devine-creations.com';
         const normalizedHost = host.replace(/\.+$/, '');
         const allowedHosts = new Set([
+            'devine-creations.com',
+            'www.devine-creations.com',
+            'devinecreations.net',
+            'www.devinecreations.net',
             'tappedin.fm',
             'www.tappedin.fm',
             'ecripto.app',
@@ -5223,7 +5833,7 @@ class VoiceLinkApp {
         ]);
         if (allowedHosts.has(normalizedHost)) return normalizedHost;
         if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalizedHost)) return normalizedHost;
-        return 'tappedin.fm';
+        return 'devine-creations.com';
     }
 
     async openWordPressAutheliaLogin(site) {
@@ -5264,6 +5874,26 @@ class VoiceLinkApp {
             .catch(() => {});
     }
 
+    restoreLocalSession() {
+        const tokenKey = 'voicelink_local_token';
+        const token = localStorage.getItem(tokenKey) || sessionStorage.getItem(tokenKey);
+        if (!token) return;
+
+        const apiBase = this.getApiBaseUrl();
+        fetch(`${apiBase}/api/auth/local/me`, {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (data?.success && data.user) {
+                    this.updateUIForAuthState(data.user);
+                }
+            })
+            .catch(() => {});
+    }
+
     checkOAuthCallback() {
         // Check URL for OAuth callback params
         const urlParams = new URLSearchParams(window.location.search);
@@ -5295,7 +5925,27 @@ class VoiceLinkApp {
 
     async handleMastodonLogout() {
         try {
+            const localToken = localStorage.getItem('voicelink_local_token') || sessionStorage.getItem('voicelink_local_token');
+            const whmcsToken = localStorage.getItem('voicelink_whmcs_token') || sessionStorage.getItem('voicelink_whmcs_token');
+            if (localToken) {
+                fetch(`${this.getApiBaseUrl()}/api/auth/local/logout`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${localToken}` }
+                }).catch(() => {});
+            }
+            if (whmcsToken) {
+                fetch(`${this.getApiBaseUrl()}/api/auth/whmcs/logout`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: whmcsToken })
+                }).catch(() => {});
+            }
+            localStorage.removeItem('voicelink_local_token');
+            sessionStorage.removeItem('voicelink_local_token');
+            localStorage.removeItem('voicelink_whmcs_token');
+            sessionStorage.removeItem('voicelink_whmcs_token');
             await window.mastodonAuth?.logout();
+            this.updateUIForAuthState(null);
             this.showNotification('Logged out successfully', 'info');
         } catch (error) {
             console.error('Logout failed:', error);
@@ -5353,10 +6003,16 @@ class VoiceLinkApp {
                     joinNameInput.value = user.displayName || user.username || currentValue;
                 }
             }
+            if (this.ui.currentScreen === 'startup-auth-screen' || this.ui.currentScreen === 'loading-screen') {
+                this.showScreen('main-menu');
+            }
         } else {
             // Show logged-out state
             if (loginPrompt) loginPrompt.style.display = 'block';
             if (userInfo) userInfo.style.display = 'none';
+            if (!this.isNativeApp() && !this.currentRoom && this.ui.currentScreen !== 'loading-screen') {
+                this.showScreen('startup-auth-screen');
+            }
 
             // Hide admin controls
             this.hideAdminControls();
@@ -5372,6 +6028,8 @@ class VoiceLinkApp {
         const currentProvider = document.getElementById('auth-current-provider');
         const currentRole = document.getElementById('auth-current-role');
         const walletStatus = document.getElementById('auth-wallet-status');
+        const authLinkMastodonBtn = document.getElementById('auth-link-mastodon-btn');
+        const authLinkWalletBtn = document.getElementById('auth-link-wallet-btn');
 
         if (currentUser) {
             currentUser.textContent = user ? (user.displayName || user.username || user.email || 'Authenticated User') : 'Not logged in';
@@ -5388,6 +6046,8 @@ class VoiceLinkApp {
             const hasWallet = !!(localStorage.getItem('voicelink_ecripto_token') || sessionStorage.getItem('voicelink_ecripto_token'));
             walletStatus.textContent = hasWallet ? 'Connected' : 'Disconnected';
         }
+        if (authLinkMastodonBtn) authLinkMastodonBtn.disabled = !user;
+        if (authLinkWalletBtn) authLinkWalletBtn.disabled = !user;
     }
 
     async checkForAppUpdates() {
@@ -5426,12 +6086,23 @@ class VoiceLinkApp {
     applyEntitlementVisibility(user) {
         const connectionsTabBtn = document.querySelector('.tab-btn[data-tab="connections"]');
         const connectionsTab = document.getElementById('connections-tab');
+        const advancedTabBtn = document.querySelector('.tab-btn[data-tab="advanced"]');
+        const advancedTab = document.getElementById('advanced-tab');
         const allowByRole = user?.permissions?.includes('admin') || user?.permissions?.includes('staff') || user?.permissions?.includes('client');
         const allowByEntitlement = user?.entitlements?.allowMultiDeviceSettings !== false;
         const allowConnections = !!user && allowByRole && allowByEntitlement;
+        const allowAdvanced = !!user;
 
         if (connectionsTabBtn) connectionsTabBtn.style.display = allowConnections ? '' : 'none';
         if (connectionsTab) connectionsTab.style.display = allowConnections ? '' : 'none';
+        if (advancedTabBtn) advancedTabBtn.disabled = !allowAdvanced;
+        if (advancedTab) {
+            advancedTab.classList.toggle('guest-disabled', !allowAdvanced);
+            advancedTab.querySelectorAll('input, select, button').forEach((control) => {
+                if (control.id === 'back-from-settings' || control.id === 'save-all-settings') return;
+                control.disabled = !allowAdvanced;
+            });
+        }
     }
 
     updateRoleBasedUI(user) {
@@ -5713,7 +6384,7 @@ class VoiceLinkApp {
         const header = document.createElement('div');
         header.className = 'admin-header';
         const title = document.createElement('h2');
-        title.textContent = 'VoiceLink Admin Panel';
+        title.textContent = 'Support and Administration';
         const closeBtn = document.createElement('button');
         closeBtn.className = 'close-admin-panel';
         closeBtn.textContent = 'X';
@@ -5728,6 +6399,7 @@ class VoiceLinkApp {
             { id: 'server', label: 'Server' },
             { id: 'rooms', label: 'Rooms' },
             { id: 'users', label: 'Users' },
+            { id: 'support', label: 'Support' },
             { id: 'mastodon', label: 'Mastodon' },
             { id: 'federation', label: 'Federation' }
         ];
@@ -5755,6 +6427,10 @@ class VoiceLinkApp {
         // Users Tab
         const usersTab = this.createUsersTab();
         contentArea.appendChild(usersTab);
+
+        // Support Tab
+        const supportTab = this.createSupportTab();
+        contentArea.appendChild(supportTab);
 
         // Mastodon Tab
         const mastodonTab = this.createMastodonTab();
@@ -5857,6 +6533,62 @@ class VoiceLinkApp {
         const requireAuthRow = this.createCheckboxRow('Require Authentication', 'admin-require-auth');
         settingsCard.appendChild(requireAuthRow);
 
+        const dbSection = document.createElement('div');
+        dbSection.className = 'setting-row';
+        dbSection.innerHTML = `
+            <label style="display:block;margin-top:10px;font-weight:600;">Database Configuration</label>
+            <label><input type="checkbox" id="admin-db-enabled"> Enable external database backend</label>
+            <div style="margin-top:8px;">
+                <label style="display:block;">Provider:</label>
+                <select id="admin-db-provider">
+                    <option value="sqlite">SQLite (Recommended default)</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                    <option value="mariadb">MariaDB</option>
+                </select>
+            </div>
+            <div id="admin-db-sqlite-fields" style="margin-top:8px;">
+                <label style="display:block;">SQLite DB Path:</label>
+                <input type="text" id="admin-db-sqlite-path" value="./data/voicelink.db">
+            </div>
+            <div id="admin-db-network-fields" style="margin-top:8px;display:none;">
+                <label style="display:block;">Host:</label>
+                <input type="text" id="admin-db-host" value="127.0.0.1">
+                <label style="display:block;">Port:</label>
+                <input type="number" id="admin-db-port" value="5432">
+                <label style="display:block;">Database Name:</label>
+                <input type="text" id="admin-db-name" value="voicelink">
+                <label style="display:block;">Username:</label>
+                <input type="text" id="admin-db-user" value="voicelink">
+                <label style="display:block;">Password:</label>
+                <input type="password" id="admin-db-password" value="">
+            </div>
+            <div style="margin-top:8px;">
+                <button class="admin-action-btn" id="admin-db-test-btn" type="button">Test Database Connection</button>
+            </div>
+        `;
+        settingsCard.appendChild(dbSection);
+
+        const inviteSection = document.createElement('div');
+        inviteSection.className = 'setting-row';
+        inviteSection.innerHTML = `
+            <label style="display:block;margin-top:12px;font-weight:600;">Admin Invite (Magic Link)</label>
+            <label style="display:block;">Admin Email:</label>
+            <input type="email" id="admin-invite-email" placeholder="admin@example.com">
+            <label style="display:block;margin-top:6px;">Role:</label>
+            <select id="admin-invite-role">
+                <option value="admin">Admin</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Owner</option>
+            </select>
+            <div style="margin-top:8px;">
+                <button class="admin-action-btn" id="admin-send-invite-btn" type="button">Send/Generate Invite Link</button>
+            </div>
+            <label style="display:block;margin-top:6px;">Last Invite Link:</label>
+            <input type="text" id="admin-last-invite-link" readonly>
+        `;
+        settingsCard.appendChild(inviteSection);
+
         const saveBtn = document.createElement('button');
         saveBtn.className = 'primary-btn';
         saveBtn.textContent = 'Save Settings';
@@ -5865,6 +6597,13 @@ class VoiceLinkApp {
 
         grid.appendChild(settingsCard);
         tab.appendChild(grid);
+
+        setTimeout(() => {
+            document.getElementById('admin-db-provider')?.addEventListener('change', () => this.updateDatabaseFieldsVisibility());
+            document.getElementById('admin-db-test-btn')?.addEventListener('click', () => this.testDatabaseConnection());
+            document.getElementById('admin-send-invite-btn')?.addEventListener('click', () => this.sendAdminInvite());
+            this.updateDatabaseFieldsVisibility();
+        }, 0);
 
         return tab;
     }
@@ -5935,6 +6674,35 @@ class VoiceLinkApp {
         usersList.className = 'admin-list';
         usersList.textContent = 'Loading users...';
         tab.appendChild(usersList);
+
+        return tab;
+    }
+
+    createSupportTab() {
+        const tab = document.createElement('div');
+        tab.className = 'admin-tab-content';
+        tab.id = 'admin-support-tab';
+
+        const title = document.createElement('h3');
+        title.textContent = 'Support Sessions';
+        tab.appendChild(title);
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'admin-toolbar';
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'admin-action-btn';
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.onclick = () => this.loadAdminSupportSessions();
+
+        toolbar.appendChild(refreshBtn);
+        tab.appendChild(toolbar);
+
+        const sessionsList = document.createElement('div');
+        sessionsList.id = 'admin-support-sessions-list';
+        sessionsList.className = 'admin-list';
+        sessionsList.textContent = 'Loading support sessions...';
+        tab.appendChild(sessionsList);
 
         return tab;
     }
@@ -6137,11 +6905,140 @@ class VoiceLinkApp {
     async loadAdminData() {
         await Promise.all([
             this.loadAdminServerStats(),
+            this.loadAdminSettings(),
             this.loadAdminRooms(),
             this.loadAdminUsers(),
+            this.loadAdminSupportSessions(),
             this.loadAdminBots(),
             this.loadFederatedServers()
         ]);
+    }
+
+    async loadAdminSettings() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/admin/settings`, {
+                headers: authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {}
+            });
+            if (!response.ok) return;
+            const settings = await response.json();
+
+            const maxRoomsEl = document.getElementById('admin-max-rooms');
+            const requireAuthEl = document.getElementById('admin-require-auth');
+            if (maxRoomsEl && settings.maxRooms != null) maxRoomsEl.value = settings.maxRooms;
+            if (requireAuthEl) requireAuthEl.checked = !!settings.requireAuth;
+
+            const db = settings.database || {};
+            const provider = db.provider || 'sqlite';
+            const enabled = !!db.enabled;
+
+            const enabledEl = document.getElementById('admin-db-enabled');
+            const providerEl = document.getElementById('admin-db-provider');
+            if (enabledEl) enabledEl.checked = enabled;
+            if (providerEl) providerEl.value = provider;
+
+            const sqlitePathEl = document.getElementById('admin-db-sqlite-path');
+            if (sqlitePathEl) sqlitePathEl.value = db.sqlite?.path || './data/voicelink.db';
+
+            const netCfg = db[provider] || {};
+            const hostEl = document.getElementById('admin-db-host');
+            const portEl = document.getElementById('admin-db-port');
+            const nameEl = document.getElementById('admin-db-name');
+            const userEl = document.getElementById('admin-db-user');
+            const passEl = document.getElementById('admin-db-password');
+            if (hostEl) hostEl.value = netCfg.host || '127.0.0.1';
+            if (portEl) portEl.value = netCfg.port || (provider === 'postgres' ? 5432 : 3306);
+            if (nameEl) nameEl.value = netCfg.database || 'voicelink';
+            if (userEl) userEl.value = netCfg.user || 'voicelink';
+            if (passEl) passEl.value = '';
+
+            this.updateDatabaseFieldsVisibility();
+        } catch (error) {
+            console.error('Failed to load admin settings:', error);
+        }
+    }
+
+    updateDatabaseFieldsVisibility() {
+        const provider = document.getElementById('admin-db-provider')?.value || 'sqlite';
+        const sqliteFields = document.getElementById('admin-db-sqlite-fields');
+        const networkFields = document.getElementById('admin-db-network-fields');
+        const portInput = document.getElementById('admin-db-port');
+
+        if (sqliteFields) sqliteFields.style.display = provider === 'sqlite' ? '' : 'none';
+        if (networkFields) networkFields.style.display = provider === 'sqlite' ? 'none' : '';
+        if (portInput && !portInput.value) {
+            portInput.value = provider === 'postgres' ? '5432' : '3306';
+        }
+    }
+
+    async testDatabaseConnection() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const provider = document.getElementById('admin-db-provider')?.value || 'sqlite';
+            const payload = {
+                provider,
+                config: provider === 'sqlite'
+                    ? { path: document.getElementById('admin-db-sqlite-path')?.value || '' }
+                    : {
+                        host: document.getElementById('admin-db-host')?.value || '',
+                        port: Number(document.getElementById('admin-db-port')?.value || 0),
+                        database: document.getElementById('admin-db-name')?.value || '',
+                        user: document.getElementById('admin-db-user')?.value || '',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    }
+            };
+
+            const response = await fetch(`${apiBase}/api/admin/database/test`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (response.ok && result.success) {
+                this.showNotification(result.message || 'Database test successful', 'success');
+            } else {
+                this.showNotification(result.error || 'Database test failed', 'error');
+            }
+        } catch (error) {
+            this.showNotification('Database test failed', 'error');
+        }
+    }
+
+    async sendAdminInvite() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const email = document.getElementById('admin-invite-email')?.value?.trim();
+            const role = document.getElementById('admin-invite-role')?.value || 'admin';
+            if (!email) {
+                this.showNotification('Enter admin email first', 'error');
+                return;
+            }
+
+            const response = await fetch(`${apiBase}/api/admin/invites`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify({ email, role })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                this.showNotification(result.error || 'Failed to create invite', 'error');
+                return;
+            }
+            const linkEl = document.getElementById('admin-last-invite-link');
+            if (linkEl) linkEl.value = result.inviteUrl || '';
+            this.showNotification('Admin invite created', 'success');
+        } catch (error) {
+            this.showNotification('Failed to create invite', 'error');
+        }
     }
 
     async loadAdminServerStats() {
@@ -6230,6 +7127,161 @@ class VoiceLinkApp {
             }
         } catch (error) {
             console.error('Failed to load admin users:', error);
+        }
+    }
+
+    async loadAdminSupportSessions() {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/support/sessions`, {
+                headers: authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {}
+            });
+
+            const sessionsList = document.getElementById('admin-support-sessions-list');
+            if (!sessionsList) return;
+
+            if (response.status === 403) {
+                sessionsList.textContent = 'Support staff access required.';
+                return;
+            }
+            if (!response.ok) {
+                sessionsList.textContent = 'Unable to load support sessions.';
+                return;
+            }
+
+            const payload = await response.json();
+            const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+            sessionsList.textContent = '';
+
+            if (sessions.length === 0) {
+                sessionsList.textContent = 'No active support sessions.';
+                return;
+            }
+
+            sessions
+                .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+                .forEach((session) => {
+                    const metaParts = [
+                        session.status || 'pending',
+                        session.userEmail || 'no email',
+                        session.hiddenRoomName || session.hiddenRoomId || 'no room'
+                    ];
+                    if (session.ticketId) metaParts.push(`Ticket ${session.ticketId}`);
+                    if (session.whmcsTicketNumber || session.whmcsTicketId) {
+                        metaParts.push(`Support ticket ${session.whmcsTicketNumber || session.whmcsTicketId}`);
+                    }
+
+                    const actions = [];
+                    if (!session.assignedAgentId) {
+                        actions.push({ label: 'Pick Up', action: () => this.pickupSupportSession(session.id) });
+                    }
+                    if (session.hiddenRoomId) {
+                        actions.push({ label: 'Open Room', action: () => this.openSupportRoom(session.hiddenRoomId, session.userName) });
+                    }
+                    if (!session.whmcsTicketId) {
+                        actions.push({ label: 'Create Support Ticket', action: () => this.attachSupportTicket(session.id, session) });
+                    }
+                    if (session.status !== 'closed') {
+                        actions.push({ label: 'Close', action: () => this.setSupportSessionStatus(session.id, 'closed') });
+                    }
+
+                    const item = this.createAdminListItem(
+                        session.userName || 'Support User',
+                        metaParts.join(' - '),
+                        actions
+                    );
+                    item.dataset.supportSessionId = session.id;
+                    sessionsList.appendChild(item);
+                });
+        } catch (error) {
+            console.error('Failed to load support sessions:', error);
+            const sessionsList = document.getElementById('admin-support-sessions-list');
+            if (sessionsList) {
+                sessionsList.textContent = 'Unable to load support sessions.';
+            }
+        }
+    }
+
+    openSupportRoom(roomId, userName = 'Support User') {
+        document.getElementById('join-room-id').value = roomId;
+        const userNameField = document.getElementById('user-name');
+        if (userNameField && !userNameField.value.trim()) {
+            userNameField.value = this.currentUser?.displayName || this.currentUser?.username || 'Support Agent';
+        }
+        this.quickJoinRoom(roomId);
+        this.showNotification(`Prepared support room for ${userName}. Press Join Room to enter.`, 'info');
+    }
+
+    async pickupSupportSession(sessionId) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/support/sessions/${encodeURIComponent(sessionId)}/pickup`, {
+                method: 'POST',
+                headers: authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {}
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Unable to pick up support session');
+            }
+            this.showNotification('Support session picked up.', 'success');
+            this.loadAdminSupportSessions();
+        } catch (error) {
+            this.showNotification(error.message || 'Unable to pick up support session', 'error');
+        }
+    }
+
+    async setSupportSessionStatus(sessionId, status) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/support/sessions/${encodeURIComponent(sessionId)}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify({
+                    status,
+                    note: status === 'closed' ? 'Support session closed by staff.' : undefined
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Unable to update support session');
+            }
+            this.showNotification(`Support session ${status}.`, 'success');
+            this.loadAdminSupportSessions();
+        } catch (error) {
+            this.showNotification(error.message || 'Unable to update support session', 'error');
+        }
+    }
+
+    async attachSupportTicket(sessionId, session = {}) {
+        try {
+            const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
+            const response = await fetch(`${apiBase}/api/support/sessions/${encodeURIComponent(sessionId)}/attach-whmcs-ticket`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
+                body: JSON.stringify({
+                    subject: `Support session for ${session.userName || 'User'}`,
+                    message: session.issue || 'Live support session attached from Support.',
+                    priority: 'Medium'
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                throw new Error(result.error || 'Unable to create support ticket');
+            }
+            this.showNotification('Support ticket created.', 'success');
+            this.loadAdminSupportSessions();
+        } catch (error) {
+            this.showNotification(error.message || 'Unable to create support ticket', 'error');
         }
     }
 
@@ -6602,15 +7654,47 @@ class VoiceLinkApp {
     async saveServerSettings() {
         try {
             const apiBase = this.getApiBaseUrl();
+            const authContext = this.getAuthContext();
 
             const settings = {
                 maxRooms: document.getElementById('admin-max-rooms')?.value,
-                requireAuth: document.getElementById('admin-require-auth')?.checked
+                requireAuth: document.getElementById('admin-require-auth')?.checked,
+                database: {
+                    enabled: !!document.getElementById('admin-db-enabled')?.checked,
+                    provider: document.getElementById('admin-db-provider')?.value || 'sqlite',
+                    sqlite: {
+                        path: document.getElementById('admin-db-sqlite-path')?.value || './data/voicelink.db'
+                    },
+                    postgres: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 5432),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    },
+                    mysql: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 3306),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    },
+                    mariadb: {
+                        host: document.getElementById('admin-db-host')?.value || '127.0.0.1',
+                        port: Number(document.getElementById('admin-db-port')?.value || 3306),
+                        database: document.getElementById('admin-db-name')?.value || 'voicelink',
+                        user: document.getElementById('admin-db-user')?.value || 'voicelink',
+                        password: document.getElementById('admin-db-password')?.value || ''
+                    }
+                }
             };
 
             await fetch(`${apiBase}/api/admin/settings`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(authContext?.token ? { Authorization: `Bearer ${authContext.token}` } : {})
+                },
                 body: JSON.stringify(settings)
             });
 
