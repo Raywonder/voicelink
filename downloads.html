@@ -3,148 +3,221 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Downloads - Build 26</title>
+    <title>VoiceLink Downloads - Native Apps & Web Client</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
-            color: #f9fafb;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
             min-height: 100vh;
-            padding: 24px;
+            padding: 20px;
         }
-        .container { max-width: 1100px; margin: 0 auto; }
-        header { text-align: center; padding: 32px 0 24px; }
-        h1 { font-size: 2.8rem; margin-bottom: 10px; }
-        .subtitle { color: #cbd5e1; font-size: 1.05rem; }
-        .release-note {
-            margin: 20px auto 0;
-            max-width: 760px;
-            background: rgba(59, 130, 246, 0.12);
-            border: 1px solid rgba(96, 165, 250, 0.35);
-            border-radius: 14px;
-            padding: 16px 18px;
-            color: #dbeafe;
-        }
-        .grid {
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { text-align: center; padding: 40px 20px; }
+        h1 { font-size: 3em; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
+        .subtitle { font-size: 1.2em; opacity: 0.9; margin-bottom: 40px; }
+        .downloads-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 22px;
-            margin-top: 28px;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin: 40px 0;
         }
-        .card {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 18px;
-            padding: 24px;
+        .download-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
-        .card h2 { font-size: 1.5rem; margin-bottom: 8px; }
-        .badge {
+        .download-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+        .platform-icon { font-size: 4em; margin-bottom: 20px; display: block; }
+        .download-card h2 { font-size: 1.8em; margin-bottom: 15px; }
+        .version {
+            background: rgba(255, 255, 255, 0.2);
             display: inline-block;
-            background: #2563eb;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+        }
+        .features { list-style: none; margin: 20px 0; font-size: 0.95em; opacity: 0.9; }
+        .features li { padding: 8px 0; padding-left: 25px; position: relative; }
+        .features li:before { content: "✓"; position: absolute; left: 0; font-weight: bold; color: #4ade80; }
+        .download-button {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
             color: #fff;
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-size: 0.8rem;
-            margin-bottom: 12px;
-        }
-        .card p { color: #cbd5e1; line-height: 1.5; }
-        .features { margin: 16px 0; padding-left: 18px; color: #e5e7eb; }
-        .features li { margin: 8px 0; }
-        .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
-        .btn {
-            display: inline-block;
-            text-align: center;
             text-decoration: none;
-            padding: 12px 16px;
             border-radius: 12px;
-            font-weight: 600;
-            color: #fff;
-            background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+            font-weight: bold;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
         }
-        .btn.secondary { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.14); }
-        .section-title { margin-top: 40px; margin-bottom: 14px; font-size: 1.5rem; }
-        .muted { color: #94a3b8; }
-        @media (max-width: 720px) { h1 { font-size: 2.1rem; } }
+        .download-button:hover { transform: scale(1.05); box-shadow: 0 5px 20px rgba(74, 222, 128, 0.4); }
+        .download-button.secondary { background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%); margin-top: 10px; }
+        .web-client-card {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(139, 92, 246, 0.3) 100%);
+            border-color: rgba(139, 92, 246, 0.5);
+        }
+        .info-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 30px 0;
+            border-left: 4px solid #4ade80;
+        }
+        .info-section h3 { margin-bottom: 15px; font-size: 1.5em; }
+        .info-section p { line-height: 1.6; opacity: 0.9; }
+        footer { text-align: center; padding: 40px 20px; opacity: 0.8; font-size: 0.9em; }
+        .file-size { font-size: 0.85em; opacity: 0.8; }
+        @media (max-width: 768px) { h1 { font-size: 2em; } .downloads-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>VoiceLink Downloads</h1>
-            <p class="subtitle">VoiceLink 1.0.0 Build 26</p>
-            <div class="release-note">
-                Desktop installers are the active supported release path. Public browser room access remains limited until the browser client is fully ready.
-            </div>
+            <h1>🎙️ VoiceLink Downloads</h1>
+            <p class="subtitle">P2P Voice Chat with 3D Spatial Audio</p>
         </header>
 
-        <div class="grid">
-            <section class="card">
-                <div class="badge">Primary Desktop Build</div>
-                <h2>macOS</h2>
-                <p>Current native desktop client for Intel and Apple Silicon.</p>
+        <div class="downloads-grid">
+            <!-- macOS Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🍎</span>
+                <h2>macOS Native</h2>
+                <span class="version">v1.0.0</span>
                 <ul class="features">
-                    <li>Universal native macOS package</li>
-                    <li>Account, licensing, room, and admin baseline</li>
-                    <li>Current mirrored public release</li>
+                    <li>SwiftUI native interface</li>
+                    <li>3D spatial audio engine</li>
+                    <li>Multi-channel audio support</li>
+                    <li>Push-to-talk (PTT)</li>
+                    <li>Jellyfin media integration</li>
+                    <li>Auto-updates built-in</li>
                 </ul>
-                <div class="actions">
-                    <a class="btn" href="/downloads/voicelink/VoiceLinkMacOS.zip">Download macOS</a>
-                    <a class="btn secondary" href="/downloads/voicelink/VoiceLinkMacOS.zip.sha256">SHA256</a>
-                </div>
-            </section>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip" class="download-button" download>
+                    Download for macOS <span class="file-size">(Current Build)</span>
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-button secondary" download>
+                    Universal PKG Installer
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg" class="download-button secondary" download>
+                    Apple Silicon PKG Installer
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg" class="download-button secondary" download>
+                    Intel PKG Installer
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (VoiceLinkMacOS.zip)
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (VoiceLink-macOS.zip)
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (Universal PKG)
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (Apple Silicon PKG)
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (Intel PKG)
+                </a>
+            </div>
 
-            <section class="card">
-                <div class="badge">Primary Desktop Build</div>
-                <h2>Windows</h2>
-                <p>Current native Windows desktop client for the build 26 baseline.</p>
+            <!-- Windows Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🪟</span>
+                <h2>Windows Native</h2>
+                <span class="version">v1.0.0 build 24</span>
                 <ul class="features">
-                    <li>Native Windows desktop package</li>
-                    <li>Current auth and room-management baseline</li>
-                    <li>Current mirrored public release</li>
+                    <li>Native .NET desktop app</li>
+                    <li>API auto-start and wake support</li>
+                    <li>Authentication and room management</li>
+                    <li>Push-to-talk and audio controls</li>
+                    <li>Server compatibility with VoiceLink API</li>
                 </ul>
-                <div class="actions">
-                    <a class="btn" href="/downloads/voicelink/VoiceLink-windows.zip">Download Windows</a>
-                    <a class="btn secondary" href="/downloads/voicelink/VoiceLink-windows.zip.sha256">SHA256</a>
-                </div>
-            </section>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe" class="download-button" download>
+                    Download for Windows <span class="file-size">(Current Build)</span>
+                </a>
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe.sha256" class="download-button secondary" download>
+                    SHA256 Checksum (VoiceLink-1.0.0-windows-setup.exe)
+                </a>
+            </div>
 
-            <section class="card">
-                <div class="badge">Browser Access</div>
-                <h2>Web App</h2>
-                <p>Use the VoiceLink web surface for status, docs, and browser-side access when enabled.</p>
+            <!-- OpenLink Tools -->
+            <div class="download-card">
+                <span class="platform-icon">🔧</span>
+                <h2>OpenLink Tools</h2>
+                <span class="version">macOS</span>
                 <ul class="features">
-                    <li>Main server web entry</li>
-                    <li>Community VPS mirror</li>
-                    <li>Desktop-first release position remains in effect</li>
+                    <li>Remote server management</li>
+                    <li>Local server installer</li>
+                    <li>Network configuration</li>
+                    <li>Diagnostic tools</li>
                 </ul>
-                <div class="actions">
-                    <a class="btn" href="/">Open Main Web App</a>
-                    <a class="btn secondary" href="https://node2.voicelink.devinecreations.net/">Open Community Mirror</a>
-                </div>
-            </section>
+                <a href="/downloads/mac-native/OpenLink-macOS.zip" class="download-button" download>
+                    OpenLink <span class="file-size">(340 KB)</span>
+                </a>
+                <a href="/downloads/mac-native/OpenLinkInstaller-macOS.zip" class="download-button secondary" download>
+                    OpenLink Installer <span class="file-size">(204 KB)</span>
+                </a>
+            </div>
+
+            <!-- Web Client -->
+            <div class="download-card web-client-card">
+                <span class="platform-icon">🌐</span>
+                <h2>Web Client (No Download Required)</h2>
+                <span class="version">Universal</span>
+                <p style="margin: 20px 0; line-height: 1.6; font-size: 1.1em;">
+                    Access VoiceLink directly from your browser. Works on any device with a modern web browser.
+                </p>
+                <ul class="features" style="columns: 2;">
+                    <li>No installation required</li>
+                    <li>Cross-platform support</li>
+                    <li>WebRTC P2P audio</li>
+                    <li>Spatial audio (WebAudio)</li>
+                    <li>Room creation & joining</li>
+                    <li>Text chat support</li>
+                    <li>Auto-port detection</li>
+                    <li>Mobile-friendly UI</li>
+                </ul>
+                <a href="/" class="download-button">Launch Web Client</a>
+            </div>
         </div>
 
-        <h2 class="section-title">Server Packages</h2>
-        <div class="grid">
-            <section class="card">
-                <div class="badge">Self-Hosting</div>
-                <h2>VoiceLink Server</h2>
-                <p>Current server package for hosted or self-hosted VoiceLink installs. Use this when deploying a new server that should connect back to the main VoiceLink network and desktop ecosystem.</p>
-                <ul class="features">
-                    <li>Current packaged server archive</li>
-                    <li>Installer/bootstrap scripts included</li>
-                    <li>Designed to connect back to the main API and federation path</li>
-                </ul>
-                <div class="actions">
-                    <a class="btn" href="/downloads/voicelink/voicelink-server-1.0.0.tar.gz">Download Server Tarball</a>
-                    <a class="btn secondary" href="/downloads/voicelink/voicelink-server-1.0.0.zip">Download Server Zip</a>
-                </div>
-            </section>
+        <div class="info-section">
+            <h3>📋 System Requirements</h3>
+            <p>
+                <strong>macOS Native:</strong> macOS 12.0 (Monterey) or later, Apple Silicon or Intel<br>
+                <strong>macOS DMG:</strong> macOS 11.0 (Big Sur) or later<br>
+                <strong>Windows:</strong> Windows 10/11, 64-bit<br>
+                <strong>Web:</strong> Chrome 90+, Firefox 88+, Safari 14+, or Edge 90+
+            </p>
         </div>
 
-        <h2 class="section-title">Release Notes</h2>
-        <p class="muted">Main landing pages should highlight the macOS and Windows desktop clients first. This full downloads page can carry the broader desktop, web, and server distribution set for immediate use.</p>
+        <div class="info-section">
+            <h3>🚀 Key Features</h3>
+            <p>
+                VoiceLink provides peer-to-peer voice communication with advanced 3D spatial audio.
+                Features include push-to-talk, whisper mode, Jellyfin media sync, TTS announcements,
+                Mastodon authentication, and automatic port detection.
+            </p>
+        </div>
+
+        <footer>
+            <p>© 2025-2026 Devine Creations | VoiceLink v1.0.x | <a href="https://devine-creations.com/" style="color: #4ade80;">devine-creations.com</a></p>
+        </footer>
     </div>
 </body>
 </html>

@@ -8,47 +8,60 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Project = Join-Path $Root "VoiceLinkNative/VoiceLinkNative.csproj"
 $PublishDir = Join-Path $Root "publish/win-x64"
 $DistDir = Join-Path $Root "dist"
-$WixMsi = Join-Path $Root "installer/wix/VoiceLink.msi.wxs"
-$WixBundle = Join-Path $Root "installer/wix/VoiceLink.bundle.wxs"
+$InnoScript = Join-Path $Root "installer/inno/VoiceLink.iss"
 
 New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
 
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    throw "dotnet SDK is required. Install .NET 8 SDK first."
+$PreferredDotnet = "C:\Program Files\dotnet\dotnet.exe"
+$Dotnet = $null
+if (Test-Path $PreferredDotnet) {
+    $Dotnet = @{ Source = $PreferredDotnet }
+} else {
+    $ResolvedDotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($ResolvedDotnet) {
+        $Dotnet = @{ Source = $ResolvedDotnet.Source }
+    } else {
+        throw "dotnet SDK is required. Install .NET 8 SDK first."
+    }
 }
 
-if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-    dotnet tool install --global wix
+$SdkList = & $Dotnet.Source --list-sdks
+if (-not $SdkList) {
+    throw "The resolved dotnet binary does not have any SDKs available."
 }
 
-$env:Path = "$env:USERPROFILE\.dotnet\tools;$env:Path"
+if (-not (Test-Path $InnoScript)) {
+    throw "Inno Setup script not found at $InnoScript"
+}
 
-wix extension add WixToolset.UI.wixext | Out-Null
-wix extension add WixToolset.Bal.wixext | Out-Null
+$Iscc = Get-Command iscc -ErrorAction SilentlyContinue
+if (-not $Iscc) {
+    $FallbackIscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    if (Test-Path $FallbackIscc) {
+        $Iscc = @{ Source = $FallbackIscc }
+    } else {
+        throw "Inno Setup Compiler (ISCC.exe) is required. Install Inno Setup 6 first."
+    }
+}
 
-dotnet restore $Project
-dotnet publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:PublishTrimmed=false
+& $Dotnet.Source restore $Project
+& $Dotnet.Source publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true
 
-$MsiOut = Join-Path $DistDir "VoiceLinkNative-$Version-win-x64.msi"
-$ExeOut = Join-Path $DistDir "VoiceLinkNative-$Version-setup.exe"
 $PortableOut = Join-Path $DistDir "VoiceLink-$Version-windows-portable.exe"
-$PortableSha = "$PortableOut.sha256"
 $SetupOut = Join-Path $DistDir "VoiceLink-$Version-windows-setup.exe"
-$SetupSha = "$SetupOut.sha256"
-$MsiNamed = Join-Path $DistDir "VoiceLink-$Version-windows.msi"
 
-wix build $WixMsi -arch x64 -d Version=$Version -d PublishDir=$PublishDir -o $MsiOut
-wix build $WixBundle -arch x64 -ext WixToolset.Bal.wixext -d Version=$Version -d DistDir=$DistDir -o $ExeOut
+Copy-Item (Join-Path $PublishDir "VoiceLinkNative.exe") $PortableOut -Force
 
-Copy-Item "$PublishDir\VoiceLinkNative.exe" $PortableOut -Force
-Copy-Item $ExeOut $SetupOut -Force
-Copy-Item $MsiOut $MsiNamed -Force
-(Get-FileHash $PortableOut -Algorithm SHA256).Hash | Out-File -FilePath $PortableSha -Encoding ascii
-(Get-FileHash $SetupOut -Algorithm SHA256).Hash | Out-File -FilePath $SetupSha -Encoding ascii
-
-if ((Get-FileHash $PortableOut -Algorithm SHA256).Hash -eq (Get-FileHash $SetupOut -Algorithm SHA256).Hash) {
-    throw "Setup EXE hash matches portable EXE hash. Refusing release because installer payload is invalid."
+& $Iscc.Source "/DMyAppVersion=$Version" "/DPublishDir=$PublishDir" "/DOutputDir=$DistDir" $InnoScript
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup build failed."
 }
+
+$PortableHash = (Get-FileHash $PortableOut -Algorithm SHA256).Hash.ToLowerInvariant()
+$SetupHash = (Get-FileHash $SetupOut -Algorithm SHA256).Hash.ToLowerInvariant()
+
+Set-Content -Path "$PortableOut.sha256" -Value "$PortableHash  $(Split-Path $PortableOut -Leaf)"
+Set-Content -Path "$SetupOut.sha256" -Value "$SetupHash  $(Split-Path $SetupOut -Leaf)"
 
 Write-Host "Built artifacts:" -ForegroundColor Green
-Get-Item $MsiNamed, $SetupOut, $PortableOut, $SetupSha, $PortableSha | Select-Object FullName, Length, LastWriteTime
+Get-Item $PortableOut, $SetupOut, "$PortableOut.sha256", "$SetupOut.sha256" | Select-Object FullName, Length, LastWriteTime
