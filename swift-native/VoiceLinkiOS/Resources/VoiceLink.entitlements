@@ -3,13 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>production</string>
-	<key>com.apple.developer.team-identifier</key>
-	<string>G5232LU4Z7</string>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>G5232LU4Z7.*</string>
-		<string>com.apple.token</string>
-	</array>
+	<string>development</string>
 </dict>
 </plist>

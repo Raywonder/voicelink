@@ -1,97 +1,11 @@
 import Foundation
 import UIKit
 
-struct IOSCrashReportSummary: Codable {
-    let fileName: String
-    let modifiedAt: String
-    let preview: String
-}
-
-struct IOSBugReport: Codable {
-    let title: String
-    let description: String
-    let category: String
-    let severity: String
-    let anonymous: Bool
-    let submittedBy: String?
-    let mastodonHandle: String?
-    let appVersion: String
-    let platform: String
-    let accountEmail: String?
-    let username: String?
-    let clientId: String?
-    let currentRoom: String?
-    let diagnosticsSummary: String?
-    let localMonitorDiagnostics: String?
-    let recentCrashReports: [IOSCrashReportSummary]?
-    let submittedAt: String?
-}
-
 @MainActor
-final class IOSDiagnosticsManager: ObservableObject {
+final class IOSDiagnosticsManager {
     static let shared = IOSDiagnosticsManager()
 
-    private let lastSessionActiveKey = "voicelink.ios.lastSessionActive"
-    private let lastSessionAtKey = "voicelink.ios.lastSessionAt"
-    private let pendingCrashSummaryKey = "voicelink.ios.pendingCrashSummary"
-
     private init() {}
-
-    func markSceneActive() {
-        let defaults = UserDefaults.standard
-        let previousActive = defaults.bool(forKey: lastSessionActiveKey)
-        let isoNow = ISO8601DateFormatter().string(from: Date())
-        if previousActive {
-            defaults.set(
-                "Previous iOS session appears to have ended unexpectedly before \(isoNow).",
-                forKey: pendingCrashSummaryKey
-            )
-        }
-        defaults.set(true, forKey: lastSessionActiveKey)
-        defaults.set(isoNow, forKey: lastSessionAtKey)
-    }
-
-    func markSceneBackground() {
-        let defaults = UserDefaults.standard
-        defaults.set(false, forKey: lastSessionActiveKey)
-        defaults.set(ISO8601DateFormatter().string(from: Date()), forKey: lastSessionAtKey)
-    }
-
-    func currentCrashSummaries() -> [IOSCrashReportSummary] {
-        let defaults = UserDefaults.standard
-        guard let summary = defaults.string(forKey: pendingCrashSummaryKey), !summary.isEmpty else {
-            return []
-        }
-        let stamp = defaults.string(forKey: lastSessionAtKey) ?? ISO8601DateFormatter().string(from: Date())
-        return [
-            IOSCrashReportSummary(
-                fileName: "ios-session-state",
-                modifiedAt: stamp,
-                preview: summary
-            )
-        ]
-    }
-
-    func diagnosticsSummary(
-        serverURL: String,
-        currentRoom: String?,
-        sessionStatus: String = "",
-        displayName: String = ""
-    ) -> String {
-        let defaults = UserDefaults.standard
-        let authToken = defaults.string(forKey: "voicelink.authToken") ?? ""
-        let tokenState = authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Not signed in" : "Authenticated"
-        let pendingCrash = defaults.string(forKey: pendingCrashSummaryKey) ?? "None"
-        return [
-            "VoiceLink iOS Diagnostics",
-            "Display Name: \(displayName.isEmpty ? "Not set" : displayName)",
-            "Server URL: \(normalizeDiagnosticsBaseURL(serverURL))",
-            "Current Room: \(currentRoom?.isEmpty == false ? currentRoom! : "None")",
-            "Auth State: \(tokenState)",
-            "Audio Status: \(sessionStatus.isEmpty ? "Unknown" : sessionStatus)",
-            "Pending Crash Summary: \(pendingCrash)"
-        ].joined(separator: "\n")
-    }
 
     func submitBugReport(
         serverURL: String,
@@ -101,86 +15,210 @@ final class IOSDiagnosticsManager: ObservableObject {
         severity: String,
         anonymous: Bool,
         currentRoom: String?,
-        sessionStatus: String,
+        sessionStatus: String?,
         displayName: String,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty, !trimmedDescription.isEmpty else {
+            completion(.failure(NSError(domain: "VoiceLinkiOS", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Diagnostics title and description are required."
+            ])))
+            return
+        }
+
         Task {
             do {
-                let defaults = UserDefaults.standard
-                let diagnosticsEnabled = defaults.object(forKey: "voicelink.autoSendDiagnostics") as? Bool ?? true
-                let includeCrashReports = defaults.object(forKey: "voicelink.shareCrashReports") as? Bool ?? true
-                let authToken = defaults.string(forKey: "voicelink.authToken") ?? ""
-                let accountEmail = defaults.string(forKey: "voicelink.accountEmail")
-                let username = defaults.string(forKey: "voicelink.username") ?? displayName
-                let clientId = defaults.string(forKey: "clientId") ?? UIDevice.current.identifierForVendor?.uuidString
-
-                let report = IOSBugReport(
-                    title: title,
-                    description: description,
+                let payload = try makePayload(
+                    title: trimmedTitle,
+                    description: trimmedDescription,
                     category: category,
                     severity: severity,
                     anonymous: anonymous,
-                    submittedBy: anonymous ? nil : displayName,
-                    mastodonHandle: nil,
-                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
-                    platform: "iOS",
-                    accountEmail: anonymous ? nil : accountEmail,
-                    username: anonymous ? nil : username,
-                    clientId: clientId,
                     currentRoom: currentRoom,
-                    diagnosticsSummary: diagnosticsEnabled ? diagnosticsSummary(serverURL: serverURL, currentRoom: currentRoom, sessionStatus: sessionStatus, displayName: displayName) : nil,
-                    localMonitorDiagnostics: nil,
-                    recentCrashReports: (diagnosticsEnabled && includeCrashReports) ? currentCrashSummaries() : nil,
-                    submittedAt: ISO8601DateFormatter().string(from: Date())
+                    sessionStatus: sessionStatus,
+                    displayName: displayName
                 )
-
-                let payload = try JSONEncoder().encode(report)
-                guard let url = URL(string: "\(normalizeDiagnosticsBaseURL(serverURL))/api/bugs/submit") else {
-                    throw URLError(.badURL)
-                }
-
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                let trimmedToken = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedToken.isEmpty {
-                    request.setValue("Bearer \(trimmedToken)", forHTTPHeaderField: "Authorization")
-                    request.setValue(trimmedToken, forHTTPHeaderField: "x-session-token")
-                }
-                request.httpBody = payload
-
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
-
-                if includeCrashReports {
-                    defaults.removeObject(forKey: pendingCrashSummaryKey)
-                }
-
-                await MainActor.run {
-                    completion(.success(()))
-                }
+                try await submitPayload(payload, serverURL: serverURL)
+                completion(.success(()))
             } catch {
-                await MainActor.run {
-                    completion(.failure(error))
-                }
+                completion(.failure(error))
             }
         }
     }
-}
 
-private func normalizeDiagnosticsBaseURL(_ rawURL: String) -> String {
-    let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        return "https://voicelink.devinecreations.net"
+    private func makePayload(
+        title: String,
+        description: String,
+        category: String,
+        severity: String,
+        anonymous: Bool,
+        currentRoom: String?,
+        sessionStatus: String?,
+        displayName: String
+    ) throws -> Data {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let appVersion = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let buildNumber = info["CFBundleVersion"] as? String ?? "unknown"
+        let device = UIDevice.current
+
+        let diagnosticsSummary = [
+            "device=\(device.model)",
+            "system=\(device.systemName) \(device.systemVersion)",
+            "appVersion=\(appVersion)",
+            "build=\(buildNumber)",
+            "room=\((currentRoom ?? "").isEmpty ? "none" : currentRoom!)",
+            "status=\((sessionStatus ?? "").isEmpty ? "none" : sessionStatus!)"
+        ].joined(separator: " | ")
+
+        let payload: [String: Any] = [
+            "title": title,
+            "description": description,
+            "category": category,
+            "severity": severity,
+            "anonymous": anonymous,
+            "submittedBy": anonymous ? NSNull() : (displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? UIDevice.current.name : displayName),
+            "displayName": anonymous ? NSNull() : displayName,
+            "appVersion": appVersion,
+            "platform": "\(device.systemName) \(device.systemVersion)",
+            "currentRoom": currentRoom ?? NSNull(),
+            "diagnosticsSummary": diagnosticsSummary,
+            "submittedAt": ISO8601DateFormatter().string(from: Date()),
+            "recentCrashReports": []
+        ]
+
+        return try JSONSerialization.data(withJSONObject: payload)
     }
-    let withScheme: String
-    if trimmed.contains("://") {
-        withScheme = trimmed
-    } else {
-        withScheme = "https://\(trimmed)"
+
+    private func submitPayload(_ payload: Data, serverURL: String) async throws {
+        let supportLogsPayload = makeSupportLogsPayload(from: payload)
+        let bases = candidateBases(from: serverURL)
+        var lastError: Error = NSError(domain: "VoiceLinkiOS", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: "Failed to submit bug report."
+        ])
+
+        for base in bases {
+            guard let url = URL(string: "\(base)/api/bugs/submit") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 15
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = payload
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    continue
+                }
+                if (200...299).contains(http.statusCode) {
+                    if let supportLogsPayload {
+                        try? await submitSupportLogs(supportLogsPayload, base: base)
+                    }
+                    return
+                }
+                lastError = NSError(domain: "VoiceLinkiOS", code: http.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Server returned status \(http.statusCode)."
+                ])
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError
     }
-    return withScheme.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+    private func makeSupportLogsPayload(from bugPayload: Data) -> Data? {
+        guard let json = try? JSONSerialization.jsonObject(with: bugPayload) as? [String: Any] else {
+            return nil
+        }
+
+        let displayName = String(json["displayName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = json["currentRoom"] as? String
+        let summary = json["diagnosticsSummary"] as? String ?? ""
+        let defaults = UserDefaults.standard
+        let device = UIDevice.current
+        let notificationPref = defaults.bool(forKey: "voicelink.notifications.enabled")
+        let inputGain = defaults.object(forKey: "voicelink.audio.inputGain") as? Double ?? 1.0
+        let outputGain = defaults.object(forKey: "voicelink.audio.outputGain") as? Double ?? 1.0
+        let mediaMuted = defaults.bool(forKey: "voicelink.audio.mediaMuted")
+        let authToken = defaults.string(forKey: "voicelink.authToken") ?? ""
+        let serverURL = defaults.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"
+        let clientId = defaults.string(forKey: "voicelink.clientId") ?? device.identifierForVendor?.uuidString ?? device.name
+
+        let sections: [String: Any] = [
+            "device": [
+                "name": device.name,
+                "model": device.model,
+                "systemName": device.systemName,
+                "systemVersion": device.systemVersion
+            ],
+            "audio": [
+                "inputGain": inputGain,
+                "outputGain": outputGain,
+                "mediaMuted": mediaMuted
+            ],
+            "session": [
+                "room": room ?? "none",
+                "status": summary
+            ],
+            "notifications": [
+                "enabled": notificationPref
+            ],
+            "auth": [
+                "signedIn": !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ],
+            "server": [
+                "baseURL": serverURL
+            ]
+        ]
+
+        let logs = [
+            "section=device name=\(device.name) model=\(device.model) system=\(device.systemName) \(device.systemVersion)",
+            String(format: "section=audio inputGain=%.2f outputGain=%.2f mediaMuted=%@", inputGain, outputGain, mediaMuted ? "true" : "false"),
+            "section=session room=\(room ?? "none") summary=\(summary.isEmpty ? "none" : summary)",
+            "section=notifications enabled=\(notificationPref ? "true" : "false")",
+            "section=auth signedIn=\(!authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "true" : "false")",
+            "section=server baseURL=\(serverURL)"
+        ]
+
+        let payload: [String: Any] = [
+            "reason": "ios-settings-diagnostics",
+            "clientId": clientId,
+            "appVersion": "\(json["appVersion"] as? String ?? "unknown") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))",
+            "platform": "iOS \(device.systemVersion)",
+            "room": room ?? NSNull(),
+            "user": displayName.isEmpty ? device.name : displayName,
+            "displayName": displayName.isEmpty ? device.name : displayName,
+            "diagnosticsSummary": summary,
+            "sections": sections,
+            "logs": logs
+        ]
+
+        return try? JSONSerialization.data(withJSONObject: payload)
+    }
+
+    private func submitSupportLogs(_ payload: Data, base: String) async throws {
+        guard let url = URL(string: "\(base)/api/support/logs") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = payload
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    private func candidateBases(from raw: String) -> [String] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://")
+            ? trimmed
+            : "https://\(trimmed)"
+        let cleaned = normalized.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+
+        var candidates = [cleaned]
+        if cleaned != "https://voicelink.devinecreations.net" {
+            candidates.append("https://voicelink.devinecreations.net")
+        }
+        return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
+    }
 }

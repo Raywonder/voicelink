@@ -1,15 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0.0
-build: 29
+build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: /xm3OxdbaMXIBL5zGFzPqJINsDa01GdHiZ/oUOtiarl9bIqsahBHOORijH/C+c2LQanVLYdXZohJ3TBEjBDL0Q==
-    size: 177181525
+    sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
+    size: 17792382
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: /xm3OxdbaMXIBL5zGFzPqJINsDa01GdHiZ/oUOtiarl9bIqsahBHOORijH/C+c2LQanVLYdXZohJ3TBEjBDL0Q==
-releaseDate: '2026-03-08T22:35:00.000Z'
+sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
+releaseDate: '2026-03-20T13:27:35.000Z'
 releaseNotes: |
-  VoiceLink macOS Hotfix (Internal Build 29)
-  - Fixed room actions flow to keep actions separate from room details.
-  - Fixed room chat target chooser to allow room vs direct-user send routing.
-  - Updated updater checksum/signature metadata for immediate redetection.
+  VoiceLink macOS Update (Build 26)
+  - Signed the current desktop app build for direct download and updater use.
+  - Refreshed the website ZIP artifacts and macOS package from the latest tested app state.
+  - Updated the mac updater manifests to point at the new signed archive.
+mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
+copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip

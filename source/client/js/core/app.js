@@ -181,7 +181,7 @@ class VoiceLinkApp {
     async openSupportLiveChatFlow() {
         const isMobileSafari = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
         if (isMobileSafari) {
-            window.location.href = 'https://devine-creations.com/contact';
+            window.location.href = `${window.location.origin}/docs/contact.html#live-chat`;
             return;
         }
 
@@ -232,7 +232,7 @@ class VoiceLinkApp {
                 </div>
                 <p id="support-live-chat-status" style="min-height:24px;margin:16px 0 0;color:#cbd5e1;"></p>
                 <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;">
-                    <button type="button" id="support-live-chat-ticket" style="border:1px solid #475569;background:#0f172a;color:#eef2ff;border-radius:10px;padding:10px 14px;cursor:pointer;">Open Ticket Portal</button>
+                    <button type="button" id="support-live-chat-ticket" style="border:1px solid #475569;background:#0f172a;color:#eef2ff;border-radius:10px;padding:10px 14px;cursor:pointer;">Open External Ticket Page</button>
                     <button type="button" id="support-live-chat-start" style="border:0;background:#2563eb;color:#fff;border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer;">Start Live Support</button>
                 </div>
             </section>
@@ -259,7 +259,7 @@ class VoiceLinkApp {
         overlay.querySelector('#support-live-chat-close')?.addEventListener('click', close);
         overlay.querySelector('#support-live-chat-ticket')?.addEventListener('click', async () => {
             close();
-            await this.openExternal('https://devine-creations.com/submitticket.php');
+            await this.openExternal('https://devinecreations.net/index.php?page=tickets');
         });
         overlay.querySelector('#support-live-chat-start')?.addEventListener('click', async () => {
             const userName = String(document.getElementById('support-live-chat-name')?.value || '').trim();
@@ -2906,7 +2906,9 @@ class VoiceLinkApp {
     renderLobbyWelcomeMessage() {
         if (this.currentRoom) return '';
         const template = this.serverConfigCache?.lobbyWelcomeMessage
-            || 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+            || this.serverConfigCache?.welcomeMessage
+            || this.serverConfigCache?.motd
+            || 'Welcome to VoiceLink.';
         const messageHtml = String(template)
             .split(/\n{2,}/)
             .map((paragraph) => `<p>${this.escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
