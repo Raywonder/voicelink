@@ -1366,13 +1366,26 @@ private struct SettingsTab: View {
             Form {
                 Section("Audio") {
                     Toggle("Mute Media Playback", isOn: $mediaMuted)
-                    VStack(alignment: .leading) {
+                    Slider(value: $inputGain, in: 0...2) {
                         Text("Input Level")
-                        Slider(value: $inputGain, in: 0...2)
+                    } minimumValueLabel: {
+                        Text("0%")
+                    } maximumValueLabel: {
+                        Text("200%")
                     }
-                    VStack(alignment: .leading) {
+                    .accessibilityValue("\(Int(inputGain * 100)) percent")
+
+                    Slider(value: $outputGain, in: 0...2) {
                         Text("Output Level")
-                        Slider(value: $outputGain, in: 0...2)
+                    } minimumValueLabel: {
+                        Text("0%")
+                    } maximumValueLabel: {
+                        Text("200%")
+                    }
+                    .accessibilityValue("\(Int(outputGain * 100)) percent")
+
+                    Button("Test Sound") {
+                        IOSActionSoundPlayer.playTest()
                     }
                 }
 
@@ -1455,11 +1468,8 @@ private struct SettingsTab: View {
     }
 
     private func requestNotificationAuthorizationIfNeeded() {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            if settings.authorizationStatus == .notDetermined {
-                center.requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
-            }
+        Task { @MainActor in
+            await IOSPushNotificationManager.shared.syncRegistrationIfNeeded()
         }
     }
 

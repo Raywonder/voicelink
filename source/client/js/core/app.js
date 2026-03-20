@@ -2906,7 +2906,9 @@ class VoiceLinkApp {
     renderLobbyWelcomeMessage() {
         if (this.currentRoom) return '';
         const template = this.serverConfigCache?.lobbyWelcomeMessage
-            || 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+            || this.serverConfigCache?.welcomeMessage
+            || this.serverConfigCache?.motd
+            || 'Welcome to VoiceLink.';
         const messageHtml = String(template)
             .split(/\n{2,}/)
             .map((paragraph) => `<p>${this.escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)

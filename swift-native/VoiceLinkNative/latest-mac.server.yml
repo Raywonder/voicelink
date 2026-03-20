@@ -1,18 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-version: 1.0
-build: 22
+version: 1.0.0
+build: 26
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-    size: 154968360
+    sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
+    size: 17792382
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-releaseDate: '2026-02-24T01:47:06.000Z'
+sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
+releaseDate: '2026-03-20T13:27:35.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Internal Build 22)
-  - Fixed monitor freeze path by blocking local monitor while room audio is active.
-  - Room settings are now separate from app settings and open room administration.
-  - Room action sheet join now executes real room join flow.
-  - Updated macOS release package and checksum manifests.
+  VoiceLink macOS Update (Build 26)
+  - Signed the current desktop app build for direct download and updater use.
+  - Refreshed the website ZIP artifacts and macOS package from the latest tested app state.
+  - Updated the mac updater manifests to point at the new signed archive.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip

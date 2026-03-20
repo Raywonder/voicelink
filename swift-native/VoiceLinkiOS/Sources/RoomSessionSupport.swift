@@ -22,8 +22,18 @@ struct RoomPreviewDestination: Identifiable, Hashable {
 
 struct RoomSessionView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("voicelink.authToken") private var authToken = ""
+    @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
+    @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
+    @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
     let destination: RoomSessionDestination
     @State private var showChat = true
+    @State private var showDetails = false
+    @State private var showControls = false
+
+    private var isSignedIn: Bool {
+        !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     private var roomURL: URL? {
         var components = URLComponents(string: normalizedRoomBaseURL(destination.baseURL))
@@ -43,7 +53,10 @@ struct RoomSessionView: View {
                     VoiceLinkWebView(
                         url: roomURL,
                         displayName: destination.displayName,
-                        showChat: showChat
+                        showChat: showChat,
+                        inputGain: inputGain,
+                        outputGain: outputGain,
+                        mediaMuted: mediaMuted
                     )
                 } else {
                     VStack(spacing: 12) {
@@ -66,8 +79,102 @@ struct RoomSessionView: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(showChat ? "Hide Chat" : "Show Chat") {
-                        showChat.toggle()
+                    Menu {
+                        Button(showChat ? "Hide Chat" : "Show Chat") {
+                            showChat.toggle()
+                            IOSActionSoundPlayer.playToggle()
+                        }
+                        Button("Room Controls") {
+                            showControls = true
+                            IOSActionSoundPlayer.playConfirm()
+                        }
+                        Button("Room Details") {
+                            showDetails = true
+                            IOSActionSoundPlayer.playConfirm()
+                        }
+                        Divider()
+                        Button("Leave Room", role: .destructive) {
+                            IOSActionSoundPlayer.playClose()
+                            NotificationCenter.default.post(
+                                name: .iosRequestLeaveRoom,
+                                object: nil,
+                                userInfo: [
+                                    "roomId": destination.roomId,
+                                    "roomName": destination.roomName
+                                ]
+                            )
+                            dismiss()
+                        }
+
+                        if isSignedIn {
+                            // Reserved for future signed-in room actions parity.
+                        }
+                    } label: {
+                        Label("Room Menu", systemImage: "ellipsis.circle")
+                    }
+                }
+            }
+            .sheet(isPresented: $showDetails) {
+                NavigationStack {
+                    List {
+                        Section("Room") {
+                            LabeledContent("Name", value: destination.roomName)
+                            LabeledContent("Room ID", value: destination.roomId)
+                            if !destination.roomDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(destination.roomDescription)
+                            }
+                        }
+                    }
+                    .navigationTitle("Room Details")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { showDetails = false }
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showControls) {
+                NavigationStack {
+                    Form {
+                        Section("Room Controls") {
+                            Toggle("Show Chat", isOn: $showChat)
+                                .onChange(of: showChat) { _ in
+                                    IOSActionSoundPlayer.playToggle()
+                                }
+                        }
+
+                        Section("Audio") {
+                            Slider(value: $inputGain, in: 0...2) {
+                                Text("Mic Level")
+                            } minimumValueLabel: {
+                                Text("0%")
+                            } maximumValueLabel: {
+                                Text("200%")
+                            }
+                            .accessibilityValue("\(Int(inputGain * 100)) percent")
+
+                            Slider(value: $outputGain, in: 0...2) {
+                                Text("Master Output")
+                            } minimumValueLabel: {
+                                Text("0%")
+                            } maximumValueLabel: {
+                                Text("200%")
+                            }
+                            .accessibilityValue("\(Int(outputGain * 100)) percent")
+
+                            Toggle("Mute Media Playback", isOn: $mediaMuted)
+                                .onChange(of: mediaMuted) { _ in
+                                    IOSActionSoundPlayer.playToggle()
+                                }
+                        }
+                    }
+                    .navigationTitle("Room Controls")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { showControls = false }
+                        }
                     }
                 }
             }
@@ -100,6 +207,7 @@ struct RoomSessionView: View {
 
 struct RoomPreviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("voicelink.displayName") private var displayName = ""
     let destination: RoomPreviewDestination
 
     private var previewURL: URL? {
@@ -115,25 +223,42 @@ struct RoomPreviewView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Room") {
-                    LabeledContent("Name", value: destination.roomName)
-                    LabeledContent("Room ID", value: destination.roomId)
-                    LabeledContent("Users", value: "\(destination.room.userCount)")
-                    if !destination.roomDescription.isEmpty {
-                        Text(destination.roomDescription)
+            Group {
+                if let previewURL {
+                    VoiceLinkWebView(
+                        url: previewURL,
+                        displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
+                        showChat: false,
+                        inputGain: 1.0,
+                        outputGain: 1.0,
+                        mediaMuted: false
+                    )
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "wifi.exclamationmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("Preview Unavailable")
+                            .font(.headline)
+                        Text("The preview link could not be prepared.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
-                }
-
-                Section("Actions") {
-                    if let previewURL {
-                        Link("Open Preview in Web Room", destination: previewURL)
-                    }
-                    Button("Close") { dismiss() }
                 }
             }
             .navigationTitle("Preview")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            IOSAudioSessionManager.shared.activateForRoomSession()
+        }
+        .onDisappear {
+            IOSAudioSessionManager.shared.deactivateRoomSessionIfPossible()
         }
     }
 }

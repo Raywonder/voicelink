@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const https = require('https');
+const http2 = require('http2');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
@@ -87,6 +88,11 @@ class VoiceLinkLocalServer {
         this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
         this.socketSessions = new Map(); // socketId -> sessionInfo
         this.deviceSessions = new Map(); // deviceId -> socketId
+        this.iosPushRegistrationsPath = path.join(__dirname, '../../data/ios-push-devices.json');
+        this.iosPushRegistrations = new Map(); // identityKey:deviceId -> registration
+        this.apnsTokenCache = null;
+        this.apnsTokenExpiresAt = 0;
+        this.loadIOSPushRegistrations();
 
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
@@ -161,6 +167,295 @@ class VoiceLinkLocalServer {
         this.setupSocketHandlers();
         this.loadPersistedRooms();
         this.start();
+    }
+
+    loadIOSPushRegistrations() {
+        this.iosPushRegistrations = new Map();
+        try {
+            if (!fs.existsSync(this.iosPushRegistrationsPath)) {
+                return;
+            }
+            const parsed = JSON.parse(fs.readFileSync(this.iosPushRegistrationsPath, 'utf8') || '{}');
+            const devices = Array.isArray(parsed?.devices) ? parsed.devices : [];
+            for (const entry of devices) {
+                const identityKey = String(entry?.identityKey || '').trim().toLowerCase();
+                const deviceId = String(entry?.deviceId || '').trim();
+                if (!identityKey || !deviceId) continue;
+                this.iosPushRegistrations.set(`${identityKey}:${deviceId}`, {
+                    identityKey,
+                    deviceId,
+                    token: String(entry?.token || '').trim(),
+                    bundleId: String(entry?.bundleId || '').trim() || null,
+                    platform: String(entry?.platform || 'ios').trim() || 'ios',
+                    deviceName: String(entry?.deviceName || '').trim() || null,
+                    systemName: String(entry?.systemName || '').trim() || null,
+                    systemVersion: String(entry?.systemVersion || '').trim() || null,
+                    appVersion: String(entry?.appVersion || '').trim() || null,
+                    buildNumber: String(entry?.buildNumber || '').trim() || null,
+                    email: String(entry?.email || '').trim().toLowerCase() || null,
+                    username: String(entry?.username || '').trim().toLowerCase() || null,
+                    authProvider: String(entry?.authProvider || '').trim().toLowerCase() || 'local',
+                    createdAt: entry?.createdAt || new Date().toISOString(),
+                    updatedAt: entry?.updatedAt || new Date().toISOString(),
+                    lastSeenAt: entry?.lastSeenAt || new Date().toISOString()
+                });
+            }
+        } catch (error) {
+            console.warn('[Push] Failed loading iOS push registrations:', error.message);
+        }
+    }
+
+    persistIOSPushRegistrations() {
+        try {
+            const payload = {
+                devices: Array.from(this.iosPushRegistrations.values())
+                    .sort((a, b) => String(a.identityKey || '').localeCompare(String(b.identityKey || '')) || String(a.deviceId || '').localeCompare(String(b.deviceId || '')))
+            };
+            fs.writeFileSync(this.iosPushRegistrationsPath, JSON.stringify(payload, null, 2), 'utf8');
+        } catch (error) {
+            console.warn('[Push] Failed saving iOS push registrations:', error.message);
+        }
+    }
+
+    upsertIOSPushRegistration(registration = {}) {
+        const identityKey = String(registration.identityKey || '').trim().toLowerCase();
+        const deviceId = String(registration.deviceId || '').trim();
+        const token = String(registration.token || '').trim();
+        if (!identityKey || !deviceId || !token) return null;
+
+        const key = `${identityKey}:${deviceId}`;
+        const existing = this.iosPushRegistrations.get(key) || {};
+        const next = {
+            ...existing,
+            ...registration,
+            identityKey,
+            deviceId,
+            token,
+            updatedAt: new Date().toISOString(),
+            lastSeenAt: new Date().toISOString(),
+            createdAt: existing.createdAt || new Date().toISOString()
+        };
+        this.iosPushRegistrations.set(key, next);
+        this.persistIOSPushRegistrations();
+        return next;
+    }
+
+    removeIOSPushRegistration(identityKey = '', deviceId = '') {
+        const normalizedIdentityKey = String(identityKey || '').trim().toLowerCase();
+        const normalizedDeviceId = String(deviceId || '').trim();
+        if (!normalizedIdentityKey || !normalizedDeviceId) return false;
+        const removed = this.iosPushRegistrations.delete(`${normalizedIdentityKey}:${normalizedDeviceId}`);
+        if (removed) {
+            this.persistIOSPushRegistrations();
+        }
+        return removed;
+    }
+
+    listIOSPushRegistrationsForIdentity(identityKey = '') {
+        const normalizedIdentityKey = String(identityKey || '').trim().toLowerCase();
+        if (!normalizedIdentityKey) return [];
+        return Array.from(this.iosPushRegistrations.values())
+            .filter((entry) => entry.identityKey === normalizedIdentityKey)
+            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    }
+
+    getAPNsConfig() {
+        const keyId = String(process.env.VOICELINK_APNS_KEY_ID || process.env.APNS_KEY_ID || '').trim();
+        const teamId = String(process.env.VOICELINK_APNS_TEAM_ID || process.env.APNS_TEAM_ID || '').trim();
+        const topic = String(process.env.VOICELINK_APNS_BUNDLE_ID || process.env.APNS_BUNDLE_ID || 'com.devinecreations.voicelink').trim();
+        const privateKeyPath = String(process.env.VOICELINK_APNS_PRIVATE_KEY_PATH || process.env.APNS_PRIVATE_KEY_PATH || '').trim();
+        const privateKeyBase64 = String(process.env.VOICELINK_APNS_PRIVATE_KEY_BASE64 || process.env.APNS_PRIVATE_KEY_BASE64 || '').trim();
+        const privateKeyInline = String(process.env.VOICELINK_APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY || '').trim();
+        const useSandbox = String(process.env.VOICELINK_APNS_USE_SANDBOX || process.env.APNS_USE_SANDBOX || '').trim().toLowerCase() === 'true';
+
+        let privateKey = '';
+        if (privateKeyInline) {
+            privateKey = privateKeyInline.replace(/\\n/g, '\n');
+        } else if (privateKeyBase64) {
+            privateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+        } else if (privateKeyPath && fs.existsSync(privateKeyPath)) {
+            privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+        }
+
+        return {
+            enabled: Boolean(keyId && teamId && topic && privateKey),
+            keyId,
+            teamId,
+            topic,
+            privateKey,
+            useSandbox,
+            host: useSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com'
+        };
+    }
+
+    createAPNsJwt(config) {
+        const now = Math.floor(Date.now() / 1000);
+        if (this.apnsTokenCache && this.apnsTokenExpiresAt - now > 60) {
+            return this.apnsTokenCache;
+        }
+        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: config.keyId, typ: 'JWT' })).toString('base64url');
+        const payload = Buffer.from(JSON.stringify({ iss: config.teamId, iat: now })).toString('base64url');
+        const signingInput = `${header}.${payload}`;
+        const signature = crypto.sign('sha256', Buffer.from(signingInput), {
+            key: config.privateKey,
+            dsaEncoding: 'ieee-p1363'
+        }).toString('base64url');
+        const token = `${signingInput}.${signature}`;
+        this.apnsTokenCache = token;
+        this.apnsTokenExpiresAt = now + (50 * 60);
+        return token;
+    }
+
+    buildPushIdentityKeyFromUser(user = {}) {
+        const authInfo = user.authInfo || {};
+        const email = String(authInfo.email || user.email || '').trim().toLowerCase();
+        const username = String(authInfo.username || user.username || user.displayName || user.name || '').trim().toLowerCase();
+        const id = String(authInfo.id || user.userId || user.id || '').trim().toLowerCase();
+        return email || username || (id ? `user:${id}` : '');
+    }
+
+    getAdminPushIdentityKeys() {
+        const identities = new Set();
+        for (const user of this.users.values()) {
+            const authInfo = user?.authInfo || {};
+            const role = String(authInfo.role || user?.role || '').toLowerCase();
+            const isAdminLike = Boolean(user?.isAdmin || user?.isModerator || ['owner', 'admin', 'staff'].includes(role));
+            if (!isAdminLike) continue;
+            const identityKey = this.buildPushIdentityKeyFromUser(user);
+            if (identityKey) {
+                identities.add(identityKey);
+            }
+        }
+        return Array.from(identities);
+    }
+
+    resolvePushIdentityKeys({ targetUserId = null, roomId = null } = {}) {
+        const identities = new Set();
+        if (targetUserId) {
+            for (const [socketId, user] of this.users.entries()) {
+                if (socketId !== targetUserId && user?.id !== targetUserId && user?.userId !== targetUserId) continue;
+                const identityKey = this.buildPushIdentityKeyFromUser(user);
+                if (identityKey) identities.add(identityKey);
+            }
+        } else if (roomId) {
+            for (const user of this.getLiveRoomUsers(roomId)) {
+                const identityKey = this.buildPushIdentityKeyFromUser(user);
+                if (identityKey) identities.add(identityKey);
+            }
+        }
+        return Array.from(identities);
+    }
+
+    async sendIOSPushNotifications(payload = {}, options = {}) {
+        const config = this.getAPNsConfig();
+        if (!config.enabled) {
+            return { sent: 0, skipped: true, reason: 'apns_not_configured' };
+        }
+
+        const identityKeys = Array.from(new Set([]
+            .concat(Array.isArray(options.identityKeys) ? options.identityKeys : [])
+            .concat(this.resolvePushIdentityKeys({
+                targetUserId: payload.targetUserId || null,
+                roomId: payload.roomId || null
+            }))
+            .filter(Boolean)));
+
+        if (!identityKeys.length) {
+            return { sent: 0, skipped: true, reason: 'no_push_recipients' };
+        }
+
+        const devices = identityKeys.flatMap((identityKey) => this.listIOSPushRegistrationsForIdentity(identityKey));
+        if (!devices.length) {
+            return { sent: 0, skipped: true, reason: 'no_registered_ios_devices' };
+        }
+
+        const jwt = this.createAPNsJwt(config);
+        const alertTitle = String(payload.title || 'VoiceLink System').trim() || 'VoiceLink System';
+        const alertBody = String(payload.message || '').trim();
+        if (!alertBody) {
+            return { sent: 0, skipped: true, reason: 'empty_message' };
+        }
+
+        const openAction = payload.userName ? 'profile' : 'messages';
+        const apnsPayload = {
+            aps: {
+                alert: {
+                    title: alertTitle,
+                    body: alertBody
+                },
+                sound: 'default',
+                badge: 1
+            },
+            id: payload.id || uuidv4(),
+            type: String(payload.type || 'system_action'),
+            severity: String(payload.severity || 'info'),
+            roomId: payload.roomId || null,
+            roomName: payload.roomName || alertTitle,
+            targetUserId: payload.targetUserId || null,
+            userId: payload.userId || payload.targetUserId || null,
+            userName: payload.userName || null,
+            openAction
+        };
+
+        const client = http2.connect(config.host);
+        let sent = 0;
+        try {
+            for (const device of devices) {
+                const topic = String(device.bundleId || config.topic || '').trim() || config.topic;
+                const response = await new Promise((resolve, reject) => {
+                    const req = client.request({
+                        ':method': 'POST',
+                        ':path': `/3/device/${device.token}`,
+                        authorization: `bearer ${jwt}`,
+                        'apns-topic': topic,
+                        'apns-push-type': 'alert',
+                        'content-type': 'application/json'
+                    });
+
+                    let body = '';
+                    req.setEncoding('utf8');
+                    req.on('response', (headers) => {
+                        req.on('data', (chunk) => {
+                            body += chunk;
+                        });
+                        req.on('end', () => {
+                            resolve({
+                                status: Number(headers[':status'] || 0),
+                                body
+                            });
+                        });
+                    });
+                    req.on('error', reject);
+                    req.end(JSON.stringify(apnsPayload));
+                });
+
+                if (response.status >= 200 && response.status < 300) {
+                    sent += 1;
+                    this.upsertIOSPushRegistration({
+                        ...device,
+                        lastSeenAt: new Date().toISOString()
+                    });
+                    continue;
+                }
+
+                if (response.status === 410 || response.status === 400) {
+                    let parsed = null;
+                    try {
+                        parsed = response.body ? JSON.parse(response.body) : null;
+                    } catch {}
+                    const reason = String(parsed?.reason || '').trim();
+                    if (['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic'].includes(reason)) {
+                        this.removeIOSPushRegistration(device.identityKey, device.deviceId);
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('[Push] Failed sending APNs notification:', error.message);
+        } finally {
+            client.close();
+        }
+
+        return { sent, attempted: devices.length };
     }
 
     initializeMailer() {
@@ -2871,6 +3166,7 @@ class VoiceLinkLocalServer {
             lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
             muted: !!(user.audioSettings?.muted),
             deafened: !!(user.audioSettings?.deafened),
+            transmitEnabled: user.audioSettings?.transmitEnabled !== false,
             speaking: !!user.isSpeaking,
             isSpeaking: !!user.isSpeaking,
             roomId: roomId || user.roomId || null,
@@ -2945,11 +3241,13 @@ class VoiceLinkLocalServer {
         if (targetUserId) {
             this.io.to(targetUserId).emit('admin-notification', payload);
             this.io.to(targetUserId).emit('system-action-notification', payload);
+            void this.sendIOSPushNotifications(payload);
             return;
         }
         if (roomId) {
             this.io.to(roomId).emit('admin-notification', payload);
             this.io.to(roomId).emit('system-action-notification', payload);
+            void this.sendIOSPushNotifications(payload);
             return;
         }
 
@@ -3000,6 +3298,9 @@ class VoiceLinkLocalServer {
             this.io.to(target).emit('admin-notification', payload);
             this.io.to(target).emit('system-action-notification', payload);
         }
+        void this.sendIOSPushNotifications(payload, {
+            identityKeys: this.getAdminPushIdentityKeys()
+        });
     }
 
     getConfiguredBackgroundStreamForRoom(room = {}) {
@@ -4270,7 +4571,7 @@ class VoiceLinkLocalServer {
     }
 
     getDefaultLobbyWelcomeMessage() {
-        return 'WELCOME! PICK A ROOM TO JOIN! IF ITS EMPTY, YOU CAN INVITE SOMEONE FROM THE MENU.\n\nHAVE FUN! HAPPY CHATTING!';
+        return 'Welcome to VoiceLink.';
     }
 
     formatDurationWords(totalSeconds) {
@@ -6779,6 +7080,35 @@ class VoiceLinkLocalServer {
         this.localAuthVerificationRequired = process.env.VOICELINK_REQUIRE_EMAIL_VERIFICATION !== 'false' && !!this.mailer;
         const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
         const normalizeUsername = (username) => String(username || '').trim().toLowerCase();
+        const canonicalIdentityGroups = (() => {
+            const configuredGroups = String(process.env.VOICELINK_CANONICAL_ACCOUNT_ALIASES || '')
+                .split(';')
+                .map((group) => group.split(',').map((value) => String(value || '').trim()).filter(Boolean))
+                .filter((group) => group.length > 1);
+            const bootstrapGroups = [
+                ['domdom', 'd.stansberry@me.com', 'webmaster@raywonderis.me', 'datboydommo@layor8.space']
+            ];
+            return [...bootstrapGroups, ...configuredGroups];
+        })();
+        const buildCanonicalIdentityCandidates = (payload = {}) => {
+            const candidates = new Set();
+            const addIdentity = (value) => {
+                const raw = String(value || '').trim();
+                if (!raw) return;
+                candidates.add(raw.includes('@') ? normalizeEmail(raw) : normalizeUsername(raw));
+            };
+            addIdentity(payload.identity);
+            addIdentity(payload.email);
+            addIdentity(payload.username);
+            addIdentity(payload.displayName);
+            for (const group of canonicalIdentityGroups) {
+                const normalizedGroup = group.map((entry) => entry.includes('@') ? normalizeEmail(entry) : normalizeUsername(entry));
+                if (normalizedGroup.some((entry) => candidates.has(entry))) {
+                    normalizedGroup.forEach((entry) => candidates.add(entry));
+                }
+            }
+            return candidates;
+        };
 
         const persistLocalAuthUsers = () => {
             try {
@@ -7015,6 +7345,37 @@ class VoiceLinkLocalServer {
             const role = String(user.role || 'user').toLowerCase();
             return role === 'owner' || role === 'admin';
         };
+        const requireAuthenticatedPushPrincipal = (req) => {
+            const authUser = this.getAnyAuthUserFromRequest(req);
+            if (!authUser) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, error: 'Authenticated account required for iOS push registration' }
+                };
+            }
+            const email = normalizeEmail(authUser.email || '');
+            const username = normalizeUsername(authUser.username || authUser.displayName || '');
+            const id = String(authUser.id || '').trim();
+            const identityKey = email || username || (id ? `user:${id.toLowerCase()}` : '');
+            if (!identityKey) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, error: 'Authenticated account identity missing for iOS push registration' }
+                };
+            }
+            return {
+                ok: true,
+                principal: {
+                    id: id || null,
+                    identityKey,
+                    email: email || null,
+                    username: username || null,
+                    authProvider: String(authUser.authProvider || 'local').trim().toLowerCase() || 'local'
+                }
+            };
+        };
         const hashPassword = (password, salt) => crypto.pbkdf2Sync(
             String(password || ''),
             salt,
@@ -7044,8 +7405,89 @@ class VoiceLinkLocalServer {
                 if (normalizeEmail(user.email) === email || normalizeUsername(user.username) === username) {
                     return user;
                 }
+                for (const linked of Array.isArray(user.linkedAuthMethods) ? user.linkedAuthMethods : []) {
+                    if (normalizeEmail(linked?.email || '') === email || normalizeUsername(linked?.username || '') === username) {
+                        return user;
+                    }
+                }
             }
             return null;
+        };
+        const findCanonicalLocalUser = (payload = {}) => {
+            const candidates = buildCanonicalIdentityCandidates(payload);
+            if (!candidates.size) return null;
+            let bestMatch = null;
+            for (const user of this.localAuthUsers.values()) {
+                const identities = new Set();
+                const userEmail = normalizeEmail(user?.email || '');
+                const userUsername = normalizeUsername(user?.username || user?.displayName || '');
+                if (userEmail) identities.add(userEmail);
+                if (userUsername) identities.add(userUsername);
+                for (const linked of Array.isArray(user?.linkedAuthMethods) ? user.linkedAuthMethods : []) {
+                    const linkedEmail = normalizeEmail(linked?.email || '');
+                    const linkedUsername = normalizeUsername(linked?.username || '');
+                    if (linkedEmail) identities.add(linkedEmail);
+                    if (linkedUsername) identities.add(linkedUsername);
+                }
+                const matches = Array.from(candidates).some((entry) => identities.has(entry));
+                if (!matches) continue;
+                if (!bestMatch || this.roleRank(user?.role) > this.roleRank(bestMatch?.role)) {
+                    bestMatch = user;
+                }
+            }
+            return bestMatch;
+        };
+        const resolveEffectiveAuthUser = (user) => {
+            if (!user) return null;
+            const localLinkedUser = (user.linkedLocalUserId && this.localAuthUsers.get(user.linkedLocalUserId))
+                || (user.canonicalAccountId && this.localAuthUsers.get(user.canonicalAccountId))
+                || (user.accountId && this.localAuthUsers.get(user.accountId))
+                || findCanonicalLocalUser({
+                    identity: user.email || user.username || user.displayName || '',
+                    email: user.email,
+                    username: user.username,
+                    displayName: user.displayName
+                })
+                || findLocalUserByIdentity(user.email || user.username || user.displayName || '');
+            if (!localLinkedUser) {
+                return this.applyAuthorityRoleOverrides(user);
+            }
+
+            const localRole = this.normalizeUserRole(localLinkedUser.role || user.role || 'user');
+            const effectiveRole = this.roleRank(localRole) >= this.roleRank(this.normalizeUserRole(user.role || 'user'))
+                ? localRole
+                : this.normalizeUserRole(user.role || localRole);
+            return this.applyAuthorityRoleOverrides({
+                ...user,
+                accountId: user.accountId || localLinkedUser.id,
+                canonicalAccountId: user.canonicalAccountId || localLinkedUser.id,
+                linkedLocalUserId: user.linkedLocalUserId || localLinkedUser.id,
+                canonicalEmail: user.canonicalEmail || localLinkedUser.email || user.email || null,
+                email: user.email || localLinkedUser.email || null,
+                username: user.username || localLinkedUser.username || user.displayName || null,
+                displayName: user.displayName || localLinkedUser.displayName || localLinkedUser.username || user.username || null,
+                role: effectiveRole,
+                permissions: Array.from(new Set([
+                    ...(Array.isArray(user.permissions) ? user.permissions : []),
+                    ...(Array.isArray(localLinkedUser.permissions) ? localLinkedUser.permissions : []),
+                    ...this.buildPermissionsForRole(effectiveRole)
+                ])),
+                entitlements: buildDefaultEntitlements(effectiveRole, {
+                    ...(localLinkedUser.entitlements && typeof localLinkedUser.entitlements === 'object' ? localLinkedUser.entitlements : {}),
+                    ...(user.entitlements && typeof user.entitlements === 'object' ? user.entitlements : {})
+                }),
+                authProvider: user.authProvider || localLinkedUser.authProvider || 'local',
+                isAdmin: effectiveRole === 'owner' || effectiveRole === 'admin',
+                isModerator: effectiveRole === 'owner' || effectiveRole === 'admin' || effectiveRole === 'staff'
+            });
+        };
+        this.getLocalAuthUserFromRequest = (req) => resolveEffectiveAuthUser(getUserFromToken(tokenFromRequest(req)));
+        this.getAnyAuthUserFromRequest = (req) => resolveEffectiveAuthUser(getUserFromToken(tokenFromRequest(req)) || getWhmcsUserFromToken(tokenFromRequest(req)));
+        this.isLocalAdminRequest = (req) => {
+            const user = this.getAnyAuthUserFromRequest(req);
+            if (!user) return false;
+            const role = String(user.role || 'user').toLowerCase();
+            return role === 'owner' || role === 'admin';
         };
         const buildLinkedAuthRecord = (provider = '', payload = {}) => ({
             provider: String(provider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
@@ -7084,7 +7526,12 @@ class VoiceLinkLocalServer {
             const email = normalizeEmail(payload.email || '');
             const username = normalizeUsername(payload.username || payload.displayName || '');
             if (!email && !username) return null;
-            const localUser = findLocalUserByIdentity(email || username);
+            const localUser = findCanonicalLocalUser({
+                identity: email || username,
+                email,
+                username,
+                displayName: payload.displayName
+            }) || findLocalUserByIdentity(email || username);
             if (!localUser) return null;
             mergeLinkedAuthMethods(localUser, provider, payload);
             if (email && !normalizeEmail(localUser.email)) {
@@ -8048,20 +8495,31 @@ class VoiceLinkLocalServer {
             }
         };
 
-        const buildNormalizedLicenseIdentity = async (req, payload = {}) => {
+        const buildNormalizedLicenseIdentity = async (req, payload = {}, options = {}) => {
+            const allowIdentityFallback = options.allowIdentityFallback === true;
             const authUser = this.getAnyAuthUserFromRequest(req);
             const identity = String(payload.identity || payload.email || payload.username || req.headers['x-user-email'] || '').trim();
             const principal = {
-                id: String(authUser?.id || payload.id || '').trim(),
-                email: normalizeEmail(authUser?.email || payload.email || req.headers['x-user-email'] || ''),
-                username: normalizeUsername(authUser?.username || payload.username || identity),
-                displayName: String(authUser?.displayName || payload.displayName || identity || '').trim() || null,
-                role: normalizeUserRole(authUser?.role || payload.role || 'user'),
-                authProvider: String(authUser?.authProvider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
-                entitlements: authUser?.entitlements || payload.entitlements || null
+                id: String(authUser?.id || '').trim(),
+                email: normalizeEmail(authUser?.email || ''),
+                username: normalizeUsername(authUser?.username || ''),
+                displayName: String(authUser?.displayName || authUser?.username || authUser?.email || '').trim() || null,
+                role: normalizeUserRole(authUser?.role || 'user'),
+                authProvider: String(authUser?.authProvider || 'local').trim().toLowerCase() || 'local',
+                entitlements: authUser?.entitlements || null
             };
 
-            if (!principal.email && identity) {
+            if (allowIdentityFallback) {
+                principal.id = principal.id || String(payload.id || '').trim();
+                principal.email = principal.email || normalizeEmail(payload.email || req.headers['x-user-email'] || '');
+                principal.username = principal.username || normalizeUsername(payload.username || identity);
+                principal.displayName = principal.displayName || (String(payload.displayName || identity || '').trim() || null);
+                principal.role = normalizeUserRole(payload.role || principal.role || 'user');
+                principal.authProvider = String(payload.authProvider || principal.authProvider || 'local').trim().toLowerCase() || 'local';
+                principal.entitlements = principal.entitlements || payload.entitlements || null;
+            }
+
+            if (allowIdentityFallback && !principal.email && identity) {
                 const localUser = findLocalUserByIdentity(identity);
                 if (localUser) {
                     principal.id = principal.id || localUser.id;
@@ -8073,7 +8531,7 @@ class VoiceLinkLocalServer {
                 }
             }
 
-            if (!principal.email && identity) {
+            if (allowIdentityFallback && !principal.email && identity) {
                 const whmcsIdentity = this.resolveWhmcsIdentity(identity);
                 principal.email = principal.email || normalizeEmail(whmcsIdentity.email);
                 principal.username = principal.username || normalizeUsername(whmcsIdentity.username);
@@ -8102,6 +8560,19 @@ class VoiceLinkLocalServer {
 
             principal.identityKey = normalizeLicenseIdentityKey(principal);
             return principal;
+        };
+
+        const requireAuthenticatedLicensePrincipal = async (req, payload = {}) => {
+            const principal = await buildNormalizedLicenseIdentity(req, payload, { allowIdentityFallback: false });
+            if (!principal.identityKey) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, status: 'error', error: 'Authenticated account required for licensing' },
+                    principal
+                };
+            }
+            return { ok: true, principal };
         };
 
         const resolveLicenseEntitlements = async (principal = {}) => {
@@ -8305,16 +8776,16 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ status: 'error', error: 'serverId and nodeId are required' });
             }
 
-            const principal = await buildNormalizedLicenseIdentity(req, {
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {
                 identity: req.body?.identity || req.body?.email || req.body?.username || req.body?.userEmail || '',
                 email: req.body?.email || req.body?.userEmail || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || ''
             });
-
-            if (!principal.identityKey) {
-                return res.status(401).json({ status: 'error', error: 'Authenticated or identifiable user required for licensing' });
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const existingByNode = findLicenseRecordByNode(serverId, nodeId);
             const record = existingByNode || await ensureLicenseRecordForPrincipal(principal, {
@@ -8375,14 +8846,23 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.json({ status: 'not_registered' });
             }
-            return res.json(publicLicenseRecord(record));
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const accessCheck = enforceLicensePrincipalAccess(record, principalResult.principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ status: 'error', error: accessCheck.error });
+            }
+            return res.json(publicLicenseRecord(record, principalResult.principal));
         });
 
         this.app.get('/api/licensing/me', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
             const record = findLicenseRecordByIdentityKey(principal.identityKey)
                 || await ensureLicenseRecordForPrincipal(principal, {});
             if (!record) {
@@ -8396,10 +8876,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/sync-entitlements', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const record = await ensureLicenseRecordForPrincipal(principal, {});
             if (!record) {
@@ -8449,7 +8930,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ valid: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ valid: false, error: accessCheck.error });
@@ -8483,7 +8968,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8546,7 +9035,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8571,7 +9064,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8601,7 +9098,7 @@ class VoiceLinkLocalServer {
                 email: req.body?.email || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || 'shared'
-            });
+            }, { allowIdentityFallback: true });
             if (!principal.identityKey) {
                 return res.status(400).json({ success: false, error: 'Target identity required' });
             }
@@ -8625,7 +9122,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/ownership/transfer', async (req, res) => {
-            const actor = await buildNormalizedLicenseIdentity(req, {});
+            const actorResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!actorResult.ok) {
+                return res.status(actorResult.status).json(actorResult.body);
+            }
+            const actor = actorResult.principal;
             const licenseKey = String(req.body?.licenseKey || '').trim();
             const record = findLicenseRecordByKey(licenseKey);
             if (!record) {
@@ -8652,7 +9153,7 @@ class VoiceLinkLocalServer {
                 email: req.body?.email || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || ''
-            });
+            }, { allowIdentityFallback: true });
             if (!targetPrincipal.identityKey || !targetPrincipal.email) {
                 return res.status(400).json({ success: false, error: 'Target account email required for transfer' });
             }
@@ -8694,10 +9195,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/domains/bind', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const record = findLicenseRecordByIdentityKey(principal.identityKey)
                 || await ensureLicenseRecordForPrincipal(principal, {});
@@ -9102,8 +9604,9 @@ class VoiceLinkLocalServer {
 
         // List devices for the authenticated account, or all server-linked devices for admins
         this.app.get('/api/devices', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, {});
-            if (principal.identityKey) {
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9165,9 +9668,10 @@ class VoiceLinkLocalServer {
         // Revoke device access (server-initiated)
         this.app.post('/api/devices/:deviceId/revoke', async (req, res) => {
             const { deviceId } = req.params;
-            const principal = await buildNormalizedLicenseIdentity(req, {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
 
-            if (principal.identityKey) {
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9227,9 +9731,10 @@ class VoiceLinkLocalServer {
         // Delete device completely
         this.app.delete('/api/devices/:deviceId', async (req, res) => {
             const { deviceId } = req.params;
-            const principal = await buildNormalizedLicenseIdentity(req, {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
 
-            if (principal.identityKey) {
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9356,7 +9861,9 @@ class VoiceLinkLocalServer {
 
         // Verify email code
         this.app.post('/api/auth/email/verify', (req, res) => {
-            const { email, code, clientId } = req.body;
+            const email = normalizeEmail(req.body?.email);
+            const code = String(req.body?.code || '').trim();
+            const clientId = String(req.body?.clientId || '').trim();
 
             if (!email || !code) {
                 return res.status(400).json({ error: 'Email and code required' });
@@ -9384,9 +9891,43 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ error: 'Invalid verification code' });
             }
 
-            // Success - generate access token
-            const accessToken = 'vlemail_' + uuidv4() + '_' + Date.now().toString(36);
-            const userId = 'user_' + email.replace(/[^a-z0-9]/gi, '_').substring(0, 20) + '_' + Date.now().toString(36);
+            let user = findLocalUserByIdentity(email);
+            if (!user) {
+                const usernameFromEmail = email.split('@')[0].replace(/[^a-z0-9._-]/gi, '').toLowerCase() || `user_${Date.now().toString(36)}`;
+                user = {
+                    id: `usr_${uuidv4()}`,
+                    username: usernameFromEmail,
+                    displayName: email.split('@')[0] || usernameFromEmail,
+                    email,
+                    role: 'user',
+                    permissions: buildPermissionsForRole('user'),
+                    entitlements: buildDefaultEntitlements('user'),
+                    linkedAuthMethods: [],
+                    isVerified: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+            }
+
+            user.isVerified = true;
+            user.updatedAt = new Date().toISOString();
+            mergeLinkedAuthMethods(user, 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            decorateUserWithCanonicalAccount(user, user.authProvider || 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+
+            const accessToken = issueLocalAuthToken(user.id);
+            const effectiveUser = resolveEffectiveAuthUser({ ...user });
 
             // Clean up verification code
             this.emailVerificationCodes.delete(email);
@@ -9394,8 +9935,9 @@ class VoiceLinkLocalServer {
             res.json({
                 success: true,
                 accessToken,
-                userId,
-                email
+                userId: effectiveUser.id,
+                email,
+                user: publicLocalUser(effectiveUser)
             });
         });
 
@@ -10459,6 +11001,27 @@ class VoiceLinkLocalServer {
             try {
                 const appRoot = path.join(__dirname, '../..');
                 const pm2Home = process.env.PM2_HOME || path.join(os.homedir(), '.pm2');
+                const readRecentLines = (filePath, maxLines = 80, maxBytes = 256 * 1024) => {
+                    try {
+                        const stats = fs.statSync(filePath);
+                        const start = Math.max(0, stats.size - maxBytes);
+                        const fd = fs.openSync(filePath, 'r');
+                        try {
+                            const length = stats.size - start;
+                            const buffer = Buffer.alloc(length);
+                            fs.readSync(fd, buffer, 0, length, start);
+                            return buffer
+                                .toString('utf8')
+                                .split(/\r?\n/)
+                                .filter(Boolean)
+                                .slice(-maxLines);
+                        } finally {
+                            fs.closeSync(fd);
+                        }
+                    } catch {
+                        return [];
+                    }
+                };
                 const candidatePaths = [
                     path.join(pm2Home, 'logs', 'voicelink-primary-error.log'),
                     path.join(pm2Home, 'logs', 'voicelink-primary-out.log'),
@@ -10472,11 +11035,7 @@ class VoiceLinkLocalServer {
                 ];
                 const existing = candidatePaths.filter(p => fs.existsSync(p));
                 const lines = existing.flatMap((filePath) => {
-                    const text = fs.readFileSync(filePath, 'utf8');
-                    return text
-                        .split(/\r?\n/)
-                        .filter(Boolean)
-                        .slice(-120)
+                    return readRecentLines(filePath, 80, 256 * 1024)
                         .map((line) => `[${path.basename(filePath)}] ${line}`);
                 });
                 const bugFile = path.join(appRoot, 'data', 'bug-reports.json');
@@ -10518,13 +11077,40 @@ class VoiceLinkLocalServer {
                         }
                     })()
                     : [];
-                const combinedLines = [...bugLines, ...lines].slice(-300);
-                if (existing.length === 0 && bugLines.length === 0) {
+                const supportLogFile = path.join(appRoot, 'data', 'support', 'client-logs.jsonl');
+                const supportLines = fs.existsSync(supportLogFile)
+                    ? (() => {
+                        try {
+                            return fs.readFileSync(supportLogFile, 'utf8')
+                                .split(/\r?\n/)
+                                .filter(Boolean)
+                                .slice(-30)
+                                .flatMap((line) => {
+                                    try {
+                                        const entry = JSON.parse(line);
+                                        const header = `[client-logs] ${entry.receivedAt || new Date().toISOString()} ${(entry.platform || 'unknown-platform')} ${(entry.user || entry.displayName || entry.accountEmail || entry.clientId || 'anonymous')} reason=${entry.reason || 'manual'} room=${entry.room || 'none'} logs=${Number(entry.logCount) || (Array.isArray(entry.logs) ? entry.logs.length : 0)}`;
+                                        const detailLines = Array.isArray(entry.logs)
+                                            ? entry.logs
+                                                .slice(-12)
+                                                .map((logLine) => `[client-logs][detail] ${String(logLine).trim()}`)
+                                            : [];
+                                        return [header, ...detailLines];
+                                    } catch {
+                                        return [`[client-logs][raw] ${line}`];
+                                    }
+                                });
+                        } catch {
+                            return [];
+                        }
+                    })()
+                    : [];
+                const combinedLines = [...supportLines, ...bugLines, ...lines].slice(-220);
+                if (existing.length === 0 && bugLines.length === 0 && supportLines.length === 0) {
                     return res.json({ success: true, source: null, lines: [] });
                 }
                 res.json({
                     success: true,
-                    source: [...existing.map((filePath) => path.basename(filePath)), bugLines.length > 0 ? 'bug-reports.json' : null].filter(Boolean).join(', '),
+                    source: [...existing.map((filePath) => path.basename(filePath)), bugLines.length > 0 ? 'bug-reports.json' : null, supportLines.length > 0 ? 'client-logs.jsonl' : null].filter(Boolean).join(', '),
                     lines: combinedLines
                 });
             } catch (error) {
@@ -11749,6 +12335,116 @@ class VoiceLinkLocalServer {
                 this.docsConfig = JSON.parse(fs.readFileSync(docsConfigPath, 'utf8'));
             } catch (e) { /* use defaults */ }
         }
+
+        this.app.get('/api/push/ios/devices', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const devices = this.listIOSPushRegistrationsForIdentity(principalResult.principal.identityKey)
+                .map((entry) => ({
+                    deviceId: entry.deviceId,
+                    bundleId: entry.bundleId || null,
+                    platform: entry.platform || 'ios',
+                    deviceName: entry.deviceName || null,
+                    systemName: entry.systemName || null,
+                    systemVersion: entry.systemVersion || null,
+                    appVersion: entry.appVersion || null,
+                    buildNumber: entry.buildNumber || null,
+                    createdAt: entry.createdAt || null,
+                    updatedAt: entry.updatedAt || null,
+                    lastSeenAt: entry.lastSeenAt || null
+                }));
+            return res.json({ success: true, devices });
+        });
+
+        this.app.get('/api/push/ios/status', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const apnsConfig = this.getAPNsConfig();
+            return res.json({
+                success: true,
+                apnsConfigured: apnsConfig.enabled,
+                apnsHost: apnsConfig.host,
+                apnsTopic: apnsConfig.topic,
+                registeredDeviceCount: this.listIOSPushRegistrationsForIdentity(principalResult.principal.identityKey).length
+            });
+        });
+
+        this.app.post('/api/push/ios/register', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
+            const deviceId = String(req.body?.deviceId || '').trim();
+            const token = String(req.body?.token || '').trim().toLowerCase();
+            if (!deviceId || !token) {
+                return res.status(400).json({ success: false, error: 'deviceId and token are required' });
+            }
+
+            const registration = this.upsertIOSPushRegistration({
+                identityKey: principal.identityKey,
+                deviceId,
+                token,
+                bundleId: String(req.body?.bundleId || '').trim() || null,
+                platform: String(req.body?.platform || 'ios').trim() || 'ios',
+                deviceName: String(req.body?.deviceName || '').trim() || null,
+                systemName: String(req.body?.systemName || '').trim() || null,
+                systemVersion: String(req.body?.systemVersion || '').trim() || null,
+                appVersion: String(req.body?.appVersion || '').trim() || null,
+                buildNumber: String(req.body?.buildNumber || '').trim() || null,
+                email: principal.email,
+                username: principal.username,
+                authProvider: principal.authProvider
+            });
+            return res.json({
+                success: true,
+                device: registration ? {
+                    deviceId: registration.deviceId,
+                    bundleId: registration.bundleId,
+                    platform: registration.platform,
+                    deviceName: registration.deviceName,
+                    updatedAt: registration.updatedAt
+                } : null
+            });
+        });
+
+        this.app.post('/api/push/ios/unregister', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const deviceId = String(req.body?.deviceId || '').trim();
+            if (!deviceId) {
+                return res.status(400).json({ success: false, error: 'deviceId is required' });
+            }
+            const removed = this.removeIOSPushRegistration(principalResult.principal.identityKey, deviceId);
+            return res.json({ success: true, removed });
+        });
+
+        this.app.post('/api/push/ios/test', async (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const message = String(req.body?.message || 'This is a test push notification from VoiceLink.').trim();
+            if (!message) {
+                return res.status(400).json({ success: false, error: 'message is required' });
+            }
+            const result = await this.sendIOSPushNotifications({
+                id: uuidv4(),
+                type: 'system_action_test',
+                title: String(req.body?.title || 'VoiceLink Test Push').trim() || 'VoiceLink Test Push',
+                message,
+                severity: 'info'
+            }, {
+                identityKeys: [principalResult.principal.identityKey]
+            });
+            return res.json({ success: true, result });
+        });
 
         // System action push notifications (desktop/iOS clients)
         this.app.post('/api/notifications/system-action', (req, res) => {
@@ -14504,6 +15200,14 @@ class VoiceLinkLocalServer {
             const role = getAdminRequestRole(req);
             return role === 'owner' || role === 'admin';
         };
+        const canAssignManagedRole = (req, role) => {
+            if (hasSharedSecretAccess(req)) return true;
+            const actingRole = getAdminRequestRole(req);
+            if (role === 'owner') {
+                return actingRole === 'owner';
+            }
+            return actingRole === 'owner' || actingRole === 'admin';
+        };
         const localRoleValue = (role) => this.normalizeUserRole(role) === 'staff' ? 'staff' : this.normalizeUserRole(role);
         const buildIdentityMatchers = (identity = {}) => {
             const socketId = String(identity.socketId || identity.userId || '').trim();
@@ -14643,10 +15347,71 @@ class VoiceLinkLocalServer {
                 role,
                 isMuted: !!(liveUser?.audioSettings?.muted),
                 isDeafened: !!(liveUser?.audioSettings?.deafened),
+                transmitEnabled: liveUser?.audioSettings?.transmitEnabled !== false,
                 ipAddress: session.ip || null,
                 authMethod: authUser?.authMethod || liveUser?.authInfo?.authMethod || null,
                 email: authUser?.email || liveUser?.authInfo?.email || liveUser?.email || null
             };
+        };
+        const setUserTransmitPermission = (targetUserId, enabled, changedBy = null) => {
+            const normalizedTarget = String(targetUserId || '').trim();
+            if (!normalizedTarget) return null;
+
+            let updated = false;
+            const touchedRooms = new Set();
+
+            for (const [socketId, user] of this.users.entries()) {
+                if (socketId !== normalizedTarget && user?.id !== normalizedTarget && user?.userId !== normalizedTarget) continue;
+                user.audioSettings = user.audioSettings || {};
+                user.audioSettings.transmitEnabled = !!enabled;
+                user.isSpeaking = false;
+                user.lastActiveAt = new Date();
+                this.users.set(socketId, user);
+                this.audioRelayEnabled.set(socketId, !!enabled && this.audioRelayEnabled.get(socketId) === true);
+                this.io.to(socketId).emit('transmit-permission-updated', {
+                    userId: socketId,
+                    transmitEnabled: !!enabled,
+                    changedBy: changedBy || 'admin'
+                });
+                if (user.roomId) {
+                    touchedRooms.add(user.roomId);
+                    this.io.to(user.roomId).emit('user-audio-state-changed', {
+                        userId: socketId,
+                        muted: !!user.audioSettings?.muted,
+                        deafened: !!user.audioSettings?.deafened,
+                        speaking: false,
+                        transmitEnabled: !!enabled
+                    });
+                }
+                updated = true;
+            }
+
+            for (const room of this.rooms.values()) {
+                const roomUsers = Array.isArray(room.users) ? room.users : [];
+                let roomUpdated = false;
+                room.users = roomUsers.map((roomUser) => {
+                    if (!roomUser) return roomUser;
+                    if (roomUser.id !== normalizedTarget && roomUser.userId !== normalizedTarget) return roomUser;
+                    roomUpdated = true;
+                    touchedRooms.add(room.id);
+                    return {
+                        ...roomUser,
+                        audioSettings: {
+                            ...(roomUser.audioSettings || {}),
+                            transmitEnabled: !!enabled
+                        },
+                        isSpeaking: false,
+                        lastActiveAt: new Date()
+                    };
+                });
+                updated = updated || roomUpdated;
+            }
+
+            for (const roomId of touchedRooms) {
+                this.emitRoomUsersSnapshot(roomId);
+            }
+
+            return updated ? { userId: normalizedTarget, transmitEnabled: !!enabled } : null;
         };
         const getTrustedRoleSyncTargets = () => {
             const configured = deployConfig.get('federation')?.trustedServers;
@@ -14733,14 +15498,34 @@ class VoiceLinkLocalServer {
             return res.json({ success: true });
         });
 
+        this.app.post('/api/admin/users/:userId/transmit', (req, res) => {
+            if (!hasUserModerationAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Moderator or admin access required' });
+            }
+            const userId = String(req.params.userId || '').trim();
+            if (!userId) {
+                return res.status(400).json({ success: false, error: 'User ID is required' });
+            }
+            const enabled = req.body?.enabled !== false;
+            const changedBy = req.user?.username || req.user?.email || req.user?.id || 'admin';
+            const result = setUserTransmitPermission(userId, enabled, changedBy);
+            if (!result) {
+                return res.status(404).json({ success: false, error: 'User is not currently connected' });
+            }
+            return res.json({ success: true, ...result });
+        });
+
         this.app.post('/api/admin/users/:userId/role', async (req, res) => {
             if (!hasRoleAssignmentAccess(req)) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
             }
             const requestedRole = String(req.body?.role || '').trim().toLowerCase();
             const normalizedRole = localRoleValue(requestedRole);
-            if (!['admin', 'staff'].includes(normalizedRole)) {
-                return res.status(400).json({ success: false, error: 'Role must be admin or moderator' });
+            if (!['owner', 'admin', 'staff'].includes(normalizedRole)) {
+                return res.status(400).json({ success: false, error: 'Role must be owner, admin, or moderator' });
+            }
+            if (!canAssignManagedRole(req, normalizedRole)) {
+                return res.status(403).json({ success: false, error: 'Only an owner can grant owner access' });
             }
             const identity = resolveManagedIdentity({ ...req.body, userId: req.params.userId });
             if (!identity.email && !identity.username && !identity.accountId) {
@@ -14799,8 +15584,8 @@ class VoiceLinkLocalServer {
             }
             const requestedRole = String(req.body?.role || '').trim().toLowerCase();
             const normalizedRole = localRoleValue(requestedRole);
-            if (!['admin', 'staff'].includes(normalizedRole)) {
-                return res.status(400).json({ success: false, error: 'Role must be admin or moderator' });
+            if (!['owner', 'admin', 'staff'].includes(normalizedRole)) {
+                return res.status(400).json({ success: false, error: 'Role must be owner, admin, or moderator' });
             }
             const identity = resolveManagedIdentity(req.body || {});
             if (!identity.email && !identity.username && !identity.accountId) {
@@ -14825,6 +15610,78 @@ class VoiceLinkLocalServer {
         });
 
         // Admin settings (server + database)
+        this.app.get('/api/admin/auth-status', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            const config = deployConfig.getConfig() || {};
+            const whmcsConfig = config.whmcs || {};
+            const smtpConfigured = !!(this.smtpTransport && (process.env.VOICELINK_SMTP_HOST || process.env.SMTP_HOST));
+            const botCount = this.mastodonBot?.bots?.size || 0;
+            const schedulerReady = !!this.modules.internalScheduler;
+            const authority = this.getWhmcsAuthorityConfig ? this.getWhmcsAuthorityConfig() : { enabled: false };
+
+            return res.json({
+                success: true,
+                providers: {
+                    native: {
+                        enabled: true,
+                        health: 'ok',
+                        label: 'VoiceLink Native'
+                    },
+                    whmcs: {
+                        enabled: this.shouldDelegateWhmcsAuth(),
+                        health: this.shouldDelegateWhmcsAuth() ? 'ok' : 'disabled',
+                        delegated: authority.enabled,
+                        portalUrl: whmcsConfig.portalUrl || null,
+                        adminUrl: whmcsConfig.adminUrl || null
+                    },
+                    mastodon: {
+                        enabled: botCount > 0,
+                        health: botCount > 0 ? 'ok' : 'needs_setup',
+                        botCount
+                    },
+                    google: {
+                        enabled: false,
+                        health: 'disabled'
+                    },
+                    apple: {
+                        enabled: false,
+                        health: 'disabled'
+                    },
+                    github: {
+                        enabled: false,
+                        health: 'disabled'
+                    },
+                    wordpress: {
+                        enabled: false,
+                        health: 'disabled'
+                    },
+                    oidc: {
+                        enabled: false,
+                        health: 'disabled'
+                    }
+                },
+                smtp: {
+                    configured: smtpConfigured,
+                    health: smtpConfigured ? 'ok' : 'not_configured',
+                    host: process.env.VOICELINK_SMTP_HOST || process.env.SMTP_HOST || null,
+                    port: Number(process.env.VOICELINK_SMTP_PORT || process.env.SMTP_PORT || 587),
+                    from: process.env.VOICELINK_SMTP_FROM || process.env.SMTP_FROM || null
+                },
+                recovery: {
+                    emailCodesAvailable: true,
+                    smtpRecoveryAvailable: smtpConfigured,
+                    breakGlassConfigured: false
+                },
+                scheduler: {
+                    available: schedulerReady,
+                    health: schedulerReady ? 'ok' : 'unavailable'
+                }
+            });
+        });
+
         this.app.get('/api/admin/settings', (req, res) => {
             if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
@@ -15417,6 +16274,7 @@ class VoiceLinkLocalServer {
                     clientId: report.clientId || req.headers['x-client-id'] || null,
                     currentRoom: report.currentRoom || null,
                     diagnosticsSummary: report.diagnosticsSummary || null,
+                    machineDetails: report.machineDetails && typeof report.machineDetails === 'object' ? report.machineDetails : null,
                     localMonitorDiagnostics: report.localMonitorDiagnostics || null,
                     recentCrashReports: Array.isArray(report.recentCrashReports) ? report.recentCrashReports : [],
                     submittedAt: report.submittedAt || new Date().toISOString(),
@@ -15448,6 +16306,167 @@ class VoiceLinkLocalServer {
                     success: true,
                     bugId: bugReport.id,
                     message: 'Bug report submitted'
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/support/logs', (req, res) => {
+            try {
+                const payload = req.body || {};
+                const logs = Array.isArray(payload.logs)
+                    ? payload.logs
+                        .map((line) => String(line || '').trim())
+                        .filter(Boolean)
+                        .slice(-300)
+                    : [];
+
+                const entry = {
+                    receivedAt: new Date().toISOString(),
+                    id: `log_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                    reason: payload.reason || 'manual',
+                    clientId: payload.clientId || req.headers['x-client-id'] || 'unknown',
+                    appVersion: payload.appVersion || 'unknown',
+                    platform: payload.platform || 'unknown',
+                    userAgent: payload.userAgent || req.headers['user-agent'] || '',
+                    room: payload.room || null,
+                    user: payload.user || null,
+                    displayName: payload.displayName || null,
+                    accountEmail: payload.accountEmail || null,
+                    diagnosticsSummary: payload.diagnosticsSummary || null,
+                    sections: payload.sections && typeof payload.sections === 'object' ? payload.sections : null,
+                    logCount: logs.length,
+                    logs
+                };
+
+                const supportDir = path.join(__dirname, '../../data', 'support');
+                const logsFile = path.join(supportDir, 'client-logs.jsonl');
+                fs.mkdirSync(supportDir, { recursive: true });
+                fs.appendFileSync(logsFile, JSON.stringify(entry) + '\n', 'utf8');
+
+                console.log(
+                    `[SupportLogs] id=${entry.id} platform=${entry.platform} user=${entry.accountEmail || entry.displayName || entry.user || 'anonymous'} room=${entry.room || 'none'} logs=${entry.logCount} reason=${entry.reason}`
+                );
+
+                return res.json({
+                    success: true,
+                    id: entry.id,
+                    stored: logs.length
+                });
+            } catch (error) {
+                console.error('[SupportLogs] Failed to store client logs:', error.message);
+                return res.status(500).json({ success: false, error: 'Failed to store logs' });
+            }
+        });
+
+        this.app.get('/api/admin/scheduler/status', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                await this.ensureInternalSchedulerModule();
+                this.initializeInternalSchedulerInstance();
+                const scheduler = this.modules.internalScheduler;
+                if (!scheduler) {
+                    return res.status(503).json({ success: false, error: 'Internal scheduler unavailable' });
+                }
+
+                const role = this.getSchedulerRole(req);
+                return res.json({
+                    success: true,
+                    status: scheduler.getStatus(role),
+                    tasks: scheduler.listTasks(role),
+                    logs: scheduler.listLogs(role, Number(req.query.limit || 50))
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/scheduler/tasks/:taskId/run', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                await this.ensureInternalSchedulerModule();
+                this.initializeInternalSchedulerInstance();
+                const scheduler = this.modules.internalScheduler;
+                if (!scheduler) {
+                    return res.status(503).json({ success: false, error: 'Internal scheduler unavailable' });
+                }
+
+                const role = this.getSchedulerRole(req);
+                const taskId = String(req.params.taskId || '').trim();
+                if (!taskId) {
+                    return res.status(400).json({ success: false, error: 'Task id is required' });
+                }
+
+                const allowedTask = scheduler.listTasks(role).find((task) => task.id === taskId);
+                if (!allowedTask) {
+                    return res.status(404).json({ success: false, error: 'Task not found' });
+                }
+                if (role !== 'admin' && !allowedTask.allowUserRun) {
+                    return res.status(403).json({ success: false, error: 'Task run requires admin access' });
+                }
+
+                const actor = this.resolveAdminActor?.(req);
+                const result = await scheduler.runTask(taskId, {
+                    actor: actor?.name || actor?.username || role,
+                    trigger: 'manual'
+                });
+
+                return res.json({
+                    success: !!result.success,
+                    result,
+                    status: scheduler.getStatus(role),
+                    tasks: scheduler.listTasks(role),
+                    logs: scheduler.listLogs(role, 50)
+                });
+            } catch (error) {
+                return res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.put('/api/admin/scheduler/tasks/:taskId', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+
+            try {
+                await this.ensureInternalSchedulerModule();
+                this.initializeInternalSchedulerInstance();
+                const scheduler = this.modules.internalScheduler;
+                if (!scheduler) {
+                    return res.status(503).json({ success: false, error: 'Internal scheduler unavailable' });
+                }
+
+                const taskId = String(req.params.taskId || '').trim();
+                if (!taskId) {
+                    return res.status(400).json({ success: false, error: 'Task id is required' });
+                }
+
+                const patch = {};
+                if (req.body?.enabled !== undefined) {
+                    patch.enabled = !!req.body.enabled;
+                }
+                if (req.body?.intervalSeconds !== undefined) {
+                    patch.intervalSeconds = Number(req.body.intervalSeconds);
+                }
+
+                const result = scheduler.updateTask(taskId, patch, 'admin');
+                if (!result.success) {
+                    return res.status(result.error === 'Task not found' ? 404 : 400).json(result);
+                }
+
+                return res.json({
+                    success: true,
+                    task: result.task,
+                    status: scheduler.getStatus('admin'),
+                    tasks: scheduler.listTasks('admin'),
+                    logs: scheduler.listLogs('admin', 50)
                 });
             } catch (error) {
                 return res.status(500).json({ success: false, error: error.message });
@@ -17325,10 +18344,14 @@ class VoiceLinkLocalServer {
                     socket.emit('error', { message: 'You are not currently joined to a room.' });
                     return;
                 }
+                const requestedMessageId = typeof data?.messageId === 'string' && data.messageId.trim()
+                    ? data.messageId.trim()
+                    : null;
                 const message = {
-                    id: uuidv4(),
+                    id: requestedMessageId || uuidv4(),
                     userId: socket.id,
                     userName: user.name,
+                    roomId: user.roomId,
                     message: data.message,
                     content: data.message,
                     timestamp: new Date(),
@@ -17699,9 +18722,12 @@ class VoiceLinkLocalServer {
             // Enable/disable audio relay for this user
             socket.on('enable-audio-relay', (data) => {
                 const { enabled, sampleRate, channels } = data;
-                this.audioRelayEnabled.set(socket.id, enabled);
+                const user = this.users.get(socket.id);
+                const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
+                const relayEnabled = !!enabled && transmitEnabled;
+                this.audioRelayEnabled.set(socket.id, relayEnabled);
 
-                if (enabled) {
+                if (relayEnabled) {
                     this.relayStats.activeRelays++;
                     console.log(`Audio relay enabled for ${socket.id}`);
 
@@ -17718,7 +18744,8 @@ class VoiceLinkLocalServer {
                 }
 
                 socket.emit('relay-status', {
-                    active: enabled,
+                    active: relayEnabled,
+                    transmitEnabled,
                     stats: this.relayStats
                 });
             });
@@ -17726,7 +18753,7 @@ class VoiceLinkLocalServer {
             // Receive audio data from client and relay to room
             socket.on('audio-data', (data) => {
                 const user = this.users.get(socket.id);
-                if (!user || !this.audioRelayEnabled.get(socket.id)) {
+                if (!user || !this.audioRelayEnabled.get(socket.id) || user?.audioSettings?.transmitEnabled === false) {
                     return;
                 }
 

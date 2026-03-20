@@ -1,14 +1,68 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 import WebKit
 
 final class IOSAudioSessionManager {
     static let shared = IOSAudioSessionManager()
 
-    private init() {}
+    private var activeRoomSessionCount = 0
+    private var observersRegistered = false
+
+    private init() {
+        registerObserversIfNeeded()
+    }
 
     func activateForRoomSession() {
-        let session = AVAudioSession.sharedInstance()
+        activeRoomSessionCount += 1
+        configureAndActivateSession()
+    }
+
+    func deactivateRoomSessionIfPossible() {
+        activeRoomSessionCount = max(0, activeRoomSessionCount - 1)
+        guard activeRoomSessionCount == 0 else { return }
+        do {
+            try session.setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            NSLog("[VoiceLinkiOS] Failed to deactivate audio session: \(error.localizedDescription)")
+        }
+    }
+
+    private var session: AVAudioSession {
+        AVAudioSession.sharedInstance()
+    }
+
+    private func registerObserversIfNeeded() {
+        guard !observersRegistered else { return }
+        observersRegistered = true
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleAudioSessionRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleMediaServicesReset),
+            name: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    private func configureAndActivateSession() {
         do {
             try session.setCategory(
                 .playAndRecord,
@@ -18,17 +72,48 @@ final class IOSAudioSessionManager {
             try session.setPreferredSampleRate(48_000)
             try session.setPreferredIOBufferDuration(0.01)
             try session.setActive(true, options: [.notifyOthersOnDeactivation])
+            try? session.overrideOutputAudioPort(.speaker)
+            NotificationCenter.default.post(name: .iosAudioSessionReactivated, object: nil)
         } catch {
             NSLog("[VoiceLinkiOS] Failed to activate audio session: \(error.localizedDescription)")
         }
     }
 
-    func deactivateRoomSessionIfPossible() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        } catch {
-            NSLog("[VoiceLinkiOS] Failed to deactivate audio session: \(error.localizedDescription)")
+    @objc private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard activeRoomSessionCount > 0,
+              let userInfo = notification.userInfo,
+              let rawType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else {
+            return
         }
+        if type == .ended {
+            configureAndActivateSession()
+        }
+    }
+
+    @objc private func handleAudioSessionRouteChange(_ notification: Notification) {
+        guard activeRoomSessionCount > 0,
+              let userInfo = notification.userInfo,
+              let rawReason = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else {
+            return
+        }
+        switch reason {
+        case .newDeviceAvailable, .oldDeviceUnavailable, .override, .categoryChange, .routeConfigurationChange:
+            configureAndActivateSession()
+        default:
+            break
+        }
+    }
+
+    @objc private func handleMediaServicesReset() {
+        guard activeRoomSessionCount > 0 else { return }
+        configureAndActivateSession()
+    }
+
+    @objc private func handleApplicationDidBecomeActive() {
+        guard activeRoomSessionCount > 0 else { return }
+        configureAndActivateSession()
     }
 }
 
@@ -36,6 +121,9 @@ struct VoiceLinkWebView: UIViewRepresentable {
     let url: URL
     let displayName: String
     let showChat: Bool
+    let inputGain: Double
+    let outputGain: Double
+    let mediaMuted: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -63,7 +151,13 @@ struct VoiceLinkWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.updateIdentity(displayName: displayName, showChat: showChat)
+        context.coordinator.updateIdentity(
+            displayName: displayName,
+            showChat: showChat,
+            inputGain: inputGain,
+            outputGain: outputGain,
+            mediaMuted: mediaMuted
+        )
         guard webView.url != url else { return }
         webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
     }
@@ -78,6 +172,7 @@ struct VoiceLinkWebView: UIViewRepresentable {
 
         private weak var webView: WKWebView?
         private var observers: [NSObjectProtocol] = []
+        private var lastIdentityScript = ""
 
         func attach(to webView: WKWebView) {
             self.webView = webView
@@ -90,19 +185,36 @@ struct VoiceLinkWebView: UIViewRepresentable {
             webView = nil
         }
 
-        func updateIdentity(displayName: String, showChat: Bool) {
+        func updateIdentity(displayName: String, showChat: Bool, inputGain: Double, outputGain: Double, mediaMuted: Bool) {
             let escapedName = displayName.jsEscapedLiteral
             let visible = showChat ? "true" : "false"
+            let inputValue = String(format: "%.3f", inputGain)
+            let outputValue = String(format: "%.3f", outputGain)
+            let mediaValue = mediaMuted ? "true" : "false"
             let script = """
             localStorage.setItem('voicelink_auth_display_name', '\(escapedName)');
             localStorage.setItem('voicelink_display_name', '\(escapedName)');
+            localStorage.setItem('voicelink_ios_input_gain', '\(inputValue)');
+            localStorage.setItem('voicelink_ios_output_gain', '\(outputValue)');
+            localStorage.setItem('voicelink_ios_media_muted', '\(mediaValue)');
             if (document.getElementById('user-name') && !document.getElementById('user-name').value) {
                 document.getElementById('user-name').value = '\(escapedName)';
             }
             window.__voicelinkSetChatVisible?.(\(visible));
-            window.__voicelinkResumeAudio?.();
+            window.__voicelinkApplyAudioSettings?.({
+              inputGain: \(inputValue),
+              outputGain: \(outputValue),
+              mediaMuted: \(mediaValue)
+            });
             """
+            lastIdentityScript = script
             webView?.evaluateJavaScript(script, completionHandler: nil)
+        }
+
+        private func reassertAudioBridge() {
+            guard let webView else { return }
+            let script = lastIdentityScript + "\nwindow.__voicelinkApplyAudioSettings?.({});\nwindow.__voicelinkResumeAudio?.(true);"
+            webView.evaluateJavaScript(script, completionHandler: nil)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -156,13 +268,40 @@ struct VoiceLinkWebView: UIViewRepresentable {
                 localStorage.setItem('voicelink_display_name', displayName);
               } catch (_) {}
 
-              window.__voicelinkResumeAudio = async () => {
+              window.__voicelinkApplyAudioSettings = (settings = {}) => {
                 try {
+                  const inputGain = Number(settings.inputGain ?? localStorage.getItem('voicelink_ios_input_gain') ?? 1);
+                  const outputGain = Number(settings.outputGain ?? localStorage.getItem('voicelink_ios_output_gain') ?? 1);
+                  const mediaMuted = String(settings.mediaMuted ?? localStorage.getItem('voicelink_ios_media_muted') ?? 'false') === 'true';
+
+                  const audioEls = Array.from(document.querySelectorAll('audio, video'));
+                  for (const el of audioEls) {
+                    try {
+                      el.muted = mediaMuted;
+                      el.volume = Math.max(0, Math.min(1, outputGain / 2));
+                    } catch (_) {}
+                  }
+
+                  if (window.app) {
+                    try { window.app.masterVolume = outputGain; } catch (_) {}
+                    try { window.app.inputVolume = inputGain; } catch (_) {}
+                  }
+                } catch (_) {}
+              };
+
+              window.__voicelinkLastAudioResumeAt = 0;
+              window.__voicelinkResumeAudio = async (force = false) => {
+                try {
+                  const now = Date.now();
+                  if (!force && now - (window.__voicelinkLastAudioResumeAt || 0) < 3000) return;
+                  window.__voicelinkLastAudioResumeAt = now;
                   if (window.iosAudioProfile?.unlockAudio) await window.iosAudioProfile.unlockAudio();
                   if (window.iosCompatibility?.resumeAudio) await window.iosCompatibility.resumeAudio();
                   if (window.iosCompatibility?.unlockAudio) await window.iosCompatibility.unlockAudio();
-                  const audioEls = Array.from(document.querySelectorAll('audio'));
-                  for (const el of audioEls) {
+                  const mediaEls = Array.from(document.querySelectorAll('audio, video'));
+                  for (const el of mediaEls) {
+                    const isPlayable = !el.muted && el.paused && !el.ended && Number(el.readyState || 0) >= 2;
+                    if (!isPlayable) continue;
                     try { await el.play(); } catch (_) {}
                   }
                   if (window.app?.audioContext?.state === 'suspended') {
@@ -171,6 +310,7 @@ struct VoiceLinkWebView: UIViewRepresentable {
                   if (window.app?.peekAudioContext?.state === 'suspended') {
                     try { await window.app.peekAudioContext.resume(); } catch (_) {}
                   }
+                  window.__voicelinkApplyAudioSettings?.({});
                 } catch (_) {}
               };
 
@@ -228,7 +368,6 @@ struct VoiceLinkWebView: UIViewRepresentable {
                   joinName.value = displayName;
                 }
                 window.__voicelinkSetChatVisible(\(chatVisible));
-                window.__voicelinkResumeAudio();
 
                 const userList = document.getElementById('user-list');
                 if (userList && !userList.__voicelinkObserved) {
@@ -249,12 +388,46 @@ struct VoiceLinkWebView: UIViewRepresentable {
                 }
               };
 
-              window.addEventListener('load', wireObservers, { once: false });
-              document.addEventListener('DOMContentLoaded', wireObservers, { once: false });
-              ['touchstart', 'touchend', 'click'].forEach((eventName) => {
-                document.addEventListener(eventName, () => { window.__voicelinkResumeAudio(); }, { passive: true });
+              const startAudioWatchdog = () => {
+                if (window.__voicelinkAudioWatchdogStarted) return;
+                window.__voicelinkAudioWatchdogStarted = true;
+                setInterval(() => {
+                  if (document.hidden) return;
+                  const hasSuspendedContext =
+                    window.app?.audioContext?.state === 'suspended' ||
+                    window.app?.peekAudioContext?.state === 'suspended';
+                  const hasPausedAudio = Array.from(document.querySelectorAll('audio, video')).some(
+                    (el) => !el.muted && el.paused && !el.ended && Number(el.readyState || 0) >= 2
+                  );
+                  if (hasSuspendedContext || hasPausedAudio) {
+                    window.__voicelinkResumeAudio?.();
+                  }
+                }, 15000);
+              };
+
+              window.addEventListener('load', () => {
+                wireObservers();
+                window.__voicelinkResumeAudio?.(true);
+                startAudioWatchdog();
+              }, { once: false });
+              document.addEventListener('DOMContentLoaded', () => {
+                wireObservers();
+                window.__voicelinkResumeAudio?.(true);
+                startAudioWatchdog();
+              }, { once: false });
+              document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                  wireObservers();
+                  window.__voicelinkResumeAudio?.(true);
+                }
               });
-              setInterval(wireObservers, 1500);
+              window.addEventListener('pageshow', () => {
+                wireObservers();
+                window.__voicelinkResumeAudio?.(true);
+              });
+              ['touchend', 'click'].forEach((eventName) => {
+                document.addEventListener(eventName, () => { window.__voicelinkResumeAudio(false); }, { passive: true });
+              });
             })();
             """
         }
@@ -288,8 +461,22 @@ struct VoiceLinkWebView: UIViewRepresentable {
                     )
                 }
             )
+
+            observers.append(
+                NotificationCenter.default.addObserver(
+                    forName: .iosAudioSessionReactivated,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.reassertAudioBridge()
+                }
+            )
         }
     }
+}
+
+extension Notification.Name {
+    static let iosAudioSessionReactivated = Notification.Name("iosAudioSessionReactivated")
 }
 
 private extension String {

@@ -2664,7 +2664,9 @@ class VoiceLinkLocalServer {
 
         // Verify email code
         this.app.post('/api/auth/email/verify', (req, res) => {
-            const { email, code, clientId } = req.body;
+            const email = normalizeEmail(req.body?.email);
+            const code = String(req.body?.code || '').trim();
+            const clientId = String(req.body?.clientId || '').trim();
 
             if (!email || !code) {
                 return res.status(400).json({ error: 'Email and code required' });
@@ -2692,9 +2694,43 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ error: 'Invalid verification code' });
             }
 
-            // Success - generate access token
-            const accessToken = 'vlemail_' + uuidv4() + '_' + Date.now().toString(36);
-            const userId = 'user_' + email.replace(/[^a-z0-9]/gi, '_').substring(0, 20) + '_' + Date.now().toString(36);
+            let user = findLocalUserByIdentity(email);
+            if (!user) {
+                const usernameFromEmail = email.split('@')[0].replace(/[^a-z0-9._-]/gi, '').toLowerCase() || `user_${Date.now().toString(36)}`;
+                user = {
+                    id: `usr_${uuidv4()}`,
+                    username: usernameFromEmail,
+                    displayName: email.split('@')[0] || usernameFromEmail,
+                    email,
+                    role: 'user',
+                    permissions: buildPermissionsForRole('user'),
+                    entitlements: buildDefaultEntitlements('user'),
+                    linkedAuthMethods: [],
+                    isVerified: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+            }
+
+            user.isVerified = true;
+            user.updatedAt = new Date().toISOString();
+            mergeLinkedAuthMethods(user, 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            decorateUserWithCanonicalAccount(user, user.authProvider || 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+
+            const accessToken = issueLocalAuthToken(user.id);
+            const effectiveUser = resolveEffectiveAuthUser({ ...user });
 
             // Clean up verification code
             this.emailVerificationCodes.delete(email);
@@ -2702,8 +2738,9 @@ class VoiceLinkLocalServer {
             res.json({
                 success: true,
                 accessToken,
-                userId,
-                email
+                userId: effectiveUser.id,
+                email,
+                user: publicLocalUser(effectiveUser)
             });
         });
 
@@ -7485,10 +7522,14 @@ class VoiceLinkLocalServer {
             socket.on('chat-message', (data) => {
                 const user = this.users.get(socket.id);
                 if (user) {
+                    const requestedMessageId = typeof data?.messageId === 'string' && data.messageId.trim()
+                        ? data.messageId.trim()
+                        : null;
                     const message = {
-                        id: uuidv4(),
+                        id: requestedMessageId || uuidv4(),
                         userId: socket.id,
                         userName: user.name,
+                        roomId: user.roomId,
                         message: data.message,
                         timestamp: new Date(),
                         isAuthenticated: user.isAuthenticated || false,
