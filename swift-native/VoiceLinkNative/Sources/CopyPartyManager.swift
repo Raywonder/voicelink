@@ -50,6 +50,13 @@ class CopyPartyManager: ObservableObject {
         ]
         var smbUsername: String = "voicelinkshare"
         var smbPreferredShare: String = "voicelink"
+        var localSMBHostnames: [String] = []
+        var localSMBPreferredShare: String = "voicelink"
+        var centralSMBHostnames: [String] = [
+            "smb.raywonderis.me",
+            "files.raywonderis.me"
+        ]
+        var centralSMBPreferredShare: String = "voicelink"
     }
 
     // MARK: - Types

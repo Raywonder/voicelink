@@ -102,8 +102,70 @@ const DEFAULT_CONFIG = {
         jukebox: true,
         screenShare: false,
         recording: false,
-        transcription: false,
+        transcription: true,
         whisperMode: true
+    },
+    fileSharing: {
+        enabled: true,
+        globalEnabled: true,
+        autoCreateUserFolders: true,
+        secondDriveEnabled: true,
+        secondDrivePath: '/mnt/backup/voicelink',
+        fallbackUploadPath: null,
+        sharedFolderName: 'shared',
+        usersFolderName: 'users',
+        smb: {
+            enabled: true,
+            username: 'voicelinkshare',
+            preferredShare: 'voicelink',
+            hostnames: ['smb.raywonderis.me', 'files.raywonderis.me'],
+            layers: {
+                local: {
+                    enabled: true,
+                    hostnames: [],
+                    preferredShare: 'voicelink'
+                },
+                central: {
+                    enabled: true,
+                    hostnames: ['smb.raywonderis.me', 'files.raywonderis.me'],
+                    preferredShare: 'voicelink'
+                }
+            },
+            shares: {
+                sharedFiles: 'shared-files',
+                voicelink: 'voicelink',
+                openlink: 'openlink',
+                bema: 'bema',
+                flexpbx: 'flexpbx',
+                flexphone: 'flexphone',
+                openclaw: 'openclaw',
+                media: 'media'
+            },
+            appShareMap: {
+                voicelink: '/mnt/backup/voicelink',
+                openlink: '/mnt/backup/openlink',
+                bema: '/mnt/backup/bema',
+                flexpbx: '/mnt/backup/flexpbx',
+                flexphone: '/mnt/backup/flexphone',
+                openclaw: '/mnt/backup/openclaw',
+                media: '/mnt/backup/media',
+                sharedFiles: '/mnt/backup/shared-files'
+            }
+        },
+        retention: {
+            defaultCategory: 'standard',
+            categories: {
+                temporary: { label: 'Temporary', days: 7 },
+                standard: { label: 'Standard', days: 30 },
+                archive: { label: 'Archive', days: 365 }
+            }
+        },
+        jellyfinSync: {
+            enabled: true,
+            mediaFolderName: 'media',
+            syncVideo: true,
+            syncAudio: true
+        }
     },
     // Jellyfin Media Server Integration
     jellyfin: {

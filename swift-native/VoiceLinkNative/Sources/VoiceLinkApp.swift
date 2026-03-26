@@ -6487,6 +6487,8 @@ struct SettingsView: View {
         SettingsSection(title: "Shared Access") {
             let copyPartyBase = CopyPartyManager.shared.config.primaryServer
             let smbHosts = CopyPartyManager.shared.config.smbHostnames.joined(separator: ", ")
+            let localSMBHosts = CopyPartyManager.shared.config.localSMBHostnames.joined(separator: ", ")
+            let centralSMBHosts = CopyPartyManager.shared.config.centralSMBHostnames.joined(separator: ", ")
             Text("Room files can be shared as clickable web links through CopyParty or mounted storage paths over SMB.")
                 .font(.caption)
                 .foregroundColor(.gray)
@@ -6509,6 +6511,44 @@ struct SettingsView: View {
                     .multilineTextAlignment(.trailing)
                     .foregroundColor(.secondary)
                     .accessibilityLabel("SMB hostnames")
+            }
+
+            HStack(alignment: .top) {
+                Text("Local SMB")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(localSMBHosts.isEmpty ? "Use this install's local SMB host" : localSMBHosts)
+                    .multilineTextAlignment(.trailing)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Local SMB hostnames")
+            }
+
+            HStack(alignment: .top) {
+                Text("Local Share")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(CopyPartyManager.shared.config.localSMBPreferredShare)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Preferred local SMB share")
+            }
+
+            HStack(alignment: .top) {
+                Text("Central SMB")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(centralSMBHosts.isEmpty ? "Use the shared backup SMB layer" : centralSMBHosts)
+                    .multilineTextAlignment(.trailing)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Central SMB hostnames")
+            }
+
+            HStack(alignment: .top) {
+                Text("Central Share")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(CopyPartyManager.shared.config.centralSMBPreferredShare)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Preferred central SMB share")
             }
 
             HStack(alignment: .top) {

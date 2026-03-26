@@ -1977,9 +1977,20 @@ class VoiceLinkLocalServer {
         const smb = fileSharingConfig.smb && typeof fileSharingConfig.smb === 'object'
             ? fileSharingConfig.smb
             : {};
-        const hostnames = Array.isArray(smb.hostnames)
-            ? smb.hostnames.map(host => String(host || '').trim()).filter(Boolean)
+        const normalizeHostnames = (value) => Array.isArray(value)
+            ? value.map(host => String(host || '').trim()).filter(Boolean)
             : [];
+        const smbLayers = smb.layers && typeof smb.layers === 'object' ? smb.layers : {};
+        const localLayer = smbLayers.local && typeof smbLayers.local === 'object' ? smbLayers.local : {};
+        const centralLayer = smbLayers.central && typeof smbLayers.central === 'object' ? smbLayers.central : {};
+        const localHostnames = normalizeHostnames(localLayer.hostnames);
+        const centralHostnames = normalizeHostnames(centralLayer.hostnames);
+        const legacyHostnames = normalizeHostnames(smb.hostnames);
+        const hostnames = [...new Set([
+            ...localHostnames,
+            ...centralHostnames,
+            ...legacyHostnames
+        ])];
         const shares = smb.shares && typeof smb.shares === 'object' ? smb.shares : {};
         const appShareMap = smb.appShareMap && typeof smb.appShareMap === 'object' ? smb.appShareMap : {};
         const uploadRoot = this.getClientUploadRoot();
@@ -2004,6 +2015,18 @@ class VoiceLinkLocalServer {
                 enabled: smb.enabled === true,
                 username: String(smb.username || '').trim(),
                 hostnames,
+                local: {
+                    enabled: localLayer.enabled !== false,
+                    hostnames: localHostnames,
+                    preferredShareKey: String(localLayer.preferredShare || smb.preferredShare || inferredShare || '').trim() || null,
+                    preferredShareName: shares[String(localLayer.preferredShare || smb.preferredShare || inferredShare || '').trim()] || preferredShareName || null
+                },
+                central: {
+                    enabled: centralLayer.enabled !== false,
+                    hostnames: centralHostnames,
+                    preferredShareKey: String(centralLayer.preferredShare || smb.preferredShare || inferredShare || '').trim() || null,
+                    preferredShareName: shares[String(centralLayer.preferredShare || smb.preferredShare || inferredShare || '').trim()] || preferredShareName || null
+                },
                 preferredShareKey: inferredShare || null,
                 preferredShareName: preferredShareName || null,
                 shares,
