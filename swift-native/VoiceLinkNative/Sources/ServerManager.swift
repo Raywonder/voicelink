@@ -20,6 +20,7 @@ class ServerManager: ObservableObject {
     @Published var inputMuted: Bool = false
     @Published var outputMuted: Bool = false
     @Published var activeRoomId: String?
+    @Published var currentUserId: String?
 
     // Server options
     static let mainServer = APIEndpointResolver.canonicalMainBase
@@ -38,17 +39,51 @@ class ServerManager: ObservableObject {
     private var roomStreamDidStopExplicitly = false
     private var roomStreamKeepAliveTimer: Timer?
     private var roomStreamEndObserver: NSObjectProtocol?
+    private var roomStreamFadeTimer: Timer?
+    private var roomStreamFadeDuration: TimeInterval = 1.5
     private let defaultRoomStreamURLString = "https://chrismixradio.com"
     private let roomStreamDefaultVolume: Float = 0.12
+    private var registeredSocketSession = false
+    private var pendingSessionRegistrationWorkItem: DispatchWorkItem?
+    @Published var currentRoomMediaVolume: Float = 0.12
+    @Published private(set) var currentRoomMediaMuted: Bool = false
+
+    struct CurrentRoomMediaState {
+        let active: Bool
+        let streamURL: String
+    }
 
     // Public accessor for the current server URL
     var baseURL: String? {
         currentServerURL.isEmpty ? nil : currentServerURL
     }
 
+    var currentRoomMedia: CurrentRoomMediaState? {
+        guard let url = currentRoomStreamURL,
+              let player = roomStreamPlayer,
+              player.currentItem != nil,
+              activeRoomId != nil else { return nil }
+        let activePlayback = player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        return CurrentRoomMediaState(
+            active: activePlayback,
+            streamURL: url.absoluteString
+        )
+    }
+
+    var isCurrentRoomMediaMuted: Bool {
+        currentRoomMediaMuted
+    }
+
+    var isCurrentRoomMediaPlaying: Bool {
+        guard let player = roomStreamPlayer,
+              player.currentItem != nil,
+              activeRoomId != nil else { return false }
+        return player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+    }
+
     init() {
-        // Default to main server
-        self.currentServerURL = ServerManager.mainServer
+        // Leave unresolved until the first connect attempt picks the best server.
+        self.currentServerURL = ""
         setupMessageNotifications()
     }
 
@@ -57,13 +92,16 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendMessageToServer,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo else { return }
+            let messageId = data["messageId"] as? String
             let content = data["content"] as? String ?? ""
             let isDirect = data["isDirect"] as? Bool ?? false
             let recipientId = data["recipientId"] as? String
             let replyToId = data["replyToId"] as? String
+            let mentions = data["mentions"] as? [String]
+            let roomId = data["roomId"] as? String
 
             if isDirect, let recipient = recipientId {
                 // Direct message
@@ -71,15 +109,30 @@ class ServerManager: ObservableObject {
                     "targetUserId": recipient,
                     "message": content
                 ]
+                if let messageId {
+                    msgData["messageId"] = messageId
+                }
                 if let reply = replyToId {
                     msgData["replyTo"] = reply
+                }
+                if let mentions, !mentions.isEmpty {
+                    msgData["mentions"] = mentions
                 }
                 self?.socket?.emit("direct-message", msgData)
             } else {
                 // Room message
                 var msgData: [String: Any] = ["message": content]
+                if let roomId, !roomId.isEmpty {
+                    msgData["roomId"] = roomId
+                }
+                if let messageId {
+                    msgData["messageId"] = messageId
+                }
                 if let reply = replyToId {
                     msgData["replyTo"] = reply
+                }
+                if let mentions, !mentions.isEmpty {
+                    msgData["mentions"] = mentions
                 }
                 self?.socket?.emit("chat-message", msgData)
             }
@@ -89,7 +142,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendTypingIndicator,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo,
                   let typing = data["typing"] as? Bool else { return }
@@ -100,7 +153,7 @@ class ServerManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .sendReactionToServer,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let data = notification.userInfo,
                   let messageId = data["messageId"] as? String,
@@ -136,11 +189,25 @@ class ServerManager: ObservableObject {
     }
 
     func tryLocalThenMain() {
-        // Try main/remote server first (primary), fallback to local
+        // Try local server first, fallback to main/federated endpoints.
+        print("Connecting to local server (primary)...")
+        connect(toMain: false)
+
+        // Set up a timeout to try the main/federated path if local fails.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self else { return }
+            if !self.isConnected && !self.useMainServer {
+                print("Local server not available, trying main server...")
+                self.connect(toMain: true)
+            }
+        }
+    }
+
+    func tryMainThenLocal() {
+        // Try main/federated endpoints first, fallback to local.
         print("Connecting to main server (primary)...")
         connect(toMain: true)
 
-        // Set up a timeout to try local server if main fails
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self = self else { return }
             if !self.isConnected && self.useMainServer {
@@ -148,11 +215,6 @@ class ServerManager: ObservableObject {
                 self.connect(toMain: false)
             }
         }
-    }
-
-    func tryMainThenLocal() {
-        // Alias for tryLocalThenMain - main is now primary
-        tryLocalThenMain()
     }
 
     func disconnect() {
@@ -238,7 +300,7 @@ class ServerManager: ObservableObject {
     }
 
     private func resolveBestMainServer() async -> String {
-        let candidates = APIEndpointResolver.mainBaseCandidates(preferred: currentServerURL)
+        let candidates = APIEndpointResolver.remoteMainBaseCandidates(preferred: currentServerURL)
         for candidate in candidates {
             if await isReachableServer(candidate) {
                 return candidate
@@ -341,6 +403,9 @@ class ServerManager: ObservableObject {
                 self.errorMessage = nil
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
+            self.registeredSocketSession = false
+            self.registerAuthenticatedSessionIfNeeded()
+            self.scheduleSessionRegistrationRetry()
             self.scheduleDomainRecoveryIfNeeded()
             // Request room list after connecting
             self.getRooms()
@@ -349,6 +414,8 @@ class ServerManager: ObservableObject {
         socket.on(clientEvent: .disconnect) { [weak self] data, ack in
             print("Disconnected from server")
             self?.stopDomainRecoveryTimer()
+            self?.cancelPendingSessionRegistrationRetry()
+            self?.registeredSocketSession = false
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
@@ -362,6 +429,27 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self?.errorMessage = "Connection error"
                 self?.serverStatus = "Error"
+            }
+        }
+
+        socket.on("auth_success") { [weak self] data, ack in
+            print("Socket session registered: \(data)")
+            self?.cancelPendingSessionRegistrationRetry()
+            self?.registeredSocketSession = true
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
+            }
+            self?.rejoinActiveRoomIfNeeded()
+        }
+
+        socket.on("auth_failed") { [weak self] data, ack in
+            print("Socket session registration failed: \(data)")
+            self?.registeredSocketSession = false
+            let message = (data.first as? [String: Any])?["message"] as? String
+                ?? (data.first as? String)
+                ?? "Authentication required"
+            DispatchQueue.main.async {
+                self?.errorMessage = message
             }
         }
 
@@ -398,11 +486,18 @@ class ServerManager: ObservableObject {
             guard let self = self else { return }
             let responseData = data.first as? [String: Any] ?? [:]
             let roomData = (responseData["room"] as? [String: Any]) ?? responseData
+            let joinedUserData = responseData["user"] as? [String: Any]
 
             if let usersData = (roomData["users"] as? [[String: Any]]) ?? (responseData["users"] as? [[String: Any]]) {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self.currentRoomUsers = users
+                }
+            }
+
+            if let joinedUserId = joinedUserData?["id"] as? String ?? joinedUserData?["odId"] as? String {
+                DispatchQueue.main.async {
+                    self.currentUserId = joinedUserId
                 }
             }
 
@@ -418,6 +513,7 @@ class ServerManager: ObservableObject {
                     self.activeRoomId = roomId
                     self.audioTransmissionStatus = "Joined room"
                 }
+                self.socket?.emit("get-room-messages", ["roomId": roomId, "limit": 50])
                 self.fetchActiveRoomStream(for: roomId)
                 self.scheduleAudioTransmissionStart(for: roomId)
             } else {
@@ -641,6 +737,37 @@ class ServerManager: ObservableObject {
         socket.on("chat-message") { data, ack in
             print("Chat message received: \(data)")
             if let msgData = data[0] as? [String: Any] {
+                let messageId = msgData["id"] as? String ?? msgData["messageId"] as? String ?? UUID().uuidString
+                let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
+                let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
+                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+                let messageType = msgData["type"] as? String ?? "text"
+                let roomId = msgData["roomId"] as? String ?? self.activeRoomId
+
+                NotificationCenter.default.post(
+                    name: .incomingChatMessage,
+                    object: nil,
+                    userInfo: [
+                        "messageId": messageId,
+                        "senderId": senderId,
+                        "senderName": senderName,
+                        "content": content,
+                        "type": messageType,
+                        "roomId": roomId as Any,
+                        "mentions": msgData["mentions"] as? [String] ?? [],
+                        "transcript": msgData["transcript"] as? Bool ?? false,
+                        "transcriptUserName": msgData["transcriptUserName"] as? String ?? ""
+                    ]
+                )
+            }
+        }
+
+        socket.on("room-messages") { data, ack in
+            guard let responseData = data.first as? [String: Any],
+                  let messages = responseData["messages"] as? [[String: Any]] else { return }
+            let roomId = responseData["roomId"] as? String ?? self.activeRoomId
+            for msgData in messages {
+                let messageId = msgData["id"] as? String ?? msgData["messageId"] as? String ?? UUID().uuidString
                 let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
                 let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
                 let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
@@ -650,13 +777,40 @@ class ServerManager: ObservableObject {
                     name: .incomingChatMessage,
                     object: nil,
                     userInfo: [
+                        "messageId": messageId,
                         "senderId": senderId,
                         "senderName": senderName,
                         "content": content,
-                        "type": messageType
+                        "type": messageType,
+                        "roomId": roomId as Any,
+                        "mentions": msgData["mentions"] as? [String] ?? [],
+                        "transcript": msgData["transcript"] as? Bool ?? false,
+                        "transcriptUserName": msgData["transcriptUserName"] as? String ?? "",
+                        "historical": true
                     ]
                 )
             }
+        }
+
+        socket.on("room-transcript") { data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            let roomId = payload["roomId"] as? String ?? self.activeRoomId ?? ""
+            let userId = payload["userId"] as? String ?? ""
+            let userName = payload["userName"] as? String ?? "Live Transcript"
+            let text = payload["text"] as? String ?? ""
+            guard !roomId.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+            NotificationCenter.default.post(
+                name: .roomTranscriptReceived,
+                object: nil,
+                userInfo: [
+                    "roomId": roomId,
+                    "userId": userId,
+                    "userName": userName,
+                    "text": text,
+                    "language": payload["language"] as? String ?? ""
+                ]
+            )
         }
 
         // Direct message received
@@ -766,6 +920,28 @@ class ServerManager: ObservableObject {
             }
         }
 
+        socket.on("room-media-updated") { data, ack in
+            let payload = (data.first as? [String: Any]) ?? [:]
+            let roomId = (payload["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !roomId.isEmpty else { return }
+            if self.activeRoomId == roomId {
+                self.roomStreamDidStopExplicitly = false
+                self.fetchActiveRoomStream(for: roomId)
+            }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .jellyfinWebhookEvent,
+                    object: nil,
+                    userInfo: [
+                        "title": "Room media updated",
+                        "message": "Room media changed for the current room.",
+                        "eventType": "room-media-updated",
+                        "payload": payload
+                    ]
+                )
+            }
+        }
+
         // MARK: - Audio Relay Handlers
 
         // Receive relayed audio from server (when P2P fails)
@@ -796,6 +972,127 @@ class ServerManager: ObservableObject {
         }
     }
 
+    func syncAuthenticatedSession() {
+        guard isConnected else { return }
+        registeredSocketSession = false
+        registerAuthenticatedSessionIfNeeded()
+        scheduleSessionRegistrationRetry()
+    }
+
+    private func registerAuthenticatedSessionIfNeeded() {
+        guard isConnected, !registeredSocketSession else { return }
+        guard let socket else { return }
+        guard let currentUser = AuthenticationManager.shared.currentUser else { return }
+
+        let provider = normalizedSessionProvider(for: currentUser)
+        var payload: [String: Any] = [
+            "provider": provider,
+            "token": currentUser.accessToken,
+            "deviceId": currentDeviceIdentifier(),
+            "deviceName": Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
+            "deviceType": "macos",
+            "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
+            "appVersion": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0",
+            "timeZone": TimeZone.current.identifier,
+            "locale": Locale.current.identifier
+        ]
+
+        if provider == "email" || provider == "mastodon" {
+            payload["user"] = [
+                "id": currentUser.id,
+                "username": currentUser.username,
+                "displayName": currentUser.displayName,
+                "email": currentUser.email as Any,
+                "role": currentUser.role as Any,
+                "permissions": currentUser.permissions,
+                "authProvider": currentUser.authProvider ?? provider
+            ]
+        }
+
+        socket.emit("register-session", payload)
+    }
+
+    private func scheduleSessionRegistrationRetry(attempt: Int = 1) {
+        cancelPendingSessionRegistrationRetry()
+        guard attempt <= 5 else { return }
+        guard isConnected, !registeredSocketSession else { return }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            guard self.isConnected, !self.registeredSocketSession else { return }
+            self.registerAuthenticatedSessionIfNeeded()
+            self.scheduleSessionRegistrationRetry(attempt: attempt + 1)
+        }
+        pendingSessionRegistrationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
+    }
+
+    private func cancelPendingSessionRegistrationRetry() {
+        pendingSessionRegistrationWorkItem?.cancel()
+        pendingSessionRegistrationWorkItem = nil
+    }
+
+    private func normalizedSessionProvider(for user: AuthenticatedUser) -> String {
+        let preferred = (user.authProvider ?? user.authMethod.rawValue)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch preferred {
+        case "mastodon":
+            return "mastodon"
+        case "whmcs":
+            return "whmcs"
+        case "local", "email", "admin_invite":
+            return "email"
+        default:
+            switch user.authMethod {
+            case .mastodon:
+                return "mastodon"
+            case .whmcs:
+                return "whmcs"
+            case .email, .adminInvite:
+                return "email"
+            case .pairingCode:
+                return "email"
+            }
+        }
+    }
+
+    private func currentDeviceIdentifier() -> String {
+        if let existing = UserDefaults.standard.string(forKey: "device_identifier"),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString.prefix(12).description
+        UserDefaults.standard.set(generated, forKey: "device_identifier")
+        return generated
+    }
+
+    private func currentPreferredJoinName() -> String {
+        let candidates = [
+            AuthenticationManager.shared.currentUser?.displayName,
+            AuthenticationManager.shared.currentUser?.username,
+            UserDefaults.standard.string(forKey: "guestName"),
+            Host.current().localizedName
+        ]
+        for candidate in candidates {
+            let trimmed = (candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return "VoiceLink User"
+    }
+
+    private func rejoinActiveRoomIfNeeded() {
+        guard let activeRoomId, !activeRoomId.isEmpty else { return }
+        let joinName = currentPreferredJoinName()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self = self else { return }
+            guard self.isConnected, self.registeredSocketSession else { return }
+            self.joinRoom(roomId: activeRoomId, username: joinName)
+        }
+    }
+
     // MARK: - API Methods
 
     func getRooms() {
@@ -822,11 +1119,16 @@ class ServerManager: ObservableObject {
             guard let audioBuffer = audioData else { return }
             SpatialAudioEngine.shared.receiveAudioData(
                 from: userId,
+                username: self.usernameForRoomUser(userId: userId),
                 data: audioBuffer,
                 timestamp: timestamp,
                 sampleRate: sampleRate
             )
         }
+    }
+
+    private func usernameForRoomUser(userId: String) -> String {
+        currentRoomUsers.first(where: { $0.id == userId || $0.odId == userId })?.username ?? userId
     }
 
     func createRoom(
@@ -926,8 +1228,13 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.activeRoomId = joinedRoomId
             self.audioTransmissionStatus = "Joined room"
+            if let joinedUserData = payload["user"] as? [String: Any],
+               let joinedUserId = joinedUserData["id"] as? String ?? joinedUserData["odId"] as? String {
+                self.currentUserId = joinedUserId
+            }
         }
         fetchActiveRoomStream(for: joinedRoomId)
+        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 50])
         scheduleAudioTransmissionStart(for: joinedRoomId)
 
         var joinedPayload = roomData
@@ -1007,6 +1314,12 @@ class ServerManager: ObservableObject {
             if right.count > left.count { return right }
             return left
         }()
+        let mergedWelcomeMessage: String? = {
+            let left = primary.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let right = incoming.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if right.count > left.count { return right.isEmpty ? nil : right }
+            return left.isEmpty ? nil : left
+        }()
 
         let mergedCreatedBy = (primary.createdBy?.isEmpty == false ? primary.createdBy : incoming.createdBy)
         let mergedCreatedByRole = (primary.createdByRole?.isEmpty == false ? primary.createdByRole : incoming.createdByRole)
@@ -1018,8 +1331,10 @@ class ServerManager: ObservableObject {
             id: primary.id,
             name: primary.name.isEmpty ? incoming.name : primary.name,
             description: mergedDescription,
+            welcomeMessage: mergedWelcomeMessage,
             userCount: max(primary.userCount, incoming.userCount),
             isPrivate: primary.isPrivate || incoming.isPrivate,
+            isLocked: primary.isLocked || incoming.isLocked,
             maxUsers: max(primary.maxUsers, incoming.maxUsers),
             createdBy: mergedCreatedBy,
             createdByRole: mergedCreatedByRole,
@@ -1038,13 +1353,16 @@ class ServerManager: ObservableObject {
         pendingJoinRoomId = nil
         pendingAudioStartWorkItem?.cancel()
         pendingAudioStartWorkItem = nil
+        let leftRoomId = activeRoomId
         socket?.emit("leave-room")
         stopAudioTransmission()
         stopRoomStreamPlayback(explicit: true)
         DispatchQueue.main.async {
             self.currentRoomUsers = []
             self.activeRoomId = nil
+            self.currentUserId = nil
         }
+        NotificationCenter.default.post(name: .roomLeft, object: nil, userInfo: ["roomId": leftRoomId as Any])
     }
 
     private func fetchActiveRoomStream(for roomId: String) {
@@ -1075,10 +1393,12 @@ class ServerManager: ObservableObject {
     }
 
     private func startRoomStreamPlayback(from rawURL: String) {
-        guard let url = URL(string: rawURL) else { return }
+        guard let url = normalizedRoomStreamURL(from: rawURL) else { return }
         DispatchQueue.main.async {
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
-                player.volume = self.roomStreamDefaultVolume
+                self.roomStreamFadeTimer?.invalidate()
+                self.roomStreamFadeTimer = nil
+                player.volume = self.currentRoomMediaMuted ? 0 : self.currentRoomMediaVolume
                 player.play()
                 self.ensureRoomStreamKeepAlive()
                 return
@@ -1092,7 +1412,7 @@ class ServerManager: ObservableObject {
             self.roomStreamEndObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
-                queue: .main
+                queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
                 guard !self.roomStreamDidStopExplicitly, let current = self.currentRoomStreamURL else { return }
@@ -1101,16 +1421,33 @@ class ServerManager: ObservableObject {
 
             if let player = self.roomStreamPlayer {
                 player.replaceCurrentItem(with: item)
-                player.volume = self.roomStreamDefaultVolume
+                player.volume = 0
                 player.play()
+                if !self.currentRoomMediaMuted {
+                    self.fadeRoomStreamVolume(
+                        to: self.currentRoomMediaVolume,
+                        duration: self.roomStreamFadeDuration
+                    )
+                }
             } else {
                 let player = AVPlayer(playerItem: item)
-                player.volume = self.roomStreamDefaultVolume
+                player.volume = 0
                 self.roomStreamPlayer = player
                 player.play()
+                if !self.currentRoomMediaMuted {
+                    self.fadeRoomStreamVolume(
+                        to: self.currentRoomMediaVolume,
+                        duration: self.roomStreamFadeDuration
+                    )
+                }
             }
             self.ensureRoomStreamKeepAlive()
         }
+    }
+
+    private func normalizedRoomStreamURL(from rawURL: String) -> URL? {
+        guard let components = URLComponents(string: rawURL) else { return nil }
+        return components.url
     }
 
     private func startDefaultRoomStreamIfNeeded() {
@@ -1125,7 +1462,7 @@ class ServerManager: ObservableObject {
             guard self.activeRoomId != nil else { return }
             guard !self.roomStreamDidStopExplicitly else { return }
             guard let player = self.roomStreamPlayer else { return }
-            player.volume = self.roomStreamDefaultVolume
+            player.volume = self.currentRoomMediaMuted ? 0 : self.currentRoomMediaVolume
             if player.currentItem == nil, let current = self.currentRoomStreamURL {
                 self.startRoomStreamPlayback(from: current.absoluteString)
                 return
@@ -1141,6 +1478,8 @@ class ServerManager: ObservableObject {
             if explicit {
                 self.roomStreamDidStopExplicitly = true
             }
+            self.roomStreamFadeTimer?.invalidate()
+            self.roomStreamFadeTimer = nil
             self.roomStreamKeepAliveTimer?.invalidate()
             self.roomStreamKeepAliveTimer = nil
             if let observer = self.roomStreamEndObserver {
@@ -1150,6 +1489,96 @@ class ServerManager: ObservableObject {
             self.roomStreamPlayer?.pause()
             self.roomStreamPlayer?.replaceCurrentItem(with: nil)
             self.currentRoomStreamURL = nil
+            self.currentRoomMediaMuted = false
+        }
+    }
+
+    func stopCurrentRoomMedia() {
+        DispatchQueue.main.async {
+            guard self.roomStreamPlayer != nil else {
+                self.stopRoomStreamPlayback()
+                return
+            }
+            self.roomStreamDidStopExplicitly = true
+            self.fadeRoomStreamVolume(
+                to: 0,
+                duration: self.roomStreamFadeDuration,
+                stopWhenComplete: true
+            )
+        }
+    }
+
+    func toggleCurrentRoomMediaMuted() {
+        DispatchQueue.main.async {
+            guard let player = self.roomStreamPlayer else { return }
+            self.currentRoomMediaMuted.toggle()
+            player.volume = self.currentRoomMediaMuted ? 0 : self.currentRoomMediaVolume
+        }
+    }
+
+    func setCurrentRoomMediaVolume(_ volume: Float) {
+        let clamped = min(max(volume, 0), 1.5)
+        DispatchQueue.main.async {
+            self.currentRoomMediaVolume = clamped
+            guard let player = self.roomStreamPlayer, !self.isCurrentRoomMediaMuted else { return }
+            player.volume = clamped
+        }
+    }
+
+    func refreshRoomMedia(for roomId: String? = nil) {
+        let targetRoomId = roomId ?? activeRoomId
+        guard let targetRoomId, !targetRoomId.isEmpty else { return }
+        fetchActiveRoomStream(for: targetRoomId)
+    }
+
+    func setRoomMediaFadeDuration(_ duration: TimeInterval) {
+        roomStreamFadeDuration = max(duration, 0.05)
+    }
+
+    private func fadeRoomStreamVolume(to target: Float, duration: TimeInterval, stopWhenComplete: Bool = false) {
+        DispatchQueue.main.async {
+            guard let player = self.roomStreamPlayer else {
+                if stopWhenComplete {
+                    self.stopRoomStreamPlayback()
+                }
+                return
+            }
+
+            self.roomStreamFadeTimer?.invalidate()
+            self.roomStreamFadeTimer = nil
+
+            let startingVolume = player.volume
+            let clampedTarget = min(max(target, 0), 1.5)
+            guard duration > 0.05 else {
+                player.volume = clampedTarget
+                if stopWhenComplete {
+                    self.stopRoomStreamPlayback()
+                }
+                return
+            }
+
+            let stepInterval = 0.05
+            let steps = max(Int(duration / stepInterval), 1)
+            var currentStep = 0
+
+            self.roomStreamFadeTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
+                guard let self, let player = self.roomStreamPlayer else {
+                    timer.invalidate()
+                    return
+                }
+
+                currentStep += 1
+                let progress = min(Float(currentStep) / Float(steps), 1)
+                player.volume = startingVolume + ((clampedTarget - startingVolume) * progress)
+
+                if progress >= 1 {
+                    timer.invalidate()
+                    self.roomStreamFadeTimer = nil
+                    if stopWhenComplete {
+                        self.stopRoomStreamPlayback()
+                    }
+                }
+            }
         }
     }
 
@@ -1239,6 +1668,10 @@ class ServerManager: ObservableObject {
         }
     }
 
+    func setLocalMonitoringEnabled(_ enabled: Bool) {
+        LocalMonitorManager.shared.setMonitoringEnabled(enabled)
+    }
+
     private func startAudioTransmissionNow() {
         if inputMuted {
             DispatchQueue.main.async {
@@ -1259,21 +1692,36 @@ class ServerManager: ObservableObject {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let format = inputNode.inputFormat(forBus: 0)
 
-        // Request relay mode from server
+        // The desktop relay/playback path is mono today, so advertise mono consistently.
         socket?.emit("enable-audio-relay", [
+            "enabled": true,
             "sampleRate": format.sampleRate,
-            "channels": format.channelCount
+            "channels": 1
         ])
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
             guard let self = self, self.isTransmitting else { return }
+            LocalMonitorManager.shared.ingestSharedTransmissionBuffer(buffer)
+            let localUsername = AuthenticationManager.shared.currentUser?.displayName
+                ?? AuthenticationManager.shared.currentUser?.username
+                ?? "Local User"
+            RecordingManager.shared.addLocalAudio(username: localUsername, buffer: buffer)
 
             // Convert PCM buffer to Data
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
-            let data = Data(bytes: channelData[0], count: frameLength * MemoryLayout<Float>.size)
+            let inputGain = Float(SettingsManager.shared.effectiveInputVolume)
+            var scaledSamples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+            if inputGain != 1 {
+                for index in scaledSamples.indices {
+                    scaledSamples[index] *= inputGain
+                }
+            }
+            let data = scaledSamples.withUnsafeBufferPointer {
+                Data(buffer: $0)
+            }
 
             // Encode as base64 for Socket.IO transmission
             let base64Audio = data.base64EncodedString()
@@ -1282,17 +1730,19 @@ class ServerManager: ObservableObject {
             self.socket?.emit("audio-data", [
                 "audioData": base64Audio,
                 "timestamp": Date().timeIntervalSince1970,
-                "sampleRate": format.sampleRate
+                "sampleRate": format.sampleRate,
+                "channels": 1
             ])
         }
 
         do {
+            engine.prepare()
             try engine.start()
             audioTransmitEngine = engine
             isTransmitting = true
             DispatchQueue.main.async {
                 self.isAudioTransmitting = true
-                self.audioTransmissionStatus = "Transmitting"
+                self.audioTransmissionStatus = LocalMonitorManager.shared.isMonitoring ? "Transmitting + monitoring" : "Transmitting"
             }
             print("[Audio] Microphone capture started, transmitting to server")
         } catch {
@@ -1378,8 +1828,10 @@ struct ServerRoom: Identifiable {
     let id: String
     let name: String
     let description: String
+    let welcomeMessage: String?
     let userCount: Int
     let isPrivate: Bool
+    let isLocked: Bool
     let maxUsers: Int
     let createdBy: String?
     let createdByRole: String?
@@ -1395,8 +1847,10 @@ struct ServerRoom: Identifiable {
         id: String,
         name: String,
         description: String,
+        welcomeMessage: String?,
         userCount: Int,
         isPrivate: Bool,
+        isLocked: Bool,
         maxUsers: Int,
         createdBy: String?,
         createdByRole: String?,
@@ -1411,8 +1865,10 @@ struct ServerRoom: Identifiable {
         self.id = id
         self.name = name
         self.description = description
+        self.welcomeMessage = welcomeMessage
         self.userCount = userCount
         self.isPrivate = isPrivate
+        self.isLocked = isLocked
         self.maxUsers = maxUsers
         self.createdBy = createdBy
         self.createdByRole = createdByRole
@@ -1489,8 +1945,12 @@ struct ServerRoom: Identifiable {
             ?? stringValue(dict["summary"])
             ?? stringValue(dict["subtitle"])
             ?? ""
+        self.welcomeMessage = stringValue(dict["welcomeMessage"])
+            ?? stringValue(dict["roomWelcomeMessage"])
+            ?? stringValue(dict["welcome"])
         self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
+        self.isLocked = dict["isLocked"] as? Bool ?? dict["locked"] as? Bool ?? false
         self.maxUsers = intValue(dict["maxUsers"]) ?? 50
         self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"])
         self.createdByRole = stringValue(dict["createdByRole"]) ?? stringValue(dict["ownerRole"])
@@ -1521,9 +1981,13 @@ struct RoomUser: Identifiable {
     let id: String
     let odId: String
     let username: String
+    let displayName: String
+    let isBot: Bool
+    let hasAudioControls: Bool
     let isMuted: Bool
     let isDeafened: Bool
     let isSpeaking: Bool
+    let transmitEnabled: Bool
 
     init?(from dict: [String: Any]) {
         guard let odId = dict["odId"] as? String ?? dict["id"] as? String,
@@ -1533,9 +1997,13 @@ struct RoomUser: Identifiable {
         self.id = odId
         self.odId = odId
         self.username = username
+        self.displayName = dict["displayName"] as? String ?? username
+        self.isBot = dict["isBot"] as? Bool ?? false
+        self.hasAudioControls = dict["hasAudioControls"] as? Bool ?? !self.isBot
         self.isMuted = dict["muted"] as? Bool ?? dict["isMuted"] as? Bool ?? false
         self.isDeafened = dict["deafened"] as? Bool ?? dict["isDeafened"] as? Bool ?? false
         self.isSpeaking = dict["speaking"] as? Bool ?? dict["isSpeaking"] as? Bool ?? false
+        self.transmitEnabled = dict["transmitEnabled"] as? Bool ?? true
     }
 }
 
@@ -1543,6 +2011,7 @@ struct RoomUser: Identifiable {
 
 extension Notification.Name {
     static let roomLeft = Notification.Name("roomLeft")
+    static let roomTranscriptReceived = Notification.Name("roomTranscriptReceived")
     static let jellyfinWebhookEvent = Notification.Name("jellyfinWebhookEvent")
     static let jellyfinMediaStreamStarted = Notification.Name("jellyfinMediaStreamStarted")
     static let jellyfinMediaStreamStopped = Notification.Name("jellyfinMediaStreamStopped")

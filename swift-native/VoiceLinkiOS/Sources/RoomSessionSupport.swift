@@ -53,6 +53,7 @@ struct RoomSessionView: View {
                     VoiceLinkWebView(
                         url: roomURL,
                         displayName: destination.displayName,
+                        audioPurpose: .room,
                         showChat: showChat,
                         inputGain: inputGain,
                         outputGain: outputGain,
@@ -145,21 +146,21 @@ struct RoomSessionView: View {
                         }
 
                         Section("Audio") {
-                            Slider(value: $inputGain, in: 0...2) {
+                            Slider(value: $inputGain, in: 0...3) {
                                 Text("Mic Level")
                             } minimumValueLabel: {
                                 Text("0%")
                             } maximumValueLabel: {
-                                Text("200%")
+                                Text("300%")
                             }
                             .accessibilityValue("\(Int(inputGain * 100)) percent")
 
-                            Slider(value: $outputGain, in: 0...2) {
+                            Slider(value: $outputGain, in: 0...3) {
                                 Text("Master Output")
                             } minimumValueLabel: {
                                 Text("0%")
                             } maximumValueLabel: {
-                                Text("200%")
+                                Text("300%")
                             }
                             .accessibilityValue("\(Int(outputGain * 100)) percent")
 
@@ -180,7 +181,7 @@ struct RoomSessionView: View {
             }
         }
         .onAppear {
-            IOSAudioSessionManager.shared.activateForRoomSession()
+            IOSAudioSessionManager.shared.activate(for: .room)
             NotificationCenter.default.post(
                 name: .iosRoomJoined,
                 object: nil,
@@ -195,7 +196,7 @@ struct RoomSessionView: View {
             )
         }
         .onDisappear {
-            IOSAudioSessionManager.shared.deactivateRoomSessionIfPossible()
+            IOSAudioSessionManager.shared.deactivate(.room)
             NotificationCenter.default.post(
                 name: .iosRoomLeft,
                 object: nil,
@@ -228,6 +229,7 @@ struct RoomPreviewView: View {
                     VoiceLinkWebView(
                         url: previewURL,
                         displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
+                        audioPurpose: .preview,
                         showChat: false,
                         inputGain: 1.0,
                         outputGain: 1.0,
@@ -255,10 +257,10 @@ struct RoomPreviewView: View {
             }
         }
         .onAppear {
-            IOSAudioSessionManager.shared.activateForRoomSession()
+            IOSAudioSessionManager.shared.activate(for: .preview)
         }
         .onDisappear {
-            IOSAudioSessionManager.shared.deactivateRoomSessionIfPossible()
+            IOSAudioSessionManager.shared.deactivate(.preview)
         }
     }
 }
@@ -271,6 +273,7 @@ extension Notification.Name {
     static let iosRoomUsersUpdated = Notification.Name("iosRoomUsersUpdated")
     static let iosRoomMessageEvent = Notification.Name("iosRoomMessageEvent")
     static let iosDirectMessageEvent = Notification.Name("iosDirectMessageEvent")
+    static let iosRoomTranscriptEvent = Notification.Name("iosRoomTranscriptEvent")
     static let iosRequestLeaveRoom = Notification.Name("iosRequestLeaveRoom")
     static let iosSendDirectMessage = Notification.Name("iosSendDirectMessage")
     static let iosSetRoomChatVisibility = Notification.Name("iosSetRoomChatVisibility")

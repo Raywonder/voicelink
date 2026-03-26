@@ -3,24 +3,47 @@ import SwiftUI
 import UIKit
 import WebKit
 
+enum IOSAudioSessionPurpose {
+    case preview
+    case room
+}
+
 final class IOSAudioSessionManager {
     static let shared = IOSAudioSessionManager()
 
     private var activeRoomSessionCount = 0
+    private var activePreviewSessionCount = 0
     private var observersRegistered = false
 
     private init() {
         registerObserversIfNeeded()
     }
 
-    func activateForRoomSession() {
-        activeRoomSessionCount += 1
-        configureAndActivateSession()
+    func activate(for purpose: IOSAudioSessionPurpose) {
+        switch purpose {
+        case .preview:
+            activePreviewSessionCount += 1
+        case .room:
+            activeRoomSessionCount += 1
+        }
+        configureAndActivateSession(for: purpose)
     }
 
-    func deactivateRoomSessionIfPossible() {
-        activeRoomSessionCount = max(0, activeRoomSessionCount - 1)
-        guard activeRoomSessionCount == 0 else { return }
+    func deactivate(_ purpose: IOSAudioSessionPurpose) {
+        switch purpose {
+        case .preview:
+            activePreviewSessionCount = max(0, activePreviewSessionCount - 1)
+        case .room:
+            activeRoomSessionCount = max(0, activeRoomSessionCount - 1)
+        }
+
+        guard dominantPurpose == nil else {
+            if let dominantPurpose {
+                configureAndActivateSession(for: dominantPurpose)
+            }
+            return
+        }
+
         do {
             try session.setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
@@ -30,6 +53,12 @@ final class IOSAudioSessionManager {
 
     private var session: AVAudioSession {
         AVAudioSession.sharedInstance()
+    }
+
+    private var dominantPurpose: IOSAudioSessionPurpose? {
+        if activeRoomSessionCount > 0 { return .room }
+        if activePreviewSessionCount > 0 { return .preview }
+        return nil
     }
 
     private func registerObserversIfNeeded() {
@@ -62,17 +91,28 @@ final class IOSAudioSessionManager {
         )
     }
 
-    private func configureAndActivateSession() {
+    private func configureAndActivateSession(for purpose: IOSAudioSessionPurpose) {
         do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
-            )
-            try session.setPreferredSampleRate(48_000)
-            try session.setPreferredIOBufferDuration(0.01)
+            switch purpose {
+            case .preview:
+                try session.setCategory(
+                    .playback,
+                    mode: .spokenAudio,
+                    options: [.allowAirPlay, .allowBluetoothA2DP]
+                )
+            case .room:
+                try session.setCategory(
+                    .playAndRecord,
+                    mode: .voiceChat,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .allowAirPlay]
+                )
+                try session.setPreferredSampleRate(48_000)
+                try session.setPreferredIOBufferDuration(0.02)
+            }
             try session.setActive(true, options: [.notifyOthersOnDeactivation])
-            try? session.overrideOutputAudioPort(.speaker)
+            if purpose == .room {
+                try? session.overrideOutputAudioPort(.speaker)
+            }
             NotificationCenter.default.post(name: .iosAudioSessionReactivated, object: nil)
         } catch {
             NSLog("[VoiceLinkiOS] Failed to activate audio session: \(error.localizedDescription)")
@@ -80,19 +120,21 @@ final class IOSAudioSessionManager {
     }
 
     @objc private func handleAudioSessionInterruption(_ notification: Notification) {
-        guard activeRoomSessionCount > 0,
+        guard dominantPurpose != nil,
               let userInfo = notification.userInfo,
               let rawType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: rawType) else {
             return
         }
         if type == .ended {
-            configureAndActivateSession()
+            if let dominantPurpose {
+                configureAndActivateSession(for: dominantPurpose)
+            }
         }
     }
 
     @objc private func handleAudioSessionRouteChange(_ notification: Notification) {
-        guard activeRoomSessionCount > 0,
+        guard dominantPurpose != nil,
               let userInfo = notification.userInfo,
               let rawReason = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else {
@@ -100,26 +142,29 @@ final class IOSAudioSessionManager {
         }
         switch reason {
         case .newDeviceAvailable, .oldDeviceUnavailable, .override, .categoryChange, .routeConfigurationChange:
-            configureAndActivateSession()
+            if let dominantPurpose {
+                configureAndActivateSession(for: dominantPurpose)
+            }
         default:
             break
         }
     }
 
     @objc private func handleMediaServicesReset() {
-        guard activeRoomSessionCount > 0 else { return }
-        configureAndActivateSession()
+        guard let dominantPurpose else { return }
+        configureAndActivateSession(for: dominantPurpose)
     }
 
     @objc private func handleApplicationDidBecomeActive() {
-        guard activeRoomSessionCount > 0 else { return }
-        configureAndActivateSession()
+        guard let dominantPurpose else { return }
+        configureAndActivateSession(for: dominantPurpose)
     }
 }
 
 struct VoiceLinkWebView: UIViewRepresentable {
     let url: URL
     let displayName: String
+    let audioPurpose: IOSAudioSessionPurpose
     let showChat: Bool
     let inputGain: Double
     let outputGain: Double
@@ -146,6 +191,7 @@ struct VoiceLinkWebView: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.allowsBackForwardNavigationGestures = true
         view.scrollView.keyboardDismissMode = .onDrag
+        view.navigationDelegate = context.coordinator
         context.coordinator.attach(to: view)
         return view
     }
@@ -167,7 +213,7 @@ struct VoiceLinkWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.bridgeName)
     }
 
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         static let bridgeName = "voicelinkNative"
 
         private weak var webView: WKWebView?
@@ -215,6 +261,24 @@ struct VoiceLinkWebView: UIViewRepresentable {
             guard let webView else { return }
             let script = lastIdentityScript + "\nwindow.__voicelinkApplyAudioSettings?.({});\nwindow.__voicelinkResumeAudio?.(true);"
             webView.evaluateJavaScript(script, completionHandler: nil)
+            scheduleDelayedResumePasses()
+        }
+
+        private func scheduleDelayedResumePasses() {
+            let delays: [TimeInterval] = [0.15, 0.35, 1.0, 2.0, 4.0]
+            for delay in delays {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, self.webView != nil else { return }
+                    self.webView?.evaluateJavaScript(
+                        "window.__voicelinkApplyAudioSettings?.({ forceAudible: true }); window.__voicelinkResumeAudio?.(true);",
+                        completionHandler: nil
+                    )
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            reassertAudioBridge()
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -242,6 +306,12 @@ struct VoiceLinkWebView: UIViewRepresentable {
             case "directMessage":
                 NotificationCenter.default.post(
                     name: .iosDirectMessageEvent,
+                    object: nil,
+                    userInfo: payload
+                )
+            case "roomTranscript":
+                NotificationCenter.default.post(
+                    name: .iosRoomTranscriptEvent,
                     object: nil,
                     userInfo: payload
                 )
@@ -273,17 +343,24 @@ struct VoiceLinkWebView: UIViewRepresentable {
                   const inputGain = Number(settings.inputGain ?? localStorage.getItem('voicelink_ios_input_gain') ?? 1);
                   const outputGain = Number(settings.outputGain ?? localStorage.getItem('voicelink_ios_output_gain') ?? 1);
                   const mediaMuted = String(settings.mediaMuted ?? localStorage.getItem('voicelink_ios_media_muted') ?? 'false') === 'true';
+                  const forceAudible = Boolean(settings.forceAudible ?? false);
+                  const targetVolume = mediaMuted ? 0 : Math.max(0, Math.min(1, forceAudible ? Math.max(outputGain, 0.9) : outputGain));
 
                   const audioEls = Array.from(document.querySelectorAll('audio, video'));
                   for (const el of audioEls) {
                     try {
                       el.muted = mediaMuted;
-                      el.volume = Math.max(0, Math.min(1, outputGain / 2));
+                      el.defaultMuted = mediaMuted;
+                      el.volume = targetVolume;
+                      if (!mediaMuted && targetVolume > 0) {
+                        try { el.removeAttribute('muted'); } catch (_) {}
+                      }
+                      try { el.playsInline = true; } catch (_) {}
                     } catch (_) {}
                   }
 
                   if (window.app) {
-                    try { window.app.masterVolume = outputGain; } catch (_) {}
+                    try { window.app.masterVolume = targetVolume; } catch (_) {}
                     try { window.app.inputVolume = inputGain; } catch (_) {}
                   }
                 } catch (_) {}
@@ -300,7 +377,15 @@ struct VoiceLinkWebView: UIViewRepresentable {
                   if (window.iosCompatibility?.unlockAudio) await window.iosCompatibility.unlockAudio();
                   const mediaEls = Array.from(document.querySelectorAll('audio, video'));
                   for (const el of mediaEls) {
-                    const isPlayable = !el.muted && el.paused && !el.ended && Number(el.readyState || 0) >= 2;
+                    try {
+                      el.muted = false;
+                      el.defaultMuted = false;
+                      el.volume = Math.max(Number(el.volume || 0), 0.9);
+                      if (Number(el.readyState || 0) < 2 && typeof el.load === 'function') {
+                        try { el.load(); } catch (_) {}
+                      }
+                    } catch (_) {}
+                    const isPlayable = !el.ended && Number(el.readyState || 0) >= 1;
                     if (!isPlayable) continue;
                     try { await el.play(); } catch (_) {}
                   }
@@ -310,7 +395,7 @@ struct VoiceLinkWebView: UIViewRepresentable {
                   if (window.app?.peekAudioContext?.state === 'suspended') {
                     try { await window.app.peekAudioContext.resume(); } catch (_) {}
                   }
-                  window.__voicelinkApplyAudioSettings?.({});
+                  window.__voicelinkApplyAudioSettings?.({ forceAudible: true });
                 } catch (_) {}
               };
 
@@ -385,6 +470,21 @@ struct VoiceLinkWebView: UIViewRepresentable {
                       record.addedNodes.forEach(postMessageNode);
                     }
                   }).observe(chatMessages, { childList: true, subtree: true });
+                }
+
+                if (window.app?.socket && !window.app.socket.__voicelinkTranscriptObserved) {
+                  window.app.socket.__voicelinkTranscriptObserved = true;
+                  window.app.socket.on('room-transcript', (payload = {}) => {
+                    safePost({
+                      event: 'roomTranscript',
+                      roomId: payload.roomId || roomId(),
+                      roomName: roomName(),
+                      speaker: payload.userName || payload.speaker || 'Speaker',
+                      userName: payload.userName || payload.speaker || 'Speaker',
+                      body: payload.text || payload.body || '',
+                      timestamp: Number(payload.timestamp || (Date.now() / 1000))
+                    });
+                  });
                 }
               };
 

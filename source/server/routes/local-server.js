@@ -1,17 +1,23 @@
 const express = require('express');
 const http = require('http');
 const https = require('https');
+const http2 = require('http2');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
 const crypto = require('crypto');
 const net = require('net');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
-const { DatabaseStorageManager } = require('../services/database-storage');
+let DatabaseStorageManager = null;
+try {
+    ({ DatabaseStorageManager } = require('../services/database-storage'));
+} catch (error) {
+    console.warn('[Database] Optional database storage module unavailable:', error.message);
+}
 const FederationManager = require('../utils/federation-manager');
 const MastodonBotManager = require('../utils/mastodon-bot');
 const { deployConfig, PRESETS } = require('../config/deploy-config');
@@ -22,7 +28,12 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
-const { DeploymentManagerModule } = require('../modules/deployment-manager');
+let DeploymentManagerModule = null;
+try {
+    ({ DeploymentManagerModule } = require('../modules/deployment-manager'));
+} catch (error) {
+    console.warn('[Modules] Optional deployment manager unavailable:', error.message);
+}
 let InternalScheduler = null;
 try {
     ({ InternalScheduler } = require('../modules/internal-scheduler'));
@@ -35,7 +46,19 @@ const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
 const fileTransferRoutes = require("./file-transfer");
 const execFileAsync = promisify(execFile);
-const databaseStorage = new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') });
+const databaseStorage = DatabaseStorageManager
+    ? new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') })
+    : {
+        sqliteAvailable: () => false,
+        ensureSchema: () => null,
+        migrateDefaults: () => ({ migrated: false, skipped: true }),
+        mirrorJsonFile: () => false,
+        status: () => ({
+            available: false,
+            mode: 'json-only',
+            reason: 'database-storage module unavailable'
+        })
+    };
 try {
     if (databaseStorage.sqliteAvailable()) {
         databaseStorage.ensureSchema();
@@ -87,6 +110,11 @@ class VoiceLinkLocalServer {
         this.activeSessionsByUser = new Map(); // userId -> Map(socketId -> sessionInfo)
         this.socketSessions = new Map(); // socketId -> sessionInfo
         this.deviceSessions = new Map(); // deviceId -> socketId
+        this.iosPushRegistrationsPath = path.join(__dirname, '../../data/ios-push-devices.json');
+        this.iosPushRegistrations = new Map(); // identityKey:deviceId -> registration
+        this.apnsTokenCache = null;
+        this.apnsTokenExpiresAt = 0;
+        this.loadIOSPushRegistrations();
 
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
@@ -96,6 +124,14 @@ class VoiceLinkLocalServer {
             packetsRelayed: 0,
             activeRelays: 0
         };
+        this.liveTranscriptionConfig = this.getLiveTranscriptionConfig();
+        this.liveTranscriptionBuffers = new Map();
+        this.liveTranscriptionJobs = new Map();
+        this.liveTranscriptionStdoutBuffer = '';
+        this.liveTranscriptionWorker = null;
+        this.liveTranscriptionSeq = 0;
+        this.liveTranscriptionTempDir = path.join(__dirname, '../../data/live-transcription');
+        fs.mkdirSync(this.liveTranscriptionTempDir, { recursive: true });
 
         // Initialize federation manager for room sync
         this.federation = new FederationManager(this);
@@ -161,6 +197,590 @@ class VoiceLinkLocalServer {
         this.setupSocketHandlers();
         this.loadPersistedRooms();
         this.start();
+    }
+
+    getLiveTranscriptionConfig() {
+        const features = deployConfig.get('features') || {};
+        const enabled = process.env.VOICELINK_LIVE_TRANSCRIPTION_ENABLED === '1'
+            || process.env.VOICELINK_LIVE_TRANSCRIPTION_ENABLED === 'true'
+            || features.transcription === true;
+        const homeDir = process.env.HOME || '';
+        const bundledPythonCandidates = [
+            path.join(__dirname, '../../server/.venv-transcription313/bin/python'),
+            path.join(__dirname, '../../server/.venv-transcription/bin/python'),
+            path.join(homeDir, 'git/Raywonder/voicelink/server/.venv-transcription313/bin/python'),
+            path.join(homeDir, 'git/Raywonder/voicelink/server/.venv-transcription/bin/python'),
+            path.join(homeDir, 'dev/apps/voicelink-local/server/.venv-transcription313/bin/python'),
+            path.join(homeDir, 'dev/apps/voicelink-local/server/.venv-transcription/bin/python')
+        ];
+        const bundledPython = bundledPythonCandidates.find((candidate) => fs.existsSync(candidate));
+        return {
+            enabled,
+            pythonBin: process.env.VOICELINK_TRANSCRIPTION_PYTHON || bundledPython || 'python3',
+            model: process.env.VOICELINK_WHISPER_MODEL || 'base',
+            language: process.env.VOICELINK_WHISPER_LANGUAGE || '',
+            minChunkSeconds: Math.max(1.5, Number(process.env.VOICELINK_TRANSCRIPTION_MIN_SECONDS || 2.4)),
+            maxChunkSeconds: Math.max(3, Number(process.env.VOICELINK_TRANSCRIPTION_MAX_SECONDS || 7.5)),
+            silenceMs: Math.max(500, Number(process.env.VOICELINK_TRANSCRIPTION_SILENCE_MS || 900)),
+            emitToChat: process.env.VOICELINK_TRANSCRIPTION_CHAT_MESSAGES !== '0'
+        };
+    }
+
+    transcriptionWorkerScriptPath() {
+        return path.join(__dirname, '../tools/live_transcription_worker.py');
+    }
+
+    isLiveTranscriptionEnabledForRoom(roomId) {
+        if (!this.liveTranscriptionConfig.enabled || !roomId) {
+            return false;
+        }
+        const room = this.rooms.get(roomId);
+        if (room?.transcriptionEnabled === false || room?.metadata?.transcriptionEnabled === false) {
+            return false;
+        }
+        return true;
+    }
+
+    ensureLiveTranscriptionWorker() {
+        if (!this.liveTranscriptionConfig.enabled) {
+            return false;
+        }
+        if (this.liveTranscriptionWorker && !this.liveTranscriptionWorker.killed) {
+            return true;
+        }
+
+        const worker = spawn(
+            this.liveTranscriptionConfig.pythonBin,
+            [this.transcriptionWorkerScriptPath()],
+            {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                env: {
+                    ...process.env,
+                    VOICELINK_WHISPER_MODEL: this.liveTranscriptionConfig.model,
+                    VOICELINK_WHISPER_LANGUAGE: this.liveTranscriptionConfig.language
+                }
+            }
+        );
+
+        worker.stdout.setEncoding('utf8');
+        worker.stdout.on('data', (chunk) => this.handleLiveTranscriptionStdout(chunk));
+        worker.stderr.setEncoding('utf8');
+        worker.stderr.on('data', (chunk) => {
+            const message = String(chunk || '').trim();
+            if (message) {
+                console.warn('[Transcription]', message);
+            }
+        });
+        worker.on('exit', (code) => {
+            console.warn(`[Transcription] worker exited with code ${code}`);
+            this.liveTranscriptionWorker = null;
+        });
+        worker.on('error', (error) => {
+            console.warn('[Transcription] worker failed to start:', error.message);
+            this.liveTranscriptionWorker = null;
+        });
+
+        this.liveTranscriptionWorker = worker;
+        return true;
+    }
+
+    handleLiveTranscriptionStdout(chunk) {
+        this.liveTranscriptionStdoutBuffer += chunk;
+        while (this.liveTranscriptionStdoutBuffer.includes('\n')) {
+            const newlineIndex = this.liveTranscriptionStdoutBuffer.indexOf('\n');
+            const line = this.liveTranscriptionStdoutBuffer.slice(0, newlineIndex).trim();
+            this.liveTranscriptionStdoutBuffer = this.liveTranscriptionStdoutBuffer.slice(newlineIndex + 1);
+            if (!line) continue;
+            try {
+                const payload = JSON.parse(line);
+                this.handleLiveTranscriptionResult(payload);
+            } catch (error) {
+                console.warn('[Transcription] invalid worker output:', line);
+            }
+        }
+    }
+
+    queueLiveTranscriptionPacket(socketId, user, audioData, sampleRate, channels) {
+        if (!user?.roomId || !this.isLiveTranscriptionEnabledForRoom(user.roomId)) {
+            return;
+        }
+        if (!audioData || typeof audioData !== 'string') {
+            return;
+        }
+        const rawBuffer = Buffer.from(audioData, 'base64');
+        if (!rawBuffer.length) {
+            return;
+        }
+
+        const key = `${user.roomId}:${socketId}`;
+        let state = this.liveTranscriptionBuffers.get(key);
+        if (!state) {
+            state = {
+                key,
+                roomId: user.roomId,
+                socketId,
+                userId: socketId,
+                userName: user.name || 'User',
+                sampleRate: Number(sampleRate) || 48000,
+                channels: Number(channels) || 1,
+                chunks: [],
+                bytes: 0,
+                busy: false,
+                timer: null,
+                lastPacketAt: 0
+            };
+            this.liveTranscriptionBuffers.set(key, state);
+        }
+
+        state.userName = user.name || state.userName;
+        state.sampleRate = Number(sampleRate) || state.sampleRate || 48000;
+        state.channels = Number(channels) || state.channels || 1;
+        state.chunks.push(rawBuffer);
+        state.bytes += rawBuffer.length;
+        state.lastPacketAt = Date.now();
+
+        const durationSeconds = this.estimateTranscriptionDurationSeconds(state.bytes, state.sampleRate, state.channels);
+        if (durationSeconds >= this.liveTranscriptionConfig.maxChunkSeconds) {
+            this.flushLiveTranscriptionBuffer(key);
+            return;
+        }
+
+        if (state.timer) {
+            clearTimeout(state.timer);
+        }
+        state.timer = setTimeout(() => {
+            this.flushLiveTranscriptionBuffer(key);
+        }, this.liveTranscriptionConfig.silenceMs);
+    }
+
+    estimateTranscriptionDurationSeconds(byteLength, sampleRate, channels) {
+        const bytesPerSample = 4;
+        const divisor = Math.max(1, Number(sampleRate) || 48000) * Math.max(1, Number(channels) || 1) * bytesPerSample;
+        return byteLength / divisor;
+    }
+
+    flushLiveTranscriptionBuffer(key, force = false) {
+        const state = this.liveTranscriptionBuffers.get(key);
+        if (!state || state.busy || !state.bytes) {
+            return;
+        }
+        if (state.timer) {
+            clearTimeout(state.timer);
+            state.timer = null;
+        }
+
+        const durationSeconds = this.estimateTranscriptionDurationSeconds(state.bytes, state.sampleRate, state.channels);
+        if (!force && durationSeconds < this.liveTranscriptionConfig.minChunkSeconds) {
+            return;
+        }
+        if (!this.ensureLiveTranscriptionWorker()) {
+            return;
+        }
+
+        state.busy = true;
+        const combined = Buffer.concat(state.chunks, state.bytes);
+        state.chunks = [];
+        state.bytes = 0;
+
+        const jobId = `tx-${Date.now()}-${++this.liveTranscriptionSeq}`;
+        const wavPath = path.join(this.liveTranscriptionTempDir, `${jobId}.wav`);
+        fs.writeFileSync(wavPath, this.buildFloatWavBuffer(combined, state.sampleRate, state.channels));
+
+        this.liveTranscriptionJobs.set(jobId, {
+            jobId,
+            key,
+            roomId: state.roomId,
+            userId: state.userId,
+            userName: state.userName,
+            wavPath
+        });
+
+        this.liveTranscriptionWorker.stdin.write(JSON.stringify({
+            id: jobId,
+            audioPath: wavPath,
+            language: this.liveTranscriptionConfig.language || null
+        }) + '\n');
+    }
+
+    buildFloatWavBuffer(floatBuffer, sampleRate, channels) {
+        const bytesPerSample = 4;
+        const blockAlign = channels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = floatBuffer.length;
+        const wav = Buffer.alloc(44 + dataSize);
+
+        wav.write('RIFF', 0);
+        wav.writeUInt32LE(36 + dataSize, 4);
+        wav.write('WAVE', 8);
+        wav.write('fmt ', 12);
+        wav.writeUInt32LE(16, 16);
+        wav.writeUInt16LE(3, 20);
+        wav.writeUInt16LE(channels, 22);
+        wav.writeUInt32LE(sampleRate, 24);
+        wav.writeUInt32LE(byteRate, 28);
+        wav.writeUInt16LE(blockAlign, 32);
+        wav.writeUInt16LE(32, 34);
+        wav.write('data', 36);
+        wav.writeUInt32LE(dataSize, 40);
+        floatBuffer.copy(wav, 44);
+        return wav;
+    }
+
+    handleLiveTranscriptionResult(payload = {}) {
+        const jobId = String(payload.id || '').trim();
+        if (!jobId) {
+            return;
+        }
+        const job = this.liveTranscriptionJobs.get(jobId);
+        if (!job) {
+            return;
+        }
+        this.liveTranscriptionJobs.delete(jobId);
+        try {
+            fs.unlinkSync(job.wavPath);
+        } catch (error) {
+            // ignore cleanup failures
+        }
+
+        const state = this.liveTranscriptionBuffers.get(job.key);
+        if (state) {
+            state.busy = false;
+            if (state.bytes > 0) {
+                this.flushLiveTranscriptionBuffer(job.key, true);
+            }
+        }
+
+        const text = String(payload.text || '').trim();
+        if (!text) {
+            return;
+        }
+
+        const transcriptPayload = {
+            id: jobId,
+            roomId: job.roomId,
+            userId: job.userId,
+            userName: job.userName,
+            text,
+            language: payload.language || null,
+            timestamp: new Date().toISOString()
+        };
+
+        this.io.to(job.roomId).emit('room-transcript', transcriptPayload);
+
+        if (this.liveTranscriptionConfig.emitToChat) {
+            const transcriptMessage = this.createRoomSystemMessage(
+                job.roomId,
+                `${job.userName}: ${text}`,
+                {
+                    userId: `transcript:${job.userId}`,
+                    userName: 'Live Transcript',
+                    transcript: true,
+                    transcriptUserId: job.userId,
+                    transcriptUserName: job.userName,
+                    transcriptLanguage: payload.language || null
+                }
+            );
+            this.io.to(job.roomId).emit('chat-message', transcriptMessage);
+        }
+    }
+
+    clearLiveTranscriptionStateForSocket(socketId) {
+        for (const [key, state] of this.liveTranscriptionBuffers.entries()) {
+            if (state.socketId !== socketId) continue;
+            if (state.timer) {
+                clearTimeout(state.timer);
+            }
+            this.liveTranscriptionBuffers.delete(key);
+        }
+    }
+
+    loadIOSPushRegistrations() {
+        this.iosPushRegistrations = new Map();
+        try {
+            if (!fs.existsSync(this.iosPushRegistrationsPath)) {
+                return;
+            }
+            const parsed = JSON.parse(fs.readFileSync(this.iosPushRegistrationsPath, 'utf8') || '{}');
+            const devices = Array.isArray(parsed?.devices) ? parsed.devices : [];
+            for (const entry of devices) {
+                const identityKey = String(entry?.identityKey || '').trim().toLowerCase();
+                const deviceId = String(entry?.deviceId || '').trim();
+                if (!identityKey || !deviceId) continue;
+                this.iosPushRegistrations.set(`${identityKey}:${deviceId}`, {
+                    identityKey,
+                    deviceId,
+                    token: String(entry?.token || '').trim(),
+                    bundleId: String(entry?.bundleId || '').trim() || null,
+                    platform: String(entry?.platform || 'ios').trim() || 'ios',
+                    deviceName: String(entry?.deviceName || '').trim() || null,
+                    systemName: String(entry?.systemName || '').trim() || null,
+                    systemVersion: String(entry?.systemVersion || '').trim() || null,
+                    appVersion: String(entry?.appVersion || '').trim() || null,
+                    buildNumber: String(entry?.buildNumber || '').trim() || null,
+                    email: String(entry?.email || '').trim().toLowerCase() || null,
+                    username: String(entry?.username || '').trim().toLowerCase() || null,
+                    authProvider: String(entry?.authProvider || '').trim().toLowerCase() || 'local',
+                    createdAt: entry?.createdAt || new Date().toISOString(),
+                    updatedAt: entry?.updatedAt || new Date().toISOString(),
+                    lastSeenAt: entry?.lastSeenAt || new Date().toISOString()
+                });
+            }
+        } catch (error) {
+            console.warn('[Push] Failed loading iOS push registrations:', error.message);
+        }
+    }
+
+    persistIOSPushRegistrations() {
+        try {
+            const payload = {
+                devices: Array.from(this.iosPushRegistrations.values())
+                    .sort((a, b) => String(a.identityKey || '').localeCompare(String(b.identityKey || '')) || String(a.deviceId || '').localeCompare(String(b.deviceId || '')))
+            };
+            fs.writeFileSync(this.iosPushRegistrationsPath, JSON.stringify(payload, null, 2), 'utf8');
+        } catch (error) {
+            console.warn('[Push] Failed saving iOS push registrations:', error.message);
+        }
+    }
+
+    upsertIOSPushRegistration(registration = {}) {
+        const identityKey = String(registration.identityKey || '').trim().toLowerCase();
+        const deviceId = String(registration.deviceId || '').trim();
+        const token = String(registration.token || '').trim();
+        if (!identityKey || !deviceId || !token) return null;
+
+        const key = `${identityKey}:${deviceId}`;
+        const existing = this.iosPushRegistrations.get(key) || {};
+        const next = {
+            ...existing,
+            ...registration,
+            identityKey,
+            deviceId,
+            token,
+            updatedAt: new Date().toISOString(),
+            lastSeenAt: new Date().toISOString(),
+            createdAt: existing.createdAt || new Date().toISOString()
+        };
+        this.iosPushRegistrations.set(key, next);
+        this.persistIOSPushRegistrations();
+        return next;
+    }
+
+    removeIOSPushRegistration(identityKey = '', deviceId = '') {
+        const normalizedIdentityKey = String(identityKey || '').trim().toLowerCase();
+        const normalizedDeviceId = String(deviceId || '').trim();
+        if (!normalizedIdentityKey || !normalizedDeviceId) return false;
+        const removed = this.iosPushRegistrations.delete(`${normalizedIdentityKey}:${normalizedDeviceId}`);
+        if (removed) {
+            this.persistIOSPushRegistrations();
+        }
+        return removed;
+    }
+
+    listIOSPushRegistrationsForIdentity(identityKey = '') {
+        const normalizedIdentityKey = String(identityKey || '').trim().toLowerCase();
+        if (!normalizedIdentityKey) return [];
+        return Array.from(this.iosPushRegistrations.values())
+            .filter((entry) => entry.identityKey === normalizedIdentityKey)
+            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    }
+
+    getAPNsConfig() {
+        const keyId = String(process.env.VOICELINK_APNS_KEY_ID || process.env.APNS_KEY_ID || '').trim();
+        const teamId = String(process.env.VOICELINK_APNS_TEAM_ID || process.env.APNS_TEAM_ID || '').trim();
+        const topic = String(process.env.VOICELINK_APNS_BUNDLE_ID || process.env.APNS_BUNDLE_ID || 'com.devinecreations.voicelink').trim();
+        const privateKeyPath = String(process.env.VOICELINK_APNS_PRIVATE_KEY_PATH || process.env.APNS_PRIVATE_KEY_PATH || '').trim();
+        const privateKeyBase64 = String(process.env.VOICELINK_APNS_PRIVATE_KEY_BASE64 || process.env.APNS_PRIVATE_KEY_BASE64 || '').trim();
+        const privateKeyInline = String(process.env.VOICELINK_APNS_PRIVATE_KEY || process.env.APNS_PRIVATE_KEY || '').trim();
+        const useSandbox = String(process.env.VOICELINK_APNS_USE_SANDBOX || process.env.APNS_USE_SANDBOX || '').trim().toLowerCase() === 'true';
+
+        let privateKey = '';
+        if (privateKeyInline) {
+            privateKey = privateKeyInline.replace(/\\n/g, '\n');
+        } else if (privateKeyBase64) {
+            privateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+        } else if (privateKeyPath && fs.existsSync(privateKeyPath)) {
+            privateKey = fs.readFileSync(privateKeyPath, 'utf8');
+        }
+
+        return {
+            enabled: Boolean(keyId && teamId && topic && privateKey),
+            keyId,
+            teamId,
+            topic,
+            privateKey,
+            useSandbox,
+            host: useSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com'
+        };
+    }
+
+    createAPNsJwt(config) {
+        const now = Math.floor(Date.now() / 1000);
+        if (this.apnsTokenCache && this.apnsTokenExpiresAt - now > 60) {
+            return this.apnsTokenCache;
+        }
+        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: config.keyId, typ: 'JWT' })).toString('base64url');
+        const payload = Buffer.from(JSON.stringify({ iss: config.teamId, iat: now })).toString('base64url');
+        const signingInput = `${header}.${payload}`;
+        const signature = crypto.sign('sha256', Buffer.from(signingInput), {
+            key: config.privateKey,
+            dsaEncoding: 'ieee-p1363'
+        }).toString('base64url');
+        const token = `${signingInput}.${signature}`;
+        this.apnsTokenCache = token;
+        this.apnsTokenExpiresAt = now + (50 * 60);
+        return token;
+    }
+
+    buildPushIdentityKeyFromUser(user = {}) {
+        const authInfo = user.authInfo || {};
+        const email = String(authInfo.email || user.email || '').trim().toLowerCase();
+        const username = String(authInfo.username || user.username || user.displayName || user.name || '').trim().toLowerCase();
+        const id = String(authInfo.id || user.userId || user.id || '').trim().toLowerCase();
+        return email || username || (id ? `user:${id}` : '');
+    }
+
+    getAdminPushIdentityKeys() {
+        const identities = new Set();
+        for (const user of this.users.values()) {
+            const authInfo = user?.authInfo || {};
+            const role = String(authInfo.role || user?.role || '').toLowerCase();
+            const isAdminLike = Boolean(user?.isAdmin || user?.isModerator || ['owner', 'admin', 'staff'].includes(role));
+            if (!isAdminLike) continue;
+            const identityKey = this.buildPushIdentityKeyFromUser(user);
+            if (identityKey) {
+                identities.add(identityKey);
+            }
+        }
+        return Array.from(identities);
+    }
+
+    resolvePushIdentityKeys({ targetUserId = null, roomId = null } = {}) {
+        const identities = new Set();
+        if (targetUserId) {
+            for (const [socketId, user] of this.users.entries()) {
+                if (socketId !== targetUserId && user?.id !== targetUserId && user?.userId !== targetUserId) continue;
+                const identityKey = this.buildPushIdentityKeyFromUser(user);
+                if (identityKey) identities.add(identityKey);
+            }
+        } else if (roomId) {
+            for (const user of this.getLiveRoomUsers(roomId)) {
+                const identityKey = this.buildPushIdentityKeyFromUser(user);
+                if (identityKey) identities.add(identityKey);
+            }
+        }
+        return Array.from(identities);
+    }
+
+    async sendIOSPushNotifications(payload = {}, options = {}) {
+        const config = this.getAPNsConfig();
+        if (!config.enabled) {
+            return { sent: 0, skipped: true, reason: 'apns_not_configured' };
+        }
+
+        const identityKeys = Array.from(new Set([]
+            .concat(Array.isArray(options.identityKeys) ? options.identityKeys : [])
+            .concat(this.resolvePushIdentityKeys({
+                targetUserId: payload.targetUserId || null,
+                roomId: payload.roomId || null
+            }))
+            .filter(Boolean)));
+
+        if (!identityKeys.length) {
+            return { sent: 0, skipped: true, reason: 'no_push_recipients' };
+        }
+
+        const devices = identityKeys.flatMap((identityKey) => this.listIOSPushRegistrationsForIdentity(identityKey));
+        if (!devices.length) {
+            return { sent: 0, skipped: true, reason: 'no_registered_ios_devices' };
+        }
+
+        const jwt = this.createAPNsJwt(config);
+        const alertTitle = String(payload.title || 'VoiceLink System').trim() || 'VoiceLink System';
+        const alertBody = String(payload.message || '').trim();
+        if (!alertBody) {
+            return { sent: 0, skipped: true, reason: 'empty_message' };
+        }
+
+        const openAction = payload.userName ? 'profile' : 'messages';
+        const apnsPayload = {
+            aps: {
+                alert: {
+                    title: alertTitle,
+                    body: alertBody
+                },
+                sound: 'default',
+                badge: 1
+            },
+            id: payload.id || uuidv4(),
+            type: String(payload.type || 'system_action'),
+            severity: String(payload.severity || 'info'),
+            roomId: payload.roomId || null,
+            roomName: payload.roomName || alertTitle,
+            targetUserId: payload.targetUserId || null,
+            userId: payload.userId || payload.targetUserId || null,
+            userName: payload.userName || null,
+            openAction
+        };
+
+        const client = http2.connect(config.host);
+        let sent = 0;
+        try {
+            for (const device of devices) {
+                const topic = String(device.bundleId || config.topic || '').trim() || config.topic;
+                const response = await new Promise((resolve, reject) => {
+                    const req = client.request({
+                        ':method': 'POST',
+                        ':path': `/3/device/${device.token}`,
+                        authorization: `bearer ${jwt}`,
+                        'apns-topic': topic,
+                        'apns-push-type': 'alert',
+                        'content-type': 'application/json'
+                    });
+
+                    let body = '';
+                    req.setEncoding('utf8');
+                    req.on('response', (headers) => {
+                        req.on('data', (chunk) => {
+                            body += chunk;
+                        });
+                        req.on('end', () => {
+                            resolve({
+                                status: Number(headers[':status'] || 0),
+                                body
+                            });
+                        });
+                    });
+                    req.on('error', reject);
+                    req.end(JSON.stringify(apnsPayload));
+                });
+
+                if (response.status >= 200 && response.status < 300) {
+                    sent += 1;
+                    this.upsertIOSPushRegistration({
+                        ...device,
+                        lastSeenAt: new Date().toISOString()
+                    });
+                    continue;
+                }
+
+                if (response.status === 410 || response.status === 400) {
+                    let parsed = null;
+                    try {
+                        parsed = response.body ? JSON.parse(response.body) : null;
+                    } catch {}
+                    const reason = String(parsed?.reason || '').trim();
+                    if (['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic'].includes(reason)) {
+                        this.removeIOSPushRegistration(device.identityKey, device.deviceId);
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('[Push] Failed sending APNs notification:', error.message);
+        } finally {
+            client.close();
+        }
+
+        return { sent, attempted: devices.length };
     }
 
     initializeMailer() {
@@ -857,6 +1477,16 @@ class VoiceLinkLocalServer {
         }
     }
 
+    updateSocketSession(socketId, updates = {}) {
+        const sessionInfo = this.socketSessions.get(socketId);
+        if (!sessionInfo) return;
+        const next = { ...sessionInfo, ...updates, socketId };
+        this.socketSessions.set(socketId, next);
+        if (sessionInfo.userId && this.activeSessionsByUser.has(sessionInfo.userId)) {
+            this.activeSessionsByUser.get(sessionInfo.userId).set(socketId, next);
+        }
+    }
+
     unregisterSocketSession(socketId) {
         const sessionInfo = this.socketSessions.get(socketId);
         if (!sessionInfo) return;
@@ -1057,7 +1687,7 @@ class VoiceLinkLocalServer {
             console.error('[Modules] Failed to initialize Updater:', e.message);
         }
 
-        if (this.moduleRegistry.isModuleEnabled('deployment-manager')) {
+        if (DeploymentManagerModule && this.moduleRegistry.isModuleEnabled('deployment-manager')) {
             try {
                 this.modules.deploymentManager = new DeploymentManagerModule({
                     config: this.moduleRegistry.getModule('deployment-manager')?.config || {},
@@ -1071,6 +1701,9 @@ class VoiceLinkLocalServer {
             } catch (e) {
                 console.error('[Modules] Failed to initialize Deployment Manager:', e.message);
             }
+        } else if (!DeploymentManagerModule) {
+            this.modules.deploymentManager = null;
+            console.log('[Modules] Deployment Manager module not bundled');
         }
 
         // Initialize Internal Scheduler module when bundled.
@@ -1100,7 +1733,9 @@ class VoiceLinkLocalServer {
             this.modules.internalScheduler = new InternalScheduler({
                 io: this.io,
                 dataDir: path.join(__dirname, '../../data/scheduler'),
-                logger: console
+                logger: console,
+                server: this,
+                deployConfig
             });
             console.log('[Modules] Internal Scheduler module initialized');
             return true;
@@ -1250,8 +1885,48 @@ class VoiceLinkLocalServer {
     }
 
     getClientUploadRoot() {
-        const uploadRoot = path.join(__dirname, '../../data/uploads');
+        const fileSharingConfig = deployConfig.get('fileSharing') || {};
+        const fallbackUploadPath = String(
+            fileSharingConfig.fallbackUploadPath
+            || process.env.VOICELINK_UPLOAD_ROOT
+            || path.join(__dirname, '../../data/uploads')
+        ).trim();
+
+        let uploadRoot = fallbackUploadPath;
+
+        if (fileSharingConfig.enabled !== false && fileSharingConfig.globalEnabled !== false) {
+            const configuredSecondDrivePath = String(
+                fileSharingConfig.secondDrivePath
+                || process.env.VOICELINK_SECOND_DRIVE_UPLOAD_ROOT
+                || ''
+            ).trim();
+
+            if (configuredSecondDrivePath) {
+                const parentDir = path.dirname(configuredSecondDrivePath);
+                if (fs.existsSync(configuredSecondDrivePath) || fs.existsSync(parentDir)) {
+                    uploadRoot = configuredSecondDrivePath;
+                }
+            }
+        }
+
         fs.mkdirSync(uploadRoot, { recursive: true });
+
+        const sharedFolderName = String(fileSharingConfig.sharedFolderName || 'shared').trim() || 'shared';
+        const usersFolderName = String(fileSharingConfig.usersFolderName || 'users').trim() || 'users';
+        fs.mkdirSync(path.join(uploadRoot, sharedFolderName), { recursive: true });
+        fs.mkdirSync(path.join(uploadRoot, usersFolderName), { recursive: true });
+
+        const retentionCategories = fileSharingConfig.retention?.categories || {};
+        for (const categoryName of Object.keys(retentionCategories)) {
+            fs.mkdirSync(path.join(uploadRoot, usersFolderName, categoryName), { recursive: true });
+        }
+
+        const jellyfinSync = fileSharingConfig.jellyfinSync || {};
+        if (jellyfinSync.enabled !== false) {
+            const mediaFolderName = String(jellyfinSync.mediaFolderName || 'media').trim() || 'media';
+            fs.mkdirSync(path.join(uploadRoot, sharedFolderName, mediaFolderName), { recursive: true });
+        }
+
         return uploadRoot;
     }
 
@@ -1297,18 +1972,106 @@ class VoiceLinkLocalServer {
         return `${proto}://${host}`.replace(/\/+$/, '');
     }
 
+    getFileSharingAccessConfig() {
+        const fileSharingConfig = deployConfig.get('fileSharing') || {};
+        const smb = fileSharingConfig.smb && typeof fileSharingConfig.smb === 'object'
+            ? fileSharingConfig.smb
+            : {};
+        const hostnames = Array.isArray(smb.hostnames)
+            ? smb.hostnames.map(host => String(host || '').trim()).filter(Boolean)
+            : [];
+        const shares = smb.shares && typeof smb.shares === 'object' ? smb.shares : {};
+        const appShareMap = smb.appShareMap && typeof smb.appShareMap === 'object' ? smb.appShareMap : {};
+        const uploadRoot = this.getClientUploadRoot();
+        const uploadRootNormalized = String(uploadRoot || '').replace(/\/+$/, '');
+
+        let inferredShare = String(smb.preferredShare || '').trim();
+        if (!inferredShare) {
+            const matched = Object.entries(appShareMap).find(([, absolutePath]) => {
+                return String(absolutePath || '').replace(/\/+$/, '') === uploadRootNormalized;
+            });
+            if (matched?.[0]) {
+                inferredShare = matched[0];
+            }
+        }
+
+        const preferredShareName = shares[inferredShare] || shares.voicelink || shares.sharedFiles || '';
+
+        return {
+            enabled: fileSharingConfig.enabled !== false && fileSharingConfig.globalEnabled !== false,
+            uploadRoot,
+            smb: {
+                enabled: smb.enabled === true,
+                username: String(smb.username || '').trim(),
+                hostnames,
+                preferredShareKey: inferredShare || null,
+                preferredShareName: preferredShareName || null,
+                shares,
+                appShareMap
+            },
+            copyParty: this.getCopyPartyExportConfig()
+        };
+    }
+
+    buildSMBShareLink(relativePath = '') {
+        const access = this.getFileSharingAccessConfig();
+        const smb = access.smb || {};
+        if (!access.enabled || smb.enabled !== true || !smb.username || !smb.preferredShareName) {
+            return null;
+        }
+
+        const cleanedRelativePath = String(relativePath || '')
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+        const encodedSegments = cleanedRelativePath
+            .split('/')
+            .filter(Boolean)
+            .map(segment => encodeURIComponent(segment));
+        const encodedSuffix = encodedSegments.length ? `/${encodedSegments.join('/')}` : '';
+        const uris = (smb.hostnames || []).map(host => `smb://${smb.username}@${host}/${smb.preferredShareName}${encodedSuffix}`);
+
+        return {
+            enabled: true,
+            username: smb.username,
+            preferredShare: smb.preferredShareName,
+            hostnames: smb.hostnames,
+            relativePath: cleanedRelativePath,
+            uris
+        };
+    }
+
     createClientUploadShareLink(req, requestPath, keepForever = false, expiresAt = null) {
         const resolved = this.resolveClientUploadPath(requestPath);
         if (!resolved || !fs.existsSync(resolved.absolutePath)) {
             return null;
         }
         const encodedPath = encodeURIComponent(resolved.publicPath);
+        const webUrl = `${this.getRequestPublicBaseUrl(req)}/api/files/content?path=${encodedPath}`;
+        const copyParty = this.buildCopyPartyLink({
+            fileName: path.basename(resolved.relativePath)
+        });
+        const smb = this.buildSMBShareLink(resolved.relativePath);
+        const providers = [
+            { provider: 'web', url: webUrl }
+        ];
+        if (copyParty?.configured && copyParty.url) {
+            providers.push({ provider: 'copyparty', url: copyParty.url });
+        }
+        if (smb?.uris?.length) {
+            for (const uri of smb.uris) {
+                providers.push({ provider: 'smb', url: uri });
+            }
+        }
 
         return {
             success: true,
             id: uuidv4(),
             filePath: resolved.publicPath,
-            url: `${this.getRequestPublicBaseUrl(req)}/api/files/content?path=${encodedPath}`,
+            url: webUrl,
+            webUrl,
+            copyPartyUrl: copyParty?.configured ? (copyParty.url || null) : null,
+            smb,
+            providers,
             token: null,
             keepForever: !!keepForever,
             expiresAt: expiresAt || null,
@@ -1729,8 +2492,90 @@ class VoiceLinkLocalServer {
         };
     }
 
-    buildClientRoomListPayload() {
-        return Array.from(this.rooms.values()).map((room) => {
+    normalizeRoomAccessLists(room = {}) {
+        const normalizeList = (value) => Array.from(new Set(
+            (Array.isArray(value) ? value : [])
+                .map((entry) => String(entry || '').trim().toLowerCase())
+                .filter(Boolean)
+        ));
+        return {
+            allowList: normalizeList(room.allowList || room.allowedUsers || room.allowedMembers),
+            denyList: normalizeList(room.denyList || room.blockedUsers || room.deniedUsers)
+        };
+    }
+
+    buildRoomAccessIdentity({ authUser = null, userName = '' } = {}) {
+        const identities = new Set();
+        const addValue = (value) => {
+            const normalized = String(value || '').trim().toLowerCase();
+            if (normalized) identities.add(normalized);
+        };
+        addValue(userName);
+        addValue(authUser?.id);
+        addValue(authUser?.email);
+        addValue(authUser?.username);
+        addValue(authUser?.displayName);
+        return identities;
+    }
+
+    canActorAccessRoom(room, { authUser = null, userName = '', includeHidden = false } = {}) {
+        if (!room) return false;
+        const visibility = String(room.visibility || 'public').trim().toLowerCase();
+        const accessType = String(room.accessType || 'hybrid').trim().toLowerCase();
+        const isGuest = !authUser;
+        const role = String(authUser?.role || '').trim().toLowerCase();
+        const isPrivileged = ['owner', 'admin', 'staff'].includes(role);
+        const identities = this.buildRoomAccessIdentity({ authUser, userName });
+        const { allowList, denyList } = this.normalizeRoomAccessLists(room);
+
+        if (denyList.some((entry) => identities.has(entry))) return false;
+        if (includeHidden && isPrivileged) return true;
+        if (accessType === 'hidden') return false;
+
+        const isExplicitlyAllowed = allowList.length === 0
+            ? false
+            : allowList.some((entry) => identities.has(entry));
+
+        if (isExplicitlyAllowed) return true;
+        if (visibility === 'private') return false;
+        if (isGuest && room.visibleToGuests === false) return false;
+        if (allowList.length > 0 && !isPrivileged) return false;
+        return true;
+    }
+
+    getListedRoomsForActor({ authUser = null, userName = '', source = 'app', includeHidden = false } = {}) {
+        const maxConfigured = Number(deployConfig.get('serverPolicies', 'maxListedRooms') || 50);
+        const maxGuestConfigured = Number(
+            deployConfig.get('serverPolicies', 'maxGuestListedRooms')
+            || deployConfig.get('serverPolicies', 'guestVisibleRoomLimit')
+            || 20
+        );
+        const maxListedRooms = Math.max(12, Math.min(50000, Number.isFinite(maxConfigured) ? maxConfigured : 50));
+        const maxGuestListedRooms = Math.max(12, Math.min(30, Number.isFinite(maxGuestConfigured) ? maxGuestConfigured : 20));
+        let rooms = Array.from(this.rooms.values()).filter((room) => {
+            const accessType = String(room.accessType || 'hybrid').trim().toLowerCase();
+            if (!includeHidden) {
+                if (accessType === 'hidden') return false;
+                if (source === 'app' && room.showInApp === false) return false;
+                if (source === 'web' && room.allowEmbed === false) return false;
+            }
+            return this.canActorAccessRoom(room, { authUser, userName, includeHidden });
+        });
+
+        rooms.sort((left, right) => {
+            const leftPinned = left.isDefault === true ? 1 : 0;
+            const rightPinned = right.isDefault === true ? 1 : 0;
+            if (leftPinned !== rightPinned) return rightPinned - leftPinned;
+            const leftUpdated = new Date(left.updatedAt || left.lastUpdated || left.createdAt || 0).getTime();
+            const rightUpdated = new Date(right.updatedAt || right.lastUpdated || right.createdAt || 0).getTime();
+            return rightUpdated - leftUpdated;
+        });
+
+        return rooms.slice(0, authUser ? maxListedRooms : maxGuestListedRooms);
+    }
+
+    buildClientRoomListPayload(viewer = {}) {
+        return this.getListedRoomsForActor(viewer).map((room) => {
             const createdAt = room.createdAt ? new Date(room.createdAt) : null;
             const uptimeSeconds = createdAt
                 ? Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / 1000))
@@ -1769,6 +2614,8 @@ class VoiceLinkLocalServer {
                 hasPassword: !!room.password,
                 visibility: room.visibility || 'public',
                 visibleToGuests: room.visibleToGuests !== false,
+                accessType: room.accessType || 'hybrid',
+                allowList: this.normalizeRoomAccessLists(room).allowList,
                 isDefault: room.isDefault || false,
                 locked: room.locked || false
             };
@@ -1776,9 +2623,23 @@ class VoiceLinkLocalServer {
     }
 
     emitRoomListToClients() {
-        const roomList = this.buildClientRoomListPayload();
-        this.io.emit('room-list', roomList);
-        return roomList;
+        if (!this.io) return [];
+        const fallbackRoomList = this.buildClientRoomListPayload();
+        const sockets = this.io.sockets?.sockets;
+        if (!sockets || typeof sockets.forEach !== 'function') {
+            this.io.emit('room-list', fallbackRoomList);
+            return fallbackRoomList;
+        }
+        sockets.forEach((socket) => {
+            const authUser = this.authenticatedUsers.get(socket.id) || null;
+            const session = this.socketSessions.get(socket.id) || null;
+            const roomList = this.buildClientRoomListPayload({
+                authUser,
+                userName: authUser?.displayName || authUser?.username || session?.displayName || session?.userName || ''
+            });
+            socket.emit('room-list', roomList);
+        });
+        return fallbackRoomList;
     }
 
     ensureTransferTargetRoom({
@@ -2824,25 +3685,50 @@ class VoiceLinkLocalServer {
         const room = this.rooms.get(roomId);
         if (!room) return [];
         room.users = this.getLiveRoomUsers(roomId);
-        const botName = 'VoiceLink Bot';
-        const virtualUsers = [{
-            id: `bot:${roomId}`,
-            roomId,
-            name: botName,
-            username: botName,
-            displayName: botName,
-            joinedAt: room.createdAt || new Date(),
-            lastActiveAt: new Date(),
-            isSpeaking: false,
-            isAuthenticated: true,
-            isBot: true,
-            authProvider: 'voicelink_bot',
-            role: 'bot',
-            audioSettings: {
-                muted: true,
-                deafened: true
+        const virtualUsers = [
+            {
+                id: `bot:voicelink:${roomId}`,
+                roomId,
+                name: 'VoiceLink Bot',
+                username: 'VoiceLink Bot',
+                displayName: 'VoiceLink',
+                joinedAt: room.createdAt || new Date(),
+                lastActiveAt: new Date(),
+                isSpeaking: false,
+                isAuthenticated: true,
+                isBot: true,
+                hasAudioControls: false,
+                authProvider: 'voicelink_bot',
+                role: 'bot',
+                statusMessage: 'Use /bot help or @VoiceLink Bot to interact.',
+                audioSettings: {
+                    muted: true,
+                    deafened: true,
+                    transmitEnabled: false
+                }
+            },
+            {
+                id: `bot:sophia:${roomId}`,
+                roomId,
+                name: 'Sophia',
+                username: 'Sophia',
+                displayName: 'Sophia',
+                joinedAt: room.createdAt || new Date(),
+                lastActiveAt: new Date(),
+                isSpeaking: false,
+                isAuthenticated: true,
+                isBot: true,
+                hasAudioControls: true,
+                authProvider: 'sophia_bot',
+                role: 'bot',
+                statusMessage: 'Mention @Sophia to chat, hear updates, or adjust room audio.',
+                audioSettings: {
+                    muted: false,
+                    deafened: false,
+                    transmitEnabled: true
+                }
             }
-        }];
+        ];
         return [...room.users, ...virtualUsers];
     }
 
@@ -2871,6 +3757,7 @@ class VoiceLinkLocalServer {
             lastActiveAt: user.lastActiveAt || user.lastSeenAt || null,
             muted: !!(user.audioSettings?.muted),
             deafened: !!(user.audioSettings?.deafened),
+            transmitEnabled: user.audioSettings?.transmitEnabled !== false,
             speaking: !!user.isSpeaking,
             isSpeaking: !!user.isSpeaking,
             roomId: roomId || user.roomId || null,
@@ -2945,11 +3832,13 @@ class VoiceLinkLocalServer {
         if (targetUserId) {
             this.io.to(targetUserId).emit('admin-notification', payload);
             this.io.to(targetUserId).emit('system-action-notification', payload);
+            void this.sendIOSPushNotifications(payload);
             return;
         }
         if (roomId) {
             this.io.to(roomId).emit('admin-notification', payload);
             this.io.to(roomId).emit('system-action-notification', payload);
+            void this.sendIOSPushNotifications(payload);
             return;
         }
 
@@ -3000,6 +3889,9 @@ class VoiceLinkLocalServer {
             this.io.to(target).emit('admin-notification', payload);
             this.io.to(target).emit('system-action-notification', payload);
         }
+        void this.sendIOSPushNotifications(payload, {
+            identityKeys: this.getAdminPushIdentityKeys()
+        });
     }
 
     getConfiguredBackgroundStreamForRoom(room = {}) {
@@ -3403,8 +4295,72 @@ class VoiceLinkLocalServer {
         return `${room.name} does not have active room media right now.`;
     }
 
-    getBotConversationKey(roomId, userId) {
-        return `${roomId || 'global'}:${userId || 'unknown'}`;
+    getBotProfile(botId = 'voicelink') {
+        const normalized = String(botId || 'voicelink').trim().toLowerCase();
+        if (normalized === 'sophia') {
+            return {
+                id: 'sophia',
+                displayName: 'Sophia',
+                userIdPrefix: 'bot:sophia:',
+                authProvider: 'sophia_bot',
+                mentionPattern: /@sophia\b/,
+                commandPrefixes: ['/sophia', '/sohia'],
+                hasAudioControls: true,
+                systemPromptLead: 'You are Sophia, a conversational VoiceLink room assistant with audio-device style controls and separate per-user memories.'
+            };
+        }
+        return {
+            id: 'voicelink',
+            displayName: 'VoiceLink Bot',
+            userIdPrefix: 'bot:voicelink:',
+            authProvider: 'voicelink_bot',
+            mentionPattern: /@voicelink(?:\s+bot)?\b/,
+            commandPrefixes: ['/bot', '/vb', '/voicebot'],
+            hasAudioControls: false,
+            systemPromptLead: 'You are VoiceLink Bot inside a live voice/chat room.'
+        };
+    }
+
+    resolveDirectBotTarget(targetUserId = '', fallbackRoomId = '') {
+        const raw = String(targetUserId || '').trim();
+        if (!raw.toLowerCase().startsWith('bot:')) return null;
+        const parts = raw.split(':');
+        if (parts.length >= 3) {
+            const botId = parts[1] || 'voicelink';
+            const roomId = parts.slice(2).join(':');
+            const profile = this.getBotProfile(botId);
+            return { raw, botId, roomId, profile };
+        }
+        const legacyRoomId = raw.slice(4);
+        return {
+            raw,
+            botId: 'voicelink',
+            roomId: legacyRoomId || fallbackRoomId || 'global',
+            profile: this.getBotProfile('voicelink')
+        };
+    }
+
+    resolveRoomBotProfileFromSource(source = '') {
+        const lowered = String(source || '').trim().toLowerCase();
+        if (lowered.startsWith('/sophia') || lowered.startsWith('/sohia') || /@sophia\b/.test(lowered)) {
+            return this.getBotProfile('sophia');
+        }
+        return this.getBotProfile('voicelink');
+    }
+
+    getActiveBotProfileId(roomId, userId) {
+        for (const botId of ['sophia', 'voicelink']) {
+            const key = this.getBotConversationKey(roomId, userId, botId);
+            const state = this.botConversationState.get(key);
+            if (state && (Date.now() - state.lastAddressedAt) <= (10 * 60 * 1000)) {
+                return botId;
+            }
+        }
+        return null;
+    }
+
+    getBotConversationKey(roomId, userId, botId = 'voicelink') {
+        return `${roomId || 'global'}:${userId || 'unknown'}:${botId || 'voicelink'}`;
     }
 
     getRecentRoomConversationContext(roomId, limit = 8) {
@@ -3420,16 +4376,17 @@ class VoiceLinkLocalServer {
             .filter(Boolean);
     }
 
-    isBotConversationActive(roomId, userId) {
-        const key = this.getBotConversationKey(roomId, userId);
+    isBotConversationActive(roomId, userId, botId = 'voicelink') {
+        const key = this.getBotConversationKey(roomId, userId, botId);
         const state = this.botConversationState.get(key);
         if (!state) return false;
         return (Date.now() - state.lastAddressedAt) <= (10 * 60 * 1000);
     }
 
-    updateBotConversationState(roomId, userId, source) {
-        const key = this.getBotConversationKey(roomId, userId);
+    updateBotConversationState(roomId, userId, source, botId = 'voicelink') {
+        const key = this.getBotConversationKey(roomId, userId, botId);
         this.botConversationState.set(key, {
+            botId,
             lastAddressedAt: Date.now(),
             lastPrompt: String(source || '').trim()
         });
@@ -3442,15 +4399,15 @@ class VoiceLinkLocalServer {
             .trim();
     }
 
-    getBotConversationMemory(roomId, userId, limit = 8) {
-        const key = this.getBotConversationKey(roomId, userId);
+    getBotConversationMemory(roomId, userId, limit = 8, botId = 'voicelink') {
+        const key = this.getBotConversationKey(roomId, userId, botId);
         const state = this.botConversationState.get(key);
         if (!state || !Array.isArray(state.history)) return [];
         return state.history.slice(-Math.max(1, limit));
     }
 
-    rememberBotTurn(roomId, userId, role, content) {
-        const key = this.getBotConversationKey(roomId, userId);
+    rememberBotTurn(roomId, userId, role, content, botId = 'voicelink') {
+        const key = this.getBotConversationKey(roomId, userId, botId);
         const existing = this.botConversationState.get(key) || {};
         const history = Array.isArray(existing.history) ? existing.history.slice(-11) : [];
         const trimmed = String(content || '').trim();
@@ -3462,6 +4419,7 @@ class VoiceLinkLocalServer {
         });
         this.botConversationState.set(key, {
             ...existing,
+            botId,
             lastAddressedAt: Date.now(),
             lastPrompt: role === 'user' ? trimmed : existing.lastPrompt,
             history
@@ -3503,6 +4461,15 @@ class VoiceLinkLocalServer {
         return { intent, model: config.conversationModel };
     }
 
+    getAudienceMentionContext(source = '') {
+        const lowered = String(source || '').toLowerCase();
+        return {
+            addressesAll: lowered.includes('@all'),
+            addressesEveryone: lowered.includes('@everyone'),
+            isBroadcast: lowered.includes('@all') || lowered.includes('@everyone')
+        };
+    }
+
     async isBotOllamaAvailable(force = false) {
         const config = this.getBotOllamaConfig();
         if (!config.enabled) return false;
@@ -3523,19 +4490,23 @@ class VoiceLinkLocalServer {
         }
     }
 
-    buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory }) {
+    buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory, botProfile }) {
         const userName = user?.name || user?.username || 'User';
         const roomName = room?.name || 'this room';
-        const memoryLines = memory.map((entry) => `${entry.role === 'assistant' ? 'VoiceLink Bot' : userName}: ${entry.content}`);
+        const botName = botProfile?.displayName || 'VoiceLink Bot';
+        const audience = this.getAudienceMentionContext(source);
+        const memoryLines = memory.map((entry) => `${entry.role === 'assistant' ? botName : userName}: ${entry.content}`);
         const roomLines = recentContext.slice(-6);
         return [
-            'You are VoiceLink Bot inside a live voice/chat room.',
+            botProfile?.systemPromptLead || 'You are VoiceLink Bot inside a live voice/chat room.',
             'Be conversational, concise, and useful.',
+            'Only treat @all and @everyone as room-wide audience markers. Do not respond just because those markers appear unless the bot is directly addressed or already in an active follow-up thread.',
             'Do not use stiff fallback wording when a user starts a normal conversation.',
             'Prefer answering normally first. Only offer next-step help after the main answer.',
             'If the question is about coding, answer like a practical engineer.',
             `Room: ${roomName}`,
             `Room purpose: ${roomPurpose}`,
+            audience.isBroadcast ? `Audience context: This message addresses the whole room using ${audience.addressesEveryone ? '@everyone' : '@all'}.` : null,
             motd ? `Message of the day: ${motd}` : null,
             roomLines.length ? `Recent room context:\n${roomLines.join('\n')}` : null,
             memoryLines.length ? `Conversation memory:\n${memoryLines.join('\n')}` : null,
@@ -3543,11 +4514,12 @@ class VoiceLinkLocalServer {
         ].filter(Boolean).join('\n\n');
     }
 
-    async generateBotOllamaReply(user, roomId, source = '') {
+    async generateBotOllamaReply(user, roomId, source = '', botId = 'voicelink') {
         const config = this.getBotOllamaConfig();
         if (!config.enabled) return null;
         const available = await this.isBotOllamaAvailable();
         if (!available) return null;
+        const botProfile = this.getBotProfile(botId);
 
         const room = this.rooms.get(roomId);
         const deploy = deployConfig.getConfig() || {};
@@ -3556,9 +4528,9 @@ class VoiceLinkLocalServer {
         const serverName = deploy.server?.name || 'VoiceLink';
         const roomPurpose = roomDescription || `${room?.name || 'This room'} is part of ${serverName}.`;
         const recentContext = this.getRecentRoomConversationContext(roomId, 6);
-        const memory = this.getBotConversationMemory(roomId, user?.id || user?.userId || user?.socketId || user?.name, 8);
+        const memory = this.getBotConversationMemory(roomId, user?.id || user?.userId || user?.socketId || user?.name, 8, botId);
         const { model, intent } = this.selectOllamaModelForBotPrompt(source);
-        const prompt = this.buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory });
+        const prompt = this.buildBotOllamaPrompt({ user, room, roomPurpose, motd, source, recentContext, memory, botProfile });
 
         try {
             const controller = new AbortController();
@@ -3584,12 +4556,12 @@ class VoiceLinkLocalServer {
         }
     }
 
-    rememberBotReply(roomId, userId, prompt, reply) {
+    rememberBotReply(roomId, userId, prompt, reply, botId = 'voicelink') {
         const now = Date.now();
         const normalizedPrompt = this.normalizeBotFingerprint(prompt);
         const normalizedReply = this.normalizeBotFingerprint(reply);
-        const roomKey = `room:${roomId || 'global'}`;
-        const userKey = `user:${roomId || 'global'}:${userId || 'unknown'}`;
+        const roomKey = `room:${roomId || 'global'}:${botId || 'voicelink'}`;
+        const userKey = `user:${roomId || 'global'}:${userId || 'unknown'}:${botId || 'voicelink'}`;
         const payload = {
             at: now,
             prompt: normalizedPrompt,
@@ -3608,14 +4580,14 @@ class VoiceLinkLocalServer {
         }
     }
 
-    shouldSuppressBotReply(roomId, userId, prompt, reply, explicitBotAddress = false) {
+    shouldSuppressBotReply(roomId, userId, prompt, reply, explicitBotAddress = false, botId = 'voicelink') {
         const now = Date.now();
         const normalizedPrompt = this.normalizeBotFingerprint(prompt);
         const normalizedReply = this.normalizeBotFingerprint(reply);
         if (!normalizedReply) return true;
 
-        const roomKey = `room:${roomId || 'global'}`;
-        const userKey = `user:${roomId || 'global'}:${userId || 'unknown'}`;
+        const roomKey = `room:${roomId || 'global'}:${botId || 'voicelink'}`;
+        const userKey = `user:${roomId || 'global'}:${userId || 'unknown'}:${botId || 'voicelink'}`;
         const roomState = this.botResponseMemory.get(roomKey);
         const userState = this.botResponseMemory.get(userKey);
 
@@ -3642,12 +4614,12 @@ class VoiceLinkLocalServer {
             return true;
         }
 
-        this.rememberBotReply(roomId, userId, prompt, reply);
+        this.rememberBotReply(roomId, userId, prompt, reply, botId);
         return false;
     }
 
-    dismissBotConversation(roomId, userId) {
-        this.botConversationState.delete(this.getBotConversationKey(roomId, userId));
+    dismissBotConversation(roomId, userId, botId = 'voicelink') {
+        this.botConversationState.delete(this.getBotConversationKey(roomId, userId, botId));
     }
 
     getBotCommandRole(user = {}) {
@@ -3799,19 +4771,14 @@ class VoiceLinkLocalServer {
         }
 
         if (destination.type === 'room' && destination.roomId && destination.roomId !== sourceRoomId) {
-            const botMessage = {
-                id: uuidv4(),
-                userId: `bot:${destination.roomId}`,
-                userName: 'VoiceLink Bot',
-                message: replyMessage || `Generated and uploaded ${attachmentName}.`,
-                timestamp: new Date(),
-                isAuthenticated: true,
-                isBot: true,
-                authProvider: 'voicelink_bot',
+            const botMessage = this.createRoomBotMessage(
+                destination.roomId,
+                replyMessage || `Generated and uploaded ${attachmentName}.`,
+                {
                 attachmentName,
                 attachmentURL,
-                reactions: []
-            };
+                }
+            );
             this.storeRoomMessage(destination.roomId, botMessage);
             this.io.to(destination.roomId).emit('chat-message', botMessage);
         }
@@ -4114,8 +5081,10 @@ class VoiceLinkLocalServer {
         return `ClawX downloads: [Windows](${links.latestWindows}), [Intel macOS](${links.latestMacIntel}), and [Apple Silicon macOS](${links.macAppleSilicon}). Tell me your OS and I will return one exact link.`;
     }
 
-    async buildBotTextReply(user, roomId, source = '') {
+    async buildBotTextReply(user, roomId, source = '', botId = 'voicelink') {
         const room = this.rooms.get(roomId);
+        const botProfile = this.getBotProfile(botId);
+        const audience = this.getAudienceMentionContext(source);
         const users = this.normalizeRoomUsers(roomId);
         const config = deployConfig.getConfig() || {};
         const motd = typeof config.server?.motd === 'string' ? config.server.motd.trim() : '';
@@ -4188,10 +5157,15 @@ class VoiceLinkLocalServer {
             if (motd) {
                 contextParts.push(`Message of the day: ${motd}`);
             }
-            return `${serverName}. ${contextParts.join(' ')} If you want, I can tell you what this room is for, what media is playing, or how to do something here.`;
+            return `${botProfile.displayName}. ${contextParts.join(' ')} If you want, I can tell you what this room is for, what media is playing, or how to do something here.`;
         }
         if (lowered.includes('help')) {
-            return 'Commands: /me action, /bot help, /vb help, /bot status, /vb status, /bot users, /bot motd, /bot server. If you want, I can also tell you what this room is about, what media is playing, or which download to use.';
+            return botId === 'sophia'
+                ? 'Commands: /sophia help, /sophia status, /sophia users, /sophia media. You can also mention @Sophia in a room for a personal follow-up conversation with separate memory. I understand @all and @everyone as room-wide audience markers when you include me.'
+                : 'Commands: /me action, /bot help, /vb help, /bot status, /vb status, /bot users, /bot motd, /bot server. I also understand @all and @everyone as room-wide audience markers when you include me.';
+        }
+        if (audience.isBroadcast && (lowered.includes('announce') || lowered.includes('say to everyone') || lowered.includes('tell everyone'))) {
+            return `Understood. This is a room-wide message for ${room?.name || 'this room'}. If you want, I can help rewrite it so it sounds clear when sent to everyone.`;
         }
         if (
             lowered.includes('what is this room about') ||
@@ -4210,7 +5184,7 @@ class VoiceLinkLocalServer {
             return messageBits.join(' ');
         }
         if (lowered.includes('status')) {
-            return `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}. If you want, I can tell you who is here or what is active in the room.`;
+            return `${room?.name || 'This room'} currently has ${users.length} participant${users.length === 1 ? '' : 's'} and is ${room?.isPrivate ? 'private' : 'public'}. If you want, ${botProfile.displayName} can tell you who is here or what is active in the room.`;
         }
         if (lowered.includes('users') || lowered.includes('who')) {
             if (lowered.includes('where is ') || lowered.startsWith('where ')) {
@@ -4388,7 +5362,7 @@ class VoiceLinkLocalServer {
         if (!this.shouldAnnounceRecentRestart()) return '';
         const roomName = room?.name || 'This room';
         const ago = this.formatDurationWords(Math.floor((Date.now() - this.serverStartedAt) / 1000));
-        return `System. VoiceLink server restarted ${ago} ago. ${roomName} has reconnected.`;
+        return `System. VoiceLink server restarted ${ago} ago. ${roomName} was rejoined.`;
     }
 
     inferBotTopicLabel(source = '', reply = '') {
@@ -4466,13 +5440,27 @@ class VoiceLinkLocalServer {
 
     getConnectedUsersCount() {
         const connectedSockets = this.getConnectedSocketSet();
-        let count = 0;
-        for (const socketId of this.users.keys()) {
+        const liveSessions = new Set();
+
+        for (const socketId of this.socketSessions.keys()) {
             if (connectedSockets.has(socketId)) {
-                count++;
+                liveSessions.add(socketId);
             }
         }
-        return count;
+
+        for (const socketId of this.authenticatedUsers.keys()) {
+            if (connectedSockets.has(socketId)) {
+                liveSessions.add(socketId);
+            }
+        }
+
+        for (const socketId of this.users.keys()) {
+            if (connectedSockets.has(socketId)) {
+                liveSessions.add(socketId);
+            }
+        }
+
+        return liveSessions.size;
     }
 
     getRoomMonitorSnapshot() {
@@ -5032,6 +6020,8 @@ class VoiceLinkLocalServer {
         this.app.get('/api/rooms', async (req, res) => {
             const source = req.query.source || 'app'; // 'app', 'web', 'all'
             const includeHidden = req.query.includeHidden === 'true';
+            const authUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
+            const requestUserName = String(req.query.userName || req.headers['x-voicelink-user'] || '').trim();
             const localServerApiBase = (
                 process.env.PUBLIC_URL
                 || deployConfig.getConfig()?.server?.publicUrl
@@ -5046,18 +6036,12 @@ class VoiceLinkLocalServer {
                 console.error('[LocalServer] Error fetching main server rooms:', e.message);
             }
 
-            // Get local rooms
-            let localRooms = Array.from(this.rooms.values());
-
-            // Filter local rooms by access type based on request source
-            if (!includeHidden) {
-                localRooms = localRooms.filter(room => {
-                    if (room.accessType === 'hidden') return false;
-                    if (source === 'app' && !room.showInApp) return false;
-                    if (source === 'web' && !room.allowEmbed) return false;
-                    return true;
-                });
-            }
+            const localRooms = this.getListedRoomsForActor({
+                authUser,
+                userName: requestUserName,
+                source,
+                includeHidden
+            });
 
             const localRoomList = localRooms.map(room => {
                 const configuredBackgroundStream = this.getConfiguredBackgroundStreamForRoom(room);
@@ -5082,6 +6066,7 @@ class VoiceLinkLocalServer {
                     accessType: room.accessType,
                     allowEmbed: room.allowEmbed,
                     visibleToGuests: room.visibleToGuests,
+                    allowList: this.normalizeRoomAccessLists(room).allowList,
                     isDefault: room.isDefault || false,
                     template: room.template || null,
                     serverSource: 'local',
@@ -5134,6 +6119,14 @@ class VoiceLinkLocalServer {
 
             const platform = String(req.query.client || req.query.platform || '').trim().toLowerCase();
             const sortBy = String(req.query.sort || (platform === 'ios' ? 'activity' : 'name')).trim().toLowerCase();
+            const maxConfigured = Number(deployConfig.get('serverPolicies', 'maxListedRooms') || 50);
+            const maxGuestConfigured = Number(
+                deployConfig.get('serverPolicies', 'maxGuestListedRooms')
+                || deployConfig.get('serverPolicies', 'guestVisibleRoomLimit')
+                || 20
+            );
+            const maxListedRooms = Math.max(12, Math.min(50000, Number.isFinite(maxConfigured) ? maxConfigured : 50));
+            const maxGuestListedRooms = Math.max(12, Math.min(30, Number.isFinite(maxGuestConfigured) ? maxGuestConfigured : 20));
             filteredRooms = filteredRooms
                 .map((room) => ({
                     ...room,
@@ -5151,7 +6144,8 @@ class VoiceLinkLocalServer {
                         if (bt !== at) return bt - at;
                     }
                     return String(a.name || '').localeCompare(String(b.name || ''));
-                });
+                })
+                .slice(0, hasAuthContext ? maxListedRooms : maxGuestListedRooms);
 
             console.log(`[LocalServer] Returning ${filteredRooms.length} rooms (${mainServerRooms.length} main + ${localRoomList.length} local)`);
             res.json(filteredRooms);
@@ -5176,7 +6170,9 @@ class VoiceLinkLocalServer {
                 autoLock = null,  // { afterUsers: N, afterMinutes: N, onHostLeave: bool }
                 autoplayMusic = false,
                 autoplayPlaylist = null,
-                isAuthenticated = false
+                isAuthenticated = false,
+                allowList = [],
+                denyList = []
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
 
@@ -5264,6 +6260,8 @@ class VoiceLinkLocalServer {
                 autoLockScheduled: null,  // Timeout ID for scheduled auto-lock
                 autoplayMusic: autoplayMusic !== undefined ? autoplayMusic : false,  // Auto-play music when room is empty
                 autoplayPlaylist: autoplayPlaylist || null,  // Playlist ID for autoplay
+                allowList: this.normalizeRoomAccessLists({ allowList }).allowList,
+                denyList: this.normalizeRoomAccessLists({ denyList }).denyList,
                 jellyfinAccess: {
                     enabled: true,
                     adminCanAccessAll: true,
@@ -6118,9 +7116,11 @@ class VoiceLinkLocalServer {
             });
         });
 
-        const clientRootDir = path.join(__dirname, '..', '..', 'client');
-        const docsRootDir = path.join(__dirname, '..', '..', 'docs');
+        const appRootDir = path.join(__dirname, '..', '..');
+        const clientRootDir = path.join(appRootDir, 'client');
+        const docsRootDir = path.join(appRootDir, 'docs');
         const directHtmlRoots = [
+            appRootDir,
             clientRootDir,
             path.join(clientRootDir, 'docs'),
             docsRootDir,
@@ -6149,14 +7149,23 @@ class VoiceLinkLocalServer {
 
         this.app.get(/.*\.html?$/i, sendDirectHtmlFile);
 
-        // Serve the main client
+        // Serve the public landing page at root.
         this.app.get('/', (req, res) => {
-            res.sendFile(path.join(clientRootDir, 'index.html'));
+            res.sendFile(path.join(appRootDir, 'index.html'));
         });
 
         // Serve downloads page
         this.app.get('/downloads.html', (req, res) => {
             res.sendFile(path.join(clientRootDir, 'downloads.html'));
+        });
+
+        // Serve canonical downloads pages for client-prefixed links too.
+        this.app.get('/client/downloads.html', (req, res) => {
+            res.sendFile(path.join(appRootDir, 'downloads.html'));
+        });
+
+        this.app.get('/client/downloads-enhanced.html', (req, res) => {
+            res.sendFile(path.join(appRootDir, 'downloads-enhanced.html'));
         });
 
         // Setup federation API routes
@@ -6399,6 +7408,16 @@ class VoiceLinkLocalServer {
             if (updates.visibleToGuests !== undefined) room.visibleToGuests = !!updates.visibleToGuests;
             if (updates.allowEmbed !== undefined) room.allowEmbed = !!updates.allowEmbed;
             if (updates.showInApp !== undefined) room.showInApp = !!updates.showInApp;
+            if (updates.allowList !== undefined || updates.allowedUsers !== undefined || updates.allowedMembers !== undefined) {
+                room.allowList = this.normalizeRoomAccessLists({
+                    allowList: updates.allowList ?? updates.allowedUsers ?? updates.allowedMembers
+                }).allowList;
+            }
+            if (updates.denyList !== undefined || updates.deniedUsers !== undefined || updates.blockedUsers !== undefined) {
+                room.denyList = this.normalizeRoomAccessLists({
+                    denyList: updates.denyList ?? updates.deniedUsers ?? updates.blockedUsers
+                }).denyList;
+            }
             if (updates.password !== undefined) room.password = updates.password || null;
             if (updates.isDefault !== undefined) room.isDefault = updates.isDefault;
             if (updates.locked !== undefined) room.locked = !!updates.locked;
@@ -6779,6 +7798,35 @@ class VoiceLinkLocalServer {
         this.localAuthVerificationRequired = process.env.VOICELINK_REQUIRE_EMAIL_VERIFICATION !== 'false' && !!this.mailer;
         const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
         const normalizeUsername = (username) => String(username || '').trim().toLowerCase();
+        const canonicalIdentityGroups = (() => {
+            const configuredGroups = String(process.env.VOICELINK_CANONICAL_ACCOUNT_ALIASES || '')
+                .split(';')
+                .map((group) => group.split(',').map((value) => String(value || '').trim()).filter(Boolean))
+                .filter((group) => group.length > 1);
+            const bootstrapGroups = [
+                ['domdom', 'd.stansberry@me.com', 'webmaster@raywonderis.me', 'datboydommo@layor8.space']
+            ];
+            return [...bootstrapGroups, ...configuredGroups];
+        })();
+        const buildCanonicalIdentityCandidates = (payload = {}) => {
+            const candidates = new Set();
+            const addIdentity = (value) => {
+                const raw = String(value || '').trim();
+                if (!raw) return;
+                candidates.add(raw.includes('@') ? normalizeEmail(raw) : normalizeUsername(raw));
+            };
+            addIdentity(payload.identity);
+            addIdentity(payload.email);
+            addIdentity(payload.username);
+            addIdentity(payload.displayName);
+            for (const group of canonicalIdentityGroups) {
+                const normalizedGroup = group.map((entry) => entry.includes('@') ? normalizeEmail(entry) : normalizeUsername(entry));
+                if (normalizedGroup.some((entry) => candidates.has(entry))) {
+                    normalizedGroup.forEach((entry) => candidates.add(entry));
+                }
+            }
+            return candidates;
+        };
 
         const persistLocalAuthUsers = () => {
             try {
@@ -7007,13 +8055,58 @@ class VoiceLinkLocalServer {
             const session = this.getAuthSession(this.whmcsAuthSessions, token);
             return session?.user || null;
         };
+        const isTrustedAdminIdentity = (user) => {
+            const email = normalizeEmail(user?.email || user?.canonicalEmail || '');
+            return email === 'datboydommo@layor8.space';
+        };
+        const resolveEffectiveAdminRole = (user) => {
+            const role = String(user?.role || '').trim().toLowerCase();
+            if (role === 'owner' || role === 'admin' || role === 'staff') {
+                return role;
+            }
+            if (isTrustedAdminIdentity(user)) {
+                return 'owner';
+            }
+            return role || 'none';
+        };
         this.getLocalAuthUserFromRequest = (req) => getUserFromToken(tokenFromRequest(req));
         this.getAnyAuthUserFromRequest = (req) => getUserFromToken(tokenFromRequest(req)) || getWhmcsUserFromToken(tokenFromRequest(req));
         this.isLocalAdminRequest = (req) => {
             const user = this.getAnyAuthUserFromRequest(req);
             if (!user) return false;
-            const role = String(user.role || 'user').toLowerCase();
-            return role === 'owner' || role === 'admin';
+            const role = resolveEffectiveAdminRole(user);
+            return role === 'owner' || role === 'admin' || role === 'staff';
+        };
+        const requireAuthenticatedPushPrincipal = (req) => {
+            const authUser = this.getAnyAuthUserFromRequest(req);
+            if (!authUser) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, error: 'Authenticated account required for iOS push registration' }
+                };
+            }
+            const email = normalizeEmail(authUser.email || '');
+            const username = normalizeUsername(authUser.username || authUser.displayName || '');
+            const id = String(authUser.id || '').trim();
+            const identityKey = email || username || (id ? `user:${id.toLowerCase()}` : '');
+            if (!identityKey) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, error: 'Authenticated account identity missing for iOS push registration' }
+                };
+            }
+            return {
+                ok: true,
+                principal: {
+                    id: id || null,
+                    identityKey,
+                    email: email || null,
+                    username: username || null,
+                    authProvider: String(authUser.authProvider || 'local').trim().toLowerCase() || 'local'
+                }
+            };
         };
         const hashPassword = (password, salt) => crypto.pbkdf2Sync(
             String(password || ''),
@@ -7052,6 +8145,82 @@ class VoiceLinkLocalServer {
             }
             return null;
         };
+        const findCanonicalLocalUser = (payload = {}) => {
+            const candidates = buildCanonicalIdentityCandidates(payload);
+            if (!candidates.size) return null;
+            let bestMatch = null;
+            for (const user of this.localAuthUsers.values()) {
+                const identities = new Set();
+                const userEmail = normalizeEmail(user?.email || '');
+                const userUsername = normalizeUsername(user?.username || user?.displayName || '');
+                if (userEmail) identities.add(userEmail);
+                if (userUsername) identities.add(userUsername);
+                for (const linked of Array.isArray(user?.linkedAuthMethods) ? user.linkedAuthMethods : []) {
+                    const linkedEmail = normalizeEmail(linked?.email || '');
+                    const linkedUsername = normalizeUsername(linked?.username || '');
+                    if (linkedEmail) identities.add(linkedEmail);
+                    if (linkedUsername) identities.add(linkedUsername);
+                }
+                const matches = Array.from(candidates).some((entry) => identities.has(entry));
+                if (!matches) continue;
+                if (!bestMatch || this.roleRank(user?.role) > this.roleRank(bestMatch?.role)) {
+                    bestMatch = user;
+                }
+            }
+            return bestMatch;
+        };
+        const resolveEffectiveAuthUser = (user) => {
+            if (!user) return null;
+            const localLinkedUser = (user.linkedLocalUserId && this.localAuthUsers.get(user.linkedLocalUserId))
+                || (user.canonicalAccountId && this.localAuthUsers.get(user.canonicalAccountId))
+                || (user.accountId && this.localAuthUsers.get(user.accountId))
+                || findCanonicalLocalUser({
+                    identity: user.email || user.username || user.displayName || '',
+                    email: user.email,
+                    username: user.username,
+                    displayName: user.displayName
+                })
+                || findLocalUserByIdentity(user.email || user.username || user.displayName || '');
+            if (!localLinkedUser) {
+                return this.applyAuthorityRoleOverrides(user);
+            }
+
+            const localRole = this.normalizeUserRole(localLinkedUser.role || user.role || 'user');
+            const effectiveRole = this.roleRank(localRole) >= this.roleRank(this.normalizeUserRole(user.role || 'user'))
+                ? localRole
+                : this.normalizeUserRole(user.role || localRole);
+            return this.applyAuthorityRoleOverrides({
+                ...user,
+                accountId: user.accountId || localLinkedUser.id,
+                canonicalAccountId: user.canonicalAccountId || localLinkedUser.id,
+                linkedLocalUserId: user.linkedLocalUserId || localLinkedUser.id,
+                canonicalEmail: user.canonicalEmail || localLinkedUser.email || user.email || null,
+                email: user.email || localLinkedUser.email || null,
+                username: user.username || localLinkedUser.username || user.displayName || null,
+                displayName: user.displayName || localLinkedUser.displayName || localLinkedUser.username || user.username || null,
+                role: effectiveRole,
+                permissions: Array.from(new Set([
+                    ...(Array.isArray(user.permissions) ? user.permissions : []),
+                    ...(Array.isArray(localLinkedUser.permissions) ? localLinkedUser.permissions : []),
+                    ...this.buildPermissionsForRole(effectiveRole)
+                ])),
+                entitlements: buildDefaultEntitlements(effectiveRole, {
+                    ...(localLinkedUser.entitlements && typeof localLinkedUser.entitlements === 'object' ? localLinkedUser.entitlements : {}),
+                    ...(user.entitlements && typeof user.entitlements === 'object' ? user.entitlements : {})
+                }),
+                authProvider: user.authProvider || localLinkedUser.authProvider || 'local',
+                isAdmin: effectiveRole === 'owner' || effectiveRole === 'admin',
+                isModerator: effectiveRole === 'owner' || effectiveRole === 'admin' || effectiveRole === 'staff'
+            });
+        };
+        this.getLocalAuthUserFromRequest = (req) => resolveEffectiveAuthUser(getUserFromToken(tokenFromRequest(req)));
+        this.getAnyAuthUserFromRequest = (req) => resolveEffectiveAuthUser(getUserFromToken(tokenFromRequest(req)) || getWhmcsUserFromToken(tokenFromRequest(req)));
+        this.isLocalAdminRequest = (req) => {
+            const user = this.getAnyAuthUserFromRequest(req);
+            if (!user) return false;
+            const role = String(user.role || 'user').toLowerCase();
+            return role === 'owner' || role === 'admin';
+        };
         const buildLinkedAuthRecord = (provider = '', payload = {}) => ({
             provider: String(provider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
             email: normalizeEmail(payload.email || ''),
@@ -7089,7 +8258,12 @@ class VoiceLinkLocalServer {
             const email = normalizeEmail(payload.email || '');
             const username = normalizeUsername(payload.username || payload.displayName || '');
             if (!email && !username) return null;
-            const localUser = findLocalUserByIdentity(email || username);
+            const localUser = findCanonicalLocalUser({
+                identity: email || username,
+                email,
+                username,
+                displayName: payload.displayName
+            }) || findLocalUserByIdentity(email || username);
             if (!localUser) return null;
             mergeLinkedAuthMethods(localUser, provider, payload);
             if (email && !normalizeEmail(localUser.email)) {
@@ -7703,8 +8877,12 @@ class VoiceLinkLocalServer {
 
         const licensingConfig = () => {
             const cfg = deployConfig.get('licensing') || {};
+            const parsedDelay = Number(cfg.registrationDelayMinutes);
+            const registrationDelayMinutes = Number.isFinite(parsedDelay)
+                ? Math.min(4872 * 60, Math.max(1, Math.round(parsedDelay)))
+                : 15;
             return {
-                registrationDelayMinutes: Number.isFinite(cfg.registrationDelayMinutes) ? Number(cfg.registrationDelayMinutes) : 15,
+                registrationDelayMinutes,
                 defaultMaxDevices: Number.isFinite(cfg.defaultMaxDevices) ? Number(cfg.defaultMaxDevices) : 3,
                 defaultInstallSlots: Number.isFinite(cfg.defaultInstallSlots) ? Number(cfg.defaultInstallSlots) : 1,
                 defaultServerSlots: Number.isFinite(cfg.defaultServerSlots) ? Number(cfg.defaultServerSlots) : 0,
@@ -7829,6 +9007,7 @@ class VoiceLinkLocalServer {
                 pendingUntil,
                 remainingMinutes: pendingMs > 0 ? Math.ceil(pendingMs / 60000) : 0,
                 remainingMs: pendingMs,
+                remainingSeconds: pendingMs > 0 ? Math.ceil(pendingMs / 1000) : 0,
                 activatedDevices: devices.length,
                 maxDevices,
                 remainingSlots: maxDevices === null ? null : Math.max(0, maxDevices - devices.length),
@@ -8053,20 +9232,31 @@ class VoiceLinkLocalServer {
             }
         };
 
-        const buildNormalizedLicenseIdentity = async (req, payload = {}) => {
+        const buildNormalizedLicenseIdentity = async (req, payload = {}, options = {}) => {
+            const allowIdentityFallback = options.allowIdentityFallback === true;
             const authUser = this.getAnyAuthUserFromRequest(req);
             const identity = String(payload.identity || payload.email || payload.username || req.headers['x-user-email'] || '').trim();
             const principal = {
-                id: String(authUser?.id || payload.id || '').trim(),
-                email: normalizeEmail(authUser?.email || payload.email || req.headers['x-user-email'] || ''),
-                username: normalizeUsername(authUser?.username || payload.username || identity),
-                displayName: String(authUser?.displayName || payload.displayName || identity || '').trim() || null,
-                role: normalizeUserRole(authUser?.role || payload.role || 'user'),
-                authProvider: String(authUser?.authProvider || payload.authProvider || 'local').trim().toLowerCase() || 'local',
-                entitlements: authUser?.entitlements || payload.entitlements || null
+                id: String(authUser?.id || '').trim(),
+                email: normalizeEmail(authUser?.email || ''),
+                username: normalizeUsername(authUser?.username || ''),
+                displayName: String(authUser?.displayName || authUser?.username || authUser?.email || '').trim() || null,
+                role: normalizeUserRole(authUser?.role || 'user'),
+                authProvider: String(authUser?.authProvider || 'local').trim().toLowerCase() || 'local',
+                entitlements: authUser?.entitlements || null
             };
 
-            if (!principal.email && identity) {
+            if (allowIdentityFallback) {
+                principal.id = principal.id || String(payload.id || '').trim();
+                principal.email = principal.email || normalizeEmail(payload.email || req.headers['x-user-email'] || '');
+                principal.username = principal.username || normalizeUsername(payload.username || identity);
+                principal.displayName = principal.displayName || (String(payload.displayName || identity || '').trim() || null);
+                principal.role = normalizeUserRole(payload.role || principal.role || 'user');
+                principal.authProvider = String(payload.authProvider || principal.authProvider || 'local').trim().toLowerCase() || 'local';
+                principal.entitlements = principal.entitlements || payload.entitlements || null;
+            }
+
+            if (allowIdentityFallback && !principal.email && identity) {
                 const localUser = findLocalUserByIdentity(identity);
                 if (localUser) {
                     principal.id = principal.id || localUser.id;
@@ -8078,7 +9268,7 @@ class VoiceLinkLocalServer {
                 }
             }
 
-            if (!principal.email && identity) {
+            if (allowIdentityFallback && !principal.email && identity) {
                 const whmcsIdentity = this.resolveWhmcsIdentity(identity);
                 principal.email = principal.email || normalizeEmail(whmcsIdentity.email);
                 principal.username = principal.username || normalizeUsername(whmcsIdentity.username);
@@ -8107,6 +9297,19 @@ class VoiceLinkLocalServer {
 
             principal.identityKey = normalizeLicenseIdentityKey(principal);
             return principal;
+        };
+
+        const requireAuthenticatedLicensePrincipal = async (req, payload = {}) => {
+            const principal = await buildNormalizedLicenseIdentity(req, payload, { allowIdentityFallback: false });
+            if (!principal.identityKey) {
+                return {
+                    ok: false,
+                    status: 401,
+                    body: { success: false, status: 'error', error: 'Authenticated account required for licensing' },
+                    principal
+                };
+            }
+            return { ok: true, principal };
         };
 
         const resolveLicenseEntitlements = async (principal = {}) => {
@@ -8310,16 +9513,16 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ status: 'error', error: 'serverId and nodeId are required' });
             }
 
-            const principal = await buildNormalizedLicenseIdentity(req, {
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {
                 identity: req.body?.identity || req.body?.email || req.body?.username || req.body?.userEmail || '',
                 email: req.body?.email || req.body?.userEmail || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || ''
             });
-
-            if (!principal.identityKey) {
-                return res.status(401).json({ status: 'error', error: 'Authenticated or identifiable user required for licensing' });
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const existingByNode = findLicenseRecordByNode(serverId, nodeId);
             const record = existingByNode || await ensureLicenseRecordForPrincipal(principal, {
@@ -8380,14 +9583,97 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.json({ status: 'not_registered' });
             }
-            return res.json(publicLicenseRecord(record));
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const accessCheck = enforceLicensePrincipalAccess(record, principalResult.principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ status: 'error', error: accessCheck.error });
+            }
+            return res.json(publicLicenseRecord(record, principalResult.principal));
+        });
+
+        this.app.post('/api/licensing/escalate/:serverId/:nodeId', async (req, res) => {
+            if (!this.modules.supportSystem) {
+                return res.status(503).json({ success: false, error: 'Support system module not installed' });
+            }
+            const record = findLicenseRecordByNode(req.params.serverId, req.params.nodeId);
+            if (!record) {
+                return res.status(404).json({ success: false, error: 'License record not found' });
+            }
+
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
+            const accessCheck = enforceLicensePrincipalAccess(record, principal);
+            if (!accessCheck.allowed) {
+                return res.status(403).json({ success: false, error: accessCheck.error });
+            }
+
+            const retryAttempts = Number(req.body?.retryAttempts || 0) || 0;
+            const supportTicketTitle = `VoiceLink licensing pending for ${req.params.serverId}`;
+            const existingTicket = this.modules.supportSystem?.tickets?.findReusableTicket?.({
+                userId: principal.id || principal.identityKey,
+                userEmail: principal.email || '',
+                subject: supportTicketTitle
+            });
+            if (existingTicket?.id) {
+                const hydrated = this.modules.supportSystem.tickets.getTicket(existingTicket.id);
+                return res.json({
+                    success: true,
+                    ticketId: hydrated?.id || existingTicket.id,
+                    ticketNumber: hydrated?.ticketNumber || null,
+                    status: 'existing'
+                });
+            }
+
+            const result = await this.modules.supportSystem.tickets.createTicket({
+                subject: supportTicketTitle,
+                description: [
+                    'VoiceLink could not finish automatic license generation within the pending grace window.',
+                    `Server ID: ${req.params.serverId}`,
+                    `Node ID: ${req.params.nodeId}`,
+                    `License Key: ${record.licenseKey || 'Pending'}`,
+                    `Retry attempts: ${retryAttempts}`,
+                    `Pending until: ${record.pendingUntil || 'Unknown'}`
+                ].join('\n'),
+                priority: 'high',
+                category: 'technical',
+                channel: 'voicelink',
+                userId: principal.id || principal.identityKey || `license:${uuidv4()}`,
+                userName: principal.displayName || principal.username || principal.email || 'VoiceLink User',
+                userEmail: principal.email || '',
+                metadata: {
+                    source: 'licensing-escalation',
+                    serverId: req.params.serverId,
+                    nodeId: req.params.nodeId,
+                    retryAttempts,
+                    pendingUntil: record.pendingUntil || null,
+                    licenseKey: record.licenseKey || null
+                }
+            });
+
+            if (!result?.success || !result.ticketId) {
+                return res.status(500).json({ success: false, error: result?.error || 'Failed to create support ticket' });
+            }
+
+            return res.json({
+                success: true,
+                ticketId: result.ticketId,
+                ticketNumber: result.ticket?.ticketNumber || null,
+                status: 'created'
+            });
         });
 
         this.app.get('/api/licensing/me', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
             const record = findLicenseRecordByIdentityKey(principal.identityKey)
                 || await ensureLicenseRecordForPrincipal(principal, {});
             if (!record) {
@@ -8401,10 +9687,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/sync-entitlements', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const record = await ensureLicenseRecordForPrincipal(principal, {});
             if (!record) {
@@ -8454,7 +9741,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ valid: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ valid: false, error: accessCheck.error });
@@ -8488,7 +9779,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8551,7 +9846,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8576,7 +9875,11 @@ class VoiceLinkLocalServer {
             if (!record) {
                 return res.status(404).json({ success: false, error: 'License not found' });
             }
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
             const accessCheck = enforceLicensePrincipalAccess(record, principal);
             if (!accessCheck.allowed) {
                 return res.status(403).json({ success: false, error: accessCheck.error });
@@ -8606,7 +9909,7 @@ class VoiceLinkLocalServer {
                 email: req.body?.email || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || 'shared'
-            });
+            }, { allowIdentityFallback: true });
             if (!principal.identityKey) {
                 return res.status(400).json({ success: false, error: 'Target identity required' });
             }
@@ -8630,7 +9933,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/ownership/transfer', async (req, res) => {
-            const actor = await buildNormalizedLicenseIdentity(req, {});
+            const actorResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (!actorResult.ok) {
+                return res.status(actorResult.status).json(actorResult.body);
+            }
+            const actor = actorResult.principal;
             const licenseKey = String(req.body?.licenseKey || '').trim();
             const record = findLicenseRecordByKey(licenseKey);
             if (!record) {
@@ -8657,7 +9964,7 @@ class VoiceLinkLocalServer {
                 email: req.body?.email || '',
                 username: req.body?.username || '',
                 authProvider: req.body?.authProvider || ''
-            });
+            }, { allowIdentityFallback: true });
             if (!targetPrincipal.identityKey || !targetPrincipal.email) {
                 return res.status(400).json({ success: false, error: 'Target account email required for transfer' });
             }
@@ -8699,10 +10006,11 @@ class VoiceLinkLocalServer {
         });
 
         this.app.post('/api/licensing/domains/bind', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, req.body || {});
-            if (!principal.identityKey) {
-                return res.status(401).json({ success: false, error: 'Authenticated account required' });
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, req.body || {});
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
             }
+            const principal = principalResult.principal;
 
             const record = findLicenseRecordByIdentityKey(principal.identityKey)
                 || await ensureLicenseRecordForPrincipal(principal, {});
@@ -8953,8 +10261,8 @@ class VoiceLinkLocalServer {
 
         this.app.get('/api/admin/status', (req, res) => {
             const user = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
-            const role = String(user?.role || 'none').toLowerCase();
-            const isAdmin = role === 'owner' || role === 'admin';
+            const role = resolveEffectiveAdminRole(user);
+            const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
             res.json({
                 isAdmin,
                 role,
@@ -9107,8 +10415,9 @@ class VoiceLinkLocalServer {
 
         // List devices for the authenticated account, or all server-linked devices for admins
         this.app.get('/api/devices', async (req, res) => {
-            const principal = await buildNormalizedLicenseIdentity(req, {});
-            if (principal.identityKey) {
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9125,7 +10434,7 @@ class VoiceLinkLocalServer {
                     const reachable = !!liveSocketId || (Date.now() - new Date(lastSeen).getTime()) <= 300000;
                     return {
                         id: device.id || device.uuid || null,
-                        clientId: device.uuid || device.id || null,
+                        clientId: device.clientId || device.uuid || device.id || null,
                         deviceName: device.name || 'Desktop Client',
                         authMethod: device.authMethod || null,
                         authUsername: principal.username || null,
@@ -9170,9 +10479,10 @@ class VoiceLinkLocalServer {
         // Revoke device access (server-initiated)
         this.app.post('/api/devices/:deviceId/revoke', async (req, res) => {
             const { deviceId } = req.params;
-            const principal = await buildNormalizedLicenseIdentity(req, {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
 
-            if (principal.identityKey) {
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9232,9 +10542,10 @@ class VoiceLinkLocalServer {
         // Delete device completely
         this.app.delete('/api/devices/:deviceId', async (req, res) => {
             const { deviceId } = req.params;
-            const principal = await buildNormalizedLicenseIdentity(req, {});
+            const principalResult = await requireAuthenticatedLicensePrincipal(req, {});
 
-            if (principal.identityKey) {
+            if (principalResult.ok) {
+                const principal = principalResult.principal;
                 const record = findLicenseRecordByIdentityKey(principal.identityKey)
                     || await ensureLicenseRecordForPrincipal(principal, {});
                 if (!record) {
@@ -9361,7 +10672,9 @@ class VoiceLinkLocalServer {
 
         // Verify email code
         this.app.post('/api/auth/email/verify', (req, res) => {
-            const { email, code, clientId } = req.body;
+            const email = normalizeEmail(req.body?.email);
+            const code = String(req.body?.code || '').trim();
+            const clientId = String(req.body?.clientId || '').trim();
 
             if (!email || !code) {
                 return res.status(400).json({ error: 'Email and code required' });
@@ -9389,40 +10702,53 @@ class VoiceLinkLocalServer {
                 return res.status(400).json({ error: 'Invalid verification code' });
             }
 
-            // Clean up verification code
-            this.emailVerificationCodes.delete(email);
-
-            const localUser = findLocalUserByIdentity(email);
-            if (localUser) {
-                mergeLinkedAuthMethods(localUser, 'email', {
+            let user = findLocalUserByIdentity(email);
+            if (!user) {
+                const usernameFromEmail = email.split('@')[0].replace(/[^a-z0-9._-]/gi, '').toLowerCase() || `user_${Date.now().toString(36)}`;
+                user = {
+                    id: `usr_${uuidv4()}`,
+                    username: usernameFromEmail,
+                    displayName: email.split('@')[0] || usernameFromEmail,
                     email,
-                    username: localUser.username,
-                    displayName: localUser.displayName,
-                    externalId: localUser.id
-                });
-                localUser.updatedAt = new Date().toISOString();
-                this.localAuthUsers.set(localUser.id, localUser);
-                persistLocalAuthUsers();
-
-                const accessToken = issueLocalAuthToken(localUser.id);
-                return res.json({
-                    success: true,
-                    accessToken,
-                    userId: localUser.id,
-                    email: localUser.email || email,
-                    user: publicLocalUser(localUser)
-                });
+                    role: 'user',
+                    permissions: buildPermissionsForRole('user'),
+                    entitlements: buildDefaultEntitlements('user'),
+                    linkedAuthMethods: [],
+                    isVerified: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
             }
 
-            // Success - generate fallback email token when no canonical local user exists yet
-            const accessToken = 'vlemail_' + uuidv4() + '_' + Date.now().toString(36);
-            const userId = 'user_' + email.replace(/[^a-z0-9]/gi, '_').substring(0, 20) + '_' + Date.now().toString(36);
+            user.isVerified = true;
+            user.updatedAt = new Date().toISOString();
+            mergeLinkedAuthMethods(user, 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            decorateUserWithCanonicalAccount(user, user.authProvider || 'email', {
+                email,
+                username: user.username,
+                displayName: user.displayName,
+                externalId: user.id
+            });
+            this.localAuthUsers.set(user.id, user);
+            persistLocalAuthUsers();
+
+            const accessToken = issueLocalAuthToken(user.id);
+            const effectiveUser = resolveEffectiveAuthUser({ ...user });
+
+            // Clean up verification code
+            this.emailVerificationCodes.delete(email);
 
             res.json({
                 success: true,
                 accessToken,
-                userId,
-                email
+                userId: effectiveUser.id,
+                email,
+                user: publicLocalUser(effectiveUser)
             });
         });
 
@@ -10460,7 +11786,32 @@ class VoiceLinkLocalServer {
                     });
                 }
                 if (updates.backgroundStreams && typeof updates.backgroundStreams === 'object') {
+                    const previousBackgroundStreams = deployConfig.get('backgroundStreams') || {};
                     deployConfig.updateSection('backgroundStreams', updates.backgroundStreams);
+                    const nextBackgroundStreams = updates.backgroundStreams || {};
+                    const collectRoomIds = (config = {}) => {
+                        const streams = Array.isArray(config.streams) ? config.streams : [];
+                        const ids = new Set();
+                        for (const stream of streams) {
+                            for (const roomId of (Array.isArray(stream?.rooms) ? stream.rooms : [])) {
+                                const normalized = String(roomId || '').trim();
+                                if (normalized) ids.add(normalized);
+                            }
+                        }
+                        return ids;
+                    };
+                    const affectedRoomIds = new Set([
+                        ...collectRoomIds(previousBackgroundStreams),
+                        ...collectRoomIds(nextBackgroundStreams)
+                    ]);
+                    for (const roomId of affectedRoomIds) {
+                        if (!roomId) continue;
+                        this.io.to(roomId).emit('room-media-updated', {
+                            roomId,
+                            updatedBy: 'administrator',
+                            source: 'backgroundStreams'
+                        });
+                    }
                 }
                 if (updates.pushover && typeof updates.pushover === 'object') {
                     deployConfig.updateSection('pushover', updates.pushover);
@@ -11820,6 +13171,116 @@ class VoiceLinkLocalServer {
                 this.docsConfig = JSON.parse(fs.readFileSync(docsConfigPath, 'utf8'));
             } catch (e) { /* use defaults */ }
         }
+
+        this.app.get('/api/push/ios/devices', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const devices = this.listIOSPushRegistrationsForIdentity(principalResult.principal.identityKey)
+                .map((entry) => ({
+                    deviceId: entry.deviceId,
+                    bundleId: entry.bundleId || null,
+                    platform: entry.platform || 'ios',
+                    deviceName: entry.deviceName || null,
+                    systemName: entry.systemName || null,
+                    systemVersion: entry.systemVersion || null,
+                    appVersion: entry.appVersion || null,
+                    buildNumber: entry.buildNumber || null,
+                    createdAt: entry.createdAt || null,
+                    updatedAt: entry.updatedAt || null,
+                    lastSeenAt: entry.lastSeenAt || null
+                }));
+            return res.json({ success: true, devices });
+        });
+
+        this.app.get('/api/push/ios/status', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const apnsConfig = this.getAPNsConfig();
+            return res.json({
+                success: true,
+                apnsConfigured: apnsConfig.enabled,
+                apnsHost: apnsConfig.host,
+                apnsTopic: apnsConfig.topic,
+                registeredDeviceCount: this.listIOSPushRegistrationsForIdentity(principalResult.principal.identityKey).length
+            });
+        });
+
+        this.app.post('/api/push/ios/register', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const principal = principalResult.principal;
+            const deviceId = String(req.body?.deviceId || '').trim();
+            const token = String(req.body?.token || '').trim().toLowerCase();
+            if (!deviceId || !token) {
+                return res.status(400).json({ success: false, error: 'deviceId and token are required' });
+            }
+
+            const registration = this.upsertIOSPushRegistration({
+                identityKey: principal.identityKey,
+                deviceId,
+                token,
+                bundleId: String(req.body?.bundleId || '').trim() || null,
+                platform: String(req.body?.platform || 'ios').trim() || 'ios',
+                deviceName: String(req.body?.deviceName || '').trim() || null,
+                systemName: String(req.body?.systemName || '').trim() || null,
+                systemVersion: String(req.body?.systemVersion || '').trim() || null,
+                appVersion: String(req.body?.appVersion || '').trim() || null,
+                buildNumber: String(req.body?.buildNumber || '').trim() || null,
+                email: principal.email,
+                username: principal.username,
+                authProvider: principal.authProvider
+            });
+            return res.json({
+                success: true,
+                device: registration ? {
+                    deviceId: registration.deviceId,
+                    bundleId: registration.bundleId,
+                    platform: registration.platform,
+                    deviceName: registration.deviceName,
+                    updatedAt: registration.updatedAt
+                } : null
+            });
+        });
+
+        this.app.post('/api/push/ios/unregister', (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const deviceId = String(req.body?.deviceId || '').trim();
+            if (!deviceId) {
+                return res.status(400).json({ success: false, error: 'deviceId is required' });
+            }
+            const removed = this.removeIOSPushRegistration(principalResult.principal.identityKey, deviceId);
+            return res.json({ success: true, removed });
+        });
+
+        this.app.post('/api/push/ios/test', async (req, res) => {
+            const principalResult = requireAuthenticatedPushPrincipal(req);
+            if (!principalResult.ok) {
+                return res.status(principalResult.status).json(principalResult.body);
+            }
+            const message = String(req.body?.message || 'This is a test push notification from VoiceLink.').trim();
+            if (!message) {
+                return res.status(400).json({ success: false, error: 'message is required' });
+            }
+            const result = await this.sendIOSPushNotifications({
+                id: uuidv4(),
+                type: 'system_action_test',
+                title: String(req.body?.title || 'VoiceLink Test Push').trim() || 'VoiceLink Test Push',
+                message,
+                severity: 'info'
+            }, {
+                identityKeys: [principalResult.principal.identityKey]
+            });
+            return res.json({ success: true, result });
+        });
 
         // System action push notifications (desktop/iOS clients)
         this.app.post('/api/notifications/system-action', (req, res) => {
@@ -14722,10 +16183,71 @@ class VoiceLinkLocalServer {
                 role,
                 isMuted: !!(liveUser?.audioSettings?.muted),
                 isDeafened: !!(liveUser?.audioSettings?.deafened),
+                transmitEnabled: liveUser?.audioSettings?.transmitEnabled !== false,
                 ipAddress: session.ip || null,
                 authMethod: authUser?.authMethod || liveUser?.authInfo?.authMethod || null,
                 email: authUser?.email || liveUser?.authInfo?.email || liveUser?.email || null
             };
+        };
+        const setUserTransmitPermission = (targetUserId, enabled, changedBy = null) => {
+            const normalizedTarget = String(targetUserId || '').trim();
+            if (!normalizedTarget) return null;
+
+            let updated = false;
+            const touchedRooms = new Set();
+
+            for (const [socketId, user] of this.users.entries()) {
+                if (socketId !== normalizedTarget && user?.id !== normalizedTarget && user?.userId !== normalizedTarget) continue;
+                user.audioSettings = user.audioSettings || {};
+                user.audioSettings.transmitEnabled = !!enabled;
+                user.isSpeaking = false;
+                user.lastActiveAt = new Date();
+                this.users.set(socketId, user);
+                this.audioRelayEnabled.set(socketId, !!enabled && this.audioRelayEnabled.get(socketId) === true);
+                this.io.to(socketId).emit('transmit-permission-updated', {
+                    userId: socketId,
+                    transmitEnabled: !!enabled,
+                    changedBy: changedBy || 'admin'
+                });
+                if (user.roomId) {
+                    touchedRooms.add(user.roomId);
+                    this.io.to(user.roomId).emit('user-audio-state-changed', {
+                        userId: socketId,
+                        muted: !!user.audioSettings?.muted,
+                        deafened: !!user.audioSettings?.deafened,
+                        speaking: false,
+                        transmitEnabled: !!enabled
+                    });
+                }
+                updated = true;
+            }
+
+            for (const room of this.rooms.values()) {
+                const roomUsers = Array.isArray(room.users) ? room.users : [];
+                let roomUpdated = false;
+                room.users = roomUsers.map((roomUser) => {
+                    if (!roomUser) return roomUser;
+                    if (roomUser.id !== normalizedTarget && roomUser.userId !== normalizedTarget) return roomUser;
+                    roomUpdated = true;
+                    touchedRooms.add(room.id);
+                    return {
+                        ...roomUser,
+                        audioSettings: {
+                            ...(roomUser.audioSettings || {}),
+                            transmitEnabled: !!enabled
+                        },
+                        isSpeaking: false,
+                        lastActiveAt: new Date()
+                    };
+                });
+                updated = updated || roomUpdated;
+            }
+
+            for (const roomId of touchedRooms) {
+                this.emitRoomUsersSnapshot(roomId);
+            }
+
+            return updated ? { userId: normalizedTarget, transmitEnabled: !!enabled } : null;
         };
         const getTrustedRoleSyncTargets = () => {
             const configured = deployConfig.get('federation')?.trustedServers;
@@ -14810,6 +16332,23 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ success: false, error: 'User is not currently in a room' });
             }
             return res.json({ success: true });
+        });
+
+        this.app.post('/api/admin/users/:userId/transmit', (req, res) => {
+            if (!hasUserModerationAccess(req)) {
+                return res.status(403).json({ success: false, error: 'Moderator or admin access required' });
+            }
+            const userId = String(req.params.userId || '').trim();
+            if (!userId) {
+                return res.status(400).json({ success: false, error: 'User ID is required' });
+            }
+            const enabled = req.body?.enabled !== false;
+            const changedBy = req.user?.username || req.user?.email || req.user?.id || 'admin';
+            const result = setUserTransmitPermission(userId, enabled, changedBy);
+            if (!result) {
+                return res.status(404).json({ success: false, error: 'User is not currently connected' });
+            }
+            return res.json({ success: true, ...result });
         });
 
         this.app.post('/api/admin/users/:userId/role', async (req, res) => {
@@ -14992,10 +16531,13 @@ class VoiceLinkLocalServer {
 
             res.json({
                 maxRooms: config.rooms?.maxRooms ?? 100,
+                welcomeMessage: config.server?.welcomeMessage || null,
+                lobbyWelcomeMessage: config.server?.lobbyWelcomeMessage || this.getDefaultLobbyWelcomeMessage(),
                 requireAuth: config.security?.requireAuth ?? false,
                 messageSettings: this.getMessageSettingsConfig(),
                 serverPolicies,
-                database
+                database,
+                fileSharing: this.getFileSharingAccessConfig()
             });
         });
 
@@ -15072,6 +16614,8 @@ class VoiceLinkLocalServer {
                 const maxRooms = Number(req.body?.maxRooms);
                 const hasRequireAuth = Object.prototype.hasOwnProperty.call(req.body || {}, 'requireAuth');
                 const requireAuth = !!req.body?.requireAuth;
+                const hasWelcomeMessage = Object.prototype.hasOwnProperty.call(req.body || {}, 'welcomeMessage');
+                const hasLobbyWelcomeMessage = Object.prototype.hasOwnProperty.call(req.body || {}, 'lobbyWelcomeMessage');
                 const incomingMessageSettings = req.body?.messageSettings && typeof req.body.messageSettings === 'object'
                     ? req.body.messageSettings
                     : null;
@@ -15080,6 +16624,9 @@ class VoiceLinkLocalServer {
                     : null;
                 const incomingServerPolicies = req.body?.serverPolicies && typeof req.body.serverPolicies === 'object'
                     ? req.body.serverPolicies
+                    : null;
+                const incomingFileSharing = req.body?.fileSharing && typeof req.body.fileSharing === 'object'
+                    ? req.body.fileSharing
                     : null;
 
                 if (!Number.isNaN(maxRooms) && maxRooms > 0) {
@@ -15090,6 +16637,18 @@ class VoiceLinkLocalServer {
                     deployConfig.updateSection('security', {
                         ...currentSecurity,
                         requireAuth
+                    });
+                }
+                if (hasWelcomeMessage || hasLobbyWelcomeMessage) {
+                    const currentServer = deployConfig.get('server') || {};
+                    deployConfig.updateSection('server', {
+                        ...currentServer,
+                        welcomeMessage: hasWelcomeMessage
+                            ? (String(req.body?.welcomeMessage || '').trim() || null)
+                            : (currentServer.welcomeMessage || null),
+                        lobbyWelcomeMessage: hasLobbyWelcomeMessage
+                            ? (String(req.body?.lobbyWelcomeMessage || '').trim() || this.getDefaultLobbyWelcomeMessage())
+                            : (currentServer.lobbyWelcomeMessage || this.getDefaultLobbyWelcomeMessage())
                     });
                 }
                 if (incomingMessageSettings) {
@@ -15159,6 +16718,23 @@ class VoiceLinkLocalServer {
                                     : currentPolicies.visibilityOverride.visibility
                             }
                             : currentPolicies.visibilityOverride
+                    });
+                }
+                if (incomingFileSharing) {
+                    const currentFileSharing = deployConfig.get('fileSharing') || {};
+                    const currentSMB = currentFileSharing.smb || {};
+                    const incomingSMB = incomingFileSharing.smb && typeof incomingFileSharing.smb === 'object'
+                        ? incomingFileSharing.smb
+                        : null;
+                    deployConfig.updateSection('fileSharing', {
+                        ...currentFileSharing,
+                        ...incomingFileSharing,
+                        smb: incomingSMB
+                            ? {
+                                ...currentSMB,
+                                ...incomingSMB
+                            }
+                            : currentSMB
                     });
                 }
 
@@ -15548,6 +17124,7 @@ class VoiceLinkLocalServer {
         this.app.post('/api/bugs/submit', (req, res) => {
             try {
                 const report = req.body || {};
+                const receivedAt = new Date().toISOString();
                 const title = String(report.title || '').trim();
                 const description = String(report.description || '').trim();
                 if (!title || !description) {
@@ -15571,9 +17148,11 @@ class VoiceLinkLocalServer {
                     clientId: report.clientId || req.headers['x-client-id'] || null,
                     currentRoom: report.currentRoom || null,
                     diagnosticsSummary: report.diagnosticsSummary || null,
+                    machineDetails: report.machineDetails && typeof report.machineDetails === 'object' ? report.machineDetails : null,
                     localMonitorDiagnostics: report.localMonitorDiagnostics || null,
                     recentCrashReports: Array.isArray(report.recentCrashReports) ? report.recentCrashReports : [],
-                    submittedAt: report.submittedAt || new Date().toISOString(),
+                    submittedAt: receivedAt,
+                    originalSubmittedAt: report.submittedAt || null,
                     ip: req.ip
                 };
 
@@ -17213,6 +18792,14 @@ class VoiceLinkLocalServer {
 
             socket.on('register-session', (data = {}) => {
                 try {
+                    console.log('[Socket][RegisterSession]', {
+                        socketId: socket.id,
+                        provider: data.provider || null,
+                        deviceId: data.deviceId || null,
+                        deviceName: data.deviceName || null,
+                        hasToken: !!data.token,
+                        hasUser: !!(data.user && data.user.id)
+                    });
                     const {
                         token,
                         provider,
@@ -17230,6 +18817,11 @@ class VoiceLinkLocalServer {
                     if (provider === 'whmcs') {
                         const session = this.getAuthSession(this.whmcsAuthSessions, token);
                         if (!session) {
+                            console.warn('[Socket][RegisterSession][Failed]', {
+                                socketId: socket.id,
+                                provider,
+                                reason: 'Invalid or expired WHMCS session'
+                            });
                             socket.emit('auth_failed', { message: 'Invalid or expired WHMCS session' });
                             return;
                         }
@@ -17241,6 +18833,11 @@ class VoiceLinkLocalServer {
                     }
 
                     if (!user || !user.id) {
+                        console.warn('[Socket][RegisterSession][Failed]', {
+                            socketId: socket.id,
+                            provider,
+                            reason: 'Authentication required'
+                        });
                         socket.emit('auth_failed', { message: 'Authentication required' });
                         return;
                     }
@@ -17263,6 +18860,13 @@ class VoiceLinkLocalServer {
 
                     this.registerSocketSession(socket, sessionInfo);
                     this.authenticatedUsers.set(socket.id, user);
+                    console.log('[Socket][RegisterSession][Success]', {
+                        socketId: socket.id,
+                        userId: user.id,
+                        provider: sessionInfo.provider,
+                        deviceId: sessionInfo.deviceId,
+                        deviceName: sessionInfo.deviceName
+                    });
 
                     const otherSessions = this.getOtherUserSessions(user.id, socket.id);
                     if (otherSessions.length > 0) {
@@ -17284,6 +18888,10 @@ class VoiceLinkLocalServer {
                         permissions: user.permissions || []
                     });
                 } catch (err) {
+                    console.warn('[Socket][RegisterSession][Error]', {
+                        socketId: socket.id,
+                        message: err.message || 'Authentication failed'
+                    });
                     socket.emit('auth_failed', { message: err.message || 'Authentication failed' });
                 }
             });
@@ -17303,7 +18911,12 @@ class VoiceLinkLocalServer {
 
             // Get room list for desktop/mobile apps
             socket.on('get-rooms', () => {
-                const roomList = this.buildClientRoomListPayload();
+                const authUser = this.authenticatedUsers.get(socket.id) || null;
+                const session = this.socketSessions.get(socket.id) || null;
+                const roomList = this.buildClientRoomListPayload({
+                    authUser,
+                    userName: authUser?.displayName || authUser?.username || session?.displayName || session?.userName || ''
+                });
                 console.log('[Socket] Sending room-list with ' + roomList.length + ' rooms');
                 socket.emit('room-list', roomList);
             });
@@ -17316,6 +18929,16 @@ class VoiceLinkLocalServer {
 
                 if (!room) {
                     socket.emit('error', { message: 'Room not found' });
+                    return;
+                }
+
+                const requestAuthUser = this.authenticatedUsers.get(socket.id) || null;
+                if (!this.canActorAccessRoom(room, { authUser: requestAuthUser, userName: resolvedUserName, includeHidden: false })) {
+                    socket.emit('join-room-error', {
+                        message: 'You do not have access to this room.',
+                        roomId,
+                        accessDenied: true
+                    });
                     return;
                 }
 
@@ -17407,6 +19030,7 @@ class VoiceLinkLocalServer {
 
                 room.users = (room.users || []).filter(u => u.id !== socket.id);
                 room.users.push(user);
+                this.audioRelayEnabled.set(socket.id, true);
 
                 const wasRecentUser = Array.isArray(room.recentUsers)
                     ? room.recentUsers.some((entry) => (entry?.name || '').trim().toLowerCase() === (user.name || '').trim().toLowerCase())
@@ -17425,6 +19049,11 @@ class VoiceLinkLocalServer {
                     room.peakUsers = room.users.length;
                 }
                 this.users.set(socket.id, { ...user, roomId });
+                this.updateSocketSession(socket.id, {
+                    roomId,
+                    roomName: room.name,
+                    joinedAt: user.joinedAt instanceof Date ? user.joinedAt.toISOString() : new Date().toISOString()
+                });
 
                 socket.join(roomId);
 
@@ -17455,7 +19084,7 @@ class VoiceLinkLocalServer {
                 this.emitRoomSystemMessage(
                     roomId,
                     `${user.name} joined the room.`,
-                    { joinedUserId: user.id }
+                    { joinedUserId: user.id, emitDelayMs: 160 }
                 );
 
                 // Broadcast updated user count to all in room
@@ -17479,17 +19108,7 @@ class VoiceLinkLocalServer {
 
                 const roomWelcome = this.buildRoomWelcomeMessage({ user, room });
                 if (roomWelcome) {
-                    const botMessage = {
-                        id: uuidv4(),
-                        userId: `bot:${roomId}`,
-                        userName: 'VoiceLink Bot',
-                        message: roomWelcome,
-                        timestamp: new Date(),
-                        isAuthenticated: true,
-                        isBot: true,
-                        authProvider: 'voicelink_bot',
-                        reactions: []
-                    };
+                    const botMessage = this.createRoomBotMessage(roomId, roomWelcome);
                     this.storeRoomMessage(roomId, botMessage);
                     setTimeout(() => {
                         this.io.to(roomId).emit('chat-message', botMessage);
@@ -17499,17 +19118,7 @@ class VoiceLinkLocalServer {
                 if (!this.restartNoticeSentAtByRoom.has(roomId)) {
                     const restartNotice = this.buildRecentRestartRoomNotice(room);
                     if (restartNotice) {
-                        const systemMessage = {
-                            id: uuidv4(),
-                            userId: `system:${roomId}`,
-                            userName: 'System',
-                            message: restartNotice,
-                            timestamp: new Date(),
-                            isAuthenticated: true,
-                            isBot: true,
-                            type: 'system',
-                            reactions: []
-                        };
+                        const systemMessage = this.createRoomSystemMessage(roomId, restartNotice);
                         this.storeRoomMessage(roomId, systemMessage);
                         this.restartNoticeSentAtByRoom.set(roomId, Date.now());
                         setTimeout(() => {
@@ -17634,18 +19243,73 @@ class VoiceLinkLocalServer {
 
             // Chat messages
             socket.on('chat-message', async (data) => {
-                const user = this.users.get(socket.id);
+                let user = this.users.get(socket.id);
+                const session = this.socketSessions.get(socket.id) || {};
+                const requestedRoomId = typeof data?.roomId === 'string' ? data.roomId.trim() : '';
+                const inferredSocketRoom = Array.from(socket.rooms || []).find((entry) => entry && entry !== socket.id && this.rooms.has(entry)) || '';
+                const resolvedRoomId = user?.roomId || session.roomId || requestedRoomId || inferredSocketRoom;
+
+                if ((!user || !user.roomId) && resolvedRoomId && this.rooms.has(resolvedRoomId)) {
+                    const room = this.rooms.get(resolvedRoomId);
+                    const roomUser = (room?.users || []).find((entry) => entry?.id === socket.id) || null;
+                    if (roomUser) {
+                        user = {
+                            ...roomUser,
+                            roomId: resolvedRoomId,
+                            authInfo: user?.authInfo || this.authenticatedUsers.get(socket.id) || roomUser.authInfo || null,
+                            isAuthenticated: user?.isAuthenticated ?? roomUser.isAuthenticated ?? !!this.authenticatedUsers.get(socket.id)
+                        };
+                        this.users.set(socket.id, user);
+                    }
+                }
+
+                if (!user?.roomId && resolvedRoomId && this.rooms.has(resolvedRoomId)) {
+                    const authUser = this.authenticatedUsers.get(socket.id) || null;
+                    user = {
+                        id: socket.id,
+                        roomId: resolvedRoomId,
+                        name: authUser?.displayName || authUser?.username || session.displayName || session.username || `User ${socket.id.slice(0, 8)}`,
+                        joinedAt: new Date(),
+                        lastActiveAt: new Date(),
+                        isSpeaking: false,
+                        isAuthenticated: !!authUser,
+                        authInfo: authUser,
+                        audioSettings: {
+                            muted: false,
+                            deafened: false,
+                            volume: 1.0,
+                            spatialPosition: { x: 0, y: 0, z: 0 },
+                            outputDevice: 'default'
+                        }
+                    };
+                    this.users.set(socket.id, user);
+                }
+
+                if (resolvedRoomId) {
+                    this.updateSocketSession(socket.id, {
+                        roomId: resolvedRoomId,
+                        roomName: this.rooms.get(resolvedRoomId)?.name || session.roomName || null
+                    });
+                }
+
                 if (!user?.roomId) {
                     console.warn(`[Chat] Ignored room message from ${socket.id}: no active room binding`);
                     socket.emit('error', { message: 'You are not currently joined to a room.' });
                     return;
                 }
+                const requestedMessageId = typeof data?.messageId === 'string' && data.messageId.trim()
+                    ? data.messageId.trim()
+                    : null;
+                const messageContent = typeof data?.message === 'string'
+                    ? data.message
+                    : (typeof data?.content === 'string' ? data.content : '');
                 const message = {
-                    id: uuidv4(),
+                    id: requestedMessageId || uuidv4(),
                     userId: socket.id,
                     userName: user.name,
-                    message: data.message,
-                    content: data.message,
+                    roomId: user.roomId,
+                    message: messageContent,
+                    content: messageContent,
                     timestamp: new Date(),
                     isAuthenticated: user.isAuthenticated || false,
                     type: data.type || 'text',
@@ -17722,37 +19386,87 @@ class VoiceLinkLocalServer {
                 const source = (sanitizedMessage.message || '').trim();
                 const lowered = source.toLowerCase();
                 const botMentionPattern = /@voicelink(?:\s+bot)?\b/;
+                const sophiaMentionPattern = /@sophia\b/;
                 const explicitBotAddress =
                     lowered.startsWith('/bot') ||
                     lowered.startsWith('/vb') ||
                     lowered.startsWith('/voicebot') ||
+                    lowered.startsWith('/sophia') ||
+                    lowered.startsWith('/sohia') ||
                     botMentionPattern.test(lowered) ||
+                    sophiaMentionPattern.test(lowered) ||
                     lowered.includes('voicelink bot');
-                const dismissesBot =
+                const selectedBotProfile = this.resolveRoomBotProfileFromSource(source);
+                const activeBotProfileId = this.getActiveBotProfileId(user.roomId, socket.id);
+                    const dismissesBot =
                     lowered.includes('dismiss bot') ||
+                    lowered.includes('dismiss sophia') ||
                     lowered.includes('thanks bot') ||
+                    lowered.includes('thanks sophia') ||
                     lowered.includes('thank you bot') ||
+                    lowered.includes('thank you sophia') ||
                     lowered.includes('that is all bot') ||
-                    lowered.includes('stop bot');
+                    lowered.includes('that is all sophia') ||
+                    lowered.includes('stop bot') ||
+                    lowered.includes('stop sophia');
                     const addressedToBot =
                         explicitBotAddress ||
-                        (this.isBotConversationActive(user.roomId, socket.id) && this.isLikelyBotFollowUp(source));
+                        (!!activeBotProfileId && this.isBotConversationActive(user.roomId, socket.id, activeBotProfileId) && this.isLikelyBotFollowUp(source));
+
+                    if (explicitBotAddress || addressedToBot || dismissesBot) {
+                        console.log('[Bot][RoomMessage]', {
+                            roomId: user.roomId,
+                            userId: socket.id,
+                            userName: user.name,
+                            messageId: sanitizedMessage.id,
+                            source,
+                            explicitBotAddress,
+                            addressedToBot,
+                            dismissesBot
+                        });
+                    }
 
                     if (addressedToBot) {
                         if (dismissesBot) {
-                            this.dismissBotConversation(user.roomId, socket.id);
+                            console.log('[Bot][Dismissed]', {
+                                roomId: user.roomId,
+                                userId: socket.id,
+                                userName: user.name,
+                                botId: activeBotProfileId || selectedBotProfile.id
+                            });
+                            this.dismissBotConversation(user.roomId, socket.id, activeBotProfileId || selectedBotProfile.id);
                             return;
                         }
-                        this.updateBotConversationState(user.roomId, socket.id, source);
-                        this.rememberBotTurn(user.roomId, socket.id, 'user', source);
+                        const botProfileId = explicitBotAddress ? selectedBotProfile.id : (activeBotProfileId || selectedBotProfile.id);
+                        this.updateBotConversationState(user.roomId, socket.id, source, botProfileId);
+                        this.rememberBotTurn(user.roomId, socket.id, 'user', source, botProfileId);
                         const commandResult = await this.executeRoomBotCommand(user, user.roomId, source);
                         let reply = commandResult.handled
                             ? commandResult.reply
-                            : await this.buildBotTextReply(user, user.roomId, source);
+                            : await this.buildBotTextReply(user, user.roomId, source, botProfileId);
+                        console.log('[Bot][ReplyDraft]', {
+                            roomId: user.roomId,
+                            userId: socket.id,
+                            handled: commandResult.handled,
+                            hasDraftReply: !!String(reply || '').trim()
+                        });
                         if (!commandResult.handled) {
-                            const generatedReply = await this.generateBotOllamaReply(user, user.roomId, source);
+                            const generatedReply = await this.generateBotOllamaReply(user, user.roomId, source, botProfileId);
                             if (generatedReply) {
                                 reply = generatedReply;
+                                console.log('[Bot][OllamaReply]', {
+                                    roomId: user.roomId,
+                                    userId: socket.id,
+                                    modelUsed: this.selectOllamaModelForBotPrompt(source).model,
+                                    hasGeneratedReply: true
+                                });
+                            } else {
+                                console.log('[Bot][OllamaReply]', {
+                                    roomId: user.roomId,
+                                    userId: socket.id,
+                                    modelUsed: this.selectOllamaModelForBotPrompt(source).model,
+                                    hasGeneratedReply: false
+                                });
                             }
                         }
                         const attachmentReply = sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL
@@ -17761,28 +19475,35 @@ class VoiceLinkLocalServer {
                         if (attachmentReply) {
                             reply = attachmentReply;
                         }
-                        if (this.shouldSuppressBotReply(user.roomId, socket.id, source, reply, explicitBotAddress)) {
+                        const suppressReply = this.shouldSuppressBotReply(user.roomId, socket.id, source, reply, explicitBotAddress, botProfileId);
+                        if (suppressReply) {
+                            console.log('[Bot][Suppressed]', {
+                                roomId: user.roomId,
+                                userId: socket.id,
+                                explicitBotAddress,
+                                replyPreview: String(reply || '').slice(0, 120)
+                            });
                             return;
                         }
                         const botThreadTarget = this.findBotReplyTarget(user.roomId, sanitizedMessage, reply);
 
-                        const botMessage = {
-                            id: uuidv4(),
-                            userId: `bot:${user.roomId}`,
-                            userName: 'VoiceLink Bot',
-                            message: reply,
-                            timestamp: new Date(),
-                            isAuthenticated: true,
-                            isBot: true,
-                            authProvider: 'voicelink_bot',
+                        const botMessage = this.createRoomBotMessage(user.roomId, reply, {
+                            botId: botProfileId,
                             replyTo: botThreadTarget.replyTo,
                             botTopic: botThreadTarget.botTopic,
                             attachmentName: commandResult.attachmentName || null,
                             attachmentURL: commandResult.attachmentURL || null,
-                            reactions: []
-                        };
-                        this.rememberBotTurn(user.roomId, socket.id, 'assistant', reply);
+                        });
+                        this.rememberBotTurn(user.roomId, socket.id, 'assistant', reply, botProfileId);
                         this.storeRoomMessage(user.roomId, botMessage);
+                        console.log('[Bot][Emit]', {
+                            roomId: user.roomId,
+                            userId: socket.id,
+                            botMessageId: botMessage.id,
+                            replyTo: botThreadTarget.replyTo,
+                            botTopic: botThreadTarget.botTopic,
+                            replyPreview: String(reply || '').slice(0, 120)
+                        });
                         setTimeout(() => {
                             this.io.to(user.roomId).emit('chat-message', botMessage);
                         }, 250);
@@ -17795,6 +19516,7 @@ class VoiceLinkLocalServer {
                 const { targetUserId, message: msgContent, replyTo } = data;
 
                 if (user && targetUserId) {
+                    const botTarget = this.resolveDirectBotTarget(targetUserId, user.roomId);
                     const outboundMessage = {
                         id: uuidv4(),
                         senderId: socket.id,
@@ -17816,7 +19538,7 @@ class VoiceLinkLocalServer {
                         read: false
                     };
 
-                    const dmTargetLabel = targetUserId.startsWith('bot:') ? 'VoiceLink Bot' : 'this conversation';
+                    const dmTargetLabel = botTarget ? botTarget.profile.displayName : 'this conversation';
                     const sanitizedResult = await this.sanitizeMessageLinks(outboundMessage, {
                         actorName: user.name,
                         roomName: dmTargetLabel
@@ -17872,19 +19594,21 @@ class VoiceLinkLocalServer {
                         });
                     }
 
-                    if (targetUserId.startsWith('bot:')) {
-                        const roomId = targetUserId.slice(4);
+                    if (botTarget) {
+                        const roomId = botTarget.roomId;
+                        const botId = botTarget.botId;
                         if (message.attachmentName || message.attachmentURL) {
                             console.log('[Bot Attachment] DM attachment received for bot', {
                                 roomId,
+                                botId,
                                 sender: user.name,
                                 attachmentName: message.attachmentName || null,
                                 attachmentURL: message.attachmentURL || null
                             });
                         }
-                        this.rememberBotTurn(roomId, socket.id, 'user', msgContent);
-                        let reply = await this.buildBotTextReply(user, roomId, msgContent);
-                        const generatedReply = await this.generateBotOllamaReply(user, roomId, msgContent);
+                        this.rememberBotTurn(roomId, socket.id, 'user', msgContent, botId);
+                        let reply = await this.buildBotTextReply(user, roomId, msgContent, botId);
+                        const generatedReply = await this.generateBotOllamaReply(user, roomId, msgContent, botId);
                         if (generatedReply) {
                             reply = generatedReply;
                         }
@@ -17898,20 +19622,20 @@ class VoiceLinkLocalServer {
                         const botReply = {
                             id: uuidv4(),
                             senderId: targetUserId,
-                            senderName: 'VoiceLink Bot',
+                            senderName: botTarget.profile.displayName,
                             receiverId: socket.id,
                             message: reply,
                             content: reply,
                             timestamp: new Date(),
                             isAuthenticated: true,
                             isBot: true,
-                            authProvider: 'voicelink_bot',
+                            authProvider: botTarget.profile.authProvider,
                             type: 'text',
                             replyTo: message.id,
                             reactions: [],
                             read: false
                         };
-                        this.rememberBotTurn(roomId, socket.id, 'assistant', reply);
+                        this.rememberBotTurn(roomId, socket.id, 'assistant', reply, botId);
                         this.storeDirectMessage(targetUserId, socket.id, botReply);
                         socket.emit('direct-message', botReply);
                     } else {
@@ -18014,9 +19738,12 @@ class VoiceLinkLocalServer {
             // Enable/disable audio relay for this user
             socket.on('enable-audio-relay', (data) => {
                 const { enabled, sampleRate, channels } = data;
-                this.audioRelayEnabled.set(socket.id, enabled);
+                const user = this.users.get(socket.id);
+                const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
+                const relayEnabled = enabled !== false && transmitEnabled;
+                this.audioRelayEnabled.set(socket.id, relayEnabled);
 
-                if (enabled) {
+                if (relayEnabled) {
                     this.relayStats.activeRelays++;
                     console.log(`Audio relay enabled for ${socket.id}`);
 
@@ -18033,7 +19760,8 @@ class VoiceLinkLocalServer {
                 }
 
                 socket.emit('relay-status', {
-                    active: enabled,
+                    active: relayEnabled,
+                    transmitEnabled,
                     stats: this.relayStats
                 });
             });
@@ -18041,7 +19769,7 @@ class VoiceLinkLocalServer {
             // Receive audio data from client and relay to room
             socket.on('audio-data', (data) => {
                 const user = this.users.get(socket.id);
-                if (!user || !this.audioRelayEnabled.get(socket.id)) {
+                if (!user || !this.audioRelayEnabled.get(socket.id) || user?.audioSettings?.transmitEnabled === false) {
                     return;
                 }
 
@@ -18072,6 +19800,8 @@ class VoiceLinkLocalServer {
                     });
                     this.emitRoomUsersSnapshot(user.roomId);
                 }
+
+                this.queueLiveTranscriptionPacket(socket.id, user, audioData, sampleRate, channels || 1);
             });
 
             // Get relay statistics
@@ -18118,7 +19848,7 @@ class VoiceLinkLocalServer {
             });
 
             // Disconnect handling
-            socket.on('disconnect', () => {
+            socket.on('disconnect', (reason) => {
                 this.unregisterSocketSession(socket.id);
                 const user = this.users.get(socket.id);
                 if (user) {
@@ -18166,8 +19896,9 @@ class VoiceLinkLocalServer {
                 }
                 this.audioRelayEnabled.delete(socket.id);
                 this.audioBuffers.delete(socket.id);
+                this.clearLiveTranscriptionStateForSocket(socket.id);
 
-                console.log(`User disconnected: ${socket.id}`);
+                console.log(`User disconnected: ${socket.id}${reason ? ` (${reason})` : ''}`);
             });
         });
     }
@@ -18199,6 +19930,8 @@ class VoiceLinkLocalServer {
             userId: `system:${roomId}`,
             userName: 'System',
             message,
+            content: message,
+            roomId,
             timestamp: new Date(),
             isAuthenticated: true,
             isBot: true,
@@ -18208,11 +19941,37 @@ class VoiceLinkLocalServer {
         };
     }
 
+    createRoomBotMessage(roomId, message, overrides = {}) {
+        const botProfile = this.getBotProfile(overrides.botId || 'voicelink');
+        return {
+            id: uuidv4(),
+            userId: `${botProfile.userIdPrefix}${roomId}`,
+            userName: botProfile.displayName,
+            message,
+            content: message,
+            roomId,
+            timestamp: new Date(),
+            isAuthenticated: true,
+            isBot: true,
+            hasAudioControls: !!botProfile.hasAudioControls,
+            authProvider: botProfile.authProvider,
+            type: 'text',
+            reactions: [],
+            ...overrides
+        };
+    }
+
     emitRoomSystemMessage(roomId, message, overrides = {}) {
         if (!roomId || !message) return null;
-        const systemMessage = this.createRoomSystemMessage(roomId, message, overrides);
+        const { emitDelayMs = 0, ...messageOverrides } = overrides || {};
+        const systemMessage = this.createRoomSystemMessage(roomId, message, messageOverrides);
         this.storeRoomMessage(roomId, systemMessage);
-        this.io.to(roomId).emit('chat-message', systemMessage);
+        const emit = () => this.io.to(roomId).emit('chat-message', systemMessage);
+        if (Number(emitDelayMs) > 0) {
+            setTimeout(emit, Number(emitDelayMs));
+        } else {
+            emit();
+        }
         return systemMessage;
     }
 
@@ -18501,9 +20260,29 @@ class VoiceLinkLocalServer {
             }
         };
 
-        // Register default processes
+        const shouldRegisterLocalJellyfinProcess = (config = {}) => {
+            const command = String(config.command || '').trim();
+            if (!command) return false;
+            const executable = command.split(/\s+/)[0];
+            if (!executable) return false;
+            if (process.platform !== 'linux' && executable.startsWith('/home/')) {
+                console.log(`[JellyfinService] Skipping ${config.user || 'unknown'} Jellyfin process on ${process.platform}: ${executable}`);
+                return false;
+            }
+            if (executable.startsWith('/')) {
+                if (!fs.existsSync(executable)) {
+                    console.log(`[JellyfinService] Skipping unmanaged Jellyfin process with missing executable: ${executable}`);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Register default processes only when the executable exists on this host.
         Object.entries(defaultProcesses).forEach(([name, config]) => {
-            this.jellyfinManager.registerProcess(name, config);
+            if (shouldRegisterLocalJellyfinProcess(config)) {
+                this.jellyfinManager.registerProcess(name, config);
+            }
         });
 
         // Set up event listeners for Jellyfin manager

@@ -1,33 +1,35 @@
-VoiceLink TestFlight Build 31
+VoiceLink TestFlight Build 35
 
-This one is still very much about room audio, but with a sharper goal:
-does joining a room finally feel steady, predictable, and boring in the best possible way?
+This build is the current iOS audio and transcript retest build.
+The main focus is room audio stability, louder output/input control, and live transcript behavior while joined to a room.
 
 Main things to test:
-- Join a room and confirm audio starts without crashing, buffering forever, chopping badly, or staying silent.
-- Speak after joining and confirm your mic actually comes through.
-- If you use preview first, make sure preview audio stops cleanly once the full room opens.
-- Background the app, return, and check that room audio comes back normally instead of going quiet, stuck, or odd.
-- Open room controls and test Mic Level, Master Output, and Show Chat with VoiceOver if available.
-- Use Test Sound in Settings > Audio and confirm it actually plays.
-- Sign in with a normal VoiceLink account and make sure the app stays on the VoiceLink auth path.
-- Join as a guest with a typed name and confirm that still works properly.
-- Confirm the app still uses the simple Main and Settings tab layout.
-- Open Profile and confirm signed-in users see account info, while guests still see the guest-friendly actions.
+- Join a room and confirm room audio starts normally.
+- Confirm room audio is actually audible on the phone speaker or connected output.
+- Speak after joining and confirm your mic comes through.
+- Open Settings and Room Controls and verify Mic Level and Master Output now boost cleanly up to 300 percent.
+- Check whether room preview hands off cleanly into the joined room.
+- Background the app, return, and confirm room audio still works.
+- Use Test Sound in Settings > Audio and confirm it plays.
+- Open Room Controls and test Mic Level, Master Output, Show Chat, and Mute Media Playback.
+- In an active room, speak for a few seconds from another client and confirm Live Transcripts starts filling in on iOS.
+- Check Bluetooth or other routed audio if available and confirm the room still stays audible after route changes.
+- Check whether the phone still gets unusually hot while joining or while sitting in one room.
 
-Nice to spot check while you are there:
-- room activity and people lists update correctly
-- guests do not see admin-only controls
-- support, privacy, and terms links still open correctly
-- the phone does not get weirdly hot just from opening the app and joining one room
+Helpful spot checks:
+- VoiceOver should still announce the sliders as real sliders.
+- Signed-in and guest room joins should both still work.
+- Room lists, people lists, and profile info should still refresh correctly.
+- Transcript rows should show the speaker name and the transcribed text.
+- Guests should not see admin-only controls.
 
 If something breaks, the best report includes:
 - device model and iOS version
-- build number 31
+- build number 35
 - server used
 - exact steps
 - what you expected
 - what actually happened
 - screenshot, screen recording, or crash report if available
 
-If audio goes from “sounds good” to “absolutely not,” that exact moment is gold.
+If audio flips from “working” to “absolutely not,” that transition point is the most useful part to report.

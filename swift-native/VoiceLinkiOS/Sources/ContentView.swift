@@ -63,12 +63,22 @@ private struct IOSRoomMessageItem: Identifiable, Hashable {
     let timestamp: Date
 }
 
+private struct IOSRoomTranscriptItem: Identifiable, Hashable {
+    let id: String
+    let roomId: String
+    let roomName: String
+    let speaker: String
+    let body: String
+    let timestamp: Date
+}
+
 @MainActor
 private final class IOSRoomMessagingState: ObservableObject {
     @Published var isInRoom = false
     @Published var activeRoomId = ""
     @Published var activeRoomName = ""
     @Published var roomMessages: [IOSRoomMessageItem] = []
+    @Published var roomTranscripts: [IOSRoomTranscriptItem] = []
     @Published var directTargets: [IOSDirectMessageTarget] = []
     @Published var selectedDirectTarget: IOSDirectMessageTarget?
     @Published var selectedProfileName: String?
@@ -118,6 +128,15 @@ private final class IOSRoomMessagingState: ObservableObject {
         ) { [weak self] notification in
             Task { @MainActor [weak self] in
                 self?.handleDirectMessage(notification.userInfo)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .iosRoomTranscriptEvent,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleRoomTranscript(notification.userInfo)
             }
         }
     }
@@ -186,6 +205,7 @@ private final class IOSRoomMessagingState: ObservableObject {
         if !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
+            roomTranscripts.removeAll()
         }
         if !roomName.isEmpty {
             activeRoomName = roomName
@@ -200,6 +220,7 @@ private final class IOSRoomMessagingState: ObservableObject {
             activeRoomName = ""
             selectedDirectTarget = nil
             statusText = "Left room."
+            roomTranscripts.removeAll()
         }
     }
 
@@ -256,6 +277,34 @@ private final class IOSRoomMessagingState: ObservableObject {
         upsertDirectTarget(target)
         if selectedDirectTarget == nil {
             selectedDirectTarget = target
+        }
+    }
+
+    private func handleRoomTranscript(_ info: [AnyHashable: Any]?) {
+        guard let info else { return }
+        let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let speaker = (
+            info["speaker"] as? String
+            ?? info["userName"] as? String
+            ?? info["author"] as? String
+            ?? "Speaker"
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = (info["body"] as? String ?? info["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
+        guard !roomId.isEmpty, !body.isEmpty else { return }
+        roomTranscripts.append(
+            IOSRoomTranscriptItem(
+                id: UUID().uuidString,
+                roomId: roomId,
+                roomName: roomName.isEmpty ? "Room" : roomName,
+                speaker: speaker.isEmpty ? "Speaker" : speaker,
+                body: body,
+                timestamp: Date(timeIntervalSince1970: ts)
+            )
+        )
+        if roomTranscripts.count > 400 {
+            roomTranscripts = Array(roomTranscripts.suffix(400))
         }
     }
 
@@ -1146,6 +1195,26 @@ private struct MessagesTab: View {
                     }
                 }
 
+                Section(roomState.isInRoom ? "Live Transcripts" : "Recent Transcripts") {
+                    if roomState.roomTranscripts.isEmpty {
+                        Text(roomState.isInRoom ? "No transcripts yet." : "Join a room to receive live transcripts.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(roomState.roomTranscripts.suffix(25).reversed()) { transcript in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(transcript.speaker)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(transcript.body)
+                                    .font(.body)
+                                Text(transcript.roomName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
                 if !roomState.statusText.isEmpty {
                     Section("Status") {
                         Text(roomState.statusText)
@@ -1366,27 +1435,30 @@ private struct SettingsTab: View {
             Form {
                 Section("Audio") {
                     Toggle("Mute Media Playback", isOn: $mediaMuted)
-                    Slider(value: $inputGain, in: 0...2) {
+                    Slider(value: $inputGain, in: 0...3) {
                         Text("Input Level")
                     } minimumValueLabel: {
                         Text("0%")
                     } maximumValueLabel: {
-                        Text("200%")
+                        Text("300%")
                     }
                     .accessibilityValue("\(Int(inputGain * 100)) percent")
 
-                    Slider(value: $outputGain, in: 0...2) {
+                    Slider(value: $outputGain, in: 0...3) {
                         Text("Output Level")
                     } minimumValueLabel: {
                         Text("0%")
                     } maximumValueLabel: {
-                        Text("200%")
+                        Text("300%")
                     }
                     .accessibilityValue("\(Int(outputGain * 100)) percent")
 
                     Button("Test Sound") {
                         IOSActionSoundPlayer.playTest()
                     }
+                    Text("Audio can be boosted up to 300 percent on iOS for quieter rooms or devices.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Interface") {
@@ -1419,6 +1491,20 @@ private struct SettingsTab: View {
                         Text(diagnosticsStatus)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                    }
+                    let submissionEntries = UserDefaults.standard.stringArray(forKey: "voicelink.iosDiagnosticsSubmissionLog") ?? []
+                    if !submissionEntries.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Recent Submission Activity")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(Array(submissionEntries.suffix(8).reversed()), id: \.self) { entry in
+                                Text(entry)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(.top, 4)
                     }
                 }
 

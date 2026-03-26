@@ -44,6 +44,12 @@ class CopyPartyManager: ObservableObject {
         var allowRawExternalLinksFallback: Bool = false
         var defaultExternalLinkExpiryHours: Int = 72
         var externalShareBaseURL: String = "https://voicelink.devinecreations.net"
+        var smbHostnames: [String] = [
+            "smb.raywonderis.me",
+            "files.raywonderis.me"
+        ]
+        var smbUsername: String = "voicelinkshare"
+        var smbPreferredShare: String = "voicelink"
     }
 
     // MARK: - Types
@@ -98,6 +104,15 @@ class CopyPartyManager: ObservableObject {
     }
 
     struct ProtectedShareLink: Identifiable, Codable {
+        struct SMBAccess: Codable {
+            let enabled: Bool
+            let username: String?
+            let preferredShare: String?
+            let hostnames: [String]
+            let relativePath: String?
+            let uris: [String]
+        }
+
         let id: String
         let filePath: String
         let url: String
@@ -105,6 +120,9 @@ class CopyPartyManager: ObservableObject {
         let expiresAt: Date?
         let keepForever: Bool
         let createdAt: Date
+        let webURL: String?
+        let copyPartyURL: String?
+        let smb: SMBAccess?
     }
 
     enum ShareLinkError: LocalizedError {
@@ -714,7 +732,10 @@ class CopyPartyManager: ObservableObject {
                 token: nil,
                 expiresAt: nil,
                 keepForever: keepForever,
-                createdAt: Date()
+                createdAt: Date(),
+                webURL: rawExternalFileURL(path: normalizedPath),
+                copyPartyURL: nil,
+                smb: nil
             )
             await MainActor.run {
                 self.recentProtectedLinks.insert(fallback, at: 0)
@@ -783,6 +804,22 @@ class CopyPartyManager: ObservableObject {
                     guard let finalURL, !finalURL.isEmpty else { continue }
                     let token = json["token"] as? String
                     let parsedExpiry = parseExpiry(from: json) ?? expiry.map { Date().addingTimeInterval(TimeInterval($0 * 3600)) }
+                    let webURL = (json["webUrl"] as? String) ?? (json["webURL"] as? String)
+                    let copyPartyURL = (json["copyPartyUrl"] as? String) ?? (json["copyPartyURL"] as? String)
+                    let smbAccess: ProtectedShareLink.SMBAccess? = {
+                        guard let smb = json["smb"] as? [String: Any] else { return nil }
+                        let hostnames = smb["hostnames"] as? [String] ?? []
+                        let uris = smb["uris"] as? [String] ?? []
+                        let enabled = smb["enabled"] as? Bool ?? !uris.isEmpty
+                        return ProtectedShareLink.SMBAccess(
+                            enabled: enabled,
+                            username: smb["username"] as? String,
+                            preferredShare: smb["preferredShare"] as? String,
+                            hostnames: hostnames,
+                            relativePath: smb["relativePath"] as? String,
+                            uris: uris
+                        )
+                    }()
 
                     return ProtectedShareLink(
                         id: UUID().uuidString,
@@ -791,7 +828,10 @@ class CopyPartyManager: ObservableObject {
                         token: token,
                         expiresAt: parsedExpiry,
                         keepForever: keepForever,
-                        createdAt: Date()
+                        createdAt: Date(),
+                        webURL: webURL,
+                        copyPartyURL: copyPartyURL,
+                        smb: smbAccess
                     )
                 } catch {
                     continue

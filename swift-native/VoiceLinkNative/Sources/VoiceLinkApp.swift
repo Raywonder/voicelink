@@ -6,6 +6,13 @@ import CoreAudio
 import Combine
 import UserNotifications
 
+private func formatPendingCountdown(_ totalSeconds: Int) -> String {
+    let seconds = max(totalSeconds, 0)
+    let minutesPart = seconds / 60
+    let secondsPart = seconds % 60
+    return String(format: "%02d:%02d", minutesPart, secondsPart)
+}
+
 @main
 struct VoiceLinkApp: App {
     @StateObject private var appState = AppState()
@@ -32,6 +39,9 @@ struct VoiceLinkApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .updateAvailable)) { _ in
                     showUpdaterSheet = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .openBugReport)) { _ in
+                    appState.showBugReport = true
                 }
         }
         .defaultSize(width: 1000, height: 750)
@@ -65,7 +75,7 @@ struct VoiceLinkApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
-                Button("Join or Search Rooms...") {
+                Button("Search for Servers or Join a Room...") {
                     appState.openJoinRoomPanel()
                 }
                 .keyboardShortcut("j", modifiers: .command)
@@ -89,16 +99,91 @@ struct VoiceLinkApp: App {
                 .keyboardShortcut("m", modifiers: [.command, .option])
                 .disabled(!appState.hasActiveRoom)
 
+                Button("Escort Me") {
+                    NotificationCenter.default.post(name: .openEscortForCurrentRoom, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(!appState.hasActiveRoom)
+
+                Button("Server Administration") {
+                    NotificationCenter.default.post(name: .openServerAdministration, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: [.command, .option])
+                .disabled(!appState.hasActiveRoom || !(AdminServerManager.shared.isAdmin || AdminServerManager.shared.adminRole.canManageRooms))
+
                 Button("Leave Room") {
                     appState.leaveCurrentRoom()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .option])
                 .disabled(!appState.hasActiveRoom)
 
+                Button("Room Controls...") {
+                    NotificationCenter.default.post(name: .openCurrentRoomActions, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option, .shift])
+                .disabled(!appState.hasActiveRoom)
+
                 Button("File Transfer Details") {
                     NotificationCenter.default.post(name: .openFileTransfers, object: nil)
                 }
                 .keyboardShortcut("l", modifiers: [.command, .option, .shift])
+            }
+            CommandMenu("Browse") {
+                Menu("Layout") {
+                    Button("List View") {
+                        NotificationCenter.default.post(name: .roomBrowseSetLayout, object: "list")
+                    }
+                    .keyboardShortcut("1", modifiers: .command)
+
+                    Button("Grid View") {
+                        NotificationCenter.default.post(name: .roomBrowseSetLayout, object: "grid")
+                    }
+                    .keyboardShortcut("2", modifiers: .command)
+
+                    Button("Column View") {
+                        NotificationCenter.default.post(name: .roomBrowseSetLayout, object: "column")
+                    }
+                    .keyboardShortcut("3", modifiers: .command)
+                }
+
+                Menu("Scope") {
+                    Button("All Rooms") {
+                        NotificationCenter.default.post(name: .roomBrowseSetScope, object: "all")
+                    }
+                    .keyboardShortcut("4", modifiers: .command)
+
+                    Button("Public Rooms") {
+                        NotificationCenter.default.post(name: .roomBrowseSetScope, object: "public")
+                    }
+                    .keyboardShortcut("5", modifiers: .command)
+
+                    Button("Private Rooms") {
+                        NotificationCenter.default.post(name: .roomBrowseSetScope, object: "private")
+                    }
+                    .keyboardShortcut("6", modifiers: .command)
+
+                    Button("Active Rooms") {
+                        NotificationCenter.default.post(name: .roomBrowseSetScope, object: "active")
+                    }
+                    .keyboardShortcut("7", modifiers: .command)
+
+                    Button("Media Rooms") {
+                        NotificationCenter.default.post(name: .roomBrowseSetScope, object: "media")
+                    }
+                    .keyboardShortcut("8", modifiers: .command)
+                }
+
+                Menu("Sort") {
+                    Button("Sort Active First") {
+                        NotificationCenter.default.post(name: .roomBrowseSetSort, object: "active")
+                    }
+                    .keyboardShortcut("9", modifiers: .command)
+
+                    Button("Sort by Members") {
+                        NotificationCenter.default.post(name: .roomBrowseSetSort, object: "members")
+                    }
+                    .keyboardShortcut("0", modifiers: .command)
+                }
             }
             CommandMenu("Audio") {
                 let settings = SettingsManager.shared
@@ -158,6 +243,11 @@ struct VoiceLinkApp: App {
                 Button("Refresh Audio Devices") {
                     settings.detectAudioDevices()
                 }
+
+                Button(settings.audioRecoveryInProgress ? "Restarting Audio Services..." : "Restart Audio Services") {
+                    settings.restartMacOSAudioServices()
+                }
+                .disabled(settings.audioRecoveryInProgress)
 
                 Button("Test Sound") {
                     AppSoundManager.shared.playSound(.soundTest, force: true)
@@ -251,13 +341,9 @@ struct VoiceLinkApp: App {
                 if AdminServerManager.shared.isAdmin || AdminServerManager.shared.adminRole == .admin || AdminServerManager.shared.adminRole == .owner {
                     Divider()
                     Menu("Admin Modes") {
-                        Button(settings.adminGodModeEnabled ? "Disable God Mode" : "Enable God Mode") {
-                            settings.adminGodModeEnabled.toggle()
-                            settings.saveSettings()
-                        }
-                        Button(settings.adminInvisibleMode ? "Disable Invisible Mode" : "Enable Invisible Mode") {
-                            settings.adminInvisibleMode.toggle()
-                            if settings.adminInvisibleMode {
+                        Button(settings.adminPresenceModeEnabled ? "Disable Admin Presence Override" : "Enable Admin Presence Override") {
+                            settings.adminPresenceModeEnabled.toggle()
+                            if settings.adminPresenceModeEnabled {
                                 statusManager.goInvisible()
                             } else if statusManager.currentStatus == .invisible {
                                 statusManager.goOnline()
@@ -285,7 +371,13 @@ struct VoiceLinkApp: App {
                     Text("Status: Licensed")
                     Text("Devices: \(licensing.activatedDevices)/\(licensing.maxDevices)")
                 } else if licensing.licenseStatus == .pending {
-                    Text("Status: Pending (\(licensing.remainingMinutes) min)")
+                    Text("Status: Pending (\(formatPendingCountdown(licensing.remainingSeconds)))")
+                    if licensing.retryAttempts > 0 {
+                        Text("Retry attempts: \(licensing.retryAttempts)")
+                    }
+                    if let ticket = licensing.supportTicketNumber ?? licensing.supportTicketId {
+                        Text("Support ticket: \(ticket)")
+                    }
                 } else {
                     Text("Status: Not Registered")
                 }
@@ -365,6 +457,7 @@ struct VoiceLinkApp: App {
 }
 
 extension Notification.Name {
+    static let audioDevicesChanged = Notification.Name("audioDevicesChanged")
     static let toggleMute = Notification.Name("toggleMute")
     static let toggleDeafen = Notification.Name("toggleDeafen")
     static let roomJoined = Notification.Name("roomJoined")
@@ -380,9 +473,17 @@ extension Notification.Name {
     static let roomActionOpenSettings = Notification.Name("roomActionOpenSettings")
     static let roomActionCreate = Notification.Name("roomActionCreate")
     static let roomActionDelete = Notification.Name("roomActionDelete")
+    static let openServerAdministration = Notification.Name("openServerAdministration")
+    static let openCurrentRoomActions = Notification.Name("openCurrentRoomActions")
+    static let openEscortForCurrentRoom = Notification.Name("openEscortForCurrentRoom")
+    static let roomBrowseSetLayout = Notification.Name("roomBrowseSetLayout")
+    static let roomBrowseSetScope = Notification.Name("roomBrowseSetScope")
+    static let roomBrowseSetSort = Notification.Name("roomBrowseSetSort")
     static let mainWindowCloseRequested = Notification.Name("mainWindowCloseRequested")
     static let openRoomJukebox = Notification.Name("openRoomJukebox")
     static let openFileTransfers = Notification.Name("openFileTransfers")
+    static let openDirectMessage = Notification.Name("openDirectMessage")
+    static let openBugReport = Notification.Name("openBugReport")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -390,6 +491,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared: AppDelegate?
     private let windowController = MainWindowController()
     private weak var mainWindow: NSWindow?
+    private var autoReconnectObserverInstalled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--self-test-sound-download") {
@@ -403,8 +505,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         AppDelegate.shared = self
 
-        // Ensure local API is up for desktop-first usage.
-        LocalAPIBootstrap.shared.ensureRunningIfNeeded()
+        if SettingsManager.shared.preferLocalServer {
+            LocalAPIBootstrap.shared.ensureRunningIfNeeded()
+        }
 
         // Initialize menubar status item
         statusBarController = StatusBarController()
@@ -439,6 +542,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             AppSoundManager.shared.playStartupWelcomeIfNeeded()
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            AppSoundManager.shared.playStartupWelcomeIfNeeded()
+        }
     }
 
     func autoConnectOnLaunch() {
@@ -460,8 +566,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if savedServer.hasPrefix("http") {
             serverManager.connectToURL(savedServer)
         } else {
-            // Default: try main server first, fallback to local
-            serverManager.tryMainThenLocal()
+            if SettingsManager.shared.preferLocalServer {
+                serverManager.tryLocalThenMain()
+            } else {
+                serverManager.tryMainThenLocal()
+            }
         }
 
         // Set up auto-reconnect observer
@@ -469,10 +578,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func setupAutoReconnect() {
+        if autoReconnectObserverInstalled {
+            return
+        }
+        autoReconnectObserverInstalled = true
         NotificationCenter.default.addObserver(
             forName: .serverConnectionChanged,
             object: nil,
-            queue: .main
+            queue: nil
         ) { _ in
             let serverManager = ServerManager.shared
             let settings = SettingsManager.shared
@@ -482,7 +595,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if !serverManager.isConnected {
                         print("[AppDelegate] Auto-reconnecting...")
-                        serverManager.tryMainThenLocal()
+                        if settings.preferLocalServer {
+                            serverManager.tryLocalThenMain()
+                        } else {
+                            serverManager.tryMainThenLocal()
+                        }
                     }
                 }
             }
@@ -490,7 +607,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func handleURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
-        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+        guard let descriptor = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)),
+              let urlString = descriptor.value(forKey: "stringValue") as? String,
               let url = URL(string: urlString) else {
             return
         }
@@ -619,6 +737,7 @@ class AppState: ObservableObject {
     @Published var pendingCreateRoomName: String = ""
     @Published var roomHasActiveMusic: [String: Bool] = [:]
     @Published var pendingJoinRoomId: String?
+    @Published var publicServerConfig: ServerConfig?
     private var previousScreen: Screen = .mainMenu
 
     let serverManager = ServerManager.shared
@@ -653,6 +772,26 @@ class AppState: ObservableObject {
         minimizedRoom != nil
     }
 
+    func closeAdminScreen() {
+        if hasActiveRoom {
+            currentScreen = .voiceChat
+            return
+        }
+        currentScreen = .mainMenu
+    }
+
+    func openSettings() {
+        currentScreen = .settings
+    }
+
+    func closeSettings() {
+        if hasActiveRoom {
+            currentScreen = .voiceChat
+            return
+        }
+        currentScreen = previousScreen == .settings ? .mainMenu : previousScreen
+    }
+
     var quickJoinCommandTitle: String {
         if currentRoom != nil {
             return "Minimize Current Room"
@@ -676,7 +815,7 @@ class AppState: ObservableObject {
 
     private func setupURLObservers() {
         // Handle URL join room
-        NotificationCenter.default.addObserver(forName: .urlJoinRoom, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .urlJoinRoom, object: nil, queue: nil) { [weak self] notification in
             guard let data = notification.object as? [String: Any],
                   let roomId = data["roomId"] as? String else { return }
 
@@ -687,7 +826,7 @@ class AppState: ObservableObject {
         }
 
         // Handle URL view room
-        NotificationCenter.default.addObserver(forName: .urlViewRoom, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .urlViewRoom, object: nil, queue: nil) { [weak self] notification in
             guard let data = notification.object as? [String: Any],
                   let roomId = data["roomId"] as? String else { return }
 
@@ -697,7 +836,7 @@ class AppState: ObservableObject {
         }
 
         // Handle URL connect server
-        NotificationCenter.default.addObserver(forName: .urlConnectServer, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .urlConnectServer, object: nil, queue: nil) { [weak self] notification in
             guard let data = notification.object as? [String: Any],
                   let serverUrl = data["serverUrl"] as? String else { return }
 
@@ -707,7 +846,7 @@ class AppState: ObservableObject {
         }
 
         // Handle URL invite
-        NotificationCenter.default.addObserver(forName: .urlUseInvite, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .urlUseInvite, object: nil, queue: nil) { [weak self] notification in
             guard let data = notification.object as? [String: Any],
                   let code = data["code"] as? String else { return }
 
@@ -717,14 +856,14 @@ class AppState: ObservableObject {
         }
 
         // Handle URL open settings
-        NotificationCenter.default.addObserver(forName: .urlOpenSettings, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .urlOpenSettings, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.currentScreen = .settings
             }
         }
 
         // Handle URL open license
-        NotificationCenter.default.addObserver(forName: .urlOpenLicense, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .urlOpenLicense, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.currentScreen = .licensing
             }
@@ -830,7 +969,11 @@ class AppState: ObservableObject {
 
     func connectToServer() {
         serverStatus = .connecting
-        serverManager.tryLocalThenMain()
+        if SettingsManager.shared.preferLocalServer {
+            serverManager.tryLocalThenMain()
+        } else {
+            serverManager.tryMainThenLocal()
+        }
     }
 
     func connectToMainServer() {
@@ -875,8 +1018,10 @@ class AppState: ObservableObject {
                             id: mapped.id,
                             name: mapped.name,
                             description: mapped.description,
+                            welcomeMessage: mapped.welcomeMessage,
                             userCount: mapped.userCount,
                             isPrivate: mapped.isPrivate,
+                            isLocked: mapped.isLocked,
                             maxUsers: mapped.maxUsers,
                             createdBy: mapped.createdBy,
                             createdByRole: mapped.createdByRole,
@@ -895,6 +1040,10 @@ class AppState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] mappedRooms in
                 self?.rooms = mappedRooms
+                if let currentRoomId = self?.currentRoom?.id,
+                   let refreshedRoom = mappedRooms.first(where: { $0.id == currentRoomId }) {
+                    self?.currentRoom = refreshedRoom
+                }
                 self?.refreshRoomMediaStatuses(for: mappedRooms)
             }
             .store(in: &cancellables)
@@ -945,7 +1094,7 @@ class AppState: ObservableObject {
             .store(in: &cancellables)
 
         // Listen for room joined notification
-        NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .roomJoined, object: nil, queue: nil) { [weak self] notification in
             Task { @MainActor in
                 guard let self else { return }
                 guard let roomData = notification.object as? [String: Any] else { return }
@@ -953,20 +1102,27 @@ class AppState: ObservableObject {
                 guard let roomId else { return }
 
                 let joinedRoom: Room = {
+                    if let parsedServerRoom = ServerRoom(from: roomData) {
+                        return Room(from: parsedServerRoom)
+                    }
                     if let existing = self.rooms.first(where: { $0.id == roomId }) {
                         return existing
                     }
                     let fallbackName = (roomData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let fallbackDescription = (roomData["description"] as? String) ?? ""
+                    let fallbackWelcome = roomData["welcomeMessage"] as? String
                     let fallbackUsers = (roomData["userCount"] as? Int) ?? 0
                     let fallbackPrivate = (roomData["isPrivate"] as? Bool) ?? false
+                    let fallbackLocked = (roomData["isLocked"] as? Bool) ?? false
                     let fallbackMaxUsers = (roomData["maxUsers"] as? Int) ?? 50
                     return Room(
                         id: roomId,
                         name: (fallbackName?.isEmpty == false ? fallbackName! : "Room \(roomId)"),
                         description: fallbackDescription,
+                        welcomeMessage: fallbackWelcome,
                         userCount: fallbackUsers,
                         isPrivate: fallbackPrivate,
+                        isLocked: fallbackLocked,
                         maxUsers: fallbackMaxUsers
                     )
                 }()
@@ -980,7 +1136,7 @@ class AppState: ObservableObject {
         }
 
         // Listen for navigation back to main menu
-        NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .goToMainMenu, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.currentScreen = .mainMenu
             }
@@ -988,22 +1144,22 @@ class AppState: ObservableObject {
     }
 
     private func setupRoomActionObservers() {
-        NotificationCenter.default.addObserver(forName: .roomActionMinimize, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .roomActionMinimize, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.minimizeCurrentRoom()
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionRestore, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .roomActionRestore, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.restoreMinimizedRoom()
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionLeave, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .roomActionLeave, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.leaveCurrentRoom()
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionJoin, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .roomActionJoin, object: nil, queue: nil) { [weak self] notification in
             Task { @MainActor in
                 guard let self else { return }
                 guard let room = notification.object as? Room else { return }
@@ -1011,7 +1167,7 @@ class AppState: ObservableObject {
                 self.joinOrShowRoom(room)
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionOpenSettings, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .roomActionOpenSettings, object: nil, queue: nil) { [weak self] notification in
             Task { @MainActor in
                 guard let self else { return }
                 guard let room = notification.object as? Room else { return }
@@ -1023,12 +1179,12 @@ class AppState: ObservableObject {
                 self.currentScreen = .admin
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionCreate, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .roomActionCreate, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.currentScreen = .createRoom
             }
         }
-        NotificationCenter.default.addObserver(forName: .roomActionDelete, object: nil, queue: .main) { [weak self] notification in
+        NotificationCenter.default.addObserver(forName: .roomActionDelete, object: nil, queue: nil) { [weak self] notification in
             Task { @MainActor in
                 guard let self else { return }
                 guard let room = notification.object as? Room else { return }
@@ -1039,10 +1195,15 @@ class AppState: ObservableObject {
                 self.deleteRoomFromMenu(room)
             }
         }
+        NotificationCenter.default.addObserver(forName: .openServerAdministration, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in
+                self?.currentScreen = .admin
+            }
+        }
     }
 
     private func setupWindowBehaviorObservers() {
-        NotificationCenter.default.addObserver(forName: .mainWindowCloseRequested, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .mainWindowCloseRequested, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
                 let settings = SettingsManager.shared
@@ -1084,16 +1245,21 @@ class AppState: ObservableObject {
 
     private func setupAdminObservers() {
         // Refresh admin capabilities after Mastodon auth completes.
-        NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshAdminCapabilities()
             }
         }
 
         // Refresh when server endpoint changes (switch, disconnect, reconnect).
-        NotificationCenter.default.addObserver(forName: .serverConnectionChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .serverConnectionChanged, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshAdminCapabilities()
+                if self?.serverManager.isConnected == true {
+                    await self?.fetchPublicServerConfig()
+                } else {
+                    self?.publicServerConfig = nil
+                }
             }
         }
 
@@ -1102,7 +1268,11 @@ class AppState: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 Task { @MainActor in
+                    self?.serverManager.syncAuthenticatedSession()
                     self?.refreshAdminCapabilities()
+                    if self?.serverManager.isConnected == true {
+                        await self?.fetchPublicServerConfig()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -1126,13 +1296,40 @@ class AppState: ObservableObject {
                     AdminServerManager.shared.adminRole = .owner
                 }
             }
+            let resolvedRole = AdminServerManager.shared.adminRole.rawValue
+            if resolvedRole != "none" {
+                AuthenticationManager.shared.updateCurrentUserRole(resolvedRole)
+            }
         }
     }
 
     func refreshRooms() {
         serverManager.getRooms()
         Task { @MainActor in
+            await fetchPublicServerConfig()
             await fetchRoomsViaHTTPFallback()
+        }
+    }
+
+    @MainActor
+    private func fetchPublicServerConfig() async {
+        let candidates = APIEndpointResolver.mainBaseCandidates(preferred: serverManager.baseURL)
+        let decoder = JSONDecoder()
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/config") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 6
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
+                publicServerConfig = try decoder.decode(ServerConfig.self, from: data)
+                return
+            } catch {
+                continue
+            }
         }
     }
 
@@ -1169,8 +1366,10 @@ class AppState: ObservableObject {
                         id: room.id,
                         name: room.name,
                         description: room.description,
+                        welcomeMessage: room.welcomeMessage,
                         userCount: room.userCount,
                         isPrivate: room.isPrivate,
+                        isLocked: room.isLocked,
                         maxUsers: room.maxUsers,
                         createdBy: room.createdBy,
                         createdByRole: room.createdByRole,
@@ -1242,7 +1441,7 @@ class AppState: ObservableObject {
         ]).filter { !$0.isEmpty }
         let isRoomOwnerByIdentity = !createdBy.isEmpty && ownerCandidates.contains(createdBy)
 
-        return SettingsManager.shared.adminGodModeEnabled
+        return SettingsManager.shared.adminPresenceModeEnabled
             || AdminServerManager.shared.isAdmin
             || AdminServerManager.shared.adminRole.canManageRooms
             || role.contains("admin")
@@ -1373,6 +1572,18 @@ class AppState: ObservableObject {
         pendingJoinRoomId = room.id
         errorMessage = "Joining \(room.name)..."
         serverManager.joinRoom(roomId: room.id, username: joinName)
+    }
+
+    func openHiddenRoom(roomId: String, roomName: String?) {
+        let trimmedName = roomName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hiddenRoom = Room(
+            id: roomId,
+            name: trimmedName.isEmpty ? "Support Room" : trimmedName,
+            description: "Private support session",
+            userCount: 0,
+            isPrivate: true
+        )
+        joinOrShowRoom(hiddenRoom)
     }
 
     func setFocusedRoom(_ room: Room?) {
@@ -1531,8 +1742,10 @@ struct Room: Identifiable, Equatable {
     let id: String
     let name: String
     let description: String
+    let welcomeMessage: String?
     var userCount: Int
     let isPrivate: Bool
+    let isLocked: Bool
     let maxUsers: Int
     let createdBy: String?
     let createdByRole: String?
@@ -1548,8 +1761,10 @@ struct Room: Identifiable, Equatable {
         id: String,
         name: String,
         description: String,
+        welcomeMessage: String? = nil,
         userCount: Int,
         isPrivate: Bool,
+        isLocked: Bool = false,
         maxUsers: Int = 50,
         createdBy: String? = nil,
         createdByRole: String? = nil,
@@ -1564,8 +1779,10 @@ struct Room: Identifiable, Equatable {
         self.id = id
         self.name = name
         self.description = description
+        self.welcomeMessage = welcomeMessage
         self.userCount = userCount
         self.isPrivate = isPrivate
+        self.isLocked = isLocked
         self.maxUsers = maxUsers
         self.createdBy = createdBy
         self.createdByRole = createdByRole
@@ -1582,8 +1799,10 @@ struct Room: Identifiable, Equatable {
         self.id = serverRoom.id
         self.name = serverRoom.name
         self.description = serverRoom.description
+        self.welcomeMessage = serverRoom.welcomeMessage
         self.userCount = serverRoom.userCount
         self.isPrivate = serverRoom.isPrivate
+        self.isLocked = serverRoom.isLocked
         self.maxUsers = serverRoom.maxUsers
         self.createdBy = serverRoom.createdBy
         self.createdByRole = serverRoom.createdByRole
@@ -1611,6 +1830,29 @@ struct Room: Identifiable, Equatable {
             return "Owner: \(owner)"
         }
         return nil
+    }
+}
+
+struct RichMessageText: View {
+    let message: String
+    var font: Font = .caption
+    var color: Color = .secondary
+    var lineLimit: Int? = nil
+    var alignment: TextAlignment = .leading
+
+    private var trimmedMessage: String {
+        message.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        if !trimmedMessage.isEmpty {
+            Text(StatusManager.shared.attributedMessage(trimmedMessage))
+                .font(font)
+                .foregroundColor(color)
+                .textSelection(.enabled)
+                .lineLimit(lineLimit)
+                .multilineTextAlignment(alignment)
+        }
     }
 }
 
@@ -1786,10 +2028,42 @@ struct MainMenuView: View {
         }
     }
 
-    var serverStatusSummary: String {
+    var serverDisplayName: String {
+        let configured = appState.publicServerConfig?.serverName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !configured.isEmpty {
+            return configured
+        }
+        if let firstNamedRoom = appState.rooms.first(where: {
+            let value = ($0.hostServerName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return !value.isEmpty
+        }), let host = firstNamedRoom.hostServerName?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+            return host
+        }
         let base = appState.serverManager.baseURL ?? ""
         let host = URL(string: base)?.host ?? appState.serverManager.connectedServer
-        return appState.isConnected ? "Connected (\(host))" : statusText
+        return host.isEmpty ? "VoiceLink" : host
+    }
+
+    var serverStatusSummary: String {
+        appState.isConnected ? "Connected to \(serverDisplayName)" : statusText
+    }
+
+    var serverWelcomeSummary: String? {
+        let serverWelcome = appState.publicServerConfig?.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let welcome = appState.publicServerConfig?.lobbyWelcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let motd = appState.publicServerConfig?.motd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parts = [serverWelcome, welcome, motd].filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n\n")
+    }
+
+    var canOpenServerAdministration: Bool {
+        let currentRole = AuthenticationManager.shared.currentUser?.role?.lowercased()
+        return AdminServerManager.shared.isAdmin
+            || AdminServerManager.shared.adminRole == .admin
+            || AdminServerManager.shared.adminRole == .owner
+            || currentRole == "admin"
+            || currentRole == "owner"
     }
 
     var sortedRooms: [Room] {
@@ -1867,8 +2141,50 @@ struct MainMenuView: View {
         }
     }
 
+    private func applyBrowseLayout(_ rawValue: String) {
+        switch rawValue {
+        case "list":
+            roomLayoutOption = .list
+        case "grid":
+            roomLayoutOption = .grid
+        case "column":
+            roomLayoutOption = .column
+        default:
+            break
+        }
+    }
+
+    private func applyBrowseScope(_ rawValue: String) {
+        switch rawValue {
+        case "all":
+            roomScopeFilter = .all
+        case "public":
+            roomScopeFilter = .publicOnly
+        case "private":
+            roomScopeFilter = .privateOnly
+        case "active":
+            roomScopeFilter = .activeUsers
+        case "media":
+            roomScopeFilter = .mediaActive
+        default:
+            break
+        }
+    }
+
+    private func applyBrowseSort(_ rawValue: String) {
+        switch rawValue {
+        case "active":
+            roomSortOption = .activeFirst
+        case "members":
+            roomSortOption = .mostMembers
+        default:
+            break
+        }
+    }
+
     var body: some View {
         let roomsForDisplay = filteredRooms
+        let authManager = AuthenticationManager.shared
         HStack(spacing: 0) {
             // Main Content
             VStack(spacing: 30) {
@@ -1880,115 +2196,6 @@ struct MainMenuView: View {
                 }
                 .padding(.top, 40)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    let base = appState.serverManager.baseURL ?? ""
-                    let host = URL(string: base)?.host ?? appState.serverManager.connectedServer
-                    HStack {
-                        Text("Server Details")
-                            .foregroundColor(.white)
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(serverStatusSummary)
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.caption)
-                    }
-
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 10, height: 10)
-                        Text("Connection: \(statusText)")
-                            .foregroundColor(.white.opacity(0.85))
-                        Spacer()
-                        Text("Local IP: \(appState.localIP)")
-                            .foregroundColor(.white.opacity(0.6))
-                            .font(.caption)
-                    }
-
-                    Group {
-                        Text("Host: \(host)")
-                        Text("Server Label: \(appState.serverManager.connectedServer)")
-                        Text("Sync Mode: \(SettingsManager.shared.syncMode.displayName)")
-                        Text("Rooms Loaded: \(appState.rooms.count)")
-                        Text("Audio Status: \(appState.serverManager.audioTransmissionStatus)")
-                        Text("Current Room: \((appState.currentRoom ?? appState.minimizedRoom)?.name ?? "None")")
-                    }
-                    .foregroundColor(.white.opacity(0.75))
-                    .font(.caption)
-                    .textSelection(.enabled)
-                }
-                .padding(.horizontal, 40)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(10)
-                .padding(.horizontal, 40)
-                .accessibilityLabel("Server details")
-                .accessibilityHint("Shows connection details and sync mode options.")
-
-                HStack {
-                    Text("Sync Mode")
-                        .foregroundColor(.white.opacity(0.7))
-                        .font(.caption)
-                    Spacer()
-                    Menu {
-                        ForEach(SyncMode.allCases) { mode in
-                            Button(action: { SettingsManager.shared.syncMode = mode }) {
-                                HStack {
-                                    if SettingsManager.shared.syncMode == mode {
-                                        Image(systemName: "checkmark")
-                                    }
-                                    Image(systemName: mode.icon)
-                                    Text(mode.displayName)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: SettingsManager.shared.syncMode.icon)
-                            Text(SettingsManager.shared.syncMode.displayName)
-                                .font(.caption)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(6)
-                        .foregroundColor(.white.opacity(0.8))
-                    }
-                    .menuStyle(.borderlessButton)
-                }
-                .padding(.horizontal, 40)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Room Details")
-                        .foregroundColor(.white)
-                        .font(.subheadline.weight(.semibold))
-                    if let room = appState.currentRoom ?? appState.minimizedRoom ?? appState.focusedRoomForQuickJoin() {
-                        Group {
-                            Text("Name: \(room.name)")
-                            Text("Description: \(appState.displayDescription(for: room))")
-                            Text("Users: \(room.userCount)/\(room.maxUsers)")
-                            Text("Media: \(appState.roomHasActiveMusic[room.id] == true ? "Playing" : "None")")
-                            if let hostedFrom = room.hostedFromLine {
-                                Text(hostedFrom)
-                            }
-                        }
-                        .foregroundColor(.white.opacity(0.75))
-                        .font(.caption)
-                        .textSelection(.enabled)
-                    } else {
-                        Text("No room selected.")
-                            .foregroundColor(.gray)
-                            .font(.caption)
-                    }
-                }
-                .padding(.horizontal, 40)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.05))
-                .cornerRadius(10)
-                .padding(.horizontal, 40)
-                .accessibilityLabel("Room details")
-                .accessibilityHint("Shows the currently focused room metadata and status.")
-
             // Error message
             if let error = appState.errorMessage {
                 Text(error)
@@ -1999,51 +2206,89 @@ struct MainMenuView: View {
 
                 // Room List
             VStack(alignment: .leading, spacing: 15) {
-                Text("Available Rooms")
+                Text("Available Rooms (\(roomsForDisplay.count))")
                     .font(.headline)
                     .foregroundColor(.white)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Room Filters")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-
-                    HStack(spacing: 12) {
-                        Picker("Server", selection: $selectedServerFilter) {
-                            ForEach(availableServerFilters, id: \.self) { server in
-                                Text(server).tag(server)
+                HStack {
+                    if authManager.authState == .authenticated, let user = authManager.currentUser {
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.crop.circle.fill")
+                                .foregroundColor(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(user.displayName)
+                                    .foregroundColor(.white)
+                                    .font(.subheadline.weight(.semibold))
+                                if let email = user.email, !email.isEmpty {
+                                    let accountTypeName: String = {
+                                        let provider = (user.authProvider ?? user.authMethod.rawValue).lowercased()
+                                        switch provider {
+                                        case "local", "voicelink", "email":
+                                            return "VoiceLink Account"
+                                        case "whmcs":
+                                            return "WHMCS Account"
+                                        case "mastodon":
+                                            return "Mastodon Account"
+                                        case "google":
+                                            return "Google Account"
+                                        case "apple":
+                                            return "Apple Account"
+                                        case "github":
+                                            return "GitHub Account"
+                                        default:
+                                            return "\(user.authMethod.displayName) Account"
+                                        }
+                                    }()
+                                    let roleName = (user.role?.isEmpty == false ? user.role! : "member")
+                                        .replacingOccurrences(of: "_", with: " ")
+                                        .capitalized
+                                    Text("\(accountTypeName) • \(roleName)")
+                                        .foregroundColor(.gray)
+                                        .font(.caption)
+                                    Text(email)
+                                        .foregroundColor(.gray.opacity(0.8))
+                                        .font(.caption2)
+                                }
                             }
-                        }
-                        .pickerStyle(.menu)
-                        .accessibilityLabel("Server filter")
-                        .accessibilityHint("Choose which server's rooms are shown. All Servers shows every room.")
 
-                        Picker("Scope", selection: $roomScopeFilter) {
-                            ForEach(RoomScopeFilter.allCases) { option in
-                                Text(option.rawValue).tag(option)
+                            if canOpenServerAdministration {
+                                Button("Server Administration") {
+                                    appState.currentScreen = .admin
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
                             }
-                        }
-                        .pickerStyle(.menu)
-                        .accessibilityLabel("Room scope filter")
-                        .accessibilityHint("Filter rooms by visibility, active users, or active media.")
 
-                        Picker("Sort", selection: $roomSortOption) {
-                            ForEach(RoomSortOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
+                            Button("Logout") {
+                                authManager.logout()
                             }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .pickerStyle(.menu)
-                        .accessibilityLabel("Sort rooms")
-                        .accessibilityHint("Sort available rooms alphabetically or by activity and member count.")
+                    } else {
+                        Button("Sign In to VoiceLink") {
+                            appState.currentScreen = .login
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
 
-                        Picker("View", selection: $roomLayoutOption) {
-                            ForEach(RoomLayoutOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
-                            }
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(serverStatusSummary)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                        if let serverWelcomeSummary {
+                            RichMessageText(
+                                message: serverWelcomeSummary,
+                                font: .caption2,
+                                color: .white.opacity(0.6),
+                                lineLimit: 5,
+                                alignment: .trailing
+                            )
+                                .frame(maxWidth: 360, alignment: .trailing)
                         }
-                        .pickerStyle(.menu)
-                        .accessibilityLabel("Room view layout")
-                        .accessibilityHint("Choose list, grid, or column layout for room cards.")
                     }
                 }
 
@@ -2225,19 +2470,13 @@ struct MainMenuView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 300)
+                .frame(maxHeight: 470)
                 .sheet(item: $selectedRoomDetails) { room in
                     RoomDetailsSheet(
                         room: room,
                         roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
                         isActiveRoom: appState.activeRoomId == room.id,
                         onJoin: { appState.joinOrShowRoom(room) },
-                        onShare: {
-                            let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(roomURL, forType: .string)
-                            AppSoundManager.shared.playSound(.success)
-                        },
                         onPreview: {
                             PeekManager.shared.togglePreview(
                                 for: room,
@@ -2257,7 +2496,14 @@ struct MainMenuView: View {
                             isInRoom: appState.activeRoomId == room.id,
                             isPresented: $showRoomActionMenuSheet
                         )
-                        .presentationDetents([.medium, .large])
+                        .presentationDetents([.height(320)])
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .openCurrentRoomActions)) { _ in
+                    guard appState.currentScreen == .mainMenu || appState.currentScreen == .joinRoom else { return }
+                    if let room = appState.focusedRoomForQuickJoin() {
+                        selectedRoomActionRoom = room
+                        showRoomActionMenuSheet = true
                     }
                 }
             }
@@ -2269,7 +2515,7 @@ struct MainMenuView: View {
                     appState.currentScreen = .createRoom
                 }
 
-                ActionButton(title: "Join by Code", icon: "link.circle.fill", color: .green) {
+                ActionButton(title: "Search for Servers or Join a Room", icon: "link.circle.fill", color: .green) {
                     appState.currentScreen = .joinRoom
                 }
             }
@@ -2277,60 +2523,12 @@ struct MainMenuView: View {
 
             // Account Button
             HStack {
-                let authManager = AuthenticationManager.shared
                 if authManager.authState == .authenticated {
-                    if let user = authManager.currentUser {
-                        HStack {
-                            Image(systemName: "person.circle.fill")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading) {
-                                Text(user.displayName)
-                                    .foregroundColor(.white)
-                                    .font(.subheadline)
-                                if let instance = user.mastodonInstance {
-                                    Text("@\(instance)")
-                                        .foregroundColor(.gray)
-                                        .font(.caption)
-                                }
-                            }
-                            Spacer()
-                            Button("Logout") {
-                                authManager.logout()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                        .padding()
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(10)
-                    }
+                    EmptyView()
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        ActionButton(title: "Login with Mastodon", icon: "person.circle.fill", color: .purple) {
+                        ActionButton(title: "Sign In to VoiceLink", icon: "person.crop.circle.badge.checkmark", color: .blue) {
                             appState.currentScreen = .login
-                        }
-                        HStack(spacing: 8) {
-                            Button("Google") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            Button("Apple") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            Button("GitHub") {
-                                if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
                         }
                     }
                 }
@@ -2344,6 +2542,21 @@ struct MainMenuView: View {
                 selectedServerFilter = "All Servers"
                 roomScopeFilter = .all
             }
+            .onReceive(NotificationCenter.default.publisher(for: .roomBrowseSetLayout)) { notification in
+                if let value = notification.object as? String {
+                    applyBrowseLayout(value)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .roomBrowseSetScope)) { notification in
+                if let value = notification.object as? String {
+                    applyBrowseScope(value)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .roomBrowseSetSort)) { notification in
+                if let value = notification.object as? String {
+                    applyBrowseSort(value)
+                }
+            }
 
             // Right Sidebar - Connection Health & Servers
             VStack(spacing: 16) {
@@ -2351,7 +2564,7 @@ struct MainMenuView: View {
 
                 // Settings tip at bottom of sidebar
                 HStack(spacing: 10) {
-                    Text("Settings: ⌘,")
+                    Text("Open Settings with Command-Comma")
                         .font(.caption)
                         .foregroundColor(.gray.opacity(0.85))
                 }
@@ -2393,7 +2606,7 @@ struct RoomCard: View {
         case .openDetails:
             return "Room Details"
         case .joinOrShow:
-            return isActiveRoom ? "Show Room" : "Join"
+            return "Join"
         case .preview:
             return "Preview"
         case .share:
@@ -2422,8 +2635,12 @@ struct RoomCard: View {
         roomHasActiveMedia ? "Media is playing." : "No media is playing."
     }
 
+    var lockStatusText: String {
+        room.isLocked ? "Locked." : "Unlocked."
+    }
+
     var roomAccessibilitySummary: String {
-        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
+        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(lockStatusText) \(mediaStatusText)"
     }
 
     var showJoinActionSeparately: Bool {
@@ -2456,6 +2673,10 @@ struct RoomCard: View {
                             .foregroundColor(.yellow)
                             .font(.caption)
                     }
+
+                    Text(room.isLocked ? "Locked" : "Unlocked")
+                        .font(.caption2)
+                        .foregroundColor(room.isLocked ? .orange : .gray)
                 }
 
                 if settings.showRoomDescriptions {
@@ -2509,25 +2730,13 @@ struct RoomCard: View {
                 isAdmin: isAdmin
             )
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(roomHasActiveMedia ? "Media: Active" : "Media: None")
-                    .font(.caption2)
-                    .foregroundColor(.gray.opacity(0.95))
-                Text("Users: \(room.userCount)/\(room.maxUsers)")
-                    .font(.caption2)
-                    .foregroundColor(.gray.opacity(0.8))
-                Text(displayDescription)
-                    .font(.caption2)
-                    .foregroundColor(.gray.opacity(0.75))
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: 260, alignment: .trailing)
         }
         .padding()
         .background(Color.white.opacity(0.1))
         .cornerRadius(12)
         .contentShape(Rectangle())
         .onTapGesture { onFocus() }
+        .onTapGesture(count: 2) { runPrimaryAction() }
         .onHover { hovering in
             if hovering { onFocus() }
         }
@@ -2536,9 +2745,8 @@ struct RoomCard: View {
             Divider()
             Button("Room Details") { onOpenDetails() }
             if showJoinActionSeparately {
-                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                Button("Join Room") { onJoin() }
             }
-            Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
             }
@@ -2557,6 +2765,7 @@ struct RoomCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryActionLabel). Use room actions for more options.")
+        .accessibilityAction { runPrimaryAction() }
         .accessibilityAction(named: Text(primaryActionLabel)) { runPrimaryAction() }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -2633,7 +2842,7 @@ struct RoomActionSplitButton: View {
                 Divider()
                 Button("Room Details") { onOpenDetails() }
                 if showJoinAction {
-                    Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                    Button("Join Room") { onJoin() }
                 }
                 Button("Preview Room Audio") { previewOrExplain() }
                     .disabled(!roomCanPreview)
@@ -2686,7 +2895,7 @@ struct RoomColumnRow: View {
         case .openDetails:
             return "Room Details"
         case .joinOrShow:
-            return isActiveRoom ? "Show Room" : "Join"
+            return "Join"
         case .preview:
             return "Preview"
         case .share:
@@ -2746,6 +2955,9 @@ struct RoomColumnRow: View {
                 Text(room.name)
                     .foregroundColor(.white)
                     .font(.subheadline.weight(.semibold))
+                Text(room.isLocked ? "Locked" : "Unlocked")
+                    .font(.caption2)
+                    .foregroundColor(room.isLocked ? .orange : .gray)
                 Text(displayDescription)
                     .font(.caption2)
                     .foregroundColor(.gray)
@@ -2807,6 +3019,7 @@ struct RoomColumnRow: View {
         .cornerRadius(10)
         .contentShape(Rectangle())
         .onTapGesture { onFocus() }
+        .onTapGesture(count: 2) { runPrimaryAction() }
         .onHover { hovering in
             if hovering { onFocus() }
         }
@@ -2815,9 +3028,8 @@ struct RoomColumnRow: View {
             Divider()
             Button("Room Details") { onOpenDetails() }
             if showJoinActionSeparately {
-                Button(isActiveRoom ? "Show Room" : "Join Room") { onJoin() }
+                Button("Join Room") { onJoin() }
             }
-            Button("Open Jukebox") { NotificationCenter.default.post(name: .openRoomJukebox, object: nil) }
             Button("Preview Room Audio") {
                 if previewAvailable { onPreview() } else { onOpenDetails() }
             }
@@ -2836,6 +3048,7 @@ struct RoomColumnRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(roomAccessibilitySummary)
         .accessibilityHint("Primary button runs \(primaryLabel). Use VoiceOver plus Shift plus M for the actions menu.")
+        .accessibilityAction { runPrimaryAction() }
         .accessibilityAction(named: Text(primaryLabel)) { runPrimaryAction() }
         .accessibilityAction(named: Text("Preview Room Audio")) {
             if previewAvailable { onPreview() } else { onOpenDetails() }
@@ -2850,7 +3063,6 @@ struct RoomDetailsSheet: View {
     let roomHasActiveMedia: Bool
     let isActiveRoom: Bool
     let onJoin: () -> Void
-    let onShare: () -> Void
     let onPreview: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var holdPreviewActive = false
@@ -2864,16 +3076,77 @@ struct RoomDetailsSheet: View {
         )
     }
 
+    private var roomWelcomeMessage: String? {
+        let value = room.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var roomCreatedLabel: String {
+        guard let createdAt = room.createdAt else { return "Unknown" }
+        return createdAt.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var roomAgeLabel: String {
+        guard let createdAt = room.createdAt else { return "Unknown" }
+        return RelativeDateTimeFormatter().localizedString(for: createdAt, relativeTo: Date())
+    }
+
+    private var roomUptimeLabel: String {
+        guard let uptimeSeconds = room.uptimeSeconds, uptimeSeconds > 0 else { return "Unknown" }
+        let hours = uptimeSeconds / 3600
+        let minutes = (uptimeSeconds % 3600) / 60
+        let seconds = uptimeSeconds % 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m \(seconds)s" }
+        return "\(seconds)s"
+    }
+
+    private var roomOwnerLabel: String {
+        let owner = room.createdBy?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return owner.isEmpty ? "Unknown" : owner
+    }
+
+    private var lastUserLabel: String {
+        let lastUser = room.lastActiveUsername?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return lastUser.isEmpty ? "No recent activity" : lastUser
+    }
+
+    private var lastActivityLabel: String {
+        guard let lastActivityAt = room.lastActivityAt else { return "Unknown" }
+        return lastActivityAt.formatted(date: .abbreviated, time: .shortened)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(room.name).font(.title2.weight(.bold))
             Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
                 .foregroundColor(.secondary)
 
-            HStack {
+            if let roomWelcomeMessage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Room Welcome")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    RichMessageText(message: roomWelcomeMessage, font: .caption, color: .secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Room Status: \(isActiveRoom ? "Joined" : "Available")")
+                Text("Lock: \(room.isLocked ? "Locked" : "Unlocked")")
+                Text("Your Status: \(ServerManager.shared.audioTransmissionStatus)")
                 Text("Users: \(room.userCount)/\(room.maxUsers)")
-                Spacer()
-                Text(room.isPrivate ? "Private" : "Public")
+                Text("Visibility: \(room.isPrivate ? "Private" : "Public")")
+                Text("Media: \(roomHasActiveMedia ? "Active" : "None")")
+                Text("Owner: \(roomOwnerLabel)")
+                Text("Created: \(roomCreatedLabel)")
+                Text("Room Age: \(roomAgeLabel)")
+                Text("Room Uptime: \(roomUptimeLabel)")
+                Text("Last User: \(lastUserLabel)")
+                Text("Last Activity: \(lastActivityLabel)")
+                if let type = room.roomType, !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Room Type: \(type)")
+                }
             }
             .font(.caption)
             .foregroundColor(.secondary)
@@ -2887,9 +3160,7 @@ struct RoomDetailsSheet: View {
             HStack(spacing: 10) {
                 Button(isActiveRoom ? "Return to Room" : "Join Room") { onJoin(); dismiss() }
                     .buttonStyle(.borderedProminent)
-                Button("Share") { onShare() }
-                    .buttonStyle(.bordered)
-                Button("Preview / Peek") {
+                Button("Preview") {
                     if holdPreviewTriggered { return }
                     onPreview()
                 }
@@ -2910,10 +3181,9 @@ struct RoomDetailsSheet: View {
                         }
                     }, perform: {})
             }
-            Spacer()
         }
         .padding(20)
-        .frame(minWidth: 460, minHeight: 260)
+        .frame(minWidth: 420, minHeight: 220)
     }
 }
 
@@ -2975,22 +3245,28 @@ struct CreateRoomView: View {
                 .foregroundColor(.white)
 
             VStack(alignment: .leading, spacing: 15) {
-                TextField("Room Name", text: $roomName)
+                TextField("Room name shown in the room list", text: $roomName)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 350)
+                    .accessibilityLabel("Room name")
+                    .accessibilityHint("Enter the name users will see for this room.")
 
-                TextField("Description (optional)", text: $roomDescription)
+                TextField("Short room description or topic, optional", text: $roomDescription)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 350)
+                    .accessibilityLabel("Room description")
+                    .accessibilityHint("Add an optional summary or topic for this room.")
 
                 Toggle("Private Room", isOn: $isPrivate)
                     .foregroundColor(.white)
                     .frame(width: 350)
 
                 if isPrivate {
-                    SecureField("Room Password", text: $password)
+                    SecureField("Room password for invited users", text: $password)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 350)
+                        .accessibilityLabel("Room password")
+                        .accessibilityHint("Enter the password users must provide to join this private room.")
                 }
 
                 if isLoggedIn {
@@ -3023,9 +3299,11 @@ struct CreateRoomView: View {
                         .frame(width: 350)
 
                     if roomType == "moderated" || roomType == "admin" {
-                        TextField("Moderation notes (optional)", text: $moderationNotes)
+                        TextField("Moderation notes for staff, optional", text: $moderationNotes)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 350)
+                            .accessibilityLabel("Moderation notes")
+                            .accessibilityHint("Enter optional staff-only notes about moderation for this room.")
                     }
                 }
             }
@@ -3086,9 +3364,15 @@ struct CreateRoomView: View {
 struct JoinRoomView: View {
     @EnvironmentObject var appState: AppState
     @State private var roomCode = ""
+    @State private var guestDisplayName = ""
 
     private var query: String {
         roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isAuthenticated: Bool {
+        AuthenticationManager.shared.authState == .authenticated
+            && AuthenticationManager.shared.currentUser != nil
     }
 
     private var filteredRooms: [Room] {
@@ -3104,7 +3388,7 @@ struct JoinRoomView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Join or Search Rooms")
+            Text("Search for Servers or Join a Room")
                 .font(.largeTitle)
                 .foregroundColor(.white)
 
@@ -3114,12 +3398,33 @@ struct JoinRoomView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 620)
 
-            TextField("Room ID, name, or keyword", text: $roomCode)
+            TextField("Search by room ID, room name, or keyword", text: $roomCode)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 520)
+                .accessibilityLabel("Room search")
+                .accessibilityHint("Type a room ID, room name, or keyword to search for a room to join.")
                 .onSubmit {
                     _ = appState.joinRoomByCodeOrName(roomCode)
                 }
+
+            if !isAuthenticated {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Guest Display Name")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    TextField("Guest display name to use in rooms", text: $guestDisplayName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 520)
+                        .accessibilityLabel("Guest display name")
+                        .accessibilityHint("Enter the name you want other users to see when joining as a guest.")
+                        .onChange(of: guestDisplayName) { newValue in
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                appState.username = trimmed
+                            }
+                        }
+                }
+            }
 
             HStack(spacing: 10) {
                 Button("Join Match") {
@@ -3177,7 +3482,7 @@ struct JoinRoomView: View {
                                     }
                                 }
                                 Spacer()
-                                Button(appState.activeRoomId == room.id ? "Show" : "Join") {
+                                Button("Join") {
                                     appState.setFocusedRoom(room)
                                     appState.joinOrShowRoom(room)
                                 }
@@ -3193,6 +3498,10 @@ struct JoinRoomView: View {
             }
         }
         .onAppear {
+            if !isAuthenticated {
+                let preferred = appState.username.trimmingCharacters(in: .whitespacesAndNewlines)
+                guestDisplayName = preferred.isEmpty ? appState.preferredDisplayName() : preferred
+            }
             if roomCode.isEmpty, let focused = appState.focusedRoomForQuickJoin() {
                 roomCode = focused.name
             }
@@ -3205,26 +3514,288 @@ struct VoiceChatView: View {
     @ObservedObject var messagingManager = MessagingManager.shared
     @ObservedObject var adminManager = AdminServerManager.shared
     @ObservedObject var roomLockManager = RoomLockManager.shared
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var audioControl = UserAudioControlManager.shared
     @State private var isMuted = false
     @State private var isDeafened = false
     @State private var messageText = ""
     @State private var showChat = true
+    @State private var showTranscripts = true
+    @State private var roomTranscripts: [RoomTranscriptEntry] = []
     @State private var showRoomActionsSheet = false
+    @State private var showRoomDetailsSheet = false
+    @State private var showEscortSheet = false
+    @State private var selectedDirectMessageUserId: String?
+    @State private var selectedDirectMessageUserName: String?
     @State private var pendingEscapeTimestamp: Date?
     @State private var escapeKeyMonitor: Any?
+    @State private var pendingRoomLockDuration: TimeInterval?
+    @State private var pendingRoomLockActionIsUnlock = false
+    @State private var showRoomLockConfirmation = false
+
+    private var isAuthenticatedUser: Bool {
+        authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
+    private var canOpenServerAdministration: Bool {
+        let currentRole = authManager.currentUser?.role?.lowercased()
+        return adminManager.isAdmin
+            || adminManager.adminRole.canManageConfig
+            || adminManager.adminRole.canManageServer
+            || currentRole == "admin"
+            || currentRole == "owner"
+    }
+
+    private var canManageBackgroundMedia: Bool {
+        guard let room = appState.currentRoom else {
+            return adminManager.isAdmin || adminManager.adminRole.canManageConfig || adminManager.adminRole.canManageRooms
+        }
+        return appState.canManageRoom(room)
+    }
+
+    private var canLockCurrentRoom: Bool {
+        guard let room = appState.currentRoom else { return roomLockManager.canCurrentUserLock }
+        return appState.canManageRoom(room)
+    }
+
+    private var availableBackgroundStreams: [BackgroundStreamConfig] {
+        guard adminManager.serverConfig?.backgroundStreams?.enabled != false else { return [] }
+        let streams = adminManager.serverConfig?.backgroundStreams?.streams ?? []
+        return streams
+            .filter { stream in
+                let url = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stream.url : stream.streamUrl
+                return !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var configuredBackgroundMediaFadeDuration: TimeInterval {
+        let fadeMilliseconds = adminManager.serverConfig?.backgroundStreams?.fadeInDuration ?? 1500
+        return max(Double(fadeMilliseconds) / 1000.0, 0.05)
+    }
 
     private var meDisplayName: String {
         appState.preferredDisplayName()
     }
 
     private var visibleRoomUsers: [RoomUser] {
+        let currentUserId = appState.serverManager.currentUserId
         let selfCandidates = Set([
             appState.username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
             appState.preferredDisplayName().lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         ])
         return appState.serverManager.currentRoomUsers.filter { user in
-            !selfCandidates.contains(user.username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
+            if let currentUserId, user.id == currentUserId || user.odId == currentUserId {
+                return false
+            }
+            return !selfCandidates.contains(user.username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
         }
+    }
+
+    private var selectedDirectMessages: [MessagingManager.ChatMessage] {
+        guard let userId = selectedDirectMessageUserId else { return [] }
+        return messagingManager.getDirectMessages(with: userId)
+    }
+
+    private var currentChatMessages: [MessagingManager.ChatMessage] {
+        selectedDirectMessageUserId == nil ? messagingManager.messages : selectedDirectMessages
+    }
+
+    private var chatTitle: String {
+        if let name = selectedDirectMessageUserName, !name.isEmpty {
+            return "Direct Messages with \(name)"
+        }
+        return "Room Chat"
+    }
+
+    private var currentChatPlaceholder: String {
+        if let name = selectedDirectMessageUserName, !name.isEmpty {
+            return "Message \(name)..."
+        }
+        return "Type a room message..."
+    }
+
+    private var canSendMessages: Bool {
+        appState.currentRoom != nil || appState.serverManager.activeRoomId != nil
+    }
+
+    private func normalizedStreamURL(for stream: BackgroundStreamConfig) -> String {
+        let primary = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+        return stream.url.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func roomNameMatchesPattern(_ roomName: String, pattern: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: pattern)
+            .replacingOccurrences(of: "\\*", with: ".*")
+        let expression = "^\(escaped)$"
+        return roomName.range(of: expression, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private func isStreamAssignedToCurrentRoom(_ stream: BackgroundStreamConfig) -> Bool {
+        guard let room = appState.currentRoom else { return false }
+        let roomId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomName = room.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicitRooms = (stream.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if explicitRooms.contains(roomId) {
+            return true
+        }
+        return (stream.roomPatterns ?? []).contains { pattern in
+            roomNameMatchesPattern(roomName, pattern: pattern)
+        }
+    }
+
+    private func updateCurrentRoomBackgroundMediaSelection(_ selectedStream: BackgroundStreamConfig?) {
+        guard canManageBackgroundMedia, let room = appState.currentRoom else { return }
+        guard var config = adminManager.serverConfig?.backgroundStreams else { return }
+
+        let roomId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        config.streams = config.streams.map { stream in
+            var updated = stream
+            var rooms = (updated.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != roomId }
+            if let selectedStream, updated.id == selectedStream.id {
+                rooms.append(roomId)
+            }
+            updated.rooms = rooms.isEmpty ? nil : Array(Set(rooms)).sorted()
+            return updated
+        }
+
+        Task {
+            let success = await adminManager.updateBackgroundStreamsConfig(config)
+            guard success else { return }
+            await MainActor.run {
+                appState.serverManager.setRoomMediaFadeDuration(configuredBackgroundMediaFadeDuration)
+                if selectedStream == nil {
+                    appState.serverManager.stopCurrentRoomMedia()
+                } else {
+                    appState.serverManager.stopCurrentRoomMedia()
+                    appState.serverManager.refreshRoomMedia(for: room.id)
+                }
+            }
+        }
+    }
+
+    private func syncRoomManagementState() {
+        guard let room = appState.currentRoom else { return }
+        roomLockManager.canCurrentUserLock = appState.canManageRoom(room)
+        roomLockManager.isRoomLocked = room.isLocked
+    }
+
+    @ViewBuilder
+    private var chatPanel: some View {
+        HStack(spacing: 0) {
+            ChatConversationSidebar(
+                visibleRoomUsers: visibleRoomUsers,
+                selectedDirectMessageUserId: selectedDirectMessageUserId,
+                unreadCounts: messagingManager.unreadCounts,
+                onSelectMainRoomChat: {
+                    selectedDirectMessageUserId = nil
+                    selectedDirectMessageUserName = nil
+                },
+                onOpenDirectMessage: { user in
+                    openDirectMessage(with: user)
+                }
+            )
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            ChatConversationPanel(
+                chatTitle: chatTitle,
+                selectedDirectMessageUserId: selectedDirectMessageUserId,
+                selectedDirectMessageUserName: selectedDirectMessageUserName,
+                totalUnreadCount: messagingManager.totalUnreadCount,
+                canLoadOlderMessages: false,
+                currentHistoryStatus: "",
+                currentChatMessages: currentChatMessages,
+                currentChatPlaceholder: currentChatPlaceholder,
+                canSendMessages: canSendMessages,
+                isSharing: false,
+                messageText: $messageText,
+                onBack: {
+                    selectedDirectMessageUserId = nil
+                    selectedDirectMessageUserName = nil
+                },
+                onLoadOlder: {},
+                onSkipToLatest: {},
+                onSelectAttachment: {},
+                onSendMessage: sendMessage,
+                onSendFileToSender: actionForSendingFile(to:),
+                onDirectMessageSender: actionForDirectMessage(to:),
+                onViewSenderProfile: actionForViewingSenderProfile(for:)
+            )
+        }
+        .frame(minWidth: 420, idealWidth: 520)
+        .background(Color.black.opacity(0.2))
+    }
+
+    @ViewBuilder
+    private var transcriptPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Live Transcripts")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .accessibilityLabel("Live Transcripts")
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text("\(roomTranscripts.count)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .accessibilityLabel("\(roomTranscripts.count) transcript items")
+            }
+            .padding()
+            .background(Color.black.opacity(0.3))
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        if roomTranscripts.isEmpty {
+                            Text("Live room transcripts will appear here.")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+
+                        ForEach(roomTranscripts) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Text(entry.userName)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(.white)
+                                    if let language = entry.language, !language.isEmpty {
+                                        Text(language.uppercased())
+                                            .font(.caption2)
+                                            .foregroundColor(.gray)
+                                    }
+                                    Spacer()
+                                    Text(entry.timestamp, style: .time)
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
+                                Text(entry.text)
+                                    .font(.callout)
+                                    .foregroundColor(.white)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(10)
+                            .background(Color.white.opacity(0.06))
+                            .cornerRadius(8)
+                            .id(entry.id)
+                        }
+                    }
+                    .padding()
+                }
+                .onChange(of: roomTranscripts.count) { _ in
+                    if let last = roomTranscripts.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .frame(minHeight: 180, idealHeight: 220)
+        .background(Color.black.opacity(0.18))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Live transcripts panel")
     }
 
     var body: some View {
@@ -3254,19 +3825,62 @@ struct VoiceChatView: View {
                     Spacer()
 
                     Menu {
-                        Button("Room Actions...") {
-                            showRoomActionsSheet = true
-                        }
-                        Button("Open Jukebox") {
-                            NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
-                        }
-                        if roomLockManager.canCurrentUserLock {
-                            Button(roomLockManager.isRoomLocked ? "Unlock Room" : "Lock Room") {
-                                roomLockManager.toggleLock()
+                        if isAuthenticatedUser {
+                            Button("Room Actions...") {
+                                showRoomActionsSheet = true
                             }
                         }
-                        if let room = appState.currentRoom, appState.canManageRoom(room) {
-                            Button("Room Administration") {
+                        if isAuthenticatedUser && canManageBackgroundMedia {
+                            Menu("Room Background Media") {
+                                Button("No Background Media") {
+                                    updateCurrentRoomBackgroundMediaSelection(nil)
+                                }
+
+                                if !availableBackgroundStreams.isEmpty {
+                                    Divider()
+                                    ForEach(availableBackgroundStreams) { stream in
+                                        Button {
+                                            updateCurrentRoomBackgroundMediaSelection(stream)
+                                        } label: {
+                                            if isStreamAssignedToCurrentRoom(stream) {
+                                                Label(stream.name, systemImage: "checkmark")
+                                            } else {
+                                                Text(stream.name)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Button("Room Details") {
+                            showRoomDetailsSheet = true
+                        }
+                        if isAuthenticatedUser && canLockCurrentRoom {
+                            if roomLockManager.isRoomLocked {
+                                Button {
+                                    requestRoomUnlock()
+                                } label: {
+                                    Label("Unlock Room", systemImage: "lock.open.fill")
+                                }
+                            } else {
+                                Menu {
+                                    ForEach(RoomLockManager.LockDurationPreset.allCases) { preset in
+                                        Button(preset.title) {
+                                            requestRoomLock(duration: preset.duration)
+                                        }
+                                    }
+                                } label: {
+                                    Label("Lock Room", systemImage: "lock.fill")
+                                }
+                            }
+                        }
+                        if isAuthenticatedUser, appState.currentRoom != nil {
+                            Button("Escort Me") {
+                                showEscortSheet = true
+                            }
+                        }
+                        if isAuthenticatedUser, canOpenServerAdministration {
+                            Button("Server Administration") {
                                 appState.currentScreen = .admin
                             }
                             Divider()
@@ -3278,7 +3892,7 @@ struct VoiceChatView: View {
                             appState.leaveCurrentRoom()
                         }
                     } label: {
-                        Label("Room", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label("Room", systemImage: roomLockManager.isRoomLocked ? "lock.fill" : "lock.open")
                     }
                     .menuStyle(.borderlessButton)
                 }
@@ -3287,13 +3901,16 @@ struct VoiceChatView: View {
                 // Users in room
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("Users in Room")
+                        Text("Members List")
                             .font(.headline)
                             .foregroundColor(.white)
+                            .accessibilityLabel("Members List")
+                            .accessibilityAddTraits(.isHeader)
                         Spacer()
                         Text("\(visibleRoomUsers.count + 1)")
                             .font(.caption)
                             .foregroundColor(.gray)
+                            .accessibilityLabel("\(visibleRoomUsers.count + 1) members")
                     }
 
                     ScrollView {
@@ -3320,6 +3937,8 @@ struct VoiceChatView: View {
                             }
                         }
                     }
+                    .accessibilityLabel("Members list")
+                    .accessibilityHint("Shows everyone currently in this room")
                 }
                 .padding(.horizontal)
 
@@ -3356,8 +3975,34 @@ struct VoiceChatView: View {
                                       isActive: showChat) {
                         showChat.toggle()
                     }
+
+                    VoiceControlButton(icon: showTranscripts ? "captions.bubble.fill" : "captions.bubble",
+                                      label: showTranscripts ? "Hide Transcripts" : "Show Transcripts",
+                                      isActive: showTranscripts) {
+                        showTranscripts.toggle()
+                    }
                 }
                 .padding(.bottom, 20)
+
+                VStack(spacing: 10) {
+                    HStack(spacing: 12) {
+                        Text("Output")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 48, alignment: .leading)
+                        Slider(value: Binding(
+                            get: { Double(audioControl.masterVolume) },
+                            set: { audioControl.masterVolume = Float($0) }
+                        ), in: 0...2.0)
+                        Text("\(Int(audioControl.masterVolume * 100))%")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 42)
+                    }
+
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 12)
 
                 // Keyboard shortcuts hint
                 HStack(spacing: 15) {
@@ -3371,80 +4016,29 @@ struct VoiceChatView: View {
             }
             .frame(minWidth: 300)
 
-            // Right side - Chat Panel
             if showChat {
-                VStack(spacing: 0) {
-                    // Chat header
-                    HStack {
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                        Text("Room Chat")
-                            .font(.headline)
-                        Spacer()
-                        if messagingManager.totalUnreadCount > 0 {
-                            Text("\(messagingManager.totalUnreadCount)")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(Color.red)
-                                .cornerRadius(10)
-                        }
+                if showTranscripts {
+                    VStack(spacing: 0) {
+                        chatPanel
+                        Divider().overlay(Color.white.opacity(0.08))
+                        transcriptPanel
                     }
-                    .padding()
-                    .background(Color.black.opacity(0.3))
-
-                    // Messages list
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 8) {
-                                ForEach(messagingManager.messages) { message in
-                                    ChatMessageRow(message: message)
-                                        .id(message.id)
-                                }
-                            }
-                            .padding()
-                        }
-                        .onChange(of: messagingManager.messages.count) { _ in
-                            if let lastMessage = messagingManager.messages.last {
-                                withAnimation {
-                                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                                }
-                            }
-                        }
-                    }
-
-                    // Message input
-                    HStack(spacing: 8) {
-                        TextField(appState.serverStatus == .online ? "Type a message..." : "Connect to send messages", text: $messageText)
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(appState.serverStatus != .online || appState.currentRoom == nil)
-                            .onSubmit {
-                                sendMessage()
-                            }
-
-                        Button(action: sendMessage) {
-                            HStack(spacing: 4) {
-                                Text("Send")
-                                    .fontWeight(.medium)
-                                Image(systemName: "paperplane.fill")
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                        }
-                        .disabled(messageText.isEmpty || appState.serverStatus != .online || appState.currentRoom == nil)
-                        .buttonStyle(.borderedProminent)
-                        .tint((messageText.isEmpty || appState.serverStatus != .online) ? .gray : .blue)
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.3))
+                } else {
+                    chatPanel
                 }
-                .frame(minWidth: 250, idealWidth: 300)
-                .background(Color.black.opacity(0.2))
             }
         }
         .onAppear {
             // Ensure room audio path is active when chat view is visible.
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            refreshRoomAdminCapabilities()
+            syncRoomManagementState()
             setupEscapeMonitor()
+            if canManageBackgroundMedia {
+                Task {
+                    await adminManager.fetchServerConfig()
+                }
+            }
         }
         .onDisappear {
             tearDownEscapeMonitor()
@@ -3463,33 +4057,200 @@ struct VoiceChatView: View {
             // Announce state change
             AccessibilityManager.shared.announceAudioStatus(isDeafened ? "deafened" : "undeafened")
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openDirectMessage)) { notification in
+            guard let info = notification.userInfo else { return }
+            guard let userId = info["userId"] as? String else { return }
+            selectedDirectMessageUserId = userId
+            selectedDirectMessageUserName = info["userName"] as? String ?? "User"
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCurrentRoomActions)) { _ in
+            if appState.currentRoom != nil {
+                showRoomActionsSheet = true
+            }
+        }
+        .onChange(of: appState.currentRoom?.id) { _ in
+            syncRoomManagementState()
+        }
+        .onChange(of: appState.currentRoom?.isLocked) { _ in
+            syncRoomManagementState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openEscortForCurrentRoom)) { _ in
+            if appState.currentRoom != nil {
+                showEscortSheet = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roomTranscriptReceived)) { notification in
+            guard let info = notification.userInfo else { return }
+            let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let activeRoomId = appState.serverManager.activeRoomId ?? appState.currentRoom?.id ?? ""
+            guard !roomId.isEmpty, roomId == activeRoomId else { return }
+            let text = (info["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return }
+            let userName = (info["userName"] as? String ?? "Live Transcript").trimmingCharacters(in: .whitespacesAndNewlines)
+            let languageValue = (info["language"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            roomTranscripts.append(
+                RoomTranscriptEntry(
+                    userId: (info["userId"] as? String ?? ""),
+                    userName: userName.isEmpty ? "Live Transcript" : userName,
+                    text: text,
+                    language: languageValue.isEmpty ? nil : languageValue
+                )
+            )
+            if roomTranscripts.count > 200 {
+                roomTranscripts.removeFirst(roomTranscripts.count - 200)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roomJoined)) { _ in
+            roomTranscripts.removeAll()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .roomLeft)) { _ in
+            roomTranscripts.removeAll()
+        }
+        .alert(
+            pendingRoomLockActionIsUnlock ? "Unlock Room?" : "Lock Room?",
+            isPresented: $showRoomLockConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button(pendingRoomLockActionIsUnlock ? "Unlock" : "Lock") {
+                if pendingRoomLockActionIsUnlock {
+                    roomLockManager.unlockRoom()
+                } else {
+                    roomLockManager.lockRoom(duration: pendingRoomLockDuration)
+                }
+            }
+        } message: {
+            if pendingRoomLockActionIsUnlock {
+                Text("This will reopen the room immediately.")
+            } else if let pendingRoomLockDuration {
+                Text("This will lock the room for \(formattedLockDuration(pendingRoomLockDuration)).")
+            } else {
+                Text("This will lock the room until it is unlocked manually.")
+            }
+        }
         .sheet(isPresented: $showRoomActionsSheet) {
             if let room = appState.currentRoom {
                 RoomActionMenu(room: room, isInRoom: true, isPresented: $showRoomActionsSheet)
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.height(520)])
             }
+        }
+        .sheet(isPresented: $showEscortSheet) {
+            if let room = appState.currentRoom {
+                EscortMeView(roomId: room.id) {
+                    showEscortSheet = false
+                }
+            }
+        }
+        .sheet(isPresented: $showRoomDetailsSheet) {
+            if let room = appState.currentRoom {
+                RoomDetailsSheet(
+                    room: room,
+                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
+                    isActiveRoom: true,
+                    onJoin: {},
+                    onPreview: {
+                        PeekManager.shared.peekIntoRoom(room)
+                    }
+                )
+                .presentationDetents([.height(280)])
+            }
+        }
+    }
+
+    private func refreshRoomAdminCapabilities() {
+        guard let serverURL = appState.serverManager.baseURL, !serverURL.isEmpty else { return }
+        let token = authManager.currentUser?.accessToken
+        Task {
+            await adminManager.checkAdminStatus(serverURL: serverURL, token: token)
         }
     }
 
     private func sendMessage() {
         guard !messageText.isEmpty else { return }
 
-        // Check if we're connected
-        guard appState.serverStatus == .online else {
-            print("Cannot send message: Not connected to server")
-            return
-        }
-
-        // Check if we're in a room
-        guard appState.currentRoom != nil else {
-            print("Cannot send message: Not in a room")
+        guard canSendMessages else {
+            print("Cannot send message: No active room session")
             return
         }
 
         print("Sending message: \(messageText)")
-        messagingManager.sendRoomMessage(messageText)
+        if let userId = selectedDirectMessageUserId {
+            messagingManager.sendDirectMessage(
+                to: userId,
+                username: selectedDirectMessageUserName ?? "User",
+                content: messageText
+            )
+            messagingManager.markAsRead(userId: userId)
+        } else {
+            messagingManager.sendRoomMessage(messageText)
+        }
         AppSoundManager.shared.playSound(.messageSent)
         messageText = ""
+    }
+
+    private func openDirectMessage(with user: RoomUser) {
+        selectedDirectMessageUserId = user.odId
+        selectedDirectMessageUserName = user.username
+    }
+
+    private func requestRoomLock(duration: TimeInterval?) {
+        pendingRoomLockActionIsUnlock = false
+        pendingRoomLockDuration = duration
+        if SettingsManager.shared.confirmRoomLockChanges {
+            showRoomLockConfirmation = true
+        } else {
+            roomLockManager.lockRoom(duration: duration)
+        }
+    }
+
+    private func requestRoomUnlock() {
+        pendingRoomLockActionIsUnlock = true
+        pendingRoomLockDuration = nil
+        if SettingsManager.shared.confirmRoomLockChanges {
+            showRoomLockConfirmation = true
+        } else {
+            roomLockManager.unlockRoom()
+        }
+    }
+
+    private func formattedLockDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = Int(duration)
+        if totalSeconds % 3600 == 0 {
+            return "\(totalSeconds / 3600) hour\(totalSeconds / 3600 == 1 ? "" : "s")"
+        }
+        if totalSeconds % 60 == 0 {
+            return "\(totalSeconds / 60) minute\(totalSeconds / 60 == 1 ? "" : "s")"
+        }
+        return "\(totalSeconds) seconds"
+    }
+
+    private func actionForSendingFile(to message: MessagingManager.ChatMessage) -> (() -> Void)? {
+        guard message.type != .system else { return nil }
+        return nil
+    }
+
+    private func actionForDirectMessage(to message: MessagingManager.ChatMessage) -> (() -> Void)? {
+        guard message.type != .system else { return nil }
+        let senderId = message.senderId
+        let senderName = message.senderName
+        guard !senderId.isEmpty else { return nil }
+        return {
+            selectedDirectMessageUserId = senderId
+            selectedDirectMessageUserName = senderName
+        }
+    }
+
+    private func actionForViewingSenderProfile(for message: MessagingManager.ChatMessage) -> (() -> Void)? {
+        guard message.type != .system else { return nil }
+        let senderId = message.senderId
+        let senderName = message.senderName
+        guard !senderId.isEmpty else { return nil }
+        return {
+            NotificationCenter.default.post(
+                name: .openDirectMessage,
+                object: nil,
+                userInfo: ["userId": senderId, "userName": senderName]
+            )
+        }
     }
 
     private func setupEscapeMonitor() {
@@ -3529,42 +4290,97 @@ struct VoiceChatView: View {
     }
 }
 
+private struct RoomTranscriptEntry: Identifiable {
+    let id = UUID()
+    let userId: String
+    let userName: String
+    let text: String
+    let language: String?
+    let timestamp = Date()
+}
+
 // Chat message row view
 struct ChatMessageRow: View {
     let message: MessagingManager.ChatMessage
+    var onSendFileToSender: (() -> Void)? = nil
+    var onDirectMessageSender: (() -> Void)? = nil
+    var onViewSenderProfile: (() -> Void)? = nil
+    @ObservedObject private var settings = SettingsManager.shared
+
+    private var replyLabel: String? {
+        guard message.replyToId != nil else { return nil }
+        if message.type == .reply {
+            return "Reply in thread"
+        }
+        return "Reply"
+    }
+
+    private var messageTextColor: Color {
+        message.type == .system ? .gray : .white
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            // Avatar placeholder
-            Circle()
-                .fill(avatarColor)
-                .frame(width: 32, height: 32)
-                .overlay(
-                    Text(String(message.senderName.prefix(1)).uppercased())
-                        .font(.caption)
-                        .foregroundColor(.white)
-                )
+            Image(systemName: senderSymbolName)
+                .foregroundColor(avatarColor)
+                .frame(width: 20, height: 20)
+                .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(message.senderName)
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundColor(message.type == .system ? .gray : .white)
+                        .foregroundColor(messageTextColor)
 
-                    Text(formatTime(message.timestamp))
+                    if settings.showMessageTimestamps {
+                        Text(formatTime(message.timestamp))
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                }
+
+                if let replyLabel {
+                    Label(replyLabel, systemImage: "arrowshape.turn.up.left")
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
 
-                Text(message.content)
-                    .font(.body)
-                    .foregroundColor(message.type == .system ? .gray : .white)
+                RichMessageText(
+                    message: message.content,
+                    font: .body,
+                    color: messageTextColor,
+                    alignment: .leading
+                )
             }
 
             Spacer()
         }
         .padding(.vertical, 4)
+        .contextMenu {
+            Button("Copy Message") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.content, forType: .string)
+            }
+
+            if let onSendFileToSender, message.type != .system {
+                Button("Send File to Sender...") {
+                    onSendFileToSender()
+                }
+            }
+
+            if let onDirectMessageSender, message.type != .system {
+                Button("Direct Message Sender") {
+                    onDirectMessageSender()
+                }
+            }
+
+            if let onViewSenderProfile, message.type != .system {
+                Button("View Sender Profile") {
+                    onViewSenderProfile()
+                }
+            }
+        }
     }
 
     private var avatarColor: Color {
@@ -3577,14 +4393,48 @@ struct ChatMessageRow: View {
         return colors[abs(hash) % colors.count]
     }
 
+    private var senderSymbolName: String {
+        if message.type == .system {
+            return "info.circle.fill"
+        }
+        if isBuiltInVoiceLinkBot {
+            return "cpu.fill"
+        }
+        if isBotMessage {
+            return "bubble.left.and.bubble.right.fill"
+        }
+        return "person.crop.circle.fill"
+    }
+
     private func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: date)
     }
+
+    private var isBotMessage: Bool {
+        let loweredId = message.senderId.lowercased()
+        let loweredName = message.senderName.lowercased()
+        return loweredId.contains("bot")
+            || loweredName.contains("bot")
+            || loweredName.contains("assistant")
+            || loweredName.contains("codex")
+    }
+
+    private var isBuiltInVoiceLinkBot: Bool {
+        let loweredId = message.senderId.lowercased()
+        let loweredName = message.senderName.lowercased()
+        return loweredId.hasPrefix("bot:")
+            || loweredName == "voicelink bot"
+    }
 }
 
 struct UserRow: View {
+    enum InteractionMode: String, CaseIterable {
+        case audio
+        case whisper
+    }
+
     let userId: String
     let username: String
     let isMuted: Bool
@@ -3598,7 +4448,12 @@ struct UserRow: View {
     @ObservedObject private var audioControl = UserAudioControlManager.shared
     @ObservedObject private var monitor = LocalMonitorManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var adminManager = AdminServerManager.shared
+    @ObservedObject private var whisperManager = WhisperModeManager.shared
     @State private var shareInProgress = false
+    @State private var transmitChangeInProgress = false
+    @State private var interactionMode: InteractionMode = .audio
+    @GestureState private var whisperPressing = false
 
     private var resolvedVolume: Double {
         if isCurrentUser {
@@ -3621,6 +4476,64 @@ struct UserRow: View {
         serverManager.activeRoomId != nil || serverManager.isAudioTransmitting
     }
 
+    private var isBotUser: Bool {
+        if let roomUser = serverManager.currentRoomUsers.first(where: { $0.odId == userId || $0.id == userId }) {
+            return roomUser.isBot
+        }
+        let loweredId = userId.lowercased()
+        let loweredName = username.lowercased()
+        return loweredId.contains("bot")
+            || loweredName.contains("bot")
+            || loweredName.contains("assistant")
+            || loweredName.contains("codex")
+            || loweredName.contains("sophia")
+    }
+
+    private var isBuiltInVoiceLinkBot: Bool {
+        let loweredId = userId.lowercased()
+        let loweredName = username.lowercased()
+        return loweredId.hasPrefix("bot:")
+            || loweredName == "voicelink bot"
+            || loweredName == "voicelink"
+    }
+
+    private var displayUsername: String {
+        if let roomUser = serverManager.currentRoomUsers.first(where: { $0.odId == userId || $0.id == userId }) {
+            return roomUser.displayName
+        }
+        if isBuiltInVoiceLinkBot {
+            return "VoiceLink"
+        }
+        return username
+    }
+
+    private var botHasAudioControls: Bool {
+        serverManager.currentRoomUsers.first(where: { $0.odId == userId || $0.id == userId })?.hasAudioControls ?? false
+    }
+
+    private var canManageTransmitPermission: Bool {
+        !isCurrentUser && (adminManager.isAdmin || adminManager.adminRole.canManageUsers)
+    }
+
+    private var roomUserTransmitEnabled: Bool {
+        serverManager.currentRoomUsers.first(where: { $0.odId == userId || $0.id == userId })?.transmitEnabled ?? true
+    }
+
+    private var canWhisperToUser: Bool {
+        !isCurrentUser && !(isBotUser && !botHasAudioControls)
+    }
+
+    private var interactionButtonLabel: String {
+        if interactionMode == .whisper && canWhisperToUser {
+            return showControls ? "Hide Whisper Controls for \(displayUsername)" : "Show Whisper Controls for \(displayUsername)"
+        }
+        return showControls ? "Hide Audio Controls for \(displayUsername)" : "Show Audio Controls for \(displayUsername)"
+    }
+
+    private func prepareWhisperTarget() {
+        whisperManager.setWhisperTarget(userId: userId, username: displayUsername)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Main row
@@ -3630,7 +4543,7 @@ struct UserRow: View {
                     .fill(isSpeaking ? Color.green : Color.gray.opacity(0.3))
                     .frame(width: 10, height: 10)
 
-                Text(username)
+                Text(displayUsername)
                     .foregroundColor(.white)
 
                 Spacer()
@@ -3644,154 +4557,352 @@ struct UserRow: View {
                         .foregroundColor(.red)
                 }
 
-                // Expand/collapse button with explicit accessible labels.
-                Button(action: { showControls.toggle() }) {
+                if isBotUser && !botHasAudioControls {
                     HStack(spacing: 4) {
-                        Image(systemName: showControls ? "chevron.up" : "chevron.down")
-                            .foregroundColor(.white.opacity(0.7))
-                        Text(showControls ? "Hide Audio Controls for User" : "Show Audio Controls for User")
+                        Text("\(displayUsername) does not have audio controls")
                             .font(.caption2)
                             .foregroundColor(.white.opacity(0.75))
                     }
+                    .accessibilityLabel("\(displayUsername) does not have audio controls")
+                    .accessibilityHint("Use actions and context menus to interact with the bot, including sending files for processing.")
+                } else {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if canWhisperToUser {
+                            HStack(spacing: 8) {
+                                Picker("Interaction Mode", selection: $interactionMode) {
+                                    Text("Audio").tag(InteractionMode.audio)
+                                    Text("Whisper").tag(InteractionMode.whisper)
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(width: 160)
+                                .accessibilityLabel("Interaction mode for \(displayUsername)")
+
+                                Button(action: {
+                                    interactionMode = .whisper
+                                    prepareWhisperTarget()
+                                    if showControls == false {
+                                        showControls = true
+                                    }
+                                }) {
+                                    Image(systemName: "mic.circle")
+                                        .foregroundColor(.white.opacity(0.85))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Whisper to \(displayUsername)")
+                                .accessibilityHint("Opens whisper controls for this user")
+                            }
+                        }
+
+                        Button(action: {
+                            if interactionMode == .whisper && canWhisperToUser {
+                                prepareWhisperTarget()
+                            }
+                            showControls.toggle()
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: showControls ? "chevron.up" : "chevron.down")
+                                    .foregroundColor(.white.opacity(0.7))
+                                Text(interactionButtonLabel)
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.75))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(interactionButtonLabel)
+                        .accessibilityHint(interactionMode == .whisper ? "Shows hold to whisper controls for \(displayUsername)" : "Toggles per-user audio controls for \(displayUsername)")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(showControls ? "Hide Audio Controls for User" : "Show Audio Controls for User")
-                .accessibilityHint("Toggles per-user audio controls for \(username)")
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 8)
             .background(Color.white.opacity(0.05))
             .contextMenu {
-                Button(action: {
-                    // TODO: Implement whisper mode
-                    print("Whisper to \(username)")
-                }) {
-                    Label("Whisper", systemImage: "mic.badge.plus")
-                }
+                if isBotUser && !botHasAudioControls {
+                    Button(action: {
+                        MessagingManager.shared.sendDirectMessage(
+                            to: userId,
+                            username: displayUsername,
+                            content: "Hi \(displayUsername)"
+                        )
+                    }) {
+                        Label("Message \(displayUsername)", systemImage: "message")
+                    }
 
-                Button(action: {
-                    MessagingManager.shared.sendDirectMessage(
-                        to: username,
-                        username: username,
-                        content: "Hi \(username)"
-                    )
-                }) {
-                    Label("Send Direct Message", systemImage: "message")
-                }
+                    Button(action: {
+                        sendFileToUser()
+                    }) {
+                        Label("Send File to \(displayUsername)", systemImage: "doc")
+                    }
 
-                Button(action: {
-                    sendFileToUser()
-                }) {
-                    Label("Send File", systemImage: "doc")
-                }
+                    Button(action: {
+                        shareProtectedLinkToUser(keepForever: false)
+                    }) {
+                        Label("Share Protected Link", systemImage: "link.badge.plus")
+                    }
 
-                Button(action: {
-                    shareProtectedLinkToUser(keepForever: false)
-                }) {
-                    Label("Share Protected Link (Expires)", systemImage: "link.badge.plus")
-                }
+                    Button(action: {
+                        shareProtectedLinkToUser(keepForever: true)
+                    }) {
+                        Label("Share Permanent Link", systemImage: "link.circle")
+                    }
+                    .disabled(shareInProgress)
 
-                Button(action: {
-                    shareProtectedLinkToUser(keepForever: true)
-                }) {
-                    Label("Share Protected Link (Keep Forever)", systemImage: "link.circle")
-                }
-                .disabled(shareInProgress)
+                    Divider()
 
-                Divider()
+                    Button(action: {
+                        print("View profile of \(displayUsername)")
+                    }) {
+                        Label("View \(displayUsername) Profile", systemImage: "person.circle")
+                    }
+                } else {
+                    Button(action: {
+                        interactionMode = .whisper
+                        prepareWhisperTarget()
+                        showControls = true
+                    }) {
+                        Label("Whisper", systemImage: "mic.badge.plus")
+                    }
 
-                Button(action: {
-                    // TODO: Implement view profile
-                    print("View profile of \(username)")
-                }) {
-                    Label("View Profile", systemImage: "person.circle")
+                    Button(action: {
+                        MessagingManager.shared.sendDirectMessage(
+                            to: userId,
+                            username: displayUsername,
+                            content: "Hi \(username)"
+                        )
+                    }) {
+                        Label("Send Direct Message", systemImage: "message")
+                    }
+
+                    Button(action: {
+                        sendFileToUser()
+                    }) {
+                        Label("Send File", systemImage: "doc")
+                    }
+
+                    Button(action: {
+                        shareProtectedLinkToUser(keepForever: false)
+                    }) {
+                        Label("Share Protected Link (Expires)", systemImage: "link.badge.plus")
+                    }
+
+                    Button(action: {
+                        shareProtectedLinkToUser(keepForever: true)
+                    }) {
+                        Label("Share Protected Link (Keep Forever)", systemImage: "link.circle")
+                    }
+                    .disabled(shareInProgress)
+
+                    Divider()
+
+                    if canManageTransmitPermission {
+                        Button(action: {
+                            guard !transmitChangeInProgress else { return }
+                            transmitChangeInProgress = true
+                            Task {
+                                _ = await adminManager.setUserTransmitEnabled(userId, enabled: true)
+                                await adminManager.fetchConnectedUsers()
+                                await MainActor.run {
+                                    transmitChangeInProgress = false
+                                }
+                            }
+                        }) {
+                            Label("Enable User Audio Transmission", systemImage: "mic.badge.checkmark")
+                        }
+                        .disabled(transmitChangeInProgress || roomUserTransmitEnabled)
+
+                        Button(action: {
+                            guard !transmitChangeInProgress else { return }
+                            transmitChangeInProgress = true
+                            Task {
+                                _ = await adminManager.setUserTransmitEnabled(userId, enabled: false)
+                                await adminManager.fetchConnectedUsers()
+                                await MainActor.run {
+                                    transmitChangeInProgress = false
+                                }
+                            }
+                        }) {
+                            Label("Disable User Audio Transmission", systemImage: "mic.slash.badge.xmark")
+                        }
+                        .disabled(transmitChangeInProgress || !roomUserTransmitEnabled)
+
+                        Button(action: {
+                            guard !transmitChangeInProgress else { return }
+                            transmitChangeInProgress = true
+                            let nextEnabled = !roomUserTransmitEnabled
+                            Task {
+                                _ = await adminManager.setUserTransmitEnabled(userId, enabled: nextEnabled)
+                                await adminManager.fetchConnectedUsers()
+                                await MainActor.run {
+                                    transmitChangeInProgress = false
+                                }
+                            }
+                        }) {
+                            Label(
+                                roomUserTransmitEnabled ? "Disallow Audio Transmit" : "Allow Audio Transmit",
+                                systemImage: roomUserTransmitEnabled ? "mic.slash.badge.xmark" : "mic.badge.checkmark"
+                            )
+                        }
+                        .disabled(transmitChangeInProgress)
+
+                        Divider()
+                    }
+
+                    Button(action: {
+                        // TODO: Implement view profile
+                        print("View profile of \(displayUsername)")
+                    }) {
+                        Label("View \(displayUsername) Profile", systemImage: "person.circle")
+                    }
                 }
             }
 
             // Expandable audio controls
-            if showControls {
+            if isBotUser && !botHasAudioControls {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This bot does not have audio controls.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.82))
+                    Text("Use the actions or context menu to interact with the bot, send direct messages, or send files for processing.")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 15)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.04))
+            } else if showControls {
                 VStack(spacing: 8) {
-                    // Volume slider
-                    HStack {
-                        Image(systemName: "speaker.wave.2")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                        Slider(
-                            value: Binding(
-                                get: { resolvedVolume },
-                                set: { newValue in
-                                    if isCurrentUser {
-                                        settings.inputVolume = newValue
-                                        settings.saveSettings()
-                                    } else {
-                                        audioControl.setVolume(for: userId, volume: Float(newValue))
+                    if interactionMode == .whisper && canWhisperToUser {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Whisper to \(displayUsername)")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.9))
+
+                            Text("Hold to whisper. Release to stop.")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+
+                            Button(action: {}) {
+                                HStack {
+                                    Image(systemName: (whisperManager.isWhispering && whisperManager.whisperTargetUserId == userId) || whisperPressing ? "mic.fill" : "mic")
+                                    Text((whisperManager.isWhispering && whisperManager.whisperTargetUserId == userId) || whisperPressing ? "Whispering..." : "Hold to Whisper")
+                                }
+                                .font(.caption)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(((whisperManager.isWhispering && whisperManager.whisperTargetUserId == userId) || whisperPressing) ? Color.orange.opacity(0.35) : Color.blue.opacity(0.28))
+                                .cornerRadius(6)
+                            }
+                            .buttonStyle(.plain)
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 0)
+                                    .updating($whisperPressing) { _, state, _ in
+                                        state = true
                                     }
+                                    .onChanged { _ in
+                                        prepareWhisperTarget()
+                                        if !whisperManager.isWhispering {
+                                            whisperManager.startWhisper()
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        if whisperManager.isWhispering {
+                                            whisperManager.stopWhisper()
+                                        }
+                                    }
+                            )
+                            .accessibilityLabel("Hold to whisper to \(displayUsername)")
+                            .accessibilityHint("Press and hold to whisper to this user, then release to stop.")
+
+                            Button(action: {
+                                interactionMode = .audio
+                                if whisperManager.whisperTargetUserId == userId {
+                                    whisperManager.clearWhisperTarget()
                                 }
-                            ),
-                            in: 0...1
-                        )
-                            .frame(maxWidth: .infinity)
-                        Text("\(Int(resolvedVolume * 100))%")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                            .frame(width: 35)
-                    }
-
-                    if isCurrentUser {
-                        Text("This slider controls your microphone input level.")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                    }
-
-                    // Mute and Solo buttons
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            if !isCurrentUser {
-                                audioControl.toggleMute(for: userId)
+                            }) {
+                                Label("Switch to Audio Controls", systemImage: "slider.horizontal.3")
                             }
-                        }) {
-                            HStack {
-                                Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
-                                Text(isUserMuted ? "Unmute" : "Mute")
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
-                            .cornerRadius(6)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isCurrentUser)
+                    } else {
+                        // Volume slider
+                        HStack {
+                            Image(systemName: "speaker.wave.2")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Slider(
+                                value: Binding(
+                                    get: { resolvedVolume },
+                                    set: { newValue in
+                                        if isCurrentUser {
+                                            settings.inputVolume = newValue
+                                            settings.saveSettings()
+                                            LocalMonitorManager.shared.setInputGain(settings.effectiveInputVolume)
+                                        } else {
+                                            audioControl.setVolume(for: userId, volume: Float(newValue))
+                                        }
+                                    }
+                                ),
+                                in: 0...1
+                            )
+                                .frame(maxWidth: .infinity)
+                            Text("\(Int(resolvedVolume * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .frame(width: 35)
+                        }
 
-                        Button(action: {
-                            if isCurrentUser {
-                                if isRoomAudioActive && !monitor.isMonitoring {
-                                    AccessibilityManager.shared.announceStatus("Input monitor is unavailable while you are in an active room.")
-                                    return
+                        if isCurrentUser {
+                            Text("This slider controls your microphone input level.")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                        }
+
+                        // Mute and Solo buttons
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                if !isCurrentUser {
+                                    audioControl.toggleMute(for: userId)
                                 }
-                                monitor.toggleMonitoring()
-                            } else {
-                                audioControl.toggleSolo(for: userId)
+                            }) {
+                                HStack {
+                                    Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
+                                    Text(isUserMuted ? "Unmute" : "Mute")
+                                }
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
+                                .cornerRadius(6)
                             }
-                        }) {
-                            HStack {
-                                Image(systemName: isSoloed ? "ear.fill" : "ear")
-                                Text(isCurrentUser ? (isSoloed ? "Stop Monitor" : "Monitor") : (isSoloed ? "Unsolo" : "Solo"))
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(isSoloed ? Color.yellow.opacity(0.3) : Color.gray.opacity(0.2))
-                            .cornerRadius(6)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isCurrentUser && isRoomAudioActive && !monitor.isMonitoring)
-                    }
+                            .buttonStyle(.plain)
+                            .disabled(isCurrentUser)
 
-                    if isCurrentUser {
-                        Text("You cannot mute yourself in this list. Use main room mute controls.")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
+                            Button(action: {
+                                if isCurrentUser {
+                                    monitor.toggleMonitoring()
+                                } else {
+                                    audioControl.toggleSolo(for: userId)
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: isSoloed ? "ear.fill" : "ear")
+                                    Text(isCurrentUser ? (isSoloed ? "Stop Monitor" : "Monitor") : (isSoloed ? "Unsolo" : "Solo"))
+                                }
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(isSoloed ? Color.yellow.opacity(0.3) : Color.gray.opacity(0.2))
+                                .cornerRadius(6)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if isCurrentUser {
+                            Text("You cannot mute yourself in this list. Use main room mute controls.")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
                     }
                 }
                 .padding(.horizontal, 15)
@@ -3832,12 +4943,23 @@ struct UserRow: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(link.url, forType: .string)
                         let expiryText = link.expiresAt.map { " Expires \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
-                        let body = "Protected link copied to clipboard for \(self.username).\(expiryText)"
+                        let smbSummary = link.smb?.uris.first.map { " SMB path available." } ?? ""
+                        let body = "Protected link copied to clipboard for \(self.username).\(expiryText)\(smbSummary)"
+                        var outgoingLines = ["Secure file link: \(link.url)"]
+                        if let webURL = link.webURL, !webURL.isEmpty, webURL != link.url {
+                            outgoingLines.append("Web link: \(webURL)")
+                        }
+                        if let copyPartyURL = link.copyPartyURL, !copyPartyURL.isEmpty, copyPartyURL != link.url {
+                            outgoingLines.append("CopyParty link: \(copyPartyURL)")
+                        }
+                        if let smbURI = link.smb?.uris.first, !smbURI.isEmpty {
+                            outgoingLines.append("SMB path: \(smbURI)")
+                        }
                         MessagingManager.shared.sendSystemMessage(body)
                         MessagingManager.shared.sendDirectMessage(
                             to: self.username,
                             username: self.username,
-                            content: "Secure file link: \(link.url)"
+                            content: outgoingLines.joined(separator: "\n")
                         )
                     }
                 } catch {
@@ -3943,7 +5065,32 @@ enum FileReceiveMode: String, CaseIterable {
 // MARK: - Settings Manager
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
+    static let internalVolumeBoost: Double = 0.35
+    static let maxBoostedVolume: Double = 1.6
     private var isApplyingAudioDeviceSelection = false
+    @Published var audioRecoveryInProgress: Bool = false
+    @Published var audioRecoveryStatusMessage: String?
+
+    struct ManagedFederationServer: Identifiable, Hashable {
+        let url: String
+        let name: String
+        let description: String
+
+        var id: String { url }
+    }
+
+    static let managedFederationServers: [ManagedFederationServer] = [
+        ManagedFederationServer(
+            url: APIEndpointResolver.canonicalMainBase,
+            name: "Main VoiceLink",
+            description: "Primary managed VoiceLink federation authority and default production peer."
+        ),
+        ManagedFederationServer(
+            url: APIEndpointResolver.communityNode2Base,
+            name: "Community VPS",
+            description: "Secondary managed federation peer used for continuity, fallback, and maintenance handoff."
+        )
+    ]
 
     enum CloseButtonBehavior: String, CaseIterable {
         case goToMainThenHide = "goToMainThenHide"
@@ -3970,7 +5117,7 @@ class SettingsManager: ObservableObject {
 
     // Connection Settings
     @Published var autoConnect: Bool = true
-    @Published var preferLocalServer: Bool = true
+    @Published var preferLocalServer: Bool = false
     @Published var reconnectOnDisconnect: Bool = true
     @Published var connectionTimeout: Double = 30
 
@@ -4009,8 +5156,9 @@ class SettingsManager: ObservableObject {
     @Published var closeButtonBehavior: CloseButtonBehavior = .goToMainThenHide
     @Published var openMainWindowOnLaunch: Bool = true
     @Published var confirmBeforeQuit: Bool = false
-    @Published var expandServerStatusByDefault: Bool = true
     @Published var showRoomDescriptions: Bool = true
+    @Published var showMessageTimestamps: Bool = true
+    @Published var confirmRoomLockChanges: Bool = true
     @Published var allowPreviewWhenMediaActive: Bool = true
     @Published var previewSoundCuesEnabled: Bool = true
     @Published var roomPreviewPolicyByRoom: [String: Bool] = [:]
@@ -4024,6 +5172,14 @@ class SettingsManager: ObservableObject {
     @Published var adminGodModeEnabled: Bool = false
     @Published var adminInvisibleMode: Bool = false
 
+    var adminPresenceModeEnabled: Bool {
+        get { adminGodModeEnabled || adminInvisibleMode }
+        set {
+            adminGodModeEnabled = newValue
+            adminInvisibleMode = newValue
+        }
+    }
+
     // Profile Settings
     @Published var userNickname: String = ""
     @Published var userProfileLinks: [String] = []
@@ -4031,6 +5187,16 @@ class SettingsManager: ObservableObject {
     // Available devices
     @Published var availableInputDevices: [String] = ["Default"]
     @Published var availableOutputDevices: [String] = ["Default"]
+    @Published private(set) var hasDetectedInputDevice: Bool = false
+    @Published private(set) var hasDetectedOutputDevice: Bool = false
+
+    var effectiveInputVolume: Double {
+        boostedVolume(inputVolume)
+    }
+
+    var effectiveOutputVolume: Double {
+        boostedVolume(outputVolume)
+    }
 
     init() {
         loadSettings()
@@ -4060,8 +5226,8 @@ class SettingsManager: ObservableObject {
         noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
         echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
         autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
-        autoConnect = UserDefaults.standard.bool(forKey: "autoConnect")
-        preferLocalServer = UserDefaults.standard.bool(forKey: "preferLocalServer")
+        autoConnect = UserDefaults.standard.object(forKey: "autoConnect") as? Bool ?? true
+        preferLocalServer = UserDefaults.standard.object(forKey: "preferLocalServer") as? Bool ?? false
         pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
         spatialAudioEnabled = UserDefaults.standard.bool(forKey: "spatialAudioEnabled")
 
@@ -4075,8 +5241,9 @@ class SettingsManager: ObservableObject {
         }
         openMainWindowOnLaunch = UserDefaults.standard.object(forKey: "openMainWindowOnLaunch") as? Bool ?? true
         confirmBeforeQuit = UserDefaults.standard.object(forKey: "confirmBeforeQuit") as? Bool ?? false
-        expandServerStatusByDefault = UserDefaults.standard.object(forKey: "expandServerStatusByDefault") as? Bool ?? true
         showRoomDescriptions = UserDefaults.standard.object(forKey: "showRoomDescriptions") as? Bool ?? true
+        showMessageTimestamps = UserDefaults.standard.object(forKey: "showMessageTimestamps") as? Bool ?? true
+        confirmRoomLockChanges = UserDefaults.standard.object(forKey: "confirmRoomLockChanges") as? Bool ?? true
         allowPreviewWhenMediaActive = UserDefaults.standard.object(forKey: "allowPreviewWhenMediaActive") as? Bool ?? true
         previewSoundCuesEnabled = UserDefaults.standard.object(forKey: "previewSoundCuesEnabled") as? Bool ?? true
         roomPreviewPolicyByRoom = UserDefaults.standard.dictionary(forKey: "roomPreviewPolicyByRoom") as? [String: Bool] ?? [:]
@@ -4092,8 +5259,10 @@ class SettingsManager: ObservableObject {
             UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
             UserDefaults.standard.set(true, forKey: "migratedDefaultRoomActionToJoin")
         }
-        adminGodModeEnabled = UserDefaults.standard.object(forKey: "adminGodModeEnabled") as? Bool ?? false
-        adminInvisibleMode = UserDefaults.standard.object(forKey: "adminInvisibleMode") as? Bool ?? false
+        let legacyGodMode = UserDefaults.standard.object(forKey: "adminGodModeEnabled") as? Bool ?? false
+        let legacyInvisibleMode = UserDefaults.standard.object(forKey: "adminInvisibleMode") as? Bool ?? false
+        let unifiedAdminPresenceMode = UserDefaults.standard.object(forKey: "adminPresenceModeEnabled") as? Bool
+        adminPresenceModeEnabled = unifiedAdminPresenceMode ?? (legacyGodMode || legacyInvisibleMode)
 
         // Profile settings
         userNickname = UserDefaults.standard.string(forKey: "userNickname") ?? ""
@@ -4124,7 +5293,7 @@ class SettingsManager: ObservableObject {
             echoCancellation = true
             autoGainControl = true
             autoConnect = true
-            preferLocalServer = true
+            preferLocalServer = false
             soundNotifications = true
             desktopNotifications = true
             notifyOnJoin = true
@@ -4137,15 +5306,19 @@ class SettingsManager: ObservableObject {
             closeButtonBehavior = .goToMainThenHide
             openMainWindowOnLaunch = true
             confirmBeforeQuit = false
-            expandServerStatusByDefault = true
             showRoomDescriptions = true
+            showMessageTimestamps = true
+            confirmRoomLockChanges = true
             allowPreviewWhenMediaActive = true
             previewSoundCuesEnabled = true
             defaultRoomPrimaryAction = .joinOrShow
-            adminGodModeEnabled = false
-            adminInvisibleMode = false
+            adminPresenceModeEnabled = false
             UserDefaults.standard.set(true, forKey: "settingsInitialized")
         }
+    }
+
+    private func boostedVolume(_ sliderValue: Double) -> Double {
+        min(max(sliderValue + Self.internalVolumeBoost, 0), Self.maxBoostedVolume)
     }
 
     func saveSettings() {
@@ -4167,14 +5340,16 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(closeButtonBehavior.rawValue, forKey: "closeButtonBehavior")
         UserDefaults.standard.set(openMainWindowOnLaunch, forKey: "openMainWindowOnLaunch")
         UserDefaults.standard.set(confirmBeforeQuit, forKey: "confirmBeforeQuit")
-        UserDefaults.standard.set(expandServerStatusByDefault, forKey: "expandServerStatusByDefault")
         UserDefaults.standard.set(showRoomDescriptions, forKey: "showRoomDescriptions")
+        UserDefaults.standard.set(showMessageTimestamps, forKey: "showMessageTimestamps")
+        UserDefaults.standard.set(confirmRoomLockChanges, forKey: "confirmRoomLockChanges")
         UserDefaults.standard.set(allowPreviewWhenMediaActive, forKey: "allowPreviewWhenMediaActive")
         UserDefaults.standard.set(previewSoundCuesEnabled, forKey: "previewSoundCuesEnabled")
         UserDefaults.standard.set(roomPreviewPolicyByRoom, forKey: "roomPreviewPolicyByRoom")
         UserDefaults.standard.set(defaultRoomPrimaryAction.rawValue, forKey: "defaultRoomPrimaryAction")
         UserDefaults.standard.set(adminGodModeEnabled, forKey: "adminGodModeEnabled")
         UserDefaults.standard.set(adminInvisibleMode, forKey: "adminInvisibleMode")
+        UserDefaults.standard.set(adminPresenceModeEnabled, forKey: "adminPresenceModeEnabled")
 
         // Profile settings
         UserDefaults.standard.set(userNickname, forKey: "userNickname")
@@ -4275,28 +5450,14 @@ class SettingsManager: ObservableObject {
 
         for deviceID in deviceIDs {
             let deviceName = coreAudioDeviceName(deviceID: deviceID) ?? ""
+            guard !deviceName.isEmpty else { continue }
+            guard isDeviceAlive(deviceID) else { continue }
 
-            // Check if input device
-            var inputStreamSize: UInt32 = 0
-            var inputAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyStreams,
-                mScope: kAudioDevicePropertyScopeInput,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            AudioObjectGetPropertyDataSize(deviceID, &inputAddress, 0, nil, &inputStreamSize)
-            if inputStreamSize > 0 && !deviceName.isEmpty {
+            if hasChannels(deviceID: deviceID, isInput: true) {
                 inputDevices.append(deviceName)
             }
 
-            // Check if output device
-            var outputStreamSize: UInt32 = 0
-            var outputAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyStreams,
-                mScope: kAudioDevicePropertyScopeOutput,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            AudioObjectGetPropertyDataSize(deviceID, &outputAddress, 0, nil, &outputStreamSize)
-            if outputStreamSize > 0 && !deviceName.isEmpty {
+            if hasChannels(deviceID: deviceID, isInput: false) {
                 outputDevices.append(deviceName)
             }
         }
@@ -4304,6 +5465,8 @@ class SettingsManager: ObservableObject {
         let uniqueInput = Array(Set(inputDevices.filter { !$0.isEmpty }))
         let uniqueOutput = Array(Set(outputDevices.filter { !$0.isEmpty }))
 
+        hasDetectedInputDevice = true
+        hasDetectedOutputDevice = true
         availableInputDevices = ["Default"] + uniqueInput.filter { $0 != "Default" }.sorted()
         availableOutputDevices = ["Default"] + uniqueOutput.filter { $0 != "Default" }.sorted()
 
@@ -4314,9 +5477,63 @@ class SettingsManager: ObservableObject {
         if !availableOutputDevices.contains(outputDevice) {
             outputDevice = "Default"
         }
+
+        if availableInputDevices.count <= 1 && availableOutputDevices.count <= 1 {
+            audioRecoveryStatusMessage = "No audio devices were detected from macOS CoreAudio."
+        } else {
+            audioRecoveryStatusMessage = nil
+        }
     }
 
-    func applySelectedAudioDevices() {
+    func restartMacOSAudioServices() {
+        guard !audioRecoveryInProgress else { return }
+        audioRecoveryInProgress = true
+        audioRecoveryStatusMessage = "Restarting macOS audio services..."
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = [
+                "-e",
+                "do shell script \"killall coreaudiod\" with administrator privileges"
+            ]
+
+            let errorPipe = Pipe()
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let errorText = String(
+                    data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                )?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.audioRecoveryInProgress = false
+                    self.detectAudioDevices()
+
+                    if process.terminationStatus == 0 {
+                        if self.availableInputDevices.count > 1 || self.availableOutputDevices.count > 1 {
+                            self.audioRecoveryStatusMessage = "Audio services restarted and device list refreshed."
+                        } else {
+                            self.audioRecoveryStatusMessage = "Audio services restarted, but macOS still reports no devices."
+                        }
+                    } else {
+                        self.audioRecoveryStatusMessage = (errorText?.isEmpty == false ? errorText : "Audio service restart did not complete.")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.audioRecoveryInProgress = false
+                    self.audioRecoveryStatusMessage = "Failed to restart audio services: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func applySelectedAudioDevices(notifyChange: Bool = true) {
         guard !isApplyingAudioDeviceSelection else { return }
         isApplyingAudioDeviceSelection = true
         defer { isApplyingAudioDeviceSelection = false }
@@ -4388,18 +5605,11 @@ class SettingsManager: ObservableObject {
         }
 
         for deviceID in deviceIDs {
-            var streamSize: UInt32 = 0
-            var streamAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyStreams,
-                mScope: scope,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            guard AudioObjectGetPropertyDataSize(deviceID, &streamAddress, 0, nil, &streamSize) == noErr else {
+            guard isDeviceAlive(deviceID) else {
                 continue
             }
-            if streamSize == 0 {
-                continue
-            }
+            let isInput = scope == kAudioDevicePropertyScopeInput
+            guard hasChannels(deviceID: deviceID, isInput: isInput) else { continue }
 
             let deviceName = coreAudioDeviceName(deviceID: deviceID) ?? ""
             if deviceName == targetName {
@@ -4427,6 +5637,43 @@ class SettingsManager: ObservableObject {
         }
         return nil
     }
+
+    private func isDeviceAlive(_ deviceID: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &alive) == noErr else {
+            return false
+        }
+        return alive != 0
+    }
+
+    private func hasChannels(deviceID: AudioDeviceID, isInput: Bool) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: isInput ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr, size > 0 else {
+            return false
+        }
+
+        let rawBuffer = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { rawBuffer.deallocate() }
+        let bufferList = rawBuffer.bindMemory(to: AudioBufferList.self, capacity: 1)
+
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, bufferList) == noErr else {
+            return false
+        }
+
+        let list = UnsafeMutableAudioBufferListPointer(bufferList)
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) } > 0
+    }
 }
 
 extension Notification.Name {
@@ -4439,6 +5686,11 @@ struct SettingsView: View {
     @StateObject private var settings = SettingsManager.shared
     @State private var selectedTab: SettingsTab = .audio
     @State private var isSoundTestPlaying = false
+    @State private var isSubmittingDiagnostics = false
+    @State private var diagnosticsSubmissionStatus: String?
+    @AppStorage("voicelink.advanced.debugLoggingEnabled") private var debugLoggingEnabled = false
+    @AppStorage("voicelink.advanced.showConnectionStats") private var showConnectionStats = false
+    @AppStorage("voicelink.advanced.audioCodec") private var selectedAudioCodec = "Opus"
 
     enum SettingsTab: String, CaseIterable {
         case general = "General"
@@ -4457,7 +5709,7 @@ struct SettingsView: View {
             HStack {
                 Button(action: {
                     settings.saveSettings()
-                    appState.currentScreen = .mainMenu
+                    appState.closeSettings()
                 }) {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
@@ -4582,9 +5834,9 @@ struct SettingsView: View {
             Toggle("Open main window on launch", isOn: $settings.openMainWindowOnLaunch)
                 .onChange(of: settings.openMainWindowOnLaunch) { _ in settings.saveSettings() }
                 .accessibilityHint("When enabled, VoiceLink opens the main window automatically at startup.")
-            Toggle("Expand server status details by default", isOn: $settings.expandServerStatusByDefault)
-                .onChange(of: settings.expandServerStatusByDefault) { _ in settings.saveSettings() }
-                .accessibilityHint("When enabled, server details start expanded. Turn off to keep that section collapsed.")
+            Toggle("Prefer local server when available", isOn: $settings.preferLocalServer)
+                .onChange(of: settings.preferLocalServer) { _ in settings.saveSettings() }
+                .accessibilityHint("When enabled, VoiceLink tries a local server before managed or federated servers. Leave off to use remote API and federation first.")
             Toggle("Show room descriptions in room list", isOn: $settings.showRoomDescriptions)
                 .onChange(of: settings.showRoomDescriptions) { _ in settings.saveSettings() }
                 .accessibilityHint("Shows or hides room description text in list and grid views.")
@@ -4619,8 +5871,10 @@ struct SettingsView: View {
                 Text("Nickname")
                     .font(.caption)
                     .foregroundColor(.gray)
-                TextField("Enter your nickname", text: $settings.userNickname)
+                TextField("Nickname shown to other VoiceLink users", text: $settings.userNickname)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Nickname")
+                    .accessibilityHint("Enter the nickname that other users will see for your account in rooms and chat.")
                     .onChange(of: settings.userNickname) { _ in
                         settings.saveSettings()
                     }
@@ -4687,7 +5941,29 @@ struct SettingsView: View {
             let authManager = AuthenticationManager.shared
             if authManager.authState == .authenticated {
                 if let user = authManager.currentUser {
-                    Text("Signed in as \(user.displayName)")
+                    let accountTypeName: String = {
+                        let provider = (user.authProvider ?? user.authMethod.rawValue).lowercased()
+                        switch provider {
+                        case "local", "voicelink", "email":
+                            return "VoiceLink Account"
+                        case "whmcs":
+                            return "WHMCS Account"
+                        case "mastodon":
+                            return "Mastodon Account"
+                        case "google":
+                            return "Google Account"
+                        case "apple":
+                            return "Apple Account"
+                        case "github":
+                            return "GitHub Account"
+                        default:
+                            return "\(user.authMethod.displayName) Account"
+                        }
+                    }()
+                    let roleName = (user.role?.isEmpty == false ? user.role! : "member")
+                        .replacingOccurrences(of: "_", with: " ")
+                        .capitalized
+                    Text("\(accountTypeName). Role: \(roleName). Signed in as \(user.displayName) (\(user.email ?? user.username)).")
                         .foregroundColor(.gray)
                 }
                 Button("Manage Connected Account") {
@@ -4729,7 +6005,7 @@ struct SettingsView: View {
     // MARK: - Audio Settings
     @ViewBuilder
     var audioSettings: some View {
-        SettingsSection(title: "Input Device") {
+        SettingsSection(title: "Audio Controls") {
             Picker("Microphone", selection: $settings.inputDevice) {
                 ForEach(settings.availableInputDevices, id: \.self) { device in
                     Text(device).tag(device)
@@ -4746,9 +6022,81 @@ struct SettingsView: View {
                 Text("\(Int(settings.inputVolume * 100))%")
                     .frame(width: 40)
             }
+            .onChange(of: settings.inputVolume) { _ in
+                settings.saveSettings()
+                LocalMonitorManager.shared.setInputGain(settings.effectiveInputVolume)
+            }
+
+            Picker("Speakers/Headphones", selection: $settings.outputDevice) {
+                ForEach(settings.availableOutputDevices, id: \.self) { device in
+                    Text(device).tag(device)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: settings.outputDevice) { _ in
+                settings.saveSettings()
+            }
+
+            HStack {
+                Text("Output Volume")
+                Slider(value: $settings.outputVolume, in: 0...1)
+                Text("\(Int(settings.outputVolume * 100))%")
+                    .frame(width: 40)
+            }
+            .onChange(of: settings.outputVolume) { _ in
+                settings.saveSettings()
+                SpatialAudioEngine.shared.refreshOutputMix()
+            }
+
+            Toggle("Play startup welcome sound", isOn: Binding(
+                get: { AppSoundManager.shared.startupIntroEnabled },
+                set: { newValue in
+                    AppSoundManager.shared.startupIntroEnabled = newValue
+                    AppSoundManager.shared.saveSettings()
+                }
+            ))
+
+            Button(action: {
+                isSoundTestPlaying = true
+                AppSoundManager.shared.playSound(.soundTest, force: true)
+                let resetAfter = max(0.6, AppSoundManager.shared.soundDuration(.soundTest) + 0.1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + resetAfter) {
+                    isSoundTestPlaying = false
+                }
+            }) {
+                Text(isSoundTestPlaying ? "Testing..." : "Test My Sound")
+            }
+            .buttonStyle(.bordered)
+            .disabled(isSoundTestPlaying)
+
+            HStack(spacing: 12) {
+                Button("Refresh Device List") {
+                    settings.detectAudioDevices()
+                }
+                .buttonStyle(.bordered)
+
+                Button(settings.audioRecoveryInProgress ? "Restarting Audio Services..." : "Restart Audio Services") {
+                    settings.restartMacOSAudioServices()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(settings.audioRecoveryInProgress)
+            }
+
+            if let status = settings.audioRecoveryStatusMessage, !status.isEmpty {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Picker("Audio Codec", selection: $selectedAudioCodec) {
+                Text("Opus (Recommended)").tag("Opus")
+                Text("PCM (.wav)").tag("PCM")
+                Text("FLAC").tag("FLAC")
+            }
+            .pickerStyle(.menu)
         }
 
-        SettingsSection(title: "Current Device Status") {
+        SettingsSection(title: "Audio Details") {
             VStack(alignment: .leading, spacing: 10) {
                 statusRow(
                     label: "System Input Device",
@@ -4760,7 +6108,7 @@ struct SettingsView: View {
                 )
                 statusRow(
                     label: "Input Status",
-                    value: settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Unavailable"
+                    value: inputStatusText
                 )
                 statusRow(
                     label: "Input Channels",
@@ -4779,7 +6127,7 @@ struct SettingsView: View {
                 )
                 statusRow(
                     label: "Output Status",
-                    value: settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Unavailable"
+                    value: outputStatusText
                 )
                 statusRow(
                     label: "Output Channels",
@@ -4787,38 +6135,9 @@ struct SettingsView: View {
                 )
             }
             .accessibilityElement(children: .contain)
-        }
-
-        SettingsSection(title: "Output Device") {
-            Picker("Speakers/Headphones", selection: $settings.outputDevice) {
-                ForEach(settings.availableOutputDevices, id: \.self) { device in
-                    Text(device).tag(device)
-                }
-            }
-            .pickerStyle(.menu)
-            .onChange(of: settings.outputDevice) { _ in
-                settings.saveSettings()
-            }
-
-            HStack {
-                Text("Output Volume")
-                Slider(value: $settings.outputVolume, in: 0...1)
-                Text("\(Int(settings.outputVolume * 100))%")
-                    .frame(width: 40)
-            }
-
-            Button(action: {
-                isSoundTestPlaying = true
-                AppSoundManager.shared.playSound(.soundTest, force: true)
-                let resetAfter = max(0.6, AppSoundManager.shared.soundDuration(.soundTest) + 0.1)
-                DispatchQueue.main.asyncAfter(deadline: .now() + resetAfter) {
-                    isSoundTestPlaying = false
-                }
-            }) {
-                Text(isSoundTestPlaying ? "Testing..." : "Test My Sound")
-            }
-            .buttonStyle(.bordered)
-            .disabled(isSoundTestPlaying)
+            Text("These values update to show the currently selected devices, the system defaults VoiceLink is using, and the detected channel layout.")
+                .font(.caption)
+                .foregroundColor(.gray)
         }
 
         SettingsSection(title: "Audio Processing") {
@@ -4873,6 +6192,20 @@ struct SettingsView: View {
 
     private var detectedOutputChannelSummary: String {
         channelSummary(for: detectedDefaultOutputName, isInput: false)
+    }
+
+    private var inputStatusText: String {
+        if settings.inputDevice == "Default" {
+            return detectedDefaultInputName == "Not detected" ? "Using system default (not enumerated)" : "Using system default"
+        }
+        return settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Unavailable"
+    }
+
+    private var outputStatusText: String {
+        if settings.outputDevice == "Default" {
+            return detectedDefaultOutputName == "Not detected" ? "Using system default (not enumerated)" : "Using system default"
+        }
+        return settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Unavailable"
     }
 
     private func defaultDeviceName(isInput: Bool) -> String {
@@ -5066,6 +6399,8 @@ struct SettingsView: View {
             Toggle("Enable sound notifications", isOn: $settings.soundNotifications)
             Toggle("Play sound when user joins", isOn: $settings.notifyOnJoin)
             Toggle("Play sound when user leaves", isOn: $settings.notifyOnLeave)
+            Toggle("Show message timestamps", isOn: $settings.showMessageTimestamps)
+            Toggle("Confirm before locking or unlocking rooms", isOn: $settings.confirmRoomLockChanges)
         }
 
         SettingsSection(title: "Desktop Notifications") {
@@ -5133,8 +6468,10 @@ struct SettingsView: View {
 
         SettingsSection(title: "Save Location") {
             HStack {
-                TextField("Save path", text: $settings.saveReceivedFilesTo)
+                TextField("Folder path for received files", text: $settings.saveReceivedFilesTo)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Save path")
+                    .accessibilityHint("Enter the local folder where received files should be saved automatically.")
                 Button("Choose...") {
                     let panel = NSOpenPanel()
                     panel.canChooseDirectories = true
@@ -5144,6 +6481,43 @@ struct SettingsView: View {
                         settings.saveReceivedFilesTo = url.path
                     }
                 }
+            }
+        }
+
+        SettingsSection(title: "Shared Access") {
+            let copyPartyBase = CopyPartyManager.shared.config.primaryServer
+            let smbHosts = CopyPartyManager.shared.config.smbHostnames.joined(separator: ", ")
+            Text("Room files can be shared as clickable web links through CopyParty or mounted storage paths over SMB.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            HStack(alignment: .top) {
+                Text("CopyParty")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(copyPartyBase)
+                    .multilineTextAlignment(.trailing)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("CopyParty server")
+            }
+
+            HStack(alignment: .top) {
+                Text("SMB Hosts")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(smbHosts)
+                    .multilineTextAlignment(.trailing)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("SMB hostnames")
+            }
+
+            HStack(alignment: .top) {
+                Text("Preferred Share")
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(CopyPartyManager.shared.config.smbPreferredShare)
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Preferred SMB share")
             }
         }
     }
@@ -5250,16 +6624,41 @@ struct SettingsView: View {
     @ViewBuilder
     var advancedSettings: some View {
         SettingsSection(title: "Developer Options") {
-            Toggle("Enable debug logging", isOn: .constant(false))
-            Toggle("Show connection stats", isOn: .constant(false))
+            Toggle("Enable debug logging", isOn: $debugLoggingEnabled)
+                .accessibilityHint("Turns on additional local diagnostic logging for troubleshooting.")
+            Toggle("Show connection stats", isOn: $showConnectionStats)
+                .accessibilityHint("Shows extra connection and transport details in the app where supported.")
         }
 
-        SettingsSection(title: "Audio Codec") {
-            Picker("Codec", selection: .constant("Opus")) {
-                Text("Opus (Recommended)").tag("Opus")
-                Text("PCM").tag("PCM")
+        SettingsSection(title: "Diagnostics Submission Log") {
+            VStack(alignment: .leading, spacing: 10) {
+                Button(isSubmittingDiagnostics ? "Submitting Diagnostics..." : "Submit Diagnostics to Server") {
+                    submitDiagnosticsFromAdvanced()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSubmittingDiagnostics)
+
+                if let diagnosticsSubmissionStatus, !diagnosticsSubmissionStatus.isEmpty {
+                    Text(diagnosticsSubmissionStatus)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
             }
-            .pickerStyle(.menu)
+
+            let submissionEntries = UserDefaults.standard.stringArray(forKey: "voicelink.diagnosticsSubmissionLog") ?? []
+            if submissionEntries.isEmpty {
+                Text("No diagnostics or bug-report submissions have been logged on this Mac yet.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            } else {
+                ForEach(Array(submissionEntries.suffix(10).reversed()), id: \.self) { entry in
+                    Text(entry)
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white.opacity(0.85))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
 
         SettingsSection(title: "Network") {
@@ -5274,6 +6673,31 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
             .foregroundColor(.red)
+        }
+    }
+
+    private func submitDiagnosticsFromAdvanced() {
+        isSubmittingDiagnostics = true
+        diagnosticsSubmissionStatus = nil
+        let report = BugReport(
+            title: "macOS diagnostics report",
+            description: "Manual diagnostics report submitted from macOS Advanced settings.",
+            category: "diagnostics",
+            severity: "medium",
+            anonymous: false,
+            submittedBy: NSFullUserName(),
+            mastodonHandle: nil,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
+            platform: "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
+        )
+        AnnouncementsManager.shared.submitBugReport(report) { result in
+            isSubmittingDiagnostics = false
+            switch result {
+            case .success:
+                diagnosticsSubmissionStatus = "Diagnostics sent. VoiceLink shared a support snapshot from this Mac so we can see what went wrong and what the app tried next."
+            case .failure(let error):
+                diagnosticsSubmissionStatus = "VoiceLink could not send the diagnostics just yet. \(error.localizedDescription) You can keep using the app and try again after the connection settles."
+            }
         }
     }
 }
