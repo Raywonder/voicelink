@@ -124,7 +124,7 @@ class VoiceLinkApp {
 
     routeStartupExperience() {
         this.startServerStatusMonitoring();
-        if (this.shouldShowStartupAuthGate()) {
+        if (this.shouldShowStartupAuthGate() && document.getElementById('startup-auth-screen')) {
             this.showScreen('startup-auth-screen');
         } else {
             this.showScreen('main-menu');
@@ -237,6 +237,7 @@ class VoiceLinkApp {
                 </div>
             </section>
         `;
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         const close = () => {
@@ -699,6 +700,7 @@ class VoiceLinkApp {
         const existingNameField = document.getElementById('user-name');
         const rememberedName = this.currentUser?.displayName
             || this.currentUser?.username
+            || localStorage.getItem('voicelink_guest_display_name')
             || localStorage.getItem('voicelink_support_name')
             || localStorage.getItem('username')
             || '';
@@ -708,6 +710,12 @@ class VoiceLinkApp {
         }
         if (existingNameField && rememberedName) {
             existingNameField.value = rememberedName;
+        }
+
+        if (!this.currentUser && !rememberedName) {
+            this.showScreen('join-room-screen');
+            setTimeout(() => existingNameField?.focus(), 200);
+            return;
         }
 
         setTimeout(() => {
@@ -1277,6 +1285,7 @@ class VoiceLinkApp {
         `;
 
         overlay.appendChild(content);
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         document.getElementById('multi-device-join-btn')?.addEventListener('click', () => {
@@ -2182,9 +2191,11 @@ class VoiceLinkApp {
         overlay.id = 'escape-options-menu';
         overlay.className = 'modal';
         overlay.style.display = 'flex';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
         overlay.innerHTML = `
             <div class="modal-content" style="${isIOSMenu ? 'max-width: 560px; width: 94%; border-radius: 18px 18px 0 0; margin-top: auto; margin-bottom: 0; padding-bottom: calc(1rem + var(--safe-area-inset-bottom, 0px));' : 'max-width: 420px; width: 90%;'}">
-                <h3 style="margin-top:0;">Navigation Menu</h3>
+                <h3 id="escape-menu-title" style="margin-top:0;">Navigation Menu</h3>
                 <p style="opacity:.8; margin-top:0;">${isIOSMenu ? 'Tap an option below.' : 'Double Escape opened this menu. Press Escape to close.'}</p>
                 <div class="button-group" id="escape-options-actions"></div>
             </div>
@@ -2205,6 +2216,7 @@ class VoiceLinkApp {
             }
         });
 
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
     }
 
@@ -2221,8 +2233,16 @@ class VoiceLinkApp {
         });
 
         // Show target screen
-        document.getElementById(screenId)?.classList.add('active');
+        const targetScreen = document.getElementById(screenId);
+        targetScreen?.classList.add('active');
         this.ui.currentScreen = screenId;
+        const focusTarget = targetScreen?.querySelector('h1, h2, [data-screen-focus]') || targetScreen;
+        if (focusTarget && typeof focusTarget.focus === 'function') {
+            if (!focusTarget.hasAttribute('tabindex')) {
+                focusTarget.setAttribute('tabindex', '-1');
+            }
+            setTimeout(() => focusTarget.focus(), 0);
+        }
 
         console.log('Switched to screen:', screenId);
     }
@@ -3561,6 +3581,10 @@ class VoiceLinkApp {
             return;
         }
 
+        if (!this.currentUser && userName.trim()) {
+            localStorage.setItem('voicelink_guest_display_name', userName.trim());
+        }
+
         try {
             // Initialize WebRTC manager
             this.webrtcManager = new WebRTCManager(
@@ -3953,6 +3977,7 @@ class VoiceLinkApp {
             </div>
         `;
 
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         // Animate progress bar
@@ -4443,7 +4468,7 @@ class VoiceLinkApp {
 
     showError(message) {
         console.error('Error:', message);
-        alert(`Error: ${message}`); // In a real app, use a proper modal
+        this.showNotification(String(message || 'Unknown error'), 'error');
     }
 
     showSuccess(message) {
@@ -4453,6 +4478,20 @@ class VoiceLinkApp {
 
     // Simple notification system without dialogs
     showNotification(message, type = 'info') {
+        const politeRegion = document.getElementById('app-status-live');
+        const alertRegion = document.getElementById('app-alert-live');
+        if (type === 'error' && alertRegion) {
+            alertRegion.textContent = '';
+            setTimeout(() => {
+                alertRegion.textContent = message;
+            }, 10);
+        } else if (politeRegion) {
+            politeRegion.textContent = '';
+            setTimeout(() => {
+                politeRegion.textContent = message;
+            }, 10);
+        }
+
         // Create notification element
         const notification = document.createElement('div');
         notification.style.cssText = `
@@ -5149,7 +5188,7 @@ class VoiceLinkApp {
     }
 
     applySavedIdentityPreferences() {
-        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || '').trim();
+        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || localStorage.getItem('voicelink_guest_display_name') || '').trim();
         const mastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '').trim();
         const joinNameInput = document.getElementById('user-name');
         const whmcsMastodonHandleInput = document.getElementById('whmcs-mastodon-handle');
@@ -5462,14 +5501,7 @@ class VoiceLinkApp {
         document.querySelectorAll('.auth-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const tabId = tab.dataset.tab;
-                // Update tab active state
-                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                // Update content visibility
-                document.querySelectorAll('.auth-tab-content').forEach(content => {
-                    content.classList.remove('active');
-                });
-                document.getElementById(`${tabId}-tab`)?.classList.add('active');
+                this.setActiveAuthTab(tabId);
             });
         });
 
@@ -5590,21 +5622,29 @@ class VoiceLinkApp {
         if (modal) {
             modal.style.display = 'flex';
             this.setActiveAuthTab(tabId);
+            const closeBtn = document.getElementById('close-login-modal');
+            if (closeBtn) {
+                setTimeout(() => closeBtn.focus(), 0);
+            }
         }
     }
 
     setActiveAuthTab(tabId) {
         document.querySelectorAll('.auth-tab').forEach(tab => {
-            if (tab.dataset.tab === tabId) {
-                tab.classList.add('active');
-            } else {
-                tab.classList.remove('active');
-            }
+            const isActive = tab.dataset.tab === tabId;
+            tab.classList.toggle('active', isActive);
+            tab.setAttribute('aria-selected', String(isActive));
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
         });
         document.querySelectorAll('.auth-tab-content').forEach(content => {
-            content.classList.remove('active');
+            const isActive = content.id === `${tabId}-tab`;
+            content.classList.toggle('active', isActive);
+            if (isActive) {
+                content.removeAttribute('hidden');
+            } else {
+                content.setAttribute('hidden', 'hidden');
+            }
         });
-        document.getElementById(`${tabId}-tab`)?.classList.add('active');
     }
 
     hideMastodonLoginModal() {
@@ -6011,7 +6051,7 @@ class VoiceLinkApp {
             if (loginPrompt) loginPrompt.style.display = 'block';
             if (userInfo) userInfo.style.display = 'none';
             if (!this.isNativeApp() && !this.currentRoom && this.ui.currentScreen !== 'loading-screen') {
-                this.showScreen('startup-auth-screen');
+                this.showScreen(document.getElementById('startup-auth-screen') ? 'startup-auth-screen' : 'main-menu');
             }
 
             // Hide admin controls

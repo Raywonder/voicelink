@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - Downloads</title>
+    <title>VoiceLink Downloads - Desktop Apps and VoiceLink Web Access</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -62,6 +62,12 @@
             margin-bottom: 15px;
             cursor: pointer;
             user-select: none;
+            width: 100%;
+            padding: 0;
+            background: transparent;
+            border: 0;
+            color: inherit;
+            text-align: left;
         }
         .platform-info {
             display: flex;
@@ -185,31 +191,31 @@
 </head>
 <body>
     <div class="container">
-        <h1>VoiceLink Local</h1>
-        <p class="tagline">P2P Voice Chat with 3D Spatial Audio</p>
+        <h1>VoiceLink Downloads</h1>
+        <p class="tagline">Desktop apps for local access, plus VoiceLink Web Access for the browser</p>
         <p class="version">
-            Version 1.0.4 
+            Current release channel
             <span class="version-badge">NEW</span>
         </p>
 
         <!-- Update Information -->
-        <div class="update-info">
-            <h3>🚀 What's New in v1.0.4</h3>
-            <p><strong>Enhanced Auto-Port Detection</strong> - Automatically finds and connects to VoiceLink servers on any available port</p>
-            <p><strong>Improved Connection Reliability</strong> - Better server discovery and fallback connections</p>
-            <p><strong>Enhanced Error Reporting</strong> - Clear error messages and automatic reconnection</p>
-        </div>
+        <main class="update-info" aria-labelledby="release-focus-heading">
+            <h2 id="release-focus-heading">Current Release Focus</h2>
+            <p><strong>Native desktop access first</strong> with refreshed macOS installers and direct Windows installer links.</p>
+            <p><strong>VoiceLink Web Access</strong> is available in-browser for quick entry on any modern platform.</p>
+            <p><strong>Current desktop fixes</strong> include restored monitoring, audio recovery, and updated desktop download paths.</p>
+        </main>
 
         <!-- Windows Downloads -->
         <div class="platform-section" id="windows-section">
-            <div class="platform-header" onclick="toggleSection('windows-section')">
+            <button class="platform-header" type="button" aria-expanded="true" aria-controls="windows-downloads" onclick="toggleSection('windows-section')">
                 <div class="platform-info">
                     <span class="platform-icon">&#8862;</span>
                     <span class="platform-name">Windows</span>
                 </div>
                 <span class="expand-icon">▼</span>
-            </div>
-            <div class="downloads">
+            </button>
+            <div class="downloads" id="windows-section-downloads">
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe" class="download-btn">
                     <div class="format">VoiceLink Windows Installer</div>
                     <div class="arch">Current Build (64-bit)</div>
@@ -223,25 +229,21 @@
 
         <!-- macOS Downloads -->
         <div class="platform-section" id="macos-section">
-            <div class="platform-header" onclick="toggleSection('macos-section')">
+            <button class="platform-header" type="button" aria-expanded="true" aria-controls="macos-downloads" onclick="toggleSection('macos-section')">
                 <div class="platform-info">
                     <span class="platform-icon">&#63743;</span>
                     <span class="platform-name">macOS</span>
                 </div>
                 <span class="expand-icon">▼</span>
-            </div>
-            <div class="downloads">
+            </button>
+            <div class="downloads" id="macos-section-downloads">
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn">
                     <div class="format">VoiceLink Native ZIP</div>
-                    <div class="arch">Current Build (Universal)</div>
+                    <div class="arch">Signed ZIP</div>
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-btn">
                     <div class="format">PKG Installer</div>
-                    <div class="arch">Universal</div>
-                </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg" class="download-btn">
-                    <div class="format">PKG Installer</div>
-                    <div class="arch">Apple Silicon</div>
+                    <div class="arch">macOS</div>
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg" class="download-btn">
                     <div class="format">PKG Installer</div>
@@ -255,62 +257,45 @@
                     <div class="format">SHA256 Checksum</div>
                     <div class="arch">VoiceLink-macOS.zip</div>
                 </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg.sha256" class="download-btn">
+                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg.sha256" class="download-btn">
                     <div class="format">SHA256 Checksum</div>
-                    <div class="arch">Apple Silicon PKG</div>
+                    <div class="arch">macOS PKG</div>
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg.sha256" class="download-btn">
                     <div class="format">SHA256 Checksum</div>
                     <div class="arch">Intel PKG</div>
                 </a>
-                <a href="VoiceLink%20Local-1.0.3-arm64.dmg" class="download-btn">
-                    <div class="format">DMG Installer</div>
-                    <div class="arch">Apple Silicon (arm64)</div>
-                </a>
-                <a href="VoiceLink%20Local-1.0.3-mac.zip" class="download-btn">
-                    <div class="format">ZIP Archive</div>
-                    <div class="arch">Intel (x64)</div>
-                </a>
-                <a href="VoiceLink%20Local-1.0.3-arm64-mac.zip" class="download-btn">
-                    <div class="format">ZIP Archive</div>
-                    <div class="arch">Apple Silicon (arm64)</div>
-                </a>
             </div>
         </div>
 
-        <!-- Linux Downloads -->
-        <div class="platform-section" id="linux-section">
-            <div class="platform-header" onclick="toggleSection('linux-section')">
+        <div class="platform-section" id="ios-section">
+            <button class="platform-header" type="button" aria-expanded="true" aria-controls="ios-downloads" onclick="toggleSection('ios-section')">
                 <div class="platform-info">
-                    <span class="platform-icon">&#128039;</span>
-                    <span class="platform-name">Linux</span>
+                    <span class="platform-icon">📱</span>
+                    <span class="platform-name">iPhone and iPad</span>
                 </div>
                 <span class="expand-icon">▼</span>
-            </div>
-            <div class="downloads">
-                <a href="VoiceLink%20Local-1.0.3.AppImage" class="download-btn">
-                    <div class="format">AppImage</div>
-                    <div class="arch">64-bit</div>
-                </a>
-                <a href="voicelink-local-1.0.3.tar.gz" class="download-btn">
-                    <div class="format">Tarball</div>
-                    <div class="arch">64-bit</div>
+            </button>
+            <div class="downloads" id="ios-section-downloads">
+                <a href="https://testflight.apple.com/join/duD9ycHJ" class="download-btn">
+                    <div class="format">Join on TestFlight</div>
+                    <div class="arch">Current iOS Preview Build</div>
                 </a>
             </div>
         </div>
 
         <!-- Browser Version -->
         <div class="platform-section" id="browser-section">
-            <div class="platform-header" onclick="toggleSection('browser-section')">
+            <button class="platform-header" type="button" aria-expanded="true" aria-controls="browser-downloads" onclick="toggleSection('browser-section')">
                 <div class="platform-info">
                     <span class="platform-icon">🌐</span>
-                    <span class="platform-name">Use in Browser</span>
+                    <span class="platform-name">VoiceLink Web Access</span>
                 </div>
                 <span class="expand-icon">▼</span>
-            </div>
-            <div class="downloads" style="grid-template-columns: 1fr;">
+            </button>
+            <div class="downloads" id="browser-section-downloads">
                 <a href="https://voicelink.devinecreations.net" class="download-btn" style="max-width: 300px; margin: 0 auto;">
-                    <div class="format">Launch Web App</div>
+                    <div class="format">Launch VoiceLink Web Access</div>
                     <div class="arch">voicelink.devinecreations.net</div>
                 </a>
             </div>
@@ -335,20 +320,19 @@
         </div>
 
         <!-- Donation Section -->
-        <div class="platform-section" style="text-align: center; background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(123,44,191,0.1));">
-            <div class="platform-header" onclick="toggleSection('donate-section')">
+        <div class="platform-section" id="donate-section" style="text-align: center; background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(123,44,191,0.1));">
+            <button class="platform-header" type="button" aria-expanded="true" aria-controls="donate-downloads" onclick="toggleSection('donate-section')">
                 <div class="platform-info" style="flex: 1; justify-content: center;">
                     <span class="platform-icon">💖</span>
                     <span class="platform-name">Support VoiceLink</span>
                 </div>
                 <span class="expand-icon">▼</span>
-            </div>
-            <div class="downloads" style="max-height: 300px; grid-template-columns: 1fr 1fr;">
+            </button>
+            <div class="downloads" id="donate-downloads" style="max-height: 300px; grid-template-columns: 1fr 1fr;">
                 <p style="color: #aaa; margin-bottom: 20px; grid-column: 1 / -1;">Help keep VoiceLink free and servers running. Your donations are appreciated!</p>
                 <a href="https://cash.app/f/VIEW_MONEY_POOL?pool_token=POOL_B170540F-F26D-4BBA-934F-7967C8BBF66C" 
                    target="_blank" 
                    rel="noopener noreferrer"
-                   role="button"
                    aria-label="Donate to Server Fund via CashApp"
                    class="donate-btn donate-server">
                     <span class="icon" aria-hidden="true">💚</span>
@@ -358,7 +342,6 @@
                 <a href="https://cash.app/f/VIEW_MONEY_POOL?pool_token=POOL_AD78845E-E729-47A4-B8D4-08BBCFA65A5A" 
                    target="_blank" 
                    rel="noopener noreferrer"
-                   role="button"
                    aria-label="Donate to Development Fund via CashApp"
                    class="donate-btn donate-dev">
                     <span class="icon" aria-hidden="true">💜</span>
@@ -370,7 +353,7 @@
         </div>
 
         <footer style="text-align: center; margin-top: 40px; padding: 20px; color: #666; font-size: 0.85rem;">
-            <p>&copy; 2024-2025 Divine Creations. All rights reserved.</p>
+            <p>&copy; 2024-2026 Divine Creations. All rights reserved.</p>
         </footer>
     </div>
 
@@ -379,21 +362,28 @@
             const section = document.getElementById(sectionId);
             if (section) {
                 section.classList.toggle('collapsed');
-                
-                // Save preference to localStorage
+                const trigger = section.querySelector('.platform-header');
+                if (trigger) trigger.setAttribute('aria-expanded', String(!section.classList.contains('collapsed')));
+                const panel = document.getElementById(`${sectionId}-downloads`);
+                if (panel) panel.setAttribute('aria-hidden', String(section.classList.contains('collapsed')));
                 const isCollapsed = section.classList.contains('collapsed');
                 localStorage.setItem(`downloads-section-${sectionId}`, isCollapsed);
             }
         }
+                
 
         // Restore saved section states
         function restoreSectionStates() {
-            const sections = ['windows-section', 'macos-section', 'linux-section', 'browser-section', 'donate-section'];
+            const sections = ['windows-section', 'macos-section', 'ios-section', 'browser-section', 'donate-section'];
             sections.forEach(sectionId => {
                 const isCollapsed = localStorage.getItem(`downloads-section-${sectionId}`) === 'true';
                 const section = document.getElementById(sectionId);
                 if (section && isCollapsed) {
                     section.classList.add('collapsed');
+                }
+                const trigger = section?.querySelector('.platform-header');
+                if (trigger) {
+                    trigger.setAttribute('aria-expanded', String(!(section?.classList.contains('collapsed'))));
                 }
             });
         }

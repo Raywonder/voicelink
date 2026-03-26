@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Downloads - Native Apps & Web Client</title>
+    <title>VoiceLink Downloads - Desktop Apps and VoiceLink Web Access</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -89,7 +89,7 @@
     <div class="container">
         <header>
             <h1>🎙️ VoiceLink Downloads</h1>
-            <p class="subtitle">P2P Voice Chat with 3D Spatial Audio</p>
+            <p class="subtitle">Desktop apps for local access, plus VoiceLink Web Access in your browser</p>
         </header>
 
         <div class="downloads-grid">
@@ -105,15 +105,13 @@
                     <li>Push-to-talk (PTT)</li>
                     <li>Jellyfin media integration</li>
                     <li>Auto-updates built-in</li>
+                    <li>Best local desktop accessibility path</li>
                 </ul>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip" class="download-button" download>
-                    Download for macOS <span class="file-size">(Current Build)</span>
+                    Download for macOS <span class="file-size">(Signed ZIP)</span>
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-button secondary" download>
-                    Universal PKG Installer
-                </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg" class="download-button secondary" download>
-                    Apple Silicon PKG Installer
+                    macOS PKG Installer
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg" class="download-button secondary" download>
                     Intel PKG Installer
@@ -125,10 +123,7 @@
                     SHA256 Checksum (VoiceLink-macOS.zip)
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos.pkg.sha256" class="download-button secondary" download>
-                    SHA256 Checksum (Universal PKG)
-                </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg.sha256" class="download-button secondary" download>
-                    SHA256 Checksum (Apple Silicon PKG)
+                    SHA256 Checksum (macOS PKG)
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg.sha256" class="download-button secondary" download>
                     SHA256 Checksum (Intel PKG)
@@ -139,19 +134,34 @@
             <div class="download-card">
                 <span class="platform-icon">🪟</span>
                 <h2>Windows Native</h2>
-                <span class="version">v1.0.0 build 24</span>
+                <span class="version">Current installer build</span>
                 <ul class="features">
                     <li>Native .NET desktop app</li>
                     <li>API auto-start and wake support</li>
                     <li>Authentication and room management</li>
                     <li>Push-to-talk and audio controls</li>
                     <li>Server compatibility with VoiceLink API</li>
+                    <li>Best option for local desktop access on Windows</li>
                 </ul>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe" class="download-button" download>
                     Download for Windows <span class="file-size">(Current Build)</span>
                 </a>
                 <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe.sha256" class="download-button secondary" download>
                     SHA256 Checksum (VoiceLink-1.0.0-windows-setup.exe)
+                </a>
+            </div>
+
+            <div class="download-card">
+                <span class="platform-icon">📱</span>
+                <h2>iPhone and iPad</h2>
+                <span class="version">TestFlight</span>
+                <ul class="features">
+                    <li>Current iOS preview channel</li>
+                    <li>Join with Apple TestFlight</li>
+                    <li>Use the desktop app above for full local desktop access</li>
+                </ul>
+                <a href="https://testflight.apple.com/join/duD9ycHJ" class="download-button">
+                    Join on TestFlight
                 </a>
             </div>
 
@@ -177,10 +187,10 @@
             <!-- Web Client -->
             <div class="download-card web-client-card">
                 <span class="platform-icon">🌐</span>
-                <h2>Web Client (No Download Required)</h2>
+                <h2>VoiceLink Web Access</h2>
                 <span class="version">Universal</span>
                 <p style="margin: 20px 0; line-height: 1.6; font-size: 1.1em;">
-                    Access VoiceLink directly from your browser. Works on any device with a modern web browser.
+                    Access VoiceLink directly from your browser. Works on any device with a modern web browser, with direct links above for local desktop access on macOS and Windows.
                 </p>
                 <ul class="features" style="columns: 2;">
                     <li>No installation required</li>
@@ -192,12 +202,12 @@
                     <li>Auto-port detection</li>
                     <li>Mobile-friendly UI</li>
                 </ul>
-                <a href="/" class="download-button">Launch Web Client</a>
+                <a href="/" class="download-button">Launch VoiceLink Web Access</a>
             </div>
         </div>
 
         <div class="info-section">
-            <h3>📋 System Requirements</h3>
+            <h2>System Requirements</h2>
             <p>
                 <strong>macOS Native:</strong> macOS 12.0 (Monterey) or later, Apple Silicon or Intel<br>
                 <strong>macOS DMG:</strong> macOS 11.0 (Big Sur) or later<br>
@@ -207,7 +217,7 @@
         </div>
 
         <div class="info-section">
-            <h3>🚀 Key Features</h3>
+            <h2>Key Features</h2>
             <p>
                 VoiceLink provides peer-to-peer voice communication with advanced 3D spatial audio.
                 Features include push-to-talk, whisper mode, Jellyfin media sync, TTS announcements,

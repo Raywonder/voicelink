@@ -3,41 +3,160 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - P2P Voice Chat</title>
+    <title>VoiceLink Web Access - Browser Voice Chat</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
 <body>
+    <script>
+        (function () {
+            const path = window.location.pathname || '';
+            if (path === '/client/downloads-enhanced.html') {
+                window.location.replace('/downloads-enhanced.html');
+                return;
+            }
+            if (path === '/client/downloads.html') {
+                window.location.replace('/downloads.html');
+            }
+        }());
+    </script>
+    <a href="#main-content" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;" onfocus="this.style.cssText='position:fixed;top:0;left:0;background:#1f5eff;color:#fff;padding:10px 20px;z-index:10001;font-size:16px;'">Skip to main content</a>
+    <div id="app-status-live" role="status" aria-live="polite" aria-atomic="true" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;"></div>
+    <div id="app-alert-live" role="alert" aria-atomic="true" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;"></div>
     <div id="app">
         <!-- Loading Screen -->
         <div id="loading-screen" class="screen active">
             <div class="loading-content">
-                <h1>🎙️ VoiceLink Local</h1>
-                <p>Initializing P2P voice chat system...</p>
+                <h1>🎙️ VoiceLink</h1>
+                <p>Opening VoiceLink Web Access...</p>
                 <div class="loading-spinner"></div>
             </div>
         </div>
 
+        <!-- Startup Auth Gate (shown for guests in browser) -->
+        <div id="startup-auth-screen" class="screen">
+            <div class="form-container">
+                <h2 id="startup-auth-title">Welcome to VoiceLink</h2>
+                <p>Sign in for your full account experience, or continue as a guest for quick browser access.</p>
+                <div class="button-group">
+                    <button id="startup-mastodon-login-btn" class="primary-btn" aria-label="Sign in with Mastodon">Login with Mastodon</button>
+                    <button id="startup-whmcs-login-btn" class="secondary-btn" aria-label="Sign in with Client Portal">Login with Client Portal</button>
+                </div>
+                <div class="button-group">
+                    <button id="startup-guest-btn" class="secondary-btn" aria-describedby="startup-guest-help">Continue as Guest</button>
+                </div>
+                <p id="startup-guest-help">Guest access is best for quick room entry. Sign in when you want your saved settings, server access, and account tools.</p>
+            </div>
+        </div>
+
         <!-- Main Menu -->
-        <div id="main-menu" class="screen">
+        <main id="main-menu" class="screen" tabindex="-1">
+            <div id="main-content" tabindex="-1"></div>
             <div class="menu-header">
-                <h1>🎙️ VoiceLink Local</h1>
-                <p>Advanced P2P Voice Chat with 3D Audio</p>
+                <h1>🎙️ VoiceLink</h1>
+                <p>Browser voice chat with rooms, account login, and quick guest access</p>
             </div>
 
-            <div id="authelia-auth-section" class="auth-section">
-                <div id="authelia-login-prompt" class="auth-prompt">
-                    <button id="authelia-login-btn" class="auth-btn sso-btn">
-                        <span class="mastodon-icon">🔐</span> Login with SSO
+            <div id="mastodon-auth-section" class="auth-section">
+                <div id="mastodon-login-prompt" class="auth-prompt">
+                    <button id="mastodon-login-btn" class="auth-btn sso-btn" aria-label="Open login options">
+                        <span class="mastodon-icon">🔐</span> Login
                     </button>
                 </div>
-                <div id="authelia-user-info" class="auth-user-info" style="display: none;">
+                <div id="mastodon-user-info" class="auth-user-info" style="display: none;">
+                    <img id="mastodon-user-avatar" class="user-avatar" src="" alt="" aria-hidden="true">
                     <div class="user-details">
-                        <span id="authelia-user-name" class="user-name"></span>
-                        <span id="authelia-user-role" class="user-role"></span>
+                        <span id="mastodon-user-name" class="user-name"></span>
+                        <span id="mastodon-user-handle" class="user-handle"></span>
+                        <span id="mastodon-user-role" class="user-role"></span>
                     </div>
-                    <button id="authelia-logout-btn" class="auth-btn logout-btn">Logout</button>
+                    <button id="mastodon-logout-btn" class="auth-btn logout-btn" aria-label="Log out of VoiceLink">Logout</button>
+                </div>
+            </div>
+
+            <div id="mastodon-login-modal" class="modal" style="display: none;">
+                <div class="modal-content auth-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+                    <button id="close-login-modal" class="close-modal-btn" aria-label="Close login dialog">✕</button>
+                    <h2 id="login-modal-title">Login to VoiceLink</h2>
+                    <div class="auth-tabs" role="tablist" aria-label="Login methods">
+                        <button class="auth-tab active" data-tab="local-login" type="button" role="tab" aria-selected="true" aria-controls="local-login-tab" id="local-login-tab-button">VoiceLink</button>
+                        <button class="auth-tab" data-tab="whmcs-login" type="button" role="tab" aria-selected="false" aria-controls="whmcs-login-tab" id="whmcs-login-tab-button">Client Portal</button>
+                        <button class="auth-tab" data-tab="mastodon-login" type="button" role="tab" aria-selected="false" aria-controls="mastodon-login-tab" id="mastodon-login-tab-button">Mastodon</button>
+                    </div>
+
+                    <div id="local-login-tab" class="auth-tab-content active" role="tabpanel" aria-labelledby="local-login-tab-button">
+                        <form id="local-login-form" class="auth-form">
+                            <div class="input-group">
+                                <label for="local-login-identity">Email or Username</label>
+                                <input type="text" id="local-login-identity" autocomplete="username" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="local-login-password">Password</label>
+                                <input type="password" id="local-login-password" autocomplete="current-password" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="local-login-2fa">Two-Factor Code</label>
+                                <input type="text" id="local-login-2fa" inputmode="numeric" autocomplete="one-time-code">
+                            </div>
+                            <div class="auth-options">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="local-remember-me"> Remember me
+                                </label>
+                                <button id="local-request-2fa-btn" class="secondary-btn" type="button">Send Code</button>
+                            </div>
+                            <button type="submit" class="primary-btn auth-submit">Sign In</button>
+                        </form>
+                    </div>
+
+                    <div id="whmcs-login-tab" class="auth-tab-content" role="tabpanel" aria-labelledby="whmcs-login-tab-button" hidden>
+                        <form id="whmcs-login-form" class="auth-form">
+                            <div class="input-group">
+                                <label for="whmcs-login-email">Email</label>
+                                <input type="email" id="whmcs-login-email" autocomplete="username" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-login-password">Password</label>
+                                <input type="password" id="whmcs-login-password" autocomplete="current-password" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-login-2fa">2FA Code</label>
+                                <input type="text" id="whmcs-login-2fa" inputmode="numeric" autocomplete="one-time-code">
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-mastodon-handle">Mastodon Handle</label>
+                                <input type="text" id="whmcs-mastodon-handle" placeholder="@name@instance.social">
+                            </div>
+                            <div class="auth-options">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="whmcs-remember-me"> Remember me
+                                </label>
+                            </div>
+                            <button type="submit" class="primary-btn auth-submit">Login</button>
+                        </form>
+                        <div class="auth-actions-row">
+                            <button id="whmcs-sso-btn" class="secondary-btn" type="button">Open Client Portal</button>
+                        </div>
+                    </div>
+
+                    <div id="mastodon-login-tab" class="auth-tab-content" role="tabpanel" aria-labelledby="mastodon-login-tab-button" hidden>
+                        <p>Login with your Mastodon account for federated authentication.</p>
+                        <div class="instance-input-group">
+                            <label for="mastodon-instance-input">Mastodon instance</label>
+                            <input type="text" id="mastodon-instance-input" placeholder="mastodon.social" class="instance-input">
+                            <button id="mastodon-connect-btn" class="primary-btn" type="button">Connect</button>
+                        </div>
+                        <div class="suggested-instances">
+                            <p>Suggested instances:</p>
+                            <button class="instance-btn" data-instance="md.tappedin.fm" type="button">TappedIn</button>
+                            <button class="instance-btn" data-instance="mastodon.devinecreations.net" type="button">DevineCreations</button>
+                        </div>
+                        <div id="oauth-code-entry" class="oauth-code-entry" style="display: none;">
+                            <label for="oauth-code-input">Authorization code</label>
+                            <input type="text" id="oauth-code-input" class="code-input">
+                            <button id="oauth-code-submit" class="primary-btn" type="button">Submit Code</button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -90,14 +209,14 @@
                 </div>
 
 
-                <div class="menu-section">
-                    <h3>Available Rooms</h3>
-                    <div id="room-list" class="room-list">
+                <div class="menu-section" aria-labelledby="available-rooms-heading">
+                    <h3 id="available-rooms-heading">Available Rooms</h3>
+                    <div id="room-list" class="room-list" aria-live="polite" aria-busy="true">
                         <p class="loading">Loading rooms...</p>
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
 
         <!-- Room Creation -->
         <div id="create-room-screen" class="screen">
@@ -192,9 +311,9 @@
                     <span id="room-id-display">Room ID: </span>
                 </div>
                 <div class="header-controls">
-                    <button id="room-settings-btn" class="icon-btn" title="Settings">⚙️</button>
-                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio">🎵</button>
-                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room">🚪</button>
+                    <button id="room-settings-btn" class="icon-btn" title="Settings" aria-label="Open room settings">⚙️</button>
+                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio" aria-label="Open quick audio controls">🎵</button>
+                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room" aria-label="Leave room">🚪</button>
                 </div>
             </div>
 
@@ -958,6 +1077,7 @@
     </div>
 
     <!-- Core Scripts -->
+    <script src="js/ui/accessibility-manager.js"></script>
     <script src="js/core/ios-compatibility.js"></script>
     <script src="js/core/audio-engine.js"></script>
     <script src="js/core/media-metadata-detector.js"></script>
@@ -966,7 +1086,7 @@
     <script src="js/core/default-rooms-manager.js"></script>
     <script src="js/core/feature-permissions-manager.js"></script>
     <script src="js/integrations/wordpress-integration.js"></script>
-    <script src="js/auth/authelia-auth.js"></script>
+    <script src="js/auth/mastodon-oauth.js"></script>
     <script src="js/core/app.js"></script>
 
     <!-- Audio Processing -->
