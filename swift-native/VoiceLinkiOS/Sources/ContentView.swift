@@ -64,6 +64,10 @@ struct IOSDirectMessageTarget: Identifiable, Hashable {
     var isDeafened: Bool = false
     var isSpeaking: Bool = false
     var transmitEnabled: Bool = true
+    var isBot: Bool = false
+    var deviceName: String = ""
+    var deviceType: String = ""
+    var clientVersion: String = ""
 }
 
 struct IOSRoomMessageItem: Identifiable, Hashable {
@@ -78,6 +82,16 @@ struct IOSRoomMessageItem: Identifiable, Hashable {
     var isSystemMessage: Bool {
         type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "system"
             || author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "system"
+    }
+
+    var isBotMessage: Bool {
+        let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedType == "bot"
+            || normalizedAuthor.contains("bot")
+            || normalizedAuthor == "sapphire"
+            || normalizedAuthor == "sophia"
+            || normalizedAuthor == "voicelink"
     }
 }
 
@@ -255,16 +269,25 @@ final class IOSRoomMessagingState: ObservableObject {
             guard let user = entry as? [String: Any] else { return nil }
             let id = String(describing: user["id"] ?? user["userId"] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = String(describing: user["name"] ?? user["userName"] ?? user["displayName"] ?? "")
+            let rawName = String(describing: user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty, !name.isEmpty else { return nil }
+            guard !id.isEmpty else { return nil }
+            let fallbackName = id.count > 8 ? "User \(id.prefix(8))" : "User \(id)"
+            let name = rawName.isEmpty ? fallbackName : rawName
             return IOSDirectMessageTarget(
                 id: id,
                 name: name,
                 isMuted: (user["muted"] as? Bool) ?? (user["isMuted"] as? Bool) ?? false,
                 isDeafened: (user["deafened"] as? Bool) ?? (user["isDeafened"] as? Bool) ?? false,
                 isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
-                transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true
+                transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
+                isBot: (user["isBot"] as? Bool) ?? false,
+                deviceName: String(describing: user["deviceName"] ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                deviceType: String(describing: user["deviceType"] ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                clientVersion: String(describing: user["clientVersion"] ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
         if isInRoom || !mapped.isEmpty {
@@ -287,7 +310,8 @@ final class IOSRoomMessagingState: ObservableObject {
         let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let author = (info["author"] as? String ?? "User").trimmingCharacters(in: .whitespacesAndNewlines)
         let body = (info["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let type = (info["type"] as? String ?? "text").trimmingCharacters(in: .whitespacesAndNewlines)
+        let incomingType = (info["type"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
         guard !roomId.isEmpty, !body.isEmpty else { return }
         roomMessages.append(
@@ -383,6 +407,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let serverTitle: String
     let serverApiBase: String
     let serverDomain: String
+    let serverDescription: String
     let federated: Bool
     let federationTier: String
     let backgroundStream: String
@@ -392,7 +417,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let iosChatMessageLimit: Int
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, memberCount, visibility, accessType, serverSource, serverTitle, serverApiBase, serverDomain, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
+        case id, name, description, users, userCount, memberCount, visibility, accessType, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -410,6 +435,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         serverTitle = (try? container.decode(String.self, forKey: .serverTitle)) ?? ""
         serverApiBase = (try? container.decode(String.self, forKey: .serverApiBase)) ?? ""
         serverDomain = (try? container.decode(String.self, forKey: .serverDomain)) ?? ""
+        serverDescription = (try? container.decode(String.self, forKey: .serverDescription)) ?? ""
         federated = (try? container.decode(Bool.self, forKey: .federated)) ?? false
         federationTier = (try? container.decode(String.self, forKey: .federationTier)) ?? "none"
         backgroundStream = (try? container.decode(String.self, forKey: .backgroundStream)) ?? ""
@@ -577,6 +603,7 @@ private struct HomeTab: View {
         guard !query.isEmpty else { return summaries }
         return summaries.filter { server in
             server.name.lowercased().contains(query)
+            || server.description.lowercased().contains(query)
             || server.baseURL.lowercased().contains(query)
             || server.rooms.contains(where: { room in
                 room.name.lowercased().contains(query)
@@ -608,6 +635,7 @@ private struct HomeTab: View {
             return HomeServerSummary(
                 id: key,
                 name: displayServerName(room: first, fallbackBase: resolvedBase),
+                description: first.serverDescription.trimmingCharacters(in: .whitespacesAndNewlines),
                 baseURL: resolvedBase,
                 roomCount: sortedRooms.count,
                 totalUsers: sortedRooms.reduce(0) { $0 + $1.userCount },
@@ -715,6 +743,11 @@ private struct HomeTab: View {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(server.name)
                                         .font(.headline)
+                                    if !server.description.isEmpty {
+                                        Text(server.description)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(server.totalUsers) users")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -802,7 +835,7 @@ private struct HomeTab: View {
             : normalizeBaseURL(room.serverApiBase)
         if action == "join" {
             if !bypassGuestPrompt && authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                !iosHasValidGuestDisplayName(displayName) {
                 pendingGuestJoinRoom = room
                 showGuestJoinPrompt = true
                 return
@@ -813,7 +846,9 @@ private struct HomeTab: View {
                 roomName: room.name,
                 roomDescription: room.description,
                 baseURL: resolvedRoomBase,
-                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
+                displayName: iosHasValidGuestDisplayName(displayName)
+                    ? displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "Guest",
                 backgroundStream: room.backgroundStream,
                 backgroundStreamVolume: room.streamVolume,
                 showChatByDefault: room.showChatInIOS,
@@ -974,6 +1009,7 @@ private struct RoomRow: View {
 private struct HomeServerSummary: Identifiable, Hashable {
     let id: String
     let name: String
+    let description: String
     let baseURL: String
     let roomCount: Int
     let totalUsers: Int
@@ -1423,8 +1459,17 @@ private struct MessagesTab: View {
                                 roomState.selectedProfileName = target.name
                                 roomState.statusText = "Selected \(target.name)."
                             } label: {
-                                HStack {
-                                    Text(target.name)
+                                HStack(spacing: 10) {
+                                    Image(systemName: iosUserAudioIconName(target))
+                                        .foregroundStyle(target.isSpeaking ? .green : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(target.name)
+                                        if let deviceSummary = iosUserDeviceSummary(target) {
+                                            Text(deviceSummary)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                     Spacer()
                                     if roomState.selectedDirectTarget?.id == target.id {
                                         Image(systemName: "checkmark.circle.fill")
@@ -1538,7 +1583,7 @@ private struct GuestJoinPromptView: View {
                         continueJoin()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!iosHasValidGuestDisplayName(displayName))
 
                     Button("Device Pair") {
                         dismiss()
@@ -1557,6 +1602,34 @@ private struct GuestJoinPromptView: View {
             }
         }
     }
+}
+
+func iosHasValidGuestDisplayName(_ raw: String) -> Bool {
+    let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return !normalized.isEmpty && !["guest", "user", "voicelink user"].contains(normalized)
+}
+
+func iosUserAudioIconName(_ target: IOSDirectMessageTarget) -> String {
+    if target.isDeafened {
+        return "speaker.slash.fill"
+    }
+    if target.isMuted || !target.transmitEnabled {
+        return "mic.slash.fill"
+    }
+    if target.isSpeaking {
+        return "waveform.circle.fill"
+    }
+    return target.isBot ? "sparkles" : "person.wave.2.fill"
+}
+
+func iosUserDeviceSummary(_ target: IOSDirectMessageTarget) -> String? {
+    let deviceName = target.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let deviceType = target.deviceType.trimmingCharacters(in: .whitespacesAndNewlines)
+    let version = target.clientVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+    let summary = [deviceName, deviceType, version.isEmpty ? "" : "v\(version)"]
+        .filter { !$0.isEmpty }
+        .joined(separator: " • ")
+    return summary.isEmpty ? nil : summary
 }
 
 private struct AdminTabView: View {

@@ -1,35 +1,48 @@
-VoiceLink TestFlight Build 35
+VoiceLink TestFlight Build 46
 
-This build is the current iOS audio and transcript retest build.
-The main focus is room audio stability, louder output/input control, and live transcript behavior while joined to a room.
+Before testing, update to the newest TestFlight build:
+- Open TestFlight.
+- Select VoiceLink.
+- Tap Update if available.
+- Confirm the installed build number is 46 before retesting.
+- If you still see an older expired build, pull down to refresh TestFlight and reopen VoiceLink from the updated build.
 
-Main things to test:
-- Join a room and confirm room audio starts normally.
-- Confirm room audio is actually audible on the phone speaker or connected output.
-- Speak after joining and confirm your mic comes through.
-- Open Settings and Room Controls and verify Mic Level and Master Output now boost cleanly up to 300 percent.
-- Check whether room preview hands off cleanly into the joined room.
-- Background the app, return, and confirm room audio still works.
-- Use Test Sound in Settings > Audio and confirm it plays.
-- Open Room Controls and test Mic Level, Master Output, Show Chat, and Mute Media Playback.
-- In an active room, speak for a few seconds from another client and confirm Live Transcripts starts filling in on iOS.
-- Check Bluetooth or other routed audio if available and confirm the room still stays audible after route changes.
-- Check whether the phone still gets unusually hot while joining or while sitting in one room.
+Focus on these changes:
+- Settings now has a native `Account Sign In` sheet on iPhone.
+- Test VoiceLink account sign-in and WHMCS-backed account sign-in.
+- If 2FA is required, test the native delivery picker and verify:
+  `Send Code`, `Text Me the Code`, and `Call Me the Code`.
+- Confirm sign-out from the native sheet clears the session cleanly.
+- Join a room while signed in with WHMCS and confirm iOS verifies the socket session before joining.
+- After a server restart or reconnect, confirm iOS refreshes the WHMCS token silently and does not show a stale-session error while still signed in.
 
-Helpful spot checks:
-- VoiceOver should still announce the sliders as real sliders.
-- Signed-in and guest room joins should both still work.
-- Room lists, people lists, and profile info should still refresh correctly.
-- Transcript rows should show the speaker name and the transcribed text.
-- Guests should not see admin-only controls.
+Audio and room checks:
+- Confirm both `voicelink.devinecreations.net` and `node2.voicelink.devinecreations.net` appear in Federated Rooms when iOS visibility is enabled on those servers.
+- If a server or room is hidden from iOS in desktop/admin settings, confirm it no longer appears in the iPhone room lists.
+- Confirm room chat defaults match room settings: chat can start hidden or shown, message order can be newest-first or oldest-first, and the visible message window caps at 20 or 50 messages.
+- Confirm system messages and bot welcome messages appear in-room, and Markdown link titles are visible and tappable.
+- Join a room and confirm audio starts and stays stable.
+- Join General Chat or another room with background media enabled and confirm the room stream starts on iPhone and stops when media playback is muted or the room is left.
+- Re-test room join on current iOS beta builds.
+- Try joining while room media is already playing.
+- Preview room audio and confirm the preview closes on its own after a short review window.
+- Confirm people in room, device names/types, audio mute/output state, messages, and transcripts still update.
+- In a room, double tap a user row to open that user's profile.
+- Open a direct message from the user actions menu and confirm it appears in its own conversation window.
+- Press and hold a user row to set or clear the whisper target, then confirm relay playback ducks while whisper mode is active.
+- Toggle Noise Reduction and Echo Cancellation in room controls and confirm the room audio session stays stable.
+- Use Room Actions to hide/show audio controls without leaving the room, and confirm Settings stays available in-room.
+- Confirm room rows show the right user counts after join, leave, and live user updates.
+- If the main API endpoint is temporarily unavailable, confirm the room list still loads through the fallback server path.
 
-If something breaks, the best report includes:
-- device model and iOS version
-- build number 35
+UI checks:
+- Main tab should be `Servers`.
+- `Servers` and `Federated Rooms` should both be available.
+- Locked room state and room details should match desktop.
+
+If something breaks, include:
+- device model
+- iOS version
+- build 46
 - server used
-- exact steps
-- what you expected
-- what actually happened
-- screenshot, screen recording, or crash report if available
-
-If audio flips from “working” to “absolutely not,” that transition point is the most useful part to report.
+- exact steps and result

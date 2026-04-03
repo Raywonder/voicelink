@@ -30,6 +30,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private var pendingSession: PendingSession?
     private var observers: [NSObjectProtocol] = []
     private let relayPlayer = IOSRoomAudioRelayPlayer()
+    private let microphoneCapture = IOSRoomMicrophoneCapture()
 
     private init() {
         let center = NotificationCenter.default
@@ -105,6 +106,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         pendingSession = nil
         connectionStatus = "Left room."
         audioRelayStatus = "Relay stopped"
+        relayPlayer.setMonitorUserId(nil)
+        microphoneCapture.stop()
         relayPlayer.stop()
         socket?.disconnect()
     }
@@ -152,6 +155,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     func setPlaybackDuckScale(_ scale: Float) {
         relayPlayer.setDuckScale(scale)
+    }
+
+    func setMonitorUserId(_ userId: String?) {
+        let normalizedUserId = (userId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        relayPlayer.setMonitorUserId(normalizedUserId.isEmpty ? nil : normalizedUserId)
+        audioRelayStatus = normalizedUserId.isEmpty ? "Relay active" : "Monitoring one user"
     }
 
     private func reconnect(to baseURL: String) {
@@ -238,6 +247,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 "sampleRate": 48000,
                 "channels": 1
             ])
+            self.startMicrophoneCaptureIfNeeded()
         }
 
         socket.on("join-room-error") { [weak self] data, _ in
@@ -390,6 +400,27 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         ])
     }
 
+    private func startMicrophoneCaptureIfNeeded() {
+        microphoneCapture.start { [weak self] packet in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      !self.joinedRoomId.isEmpty,
+                      !self.inputMuted,
+                      let socket = self.socket,
+                      socket.status == .connected else {
+                    return
+                }
+                socket.emit("audio-data", [
+                    "roomId": self.joinedRoomId,
+                    "audioData": packet.audioData.base64EncodedString(),
+                    "timestamp": Date().timeIntervalSince1970,
+                    "sampleRate": packet.sampleRate,
+                    "channels": packet.channels
+                ])
+            }
+        }
+    }
+
     private func registerPendingSessionIfNeeded() {
         guard let pendingSession else { return }
         let token = pendingSession.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -469,6 +500,7 @@ private final class IOSRoomAudioRelayPlayer {
     private var duckScale: Float = 1.0
     private var isMuted = false
     private var isConfigured = false
+    private var monitorUserId: String?
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
@@ -527,6 +559,12 @@ private final class IOSRoomAudioRelayPlayer {
         }
     }
 
+    func setMonitorUserId(_ userId: String?) {
+        renderQueue.async { [weak self] in
+            self?.monitorUserId = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
     func playPacket(_ payload: [String: Any]) {
         guard let encoded = payload["audioData"] as? String,
               let data = Data(base64Encoded: encoded) else {
@@ -534,8 +572,15 @@ private final class IOSRoomAudioRelayPlayer {
         }
         let sampleRate = (payload["sampleRate"] as? Double) ?? 48_000
         let channels = AVAudioChannelCount((payload["channels"] as? Int) ?? 1)
+        let senderId = String(describing: payload["userId"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         renderQueue.async { [weak self] in
             guard let self else { return }
+            if let monitorUserId = self.monitorUserId,
+               !monitorUserId.isEmpty,
+               senderId != monitorUserId {
+                return
+            }
             if self.playbackFormat?.sampleRate != sampleRate || self.playbackFormat?.channelCount != channels {
                 self.rebuildEngine(sampleRate: sampleRate, channels: channels)
             }
@@ -583,6 +628,81 @@ private final class IOSRoomAudioRelayPlayer {
     private func applyOutputVolume() {
         let scaledGain = gain * duckScale
         engine.mainMixerNode.outputVolume = isMuted ? 0 : max(0, min(3, scaledGain))
+    }
+}
+
+private struct IOSCapturedAudioPacket {
+    let audioData: Data
+    let sampleRate: Double
+    let channels: Int
+}
+
+private final class IOSRoomMicrophoneCapture {
+    private let captureQueue = DispatchQueue(label: "voicelink.ios.microphone.capture")
+    private let engine = AVAudioEngine()
+    private var isRunning = false
+
+    func start(onPacket: @escaping (IOSCapturedAudioPacket) -> Void) {
+        captureQueue.async { [weak self] in
+            guard let self, !self.isRunning else { return }
+
+            let inputNode = self.engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            let channelCount = max(1, Int(inputFormat.channelCount))
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, _ in
+                guard let packet = self.encode(buffer: buffer, sampleRate: inputFormat.sampleRate, channels: channelCount) else {
+                    return
+                }
+                onPacket(packet)
+            }
+
+            do {
+                self.engine.prepare()
+                try self.engine.start()
+                self.isRunning = true
+            } catch {
+                inputNode.removeTap(onBus: 0)
+                self.engine.stop()
+                self.isRunning = false
+            }
+        }
+    }
+
+    func stop() {
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            self.engine.inputNode.removeTap(onBus: 0)
+            self.engine.stop()
+            self.isRunning = false
+        }
+    }
+
+    private func encode(buffer: AVAudioPCMBuffer, sampleRate: Double, channels: Int) -> IOSCapturedAudioPacket? {
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0, let channelData = buffer.floatChannelData else {
+            return nil
+        }
+
+        var pcmData = Data(count: frameCount * channels * MemoryLayout<Float>.size)
+        pcmData.withUnsafeMutableBytes { rawBuffer in
+            guard let target = rawBuffer.bindMemory(to: Float.self).baseAddress else { return }
+            if channels == 1 {
+                target.update(from: channelData[0], count: frameCount)
+                return
+            }
+            for frame in 0..<frameCount {
+                for channelIndex in 0..<channels {
+                    target[frame * channels + channelIndex] = channelData[channelIndex][frame]
+                }
+            }
+        }
+
+        return IOSCapturedAudioPacket(
+            audioData: pcmData,
+            sampleRate: sampleRate > 0 ? sampleRate : 48_000,
+            channels: channels
+        )
     }
 }
 

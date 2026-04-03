@@ -14,6 +14,8 @@ final class IOSAudioSessionManager {
     private var activeRoomSessionCount = 0
     private var activePreviewSessionCount = 0
     private var observersRegistered = false
+    private var lastConfiguredPurpose: IOSAudioSessionPurpose?
+    private var lastConfigurationAt: Date?
 
     private init() {
         registerObserversIfNeeded()
@@ -49,6 +51,11 @@ final class IOSAudioSessionManager {
         } catch {
             NSLog("[VoiceLinkiOS] Failed to deactivate audio session: \(error.localizedDescription)")
         }
+    }
+
+    func refreshActiveSessionConfiguration() {
+        guard let dominantPurpose else { return }
+        configureAndActivateSession(for: dominantPurpose, force: true)
     }
 
     private var session: AVAudioSession {
@@ -91,7 +98,13 @@ final class IOSAudioSessionManager {
         )
     }
 
-    private func configureAndActivateSession(for purpose: IOSAudioSessionPurpose) {
+    private func configureAndActivateSession(for purpose: IOSAudioSessionPurpose, force: Bool = false) {
+        if !force,
+           lastConfiguredPurpose == purpose,
+           let lastConfigurationAt,
+           Date().timeIntervalSince(lastConfigurationAt) < 1.0 {
+            return
+        }
         do {
             switch purpose {
             case .preview:
@@ -101,18 +114,22 @@ final class IOSAudioSessionManager {
                     options: [.allowAirPlay, .allowBluetoothA2DP]
                 )
             case .room:
+                let echoCancellationEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.echoCancellationEnabled") as? Bool ?? true
+                let noiseReductionEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.noiseReductionEnabled") as? Bool ?? true
+                let processingMode: AVAudioSession.Mode = (echoCancellationEnabled || noiseReductionEnabled)
+                    ? .voiceChat
+                    : .measurement
                 try session.setCategory(
                     .playAndRecord,
-                    mode: .voiceChat,
-                    options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .allowAirPlay]
+                    mode: processingMode,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP]
                 )
                 try session.setPreferredSampleRate(48_000)
-                try session.setPreferredIOBufferDuration(0.02)
+                try session.setPreferredIOBufferDuration(0.03)
             }
-            try session.setActive(true, options: [.notifyOthersOnDeactivation])
-            if purpose == .room {
-                try? session.overrideOutputAudioPort(.speaker)
-            }
+            try session.setActive(true, options: [])
+            lastConfiguredPurpose = purpose
+            lastConfigurationAt = Date()
             NotificationCenter.default.post(name: .iosAudioSessionReactivated, object: nil)
         } catch {
             NSLog("[VoiceLinkiOS] Failed to activate audio session: \(error.localizedDescription)")
@@ -128,7 +145,7 @@ final class IOSAudioSessionManager {
         }
         if type == .ended {
             if let dominantPurpose {
-                configureAndActivateSession(for: dominantPurpose)
+                configureAndActivateSession(for: dominantPurpose, force: true)
             }
         }
     }
@@ -141,7 +158,7 @@ final class IOSAudioSessionManager {
             return
         }
         switch reason {
-        case .newDeviceAvailable, .oldDeviceUnavailable, .override, .categoryChange, .routeConfigurationChange:
+        case .newDeviceAvailable, .oldDeviceUnavailable, .override:
             if let dominantPurpose {
                 configureAndActivateSession(for: dominantPurpose)
             }
@@ -152,7 +169,7 @@ final class IOSAudioSessionManager {
 
     @objc private func handleMediaServicesReset() {
         guard let dominantPurpose else { return }
-        configureAndActivateSession(for: dominantPurpose)
+        configureAndActivateSession(for: dominantPurpose, force: true)
     }
 
     @objc private func handleApplicationDidBecomeActive() {
@@ -219,6 +236,8 @@ struct VoiceLinkWebView: UIViewRepresentable {
         private weak var webView: WKWebView?
         private var observers: [NSObjectProtocol] = []
         private var lastIdentityScript = ""
+        private var lastBridgeReassertAt: Date?
+        private var pendingBridgeResumeWorkItems: [DispatchWorkItem] = []
 
         func attach(to webView: WKWebView) {
             self.webView = webView
@@ -228,6 +247,8 @@ struct VoiceLinkWebView: UIViewRepresentable {
         func detach() {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
+            pendingBridgeResumeWorkItems.forEach { $0.cancel() }
+            pendingBridgeResumeWorkItems.removeAll()
             webView = nil
         }
 
@@ -257,28 +278,38 @@ struct VoiceLinkWebView: UIViewRepresentable {
             webView?.evaluateJavaScript(script, completionHandler: nil)
         }
 
-        private func reassertAudioBridge() {
+        private func reassertAudioBridge(force: Bool = false) {
             guard let webView else { return }
+            if !force,
+               let lastBridgeReassertAt,
+               Date().timeIntervalSince(lastBridgeReassertAt) < 1.5 {
+                return
+            }
+            lastBridgeReassertAt = Date()
+            pendingBridgeResumeWorkItems.forEach { $0.cancel() }
+            pendingBridgeResumeWorkItems.removeAll()
             let script = lastIdentityScript + "\nwindow.__voicelinkApplyAudioSettings?.({});\nwindow.__voicelinkResumeAudio?.(true);"
             webView.evaluateJavaScript(script, completionHandler: nil)
             scheduleDelayedResumePasses()
         }
 
         private func scheduleDelayedResumePasses() {
-            let delays: [TimeInterval] = [0.15, 0.35, 1.0, 2.0, 4.0]
+            let delays: [TimeInterval] = [0.2, 0.8, 2.0]
             for delay in delays {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                let workItem = DispatchWorkItem { [weak self] in
                     guard let self, self.webView != nil else { return }
                     self.webView?.evaluateJavaScript(
                         "window.__voicelinkApplyAudioSettings?.({ forceAudible: true }); window.__voicelinkResumeAudio?.(true);",
                         completionHandler: nil
                     )
                 }
+                pendingBridgeResumeWorkItems.append(workItem)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            reassertAudioBridge()
+            reassertAudioBridge(force: true)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -429,6 +460,25 @@ struct VoiceLinkWebView: UIViewRepresentable {
                 safePost({ event: 'roomUsers', roomId: roomId(), users });
               };
 
+              const normalizeSocketUsers = (users = []) => {
+                if (!Array.isArray(users)) return [];
+                return users.map((entry, index) => {
+                  const id = String(entry?.id ?? entry?.userId ?? `user-${index}`);
+                  const name = String(entry?.name ?? entry?.userName ?? entry?.displayName ?? 'User').trim();
+                  return { id, name };
+                }).filter((entry) => entry.id && entry.name);
+              };
+
+              const requestRoomUsers = () => {
+                try {
+                  const currentRoomId = roomId();
+                  if (!currentRoomId) return;
+                  if (window.app?.socket?.emit) {
+                    window.app.socket.emit('get-room-users', { roomId: currentRoomId });
+                  }
+                } catch (_) {}
+              };
+
               const postMessageNode = (node) => {
                 if (!(node instanceof HTMLElement)) return;
                 const body = node.querySelector('.message-text')?.textContent?.trim() || node.textContent?.trim() || '';
@@ -474,6 +524,21 @@ struct VoiceLinkWebView: UIViewRepresentable {
 
                 if (window.app?.socket && !window.app.socket.__voicelinkTranscriptObserved) {
                   window.app.socket.__voicelinkTranscriptObserved = true;
+                  window.app.socket.on('room-users', (payload = {}) => {
+                    safePost({
+                      event: 'roomUsers',
+                      roomId: payload.roomId || roomId(),
+                      users: normalizeSocketUsers(payload.users)
+                    });
+                  });
+                  ['joined-room', 'user-joined', 'user-left'].forEach((eventName) => {
+                    window.app.socket.on(eventName, () => {
+                      setTimeout(() => {
+                        requestRoomUsers();
+                        collectUsers();
+                      }, 120);
+                    });
+                  });
                   window.app.socket.on('room-transcript', (payload = {}) => {
                     safePost({
                       event: 'roomTranscript',
@@ -486,6 +551,8 @@ struct VoiceLinkWebView: UIViewRepresentable {
                     });
                   });
                 }
+
+                requestRoomUsers();
               };
 
               const startAudioWatchdog = () => {

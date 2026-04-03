@@ -34,6 +34,8 @@ struct RoomSessionView: View {
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
     @AppStorage("voicelink.audio.inputMuted") private var inputMuted = false
     @AppStorage("voicelink.audio.roomOutputMuted") private var roomOutputMuted = false
+    @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = true
+    @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = true
     @AppStorage("voicelink.authProvider") private var authProvider = ""
     @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
     let destination: RoomSessionDestination
@@ -44,8 +46,11 @@ struct RoomSessionView: View {
     @State private var showControls = false
     @State private var showPeople = false
     @State private var showAudioControls = true
+    @State private var showPeopleAudioState = true
     @State private var showDirectMessages = false
     @State private var whisperTarget: IOSDirectMessageTarget?
+    @State private var monitorTarget: IOSDirectMessageTarget?
+    @State private var replyTarget: IOSRoomMessageItem?
     @State private var joinSoundTask: Task<Void, Never>?
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
@@ -101,18 +106,31 @@ struct RoomSessionView: View {
                                 openProfile(for: target)
                             } label: {
                                 HStack(alignment: .center, spacing: 12) {
+                                    Image(systemName: iosUserAudioIconName(target))
+                                        .foregroundStyle(target.isSpeaking ? .green : .secondary)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(target.name)
                                             .font(.body)
-                                        Text(roomAudioStatusLabel(for: target))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                        if showPeopleAudioState {
+                                            Text(roomAudioStatusLabel(for: target))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        if let deviceSummary = iosUserDeviceSummary(target) {
+                                            Text(deviceSummary)
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
                                     }
                                     Spacer()
                                     if whisperTarget?.id == target.id {
                                         Text("Whisper")
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(.orange)
+                                    } else if monitorTarget?.id == target.id {
+                                        Text("Monitor")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.blue)
                                     }
                                 }
                             }
@@ -126,6 +144,13 @@ struct RoomSessionView: View {
                                 }
                                 Button(whisperTarget?.id == target.id ? "Stop Whisper Target" : "Whisper to \(target.name)") {
                                     toggleWhisperTarget(target)
+                                }
+                                Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
+                                    toggleMonitorTarget(target)
+                                }
+                                Button(showPeopleAudioState ? "Hide User Audio State" : "Show User Audio State") {
+                                    showPeopleAudioState.toggle()
+                                    IOSActionSoundPlayer.playToggle()
                                 }
                                 Button(showAudioControls ? "Hide Audio Controls" : "Show Audio Controls") {
                                     showAudioControls.toggle()
@@ -145,6 +170,9 @@ struct RoomSessionView: View {
                             .accessibilityAction(named: Text("Direct Message")) {
                                 openDirectMessages(with: target)
                             }
+                            .accessibilityAction(named: Text(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring")) {
+                                toggleMonitorTarget(target)
+                            }
                             .accessibilityAction(named: Text(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")) {
                                 toggleWhisperTarget(target)
                             }
@@ -153,33 +181,7 @@ struct RoomSessionView: View {
                 }
 
                 if showChat {
-                    Section("Send Message") {
-                        TextField("Type a room message", text: $draftMessage, axis: .vertical)
-                            .lineLimit(1...4)
-                        Button("Send to Room") {
-                            let body = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !body.isEmpty else { return }
-                            socketClient.sendRoomMessage(body)
-                            draftMessage = ""
-                            IOSActionSoundPlayer.playConfirm()
-                        }
-                        .disabled(draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
-                    Section("Direct Messages") {
-                        if let target = roomState.selectedDirectTarget {
-                            LabeledContent("Current Thread", value: target.name)
-                            Button("Open Conversation with \(target.name)") {
-                                openDirectMessages(with: target)
-                            }
-                            .buttonStyle(.borderedProminent)
-                        } else {
-                            Text("Open a person from the room list to start a direct conversation.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Section("Recent Room Messages") {
+                    Section("Room Chat") {
                         if roomMessages.isEmpty {
                             Text("No room messages yet.")
                                 .foregroundStyle(.secondary)
@@ -188,18 +190,66 @@ struct RoomSessionView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(message.author)
                                         .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(message.isSystemMessage ? .orange : .primary)
+                                        .foregroundStyle(message.isSystemMessage ? .orange : (message.isBotMessage ? .blue : .primary))
                                     Text(iosMarkdownMessageText(message.body))
                                         .font(.body)
+                                    if let replyTarget, replyTarget.id == message.id {
+                                        Text("Replying to this message")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
                                     if message.isSystemMessage {
                                         Text("System message")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    } else if message.isBotMessage {
+                                        Text("Bot message")
                                             .font(.caption2.weight(.semibold))
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 .padding(.vertical, 2)
+                                .contextMenu {
+                                    Button("Reply to \(message.author)") {
+                                        replyTarget = message
+                                        draftMessage = "@\(message.author) "
+                                        IOSActionSoundPlayer.playConfirm()
+                                    }
+                                    if let target = roomState.directTargets.first(where: { $0.name == message.author }) {
+                                        Button("Direct Message \(target.name)") {
+                                            openDirectMessages(with: target)
+                                        }
+                                    }
+                                }
                             }
                         }
+                    }
+
+                    Section("Send Message") {
+                        if let replyTarget {
+                            HStack {
+                                Text("Replying to \(replyTarget.author)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Clear") {
+                                    self.replyTarget = nil
+                                    IOSActionSoundPlayer.playClose()
+                                }
+                            }
+                        }
+                        TextField("Type a room message", text: $draftMessage, axis: .vertical)
+                            .lineLimit(1...4)
+                        Button("Send to Room") {
+                            let body = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !body.isEmpty else { return }
+                            let outgoingBody = replyTarget == nil ? body : "> \(replyTarget?.author ?? "User"): \(replyTarget?.body ?? "")\n\n\(body)"
+                            socketClient.sendRoomMessage(outgoingBody)
+                            draftMessage = ""
+                            replyTarget = nil
+                            IOSActionSoundPlayer.playConfirm()
+                        }
+                        .disabled(draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
 
@@ -252,6 +302,16 @@ struct RoomSessionView: View {
                                 syncRoomBackgroundPlaybackState()
                                 IOSActionSoundPlayer.playToggle()
                             }
+                        Toggle("Noise Reduction", isOn: $noiseReductionEnabled)
+                            .onChange(of: noiseReductionEnabled) { _ in
+                                IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                                IOSActionSoundPlayer.playToggle()
+                            }
+                        Toggle("Echo Cancellation", isOn: $echoCancellationEnabled)
+                            .onChange(of: echoCancellationEnabled) { _ in
+                                IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                                IOSActionSoundPlayer.playToggle()
+                            }
                         Text("Press and hold a person to mark a whisper target. Relay playback ducks to 25% while a whisper target is active so that direct talk is easier to follow.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -288,6 +348,10 @@ struct RoomSessionView: View {
                         }
                         Button(showAudioControls ? "Hide Audio Controls" : "Show Audio Controls") {
                             showAudioControls.toggle()
+                            IOSActionSoundPlayer.playToggle()
+                        }
+                        Button(showPeopleAudioState ? "Hide User Audio State" : "Show User Audio State") {
+                            showPeopleAudioState.toggle()
                             IOSActionSoundPlayer.playToggle()
                         }
                         Divider()
@@ -342,6 +406,10 @@ struct RoomSessionView: View {
                                 .onChange(of: showAudioControls) { _ in
                                     IOSActionSoundPlayer.playToggle()
                                 }
+                            Toggle("Show User Audio State", isOn: $showPeopleAudioState)
+                                .onChange(of: showPeopleAudioState) { _ in
+                                    IOSActionSoundPlayer.playToggle()
+                                }
                         }
 
                         Section("Audio") {
@@ -378,12 +446,32 @@ struct RoomSessionView: View {
                                     syncRoomBackgroundPlaybackState()
                                     IOSActionSoundPlayer.playToggle()
                                 }
+                            Toggle("Noise Reduction", isOn: $noiseReductionEnabled)
+                                .onChange(of: noiseReductionEnabled) { _ in
+                                    IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                                    IOSActionSoundPlayer.playToggle()
+                                }
+                            Toggle("Echo Cancellation", isOn: $echoCancellationEnabled)
+                                .onChange(of: echoCancellationEnabled) { _ in
+                                    IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                                    IOSActionSoundPlayer.playToggle()
+                                }
+                            Text("Voice processing mode is enabled when Noise Reduction or Echo Cancellation is on. Turn both off for raw monitoring.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                             Button(whisperTarget == nil ? "No Whisper Target" : "Clear Whisper Target") {
                                 whisperTarget = nil
                                 socketClient.setPlaybackDuckScale(1.0)
                                 IOSActionSoundPlayer.playToggle()
                             }
                             .disabled(whisperTarget == nil)
+
+                            Button(monitorTarget == nil ? "No Monitor Target" : "Clear Monitor Target") {
+                                monitorTarget = nil
+                                socketClient.setMonitorUserId(nil)
+                                IOSActionSoundPlayer.playToggle()
+                            }
+                            .disabled(monitorTarget == nil)
                         }
                     }
                     .navigationTitle("Room Controls")
@@ -411,9 +499,16 @@ struct RoomSessionView: View {
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text(target.name)
                                                     .font(.body)
-                                                Text(roomAudioStatusLabel(for: target))
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                if showPeopleAudioState {
+                                                    Text(roomAudioStatusLabel(for: target))
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                if let deviceSummary = iosUserDeviceSummary(target) {
+                                                    Text(deviceSummary)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.tertiary)
+                                                }
                                             }
                                             Spacer()
                                         }
@@ -424,6 +519,9 @@ struct RoomSessionView: View {
                                         }
                                         Button(whisperTarget?.id == target.id ? "Stop Whisper Target" : "Whisper to \(target.name)") {
                                             toggleWhisperTarget(target)
+                                        }
+                                        Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
+                                            toggleMonitorTarget(target)
                                         }
                                     }
                                     .simultaneousGesture(
@@ -463,11 +561,6 @@ struct RoomSessionView: View {
                             .disabled(draftDirectMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
 
-                        Section("Status") {
-                            Text(roomState.statusText.isEmpty ? "Private conversation window is open." : roomState.statusText)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
                     }
                     .navigationTitle(roomState.selectedDirectTarget?.name ?? "Direct Message")
                     .navigationBarTitleDisplayMode(.inline)
@@ -551,6 +644,21 @@ struct RoomSessionView: View {
             socketClient.setPlaybackDuckScale(0.25)
             updateRoomBackgroundPlaybackVolume()
             roomState.statusText = "Whisper target set to \(target.name)."
+        }
+        IOSActionSoundPlayer.playToggle()
+    }
+
+    private func toggleMonitorTarget(_ target: IOSDirectMessageTarget) {
+        if monitorTarget?.id == target.id {
+            monitorTarget = nil
+            socketClient.setMonitorUserId(nil)
+            roomState.statusText = "Stopped monitoring \(target.name)."
+        } else {
+            monitorTarget = target
+            roomState.selectedDirectTarget = target
+            roomState.selectedProfileName = target.name
+            socketClient.setMonitorUserId(target.id)
+            roomState.statusText = "Monitoring \(target.name)."
         }
         IOSActionSoundPlayer.playToggle()
     }
