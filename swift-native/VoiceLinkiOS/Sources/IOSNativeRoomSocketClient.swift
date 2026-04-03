@@ -13,6 +13,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     @Published private(set) var audioRelayStatus = "Relay idle"
     @Published private(set) var inputMuted = false
     @Published private(set) var outputMuted = false
+    @Published private(set) var userAudioLevels: [String: Float] = [:]
 
     private struct PendingSession {
         let baseURL: String
@@ -106,6 +107,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         pendingSession = nil
         connectionStatus = "Left room."
         audioRelayStatus = "Relay stopped"
+        userAudioLevels = [:]
         relayPlayer.setMonitorUserId(nil)
         microphoneCapture.stop()
         relayPlayer.stop()
@@ -367,6 +369,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("relayed-audio") { [weak self] data, _ in
             guard let self,
                   let payload = data.first as? [String: Any] else { return }
+            self.updateIncomingAudioLevel(from: payload)
             self.relayPlayer.playPacket(payload)
         }
 
@@ -465,6 +468,15 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 "timestamp": Date().timeIntervalSince1970
             ]
         )
+    }
+
+    private func updateIncomingAudioLevel(from payload: [String: Any]) {
+        let userId = String(describing: payload["userId"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !userId.isEmpty else { return }
+        let encoded = (payload["audioData"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let level = IOSRoomAudioRelayPlayer.packetLevel(fromBase64Audio: encoded)
+        userAudioLevels[userId] = level
     }
 
     private func parseErrorMessage(_ data: [Any]) -> String? {
@@ -628,6 +640,28 @@ private final class IOSRoomAudioRelayPlayer {
     private func applyOutputVolume() {
         let scaledGain = gain * duckScale
         engine.mainMixerNode.outputVolume = isMuted ? 0 : max(0, min(3, scaledGain))
+    }
+
+    static func packetLevel(fromBase64Audio encoded: String) -> Float {
+        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let data = Data(base64Encoded: trimmed) else {
+            return 0
+        }
+        let sampleCount = data.count / MemoryLayout<Float>.size
+        guard sampleCount > 0 else { return 0 }
+
+        let rms = data.withUnsafeBytes { rawBuffer -> Float in
+            guard let samples = rawBuffer.bindMemory(to: Float.self).baseAddress else { return 0 }
+            var sumOfSquares: Float = 0
+            for index in 0..<sampleCount {
+                let sample = samples[index]
+                sumOfSquares += sample * sample
+            }
+            return sqrt(sumOfSquares / Float(sampleCount))
+        }
+
+        return max(0, min(1, rms * 3))
     }
 }
 
