@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<uninstall>
+  <preserve>
+    <path>.well-known/acme-challenge</path>
+  </preserve>
+  <remove>
+    <path>.well-known/voicelink.json</path>
+    <path>.well-known/voicelink-license</path>
+  </remove>
+</uninstall>

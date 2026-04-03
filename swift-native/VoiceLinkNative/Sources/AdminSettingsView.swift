@@ -27,34 +27,38 @@ struct AdminSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack {
-                Button(action: { appState.closeAdminScreen() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(.plain)
+            VStack(spacing: 10) {
+                HStack {
+                    Button(action: { appState.closeAdminScreen() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.gray)
+                    }
+                    .buttonStyle(.plain)
 
-                Spacer()
+                    Spacer()
 
-                Text("Server Administration")
-                    .font(.title2.bold())
-                    .foregroundColor(.white)
-
-                Spacer()
-
-                // Admin role badge
-                HStack(spacing: 6) {
-                    Image(systemName: adminRoleIcon)
-                        .foregroundColor(adminRoleColor)
-                    Text(adminManager.adminRole.rawValue.capitalized)
-                        .font(.caption)
+                    Text("Server Administration")
+                        .font(.title2.bold())
                         .foregroundColor(.white)
+
+                    Spacer()
+
+                    // Admin role badge
+                    HStack(spacing: 6) {
+                        Image(systemName: adminRoleIcon)
+                            .foregroundColor(adminRoleColor)
+                        Text(adminRoleBadgeText)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(adminRoleColor.opacity(0.2))
+                    .cornerRadius(20)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(adminRoleColor.opacity(0.2))
-                .cornerRadius(20)
+
+                adminScopeBar
             }
             .padding()
             .background(Color.black.opacity(0.3))
@@ -128,9 +132,16 @@ struct AdminSettingsView: View {
             )
         )
         .task {
+            if let serverURL = appState.serverManager.baseURL, !serverURL.isEmpty {
+                await adminManager.checkAdminStatus(
+                    serverURL: serverURL,
+                    token: authManager.currentUser?.accessToken
+                )
+            }
             if !canAccessTab(selectedTab) {
                 selectedTab = .overview
             }
+            adminManager.refreshManagementTargets()
             async let stats: Void = adminManager.fetchServerStats()
             async let config: Void = adminManager.fetchServerConfig()
             async let advanced: Void = adminManager.fetchAdvancedServerSettings()
@@ -140,6 +151,23 @@ struct AdminSettingsView: View {
                 _ = await (stats, config, advanced, modules, support)
             } else {
                 _ = await (stats, config, advanced, modules)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .adminSelectTab)) { notification in
+            guard let rawValue = notification.object as? String,
+                  let tab = AdminTab(rawValue: rawValue),
+                  canAccessTab(tab) else { return }
+            selectedTab = tab
+        }
+        .onChange(of: adminManager.selectedManagementTargetID) { newValue in
+            Task {
+                await adminManager.selectManagementTarget(newValue, token: authManager.currentUser?.accessToken)
+                await reloadSelectedAdminTarget()
+            }
+        }
+        .onChange(of: adminManager.manageAllLinkedServers) { enabled in
+            if enabled && !canAccessTab(selectedTab) {
+                selectedTab = .overview
             }
         }
     }
@@ -162,7 +190,23 @@ struct AdminSettingsView: View {
         }
     }
 
+    private var adminRoleBadgeText: String {
+        switch adminManager.adminRole {
+        case .owner:
+            return "Owner / Admin"
+        case .admin:
+            return "Admin"
+        case .moderator:
+            return "Moderator"
+        case .none:
+            return "No Server Role"
+        }
+    }
+
     private func canAccessTab(_ tab: AdminTab) -> Bool {
+        if adminManager.manageAllLinkedServers {
+            return tab == .overview || tab == .federation
+        }
         switch tab {
         case .overview:
             return true
@@ -180,6 +224,89 @@ struct AdminSettingsView: View {
             return adminManager.adminRole.canManageConfig
         case .config, .streams, .apiSync, .federation:
             return adminManager.adminRole.canManageConfig
+        }
+    }
+
+    @ViewBuilder
+    private var adminScopeBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("Manage")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.gray)
+
+                Picker("Manage", selection: $adminManager.selectedManagementTargetID) {
+                    ForEach(adminManager.managementTargets) { target in
+                        Text(target.displayLabel).tag(target.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                Toggle("All Linked Servers", isOn: $adminManager.manageAllLinkedServers)
+                    .toggleStyle(.switch)
+                    .disabled(!adminManager.canManageMultipleTargets)
+                    .help("Use shared overview and federation controls across the linked VoiceLink servers owned by this admin.")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(adminManager.manageAllLinkedServers ? adminManager.allLinkedScopeSummary : "Managing \(adminManager.selectedManagementTargetName)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                if adminManager.manageAllLinkedServers {
+                    Text("Shared mode keeps you in Overview and Federation so the same policy can be reviewed across linked VoiceLink servers without editing one server by mistake.")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let selectedTarget = adminManager.managementTargets.first(where: { $0.id == adminManager.selectedManagementTargetID }) {
+                    Text("\(selectedTarget.kindLabel) target: \(selectedTarget.url)")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.9))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func reloadSelectedAdminTarget() async {
+        async let stats: Void = adminManager.fetchServerStats()
+        async let config: Void = adminManager.fetchServerConfig()
+        async let advanced: Void = adminManager.fetchAdvancedServerSettings()
+        async let modules: Void = adminManager.refreshModulesCenter()
+        if canAccessTab(.support) {
+            async let support: Void = adminManager.fetchSupportSessions()
+            _ = await (stats, config, advanced, modules, support)
+        } else {
+            _ = await (stats, config, advanced, modules)
+        }
+    }
+}
+
+private enum HandoffPromptMode: String, CaseIterable, Identifiable {
+    case serverRecommended
+    case alwaysAsk
+    case automatic
+    case neverPrompt
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .serverRecommended: return "Server Recommended"
+        case .alwaysAsk: return "Always Ask"
+        case .automatic: return "Move Automatically"
+        case .neverPrompt: return "Do Not Prompt"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .serverRecommended: return "Use the server's suggested failover and maintenance handoff behavior."
+        case .alwaysAsk: return "Always prompt users before moving them during maintenance or failover."
+        case .automatic: return "Move users automatically when a trusted handoff target is available."
+        case .neverPrompt: return "Do not present handoff prompts to clients by default."
         }
     }
 }
@@ -257,7 +384,7 @@ struct AdminOverviewSection: View {
                 operationalSummary(stats: stats)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    if let error = adminManager.error, !error.isEmpty {
+                    if let error = adminManager.serverStatsError, !error.isEmpty {
                         Label("Server stats are unavailable right now.", systemImage: "exclamationmark.triangle.fill")
                             .foregroundColor(.yellow)
                         Text(error)
@@ -349,7 +476,7 @@ struct AdminOverviewSection: View {
             Text("Overview")
                 .font(.title2.bold())
                 .foregroundColor(.white)
-            Text("Current server health, capacity, and installed feature summary.")
+            Text(adminManager.manageAllLinkedServers ? adminManager.allLinkedScopeSummary : "Current server health, capacity, and installed feature summary for \(adminManager.selectedManagementTargetName).")
                 .font(.subheadline)
                 .foregroundColor(.gray)
         }
@@ -689,6 +816,7 @@ struct AdminUsersSection: View {
     @State private var showBanAlert = false
     @State private var showGrantModeratorAlert = false
     @State private var showGrantAdminAlert = false
+    @State private var showGrantOwnerAlert = false
     @State private var showRevokeRoleAlert = false
     @State private var kickReason = ""
     @State private var banReason = ""
@@ -729,6 +857,8 @@ struct AdminUsersSection: View {
                             showGrantModeratorAlert = true
                         case .grantAdmin:
                             showGrantAdminAlert = true
+                        case .grantOwner:
+                            showGrantOwnerAlert = true
                         case .revokeRole:
                             showRevokeRoleAlert = true
                         }
@@ -740,7 +870,7 @@ struct AdminUsersSection: View {
             await adminManager.fetchConnectedUsers()
         }
         .alert("Kick User", isPresented: $showKickAlert) {
-            TextField("Reason (optional)", text: $kickReason)
+            TextField("Optional reason shown to the user being removed", text: $kickReason)
             Button("Cancel", role: .cancel) {}
             Button("Kick", role: .destructive) {
                 if let user = selectedUser {
@@ -752,8 +882,8 @@ struct AdminUsersSection: View {
             }
         }
         .alert("Ban User", isPresented: $showBanAlert) {
-            TextField("Reason", text: $banReason)
-            TextField("Duration (hours)", value: $banDuration, format: .number)
+            TextField("Reason for the ban", text: $banReason)
+            TextField("Ban duration in hours", value: $banDuration, format: .number)
             Button("Cancel", role: .cancel) {}
             Button("Ban", role: .destructive) {
                 if let user = selectedUser {
@@ -803,6 +933,26 @@ struct AdminUsersSection: View {
             }
         } message: {
             Text("Grant server administration access to this user across the servers you own.")
+        }
+        .alert("Grant Owner Access", isPresented: $showGrantOwnerAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Grant Owner", role: .destructive) {
+                if let user = selectedUser {
+                    Task {
+                        _ = await adminManager.updateUserRole(
+                            user.id,
+                            role: "owner",
+                            accountId: user.accountId,
+                            email: user.email,
+                            username: user.username,
+                            displayName: user.displayName
+                        )
+                        await adminManager.fetchConnectedUsers()
+                    }
+                }
+            }
+        } message: {
+            Text("Grant full owner access to this user. This gives full server administration control, synced identity updates, and authority across linked server role assignment features.")
         }
         .alert("Revoke Elevated Access", isPresented: $showRevokeRoleAlert) {
             Button("Cancel", role: .cancel) {}
@@ -876,7 +1026,7 @@ struct AdminSupportSection: View {
                     .padding()
             } else {
                 LazyVStack(spacing: 10) {
-                    ForEach(adminManager.supportSessions) { session in
+                    ForEach(adminManager.supportSessions, id: \.id) { session in
                         AdminSupportSessionRow(session: session) { action in
                             switch action {
                             case .pickup:
@@ -1059,7 +1209,7 @@ struct UserAdminRow: View {
     let onAction: (UserAction) -> Void
 
     enum UserAction {
-        case kick, ban, grantModerator, grantAdmin, revokeRole
+        case kick, ban, grantModerator, grantAdmin, grantOwner, revokeRole
     }
 
     var body: some View {
@@ -1115,6 +1265,9 @@ struct UserAdminRow: View {
                 }
                 Button(action: { onAction(.grantAdmin) }) {
                     Label("Grant Admin", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                Button(action: { onAction(.grantOwner) }) {
+                    Label("Grant Owner", systemImage: "crown.fill")
                 }
                 Button(action: { onAction(.revokeRole) }) {
                     Label("Revoke Elevated Access", systemImage: "person.crop.circle.badge.minus")
@@ -1211,8 +1364,10 @@ struct AdminRoomsSection: View {
             .cornerRadius(10)
 
             VStack(alignment: .leading, spacing: 10) {
-                TextField("Search rooms by name, id, visibility, or access", text: $roomSearchText)
+                TextField("Search rooms by name, ID, visibility, or access level", text: $roomSearchText)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Room search")
+                    .accessibilityHint("Filter the room list by room name, room ID, visibility, or access settings.")
 
                 Text("Showing \(filteredRooms.count) of \(adminManager.serverRooms.count) rooms")
                     .font(.caption)
@@ -1419,6 +1574,16 @@ struct AdminRoomEditSheet: View {
                 set: { draft.description = $0 }
             ))
 
+            ConfigTextField(
+                label: "Room Welcome Message",
+                placeholder: "Optional room-specific greeting, links, or instructions for people who open this room.",
+                helpText: "Shown in room details and in-room welcome messaging when configured.",
+                text: Binding(
+                    get: { draft.welcomeMessage ?? "" },
+                    set: { draft.welcomeMessage = $0.isEmpty ? nil : $0 }
+                )
+            )
+
             HStack(spacing: 16) {
                 ConfigNumberField(label: "Max Users", value: Binding(
                     get: { draft.maxUsers },
@@ -1475,6 +1640,19 @@ struct AdminRoomEditSheet: View {
                 get: { draft.locked ?? false },
                 set: { draft.locked = $0 }
             ))
+            ConfigTextField(
+                label: "Room PIN",
+                placeholder: "Optional PIN for quick locked-room entry",
+                helpText: "When set, members can use this PIN to enter a locked room without waiting for approval. Leave blank to remove it.",
+                text: Binding(
+                    get: { draft.accessPin ?? "" },
+                    set: { draft.accessPin = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                )
+            )
+            ConfigToggle(label: "Allow Recording in This Room", isOn: Binding(
+                get: { draft.recordingAllowed ?? AdminServerManager.shared.serverConfig?.recordingEnabled ?? false },
+                set: { draft.recordingAllowed = $0 }
+            ))
             ConfigToggle(label: "Enabled", isOn: Binding(
                 get: { draft.enabled ?? true },
                 set: { draft.enabled = $0 }
@@ -1508,6 +1686,9 @@ struct AdminConfigSection: View {
     @State private var selectedSection: ConfigSection = .identity
     @State private var isSaving = false
     @State private var databaseActionInFlight = false
+    @State private var mastodonBotInstanceURL = ""
+    @State private var mastodonBotAccessToken = ""
+    @State private var mastodonBotActionInFlight = false
 
     enum ConfigSection: String, CaseIterable {
         case identity = "Identity"
@@ -1589,6 +1770,15 @@ struct AdminConfigSection: View {
             if adminManager.databaseStatus == nil {
                 await adminManager.fetchDatabaseStatus()
             }
+            if adminManager.schedulerStatus == nil && adminManager.schedulerError == nil {
+                await adminManager.fetchServerSchedulerStatus()
+            }
+            if adminManager.mastodonBots.isEmpty && adminManager.mastodonBotError == nil {
+                await adminManager.fetchMastodonBots()
+            }
+            if adminManager.authProviderStatus == nil && adminManager.authProviderStatusError == nil {
+                await adminManager.fetchAuthProviderStatus()
+            }
         }
     }
 
@@ -1630,38 +1820,6 @@ struct AdminConfigSection: View {
                 ConfigTextField(label: "Description", text: Binding(
                     get: { editedConfig?.serverDescription ?? config.serverDescription },
                     set: { editedConfig = (editedConfig ?? config).with(serverDescription: $0) }
-                ))
-
-                ConfigTextField(label: "Welcome Message", text: Binding(
-                    get: { editedConfig?.welcomeMessage ?? config.welcomeMessage ?? "" },
-                    set: { editedConfig = (editedConfig ?? config).with(welcomeMessage: $0.isEmpty ? nil : $0) }
-                ))
-
-                ConfigTextField(label: "Message of the Day", text: Binding(
-                    get: { editedConfig?.motd ?? config.motd ?? "" },
-                    set: { editedConfig = (editedConfig ?? config).with(motd: $0.isEmpty ? nil : $0) }
-                ))
-
-                SectionHeader(title: "Message Display")
-
-                ConfigToggle(label: "Enable Message of the Day", isOn: Binding(
-                    get: { editedConfig?.motdSettings.enabled ?? config.motdSettings.enabled },
-                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(enabled: $0)) }
-                ))
-
-                ConfigToggle(label: "Show Before Joining Rooms", isOn: Binding(
-                    get: { editedConfig?.motdSettings.showBeforeJoin ?? config.motdSettings.showBeforeJoin },
-                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showBeforeJoin: $0)) }
-                ))
-
-                ConfigToggle(label: "Show Inside Joined Rooms", isOn: Binding(
-                    get: { editedConfig?.motdSettings.showInRoom ?? config.motdSettings.showInRoom },
-                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showInRoom: $0)) }
-                ))
-
-                ConfigToggle(label: "Append MOTD to Welcome Message", isOn: Binding(
-                    get: { editedConfig?.motdSettings.appendToWelcomeMessage ?? config.motdSettings.appendToWelcomeMessage },
-                    set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(appendToWelcomeMessage: $0)) }
                 ))
 
                 SectionHeader(title: "Maintenance Handoff Defaults")
@@ -1780,11 +1938,263 @@ struct AdminConfigSection: View {
                     }
                 ))
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Authentication Provider Health")
+
+                Text("This reflects the live server-side auth/provider state used by VoiceLink administration, recovery, and linked-account features.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let authStatus = adminManager.authProviderStatus {
+                    ForEach(authStatus.providers.keys.sorted(), id: \.self) { key in
+                        if let provider = authStatus.providers[key] {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(provider.label ?? key.capitalized)
+                                        .foregroundColor(.white)
+                                    Text(provider.enabled ? "Enabled" : "Disabled")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    if let botCount = provider.botCount {
+                                        Text("Bot Accounts: \(botCount)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let portalUrl = provider.portalUrl, !portalUrl.isEmpty {
+                                        Text("Portal: \(portalUrl)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(provider.health.replacingOccurrences(of: "_", with: " ").capitalized)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.08))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(10)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("SMTP: \(authStatus.smtp.configured ? "Configured" : "Not Configured")")
+                        Text("SMTP Health: \(authStatus.smtp.health.replacingOccurrences(of: "_", with: " ").capitalized)")
+                        if let host = authStatus.smtp.host, !host.isEmpty {
+                            Text("SMTP Host: \(host):\(authStatus.smtp.port)")
+                        }
+                        if let from = authStatus.smtp.from, !from.isEmpty {
+                            Text("SMTP From: \(from)")
+                        }
+                        Text("Email Code Recovery: \(authStatus.recovery.emailCodesAvailable ? "Available" : "Unavailable")")
+                        Text("SMTP Recovery: \(authStatus.recovery.smtpRecoveryAvailable ? "Available" : "Unavailable")")
+                        Text("Break-Glass Recovery: \(authStatus.recovery.breakGlassConfigured ? "Configured" : "Not Configured")")
+                        Text("Server Scheduler: \(authStatus.scheduler.available ? authStatus.scheduler.health.capitalized : "Unavailable")")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                } else if let authError = adminManager.authProviderStatusError, !authError.isEmpty {
+                    Text(authError)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else {
+                    Text("Auth provider status has not been loaded yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Button("Refresh Provider Health") {
+                    Task { await adminManager.fetchAuthProviderStatus() }
+                }
+                .buttonStyle(.bordered)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Mastodon Bot Accounts")
+
+                Text("Register the built-in VoiceLink bot as a real Mastodon bot account on connected instances for announcements, moderation commands, and management actions.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ConfigTextField(
+                    label: "Instance URL",
+                    placeholder: "https://md.tappedin.fm",
+                    helpText: "The Mastodon instance where the VoiceLink bot account exists.",
+                    defaultValueDescription: "Blank until you register a bot.",
+                    text: $mastodonBotInstanceURL
+                )
+
+                ConfigSecureField(
+                    label: "Bot Access Token",
+                    placeholder: "Paste the bot account access token",
+                    helpText: "Use the Mastodon bot account token for VoiceLink bot posting and commands.",
+                    defaultValueDescription: "Blank until supplied.",
+                    text: $mastodonBotAccessToken
+                )
+
+                HStack(spacing: 12) {
+                    Button("Register Bot Account") {
+                        mastodonBotActionInFlight = true
+                        Task {
+                            let success = await adminManager.registerMastodonBot(
+                                instanceURL: mastodonBotInstanceURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                                accessToken: mastodonBotAccessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+                            )
+                            if success {
+                                mastodonBotAccessToken = ""
+                            }
+                            mastodonBotActionInFlight = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        mastodonBotActionInFlight ||
+                        mastodonBotInstanceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        mastodonBotAccessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+
+                    Button("Refresh Bot Accounts") {
+                        mastodonBotActionInFlight = true
+                        Task {
+                            await adminManager.fetchMastodonBots()
+                            mastodonBotActionInFlight = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(mastodonBotActionInFlight)
+                }
+
+                if let botError = adminManager.mastodonBotError, !botError.isEmpty {
+                    Text(botError)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
+                if adminManager.mastodonBots.isEmpty {
+                    Text("No Mastodon bot accounts registered yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(adminManager.mastodonBots) { bot in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(bot.displayName?.isEmpty == false ? bot.displayName! : "VoiceLink")
+                                        .foregroundColor(.white)
+                                    Text(bot.instance)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let username = bot.username, !username.isEmpty {
+                                        Text("@\(username)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(bot.enabled ? "Enabled" : "Disabled")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.08))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+
+                                Button("Remove") {
+                                    mastodonBotActionInFlight = true
+                                    Task {
+                                        _ = await adminManager.removeMastodonBot(instanceURL: bot.instance)
+                                        mastodonBotActionInFlight = false
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(mastodonBotActionInFlight)
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(10)
+                        }
+                    }
+                }
+            }
         }
     }
 
     private func messagesSection(config: ServerConfig) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            SectionHeader(title: "Server Welcome and MOTD")
+
+            Text("These messages are shown in the main window, lobby, and joined rooms depending on the options below.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            ConfigTextField(
+                label: "Lobby Welcome Message",
+                placeholder: "Welcome everyone before they join a room. Add guidance, links, or a short hello here.",
+                helpText: "Shown in the room browser before a user joins a room.",
+                defaultValueDescription: "Welcome to VoiceLink.",
+                text: Binding(
+                    get: { editedConfig?.lobbyWelcomeMessage ?? config.lobbyWelcomeMessage ?? "" },
+                    set: { editedConfig = (editedConfig ?? config).with(lobbyWelcomeMessage: $0.isEmpty ? nil : $0) }
+                )
+            )
+
+            ConfigTextField(
+                label: "Server Welcome Message",
+                placeholder: "General welcome text shown for the connected server.",
+                helpText: "Shown in the connected server summary and other main app surfaces.",
+                defaultValueDescription: "Blank unless your server sets one.",
+                text: Binding(
+                    get: { editedConfig?.welcomeMessage ?? config.welcomeMessage ?? "" },
+                    set: { editedConfig = (editedConfig ?? config).with(welcomeMessage: $0.isEmpty ? nil : $0) }
+                )
+            )
+
+            ConfigTextField(
+                label: "Message of the Day",
+                placeholder: "Share a featured link, maintenance notice, event, or current update.",
+                helpText: "Use this for short rotating announcements that can also appear inside rooms.",
+                defaultValueDescription: "Blank and disabled.",
+                text: Binding(
+                    get: { editedConfig?.motd ?? config.motd ?? "" },
+                    set: { editedConfig = (editedConfig ?? config).with(motd: $0.isEmpty ? nil : $0) }
+                )
+            )
+
+            SectionHeader(title: "MOTD Display")
+
+            ConfigToggle(label: "Enable Message of the Day", defaultValueDescription: "Off", isOn: Binding(
+                get: { editedConfig?.motdSettings.enabled ?? config.motdSettings.enabled },
+                set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(enabled: $0)) }
+            ))
+
+            ConfigToggle(label: "Show Before Joining Rooms", defaultValueDescription: "On", isOn: Binding(
+                get: { editedConfig?.motdSettings.showBeforeJoin ?? config.motdSettings.showBeforeJoin },
+                set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showBeforeJoin: $0)) }
+            ))
+
+            ConfigToggle(label: "Show Inside Joined Rooms", defaultValueDescription: "On", isOn: Binding(
+                get: { editedConfig?.motdSettings.showInRoom ?? config.motdSettings.showInRoom },
+                set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(showInRoom: $0)) }
+            ))
+
+            ConfigToggle(label: "Append MOTD to Welcome Message", defaultValueDescription: "Off", isOn: Binding(
+                get: { editedConfig?.motdSettings.appendToWelcomeMessage ?? config.motdSettings.appendToWelcomeMessage },
+                set: { editedConfig = (editedConfig ?? config).with(motdSettings: (editedConfig ?? config).motdSettingsUpdating(appendToWelcomeMessage: $0)) }
+            ))
+
             SectionHeader(title: "Message Retention and Loading")
 
             Text("These settings control room chat, direct messages, bot memory, and how much history users load by default when they join a room or open a direct conversation.")
@@ -2104,6 +2514,155 @@ struct AdminConfigSection: View {
                 }
                 .disabled(databaseActionInFlight)
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Server Scheduler")
+
+                Text("VoiceLink uses a server-side internal scheduler for sync, health probes, and maintenance work. This status should stay in sync with the active server instance.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let status = adminManager.schedulerStatus {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Service: \(status.service)")
+                        Text("Visible Tasks: \(status.totalVisibleTasks)")
+                        Text("Enabled Tasks: \(status.enabledTasks)")
+                        Text("Running Tasks: \(status.runningTasks)")
+                        Text("Role: \(status.role.capitalized)")
+                        Text("Server Time: \(status.serverTime)")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                } else if let schedulerError = adminManager.schedulerError, !schedulerError.isEmpty {
+                    Text(schedulerError)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else {
+                    Text("Scheduler status has not been loaded yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if !adminManager.schedulerTasks.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Tasks")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+
+                        ForEach(adminManager.schedulerTasks) { task in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(task.name)
+                                            .foregroundColor(.white)
+                                        Text(task.description)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(task.lastStatus.capitalized)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.white.opacity(0.08))
+                                        .foregroundColor(.white)
+                                        .cornerRadius(8)
+                                }
+
+                                HStack(spacing: 16) {
+                                    Toggle("Enabled", isOn: Binding(
+                                        get: { task.enabled },
+                                        set: { value in
+                                            Task { _ = await adminManager.updateServerSchedulerTask(task.id, enabled: value) }
+                                        }
+                                    ))
+                                    .toggleStyle(.switch)
+
+                                    if task.running {
+                                        HStack(spacing: 6) {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                            Text("Running")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    } else {
+                                        Button("Run Now") {
+                                            Task { _ = await adminManager.runServerSchedulerTask(task.id) }
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+
+                                HStack(spacing: 20) {
+                                    Text("Every \(task.intervalSeconds) sec")
+                                    Text("Last Run: \(task.lastRunAt ?? "Never")")
+                                }
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+
+                                Text("Next Run: \(task.nextRunAt ?? "Not scheduled")")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+
+                                if let lastMessage = task.lastMessage, !lastMessage.isEmpty {
+                                    Text(lastMessage)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(10)
+                        }
+                    }
+                }
+
+                if !adminManager.schedulerLogs.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recent Job History")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+
+                        ForEach(adminManager.schedulerLogs.prefix(8)) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(entry.taskName)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Text(entry.status.capitalized)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text("\(entry.timestamp) • \(entry.actor) • \(entry.trigger)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                if let message = entry.message, !message.isEmpty {
+                                    Text(message)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                }
+
+                Button("Refresh Scheduler Status") {
+                    Task { await adminManager.fetchServerSchedulerStatus() }
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 
@@ -2292,13 +2851,7 @@ struct AdminStreamsSection: View {
                 Text("Background Streams")
                     .font(.headline)
                     .foregroundColor(.white)
-
                 Spacer()
-
-                Button(action: { showAddStream = true }) {
-                    Label("Add Stream", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
             }
 
             Toggle("Enable background streams", isOn: $config.enabled)
@@ -2387,7 +2940,7 @@ struct AdminStreamsSection: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(stream.name)
                                     .foregroundColor(.white)
-                                Text(stream.streamUrl)
+                                Text(stream.streamUrl.isEmpty ? stream.url : stream.streamUrl)
                                     .font(.caption)
                                     .foregroundColor(.gray)
                             }
@@ -2406,6 +2959,11 @@ struct AdminStreamsSection: View {
                 .frame(minHeight: 220, maxHeight: 320)
 
                 HStack {
+                    Button(action: { showAddStream = true }) {
+                        Label("Add Stream", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+
                     Button {
                         guard let selected = config.streams.first(where: { $0.id == selectedStreamID }) else { return }
                         editingStream = selected
@@ -2578,8 +3136,8 @@ struct StreamEditorSheet: View {
         NavigationView {
             Form {
                 Section("Stream") {
-                    TextField("Name", text: $stream.name)
-                    TextField("Direct stream URL", text: Binding(
+                    TextField("Display name for this background stream", text: $stream.name)
+                    TextField("Direct stream URL such as https://example.com/stream", text: Binding(
                         get: { stream.streamUrl.isEmpty ? stream.url : stream.streamUrl },
                         set: {
                             stream.streamUrl = $0
@@ -2602,7 +3160,7 @@ struct StreamEditorSheet: View {
                 if isAddMode {
                     Section("Discover Stream URL") {
                         HStack {
-                            TextField("example.com, stream domain, or direct URL", text: $probeInput)
+                            TextField("Website, stream domain, or direct stream URL", text: $probeInput)
                                 .textFieldStyle(.roundedBorder)
                             Button(isProbing ? "Checking..." : "Detect") {
                                 let input = probeInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2680,7 +3238,7 @@ struct StreamEditorSheet: View {
                 }
 
                 Section("Room Name Patterns") {
-                    TextField("Comma-separated patterns, optional", text: $roomPatternText)
+                    TextField("Optional comma-separated room patterns", text: $roomPatternText)
                     Text("Use patterns when a stream should attach to multiple rooms by naming rule.")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -2824,6 +3382,19 @@ struct AdminAPISyncSection: View {
                         .font(.caption)
                         .foregroundColor(.gray)
 
+                    HStack {
+                        Button {
+                            applyRecommendedDefaults()
+                        } label: {
+                            Label("Auto-Detect and Apply Recommended Defaults", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Text("Uses detected linked servers and safe fallback behavior so new admins do not have to guess the right mode, sync interval, or initial routing profile.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
                     SectionHeader(title: "Sync Behavior")
 
                     ConfigNumberField(
@@ -2862,7 +3433,7 @@ struct AdminAPISyncSection: View {
                 case .routing:
                     SectionHeader(title: "Routing Profiles")
 
-                    Text("Profiles define ordered handoff and fallback actions. You can keep more than one entry for the same server when the target path or action chain is different.")
+                    Text("Profiles define ordered handoff and fallback actions. `Start` connects to the target, `Handoff` moves active users during maintenance, `Return` brings them back after recovery, and `Fallback` uses the target only when the preferred server is unavailable. You can keep more than one entry for the same server when the target path or action chain is different.")
                         .font(.caption)
                         .foregroundColor(.gray)
 
@@ -3014,14 +3585,27 @@ struct AdminAPISyncSection: View {
                             set: { config.whmcsAllowClientPortalLaunch = $0; settings = config }
                         ))
 
-                        ConfigToggle(label: "Allow Admin Portal Launch", helpText: "Permit admin-capable desktop clients to open the configured WHMCS admin URL from this server.", isOn: Binding(
-                            get: { config.whmcsAllowAdminPortalLaunch },
-                            set: { config.whmcsAllowAdminPortalLaunch = $0; settings = config }
-                        ))
+                    ConfigToggle(label: "Allow Admin Portal Launch", helpText: "Permit admin-capable desktop clients to open the configured WHMCS admin URL from this server.", isOn: Binding(
+                        get: { config.whmcsAllowAdminPortalLaunch },
+                        set: { config.whmcsAllowAdminPortalLaunch = $0; settings = config }
+                    ))
 
-                        ConfigTextField(
-                            label: "Endpoint Access Mode",
-                            placeholder: "managed",
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Planned Server Ownership Billing")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text("VoiceLink governance reserves one primary owner and up to two co-owners per server. The primary owner delegates and revokes co-owners, and WHMCS billing will apply prorated ownership changes on the next invoice once that workflow is implemented.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Color.white.opacity(0.04))
+                    .cornerRadius(10)
+
+                    ConfigTextField(
+                        label: "Endpoint Access Mode",
+                        placeholder: "managed",
                             helpText: "Use `managed` to keep installed servers linked to VoiceLink APIs while your management side decides which endpoints stay available.",
                             text: Binding(
                                 get: { config.whmcsEndpointAccessMode },
@@ -3131,7 +3715,7 @@ struct AdminAPISyncSection: View {
                     }
 
                     HStack {
-                        TextField("Manual domain or IP", text: $manualServerEntry)
+                        TextField("Manual domain, private IP, or public IP", text: $manualServerEntry)
                             .textFieldStyle(.roundedBorder)
                         Button("Add") {
                             let trimmed = manualServerEntry.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3317,6 +3901,37 @@ struct AdminAPISyncSection: View {
         }
     }
 
+    private func applyRecommendedDefaults() {
+        guard var config = settings else { return }
+        config.enabled = true
+        config.mode = detectedTargets.isEmpty ? "hybrid" : "federated"
+        config.syncInterval = 60
+        config.autoSyncOnChange = true
+        config.allowClientChoice = true
+        config.autoReturnRecoveredUsers = true
+        config.snapshotIntervalSeconds = 180
+
+        if config.routingProfiles.isEmpty {
+            let seedTargets = detectedTargets.isEmpty
+                ? ["https://node2.voicelink.devinecreations.net"]
+                : detectedTargets
+            config.routingProfiles = seedTargets.prefix(4).enumerated().map { index, target in
+                APISyncRoutingProfile(
+                    label: index == 0 ? "Primary fallback route" : "Detected fallback \(index + 1)",
+                    targetServer: target,
+                    targetType: target.contains("/") ? "domain" : "manual",
+                    manualAddress: target,
+                    actions: ["start", "fallback", "return"]
+                )
+            }
+        }
+
+        settings = config
+        if selectedSubtab == .connection {
+            selectedSubtab = .routing
+        }
+    }
+
     private var subtabToolbar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -3334,18 +3949,22 @@ struct AdminAPISyncSection: View {
     }
 
     private var detectedTargets: [String] {
-        Array(Set(SettingsManager.managedFederationServers.map(\.url))).sorted()
+        Array(Set(SettingsManager.shared.managedFederationServers.map(\.url))).sorted()
     }
 }
 
 // MARK: - Federation Section
 struct AdminFederationSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
+    @ObservedObject private var settingsManager = SettingsManager.shared
     @State private var settings: FederationSettings?
     @State private var newTrustedServer = ""
     @State private var newBlockedServer = ""
     @State private var isSaving = false
-    private let managedPeers = SettingsManager.managedFederationServers
+
+    private var managedPeers: [SettingsManager.ManagedFederationServer] {
+        settingsManager.managedFederationServers
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -3483,7 +4102,7 @@ struct AdminFederationSection: View {
                     SectionHeader(title: "Trusted Servers")
 
                     HStack {
-                        TextField("Server URL", text: $newTrustedServer)
+                        TextField("Trusted server URL", text: $newTrustedServer)
                             .textFieldStyle(.roundedBorder)
                         Button("Add") {
                             if !newTrustedServer.isEmpty {
@@ -3518,7 +4137,7 @@ struct AdminFederationSection: View {
                     SectionHeader(title: "Blocked Servers")
 
                     HStack {
-                        TextField("Server URL", text: $newBlockedServer)
+                        TextField("Blocked server URL", text: $newBlockedServer)
                             .textFieldStyle(.roundedBorder)
                         Button("Block") {
                             if !newBlockedServer.isEmpty {
@@ -3590,7 +4209,11 @@ struct AdminFederationSection: View {
 // MARK: - Deployment Section
 struct AdminDeploymentSection: View {
     @ObservedObject var adminManager = AdminServerManager.shared
-    @State private var selectedTransport = "sftp"
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @AppStorage("voicelink.deployment.autoDetectDeployment") private var autoDetectDeployment = true
+    @AppStorage("voicelink.deployment.showAdvancedOptions") private var showAdvancedDeploymentOptions = false
+    @AppStorage("voicelink.deployment.defaultTransport") private var selectedTransport = "sftp"
+    @AppStorage("voicelink.deployment.defaultSiteType") private var selectedSiteType = "auto"
     @State private var packagePreset = ""
     @State private var targetLabel = ""
     @State private var targetServerUrl = ""
@@ -3601,6 +4224,7 @@ struct AdminDeploymentSection: View {
     @State private var targetHost = ""
     @State private var targetPort = ""
     @State private var remotePath = ""
+    @State private var siteRoot = ""
     @State private var uploadUrl = ""
     @State private var username = ""
     @State private var password = ""
@@ -3613,6 +4237,14 @@ struct AdminDeploymentSection: View {
     @State private var restartAfterBootstrap = false
     @State private var restartUrl = ""
     @State private var restartMethod = "POST"
+    @State private var setupMode = "existing-or-new"
+    @State private var accountLinkMode = "shared-identity"
+    @State private var portalAccountAction = "create-or-link"
+    @State private var linkAllProviders = true
+    @State private var reuseFirstGeneratedLicense = true
+    @State private var firstLicensePreference = "first-generated"
+    @State private var defaultServerTier = "free-limited"
+    @State private var allowPaidFeatureUnlocks = true
     @State private var lastPackage: DeploymentPackageResponse?
     @State private var lastDeployment: DeploymentExecutionResponse?
     @State private var actionInFlight = false
@@ -3636,12 +4268,15 @@ struct AdminDeploymentSection: View {
                 ],
                 docs: [
                     AdminDocLink(title: "Deployment Docs", localRelativePath: "authenticated/admin-panel.html", webPath: "/docs/authenticated/admin-panel.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
-                    AdminDocLink(title: "Install Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html")
+                    AdminDocLink(title: "Install Docs", localRelativePath: "installation/index.html", webPath: "/docs/installation/index.html", adminWebPath: "/docs/authenticated/admin-panel.html"),
+                    AdminDocLink(title: "Installatron Docs", localRelativePath: "INSTALLATRON_BROWSER_UI_INTEGRATION.md", webPath: "/docs/INSTALLATRON_BROWSER_UI_INTEGRATION.md", adminWebPath: "/docs/authenticated/admin-panel.html")
                 ]
             )
 
             statusSection
             packageSection
+            onboardingSection
+            detectionSection
             transportSection
             bootstrapSection
             actionSection
@@ -3654,6 +4289,60 @@ struct AdminDeploymentSection: View {
                 targetLabel = "\(base) Remote Install"
             }
         }
+    }
+
+    private var detectionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Detection")
+            Text("Enter the server or site details first. VoiceLink will try to detect the best deployment method, site type, and install path automatically. Use Advanced only when you need to override the detected choices.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            HStack(spacing: 20) {
+                ConfigToggle(label: "Auto-detect deployment method first", isOn: $autoDetectDeployment)
+                ConfigToggle(label: "Show advanced deployment options", isOn: $showAdvancedDeploymentOptions)
+            }
+
+            Button("Use Current Choices as Default") {
+                saveCurrentDeploymentDefaults()
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Saves the current deployment detection and advanced option choices as the default behavior for future server deployments.")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(autoDetectDeployment ? "Detected and Will Be Used" : "Current Deployment Choices")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text("Transport: \(effectiveTransportLabel)")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                Text("Site Type: \(effectiveSiteTypeLabel)")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                Text("Install Path: \(effectiveRemotePathLabel)")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                Text("Site Root: \(effectiveSiteRootLabel)")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                if !detectedReason.isEmpty {
+                    Text(detectedReason)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                Text(autoDetectDeployment
+                     ? "VoiceLink will use these detected values unless you open Advanced and override them."
+                     : "VoiceLink will use your current manual deployment choices.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.04))
+            .cornerRadius(10)
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
     }
 
     private var statusSection: some View {
@@ -3721,48 +4410,145 @@ struct AdminDeploymentSection: View {
     private var transportSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "Transport")
-            Picker("Transport", selection: $selectedTransport) {
-                ForEach(availableTransports) { transport in
-                    Text(transport.name).tag(transport.id)
+            if showAdvancedDeploymentOptions {
+                Picker("Transport", selection: $selectedTransport) {
+                    ForEach(availableTransports) { transport in
+                        Text(transport.name).tag(transport.id)
+                    }
+                    if availableTransports.isEmpty {
+                        Text("SFTP").tag("sftp")
+                        Text("SMB").tag("smb")
+                        Text("HTTP").tag("http")
+                        Text("HTTPS").tag("https")
+                    }
                 }
-                if availableTransports.isEmpty {
-                    Text("SFTP").tag("sftp")
-                    Text("SMB").tag("smb")
-                    Text("HTTP").tag("http")
-                    Text("HTTPS").tag("https")
+                .pickerStyle(.menu)
+
+                Picker("Site Type", selection: $selectedSiteType) {
+                    Text("Auto Detect").tag("auto")
+                    Text("WordPress").tag("wordpress")
+                    Text("Composr").tag("composr")
+                    Text("WHMCS").tag("whmcs")
+                    Text("cPanel").tag("cpanel")
+                    Text("Installatron").tag("installatron")
+                    Text("Plain App Install").tag("plain")
                 }
+                .pickerStyle(.menu)
+
+                if let transport = availableTransports.first(where: { $0.id == selectedTransport }) {
+                    Text(transport.description)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if effectiveTransport == "http" || effectiveTransport == "https" {
+                    ConfigTextField(label: "Upload URL", text: $uploadUrl)
+                } else {
+                    HStack(spacing: 12) {
+                        ConfigTextField(label: "Host", text: $targetHost)
+                        ConfigTextField(label: "Port", text: $targetPort)
+                        ConfigTextField(label: "Remote Path", text: $remotePath)
+                    }
+                }
+
+                ConfigTextField(label: "Site Root Override", text: $siteRoot)
+
+                HStack(spacing: 12) {
+                    ConfigTextField(label: "Username", text: $username)
+                    ConfigSecureField(label: "Password", text: $password)
+                }
+
+                if effectiveTransport == "http" || effectiveTransport == "https" {
+                    Picker("HTTP Method", selection: $httpMethod) {
+                        Text("PUT").tag("PUT")
+                        Text("POST").tag("POST")
+                    }
+                    .pickerStyle(.segmented)
+                    ConfigToggle(label: "Allow insecure TLS", isOn: $insecure)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Transport: \(detectedTransportLabel)")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    Text("Site Type: \(detectedSiteTypeLabel)")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    Text("Install Path: \(detectedRemotePathLabel)")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.04))
+                .cornerRadius(10)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+
+    private var onboardingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Owner Account and License Link")
+            Text("Deployment Manager can stage the latest server install, then let the first admin finish setup with an existing or new VoiceLink account, plus a linked Client Portal account when needed.")
+                .font(.caption)
+                .foregroundColor(.gray)
+
+            Picker("Account Setup", selection: $setupMode) {
+                Text("Use Existing or Create New").tag("existing-or-new")
+                Text("Use Existing Account Only").tag("existing-only")
+                Text("Create New Account First").tag("new-only")
             }
             .pickerStyle(.menu)
 
-            if let transport = availableTransports.first(where: { $0.id == selectedTransport }) {
-                Text(transport.description)
+            Picker("Identity Link Mode", selection: $accountLinkMode) {
+                Text("Shared Identity").tag("shared-identity")
+                Text("Separate Identities Allowed").tag("separate-identities")
+            }
+            .pickerStyle(.menu)
+
+            Picker("Client Portal Action", selection: $portalAccountAction) {
+                Text("Create or Link Portal Account").tag("create-or-link")
+                Text("Link Existing Portal Account").tag("link-existing")
+                Text("Create Portal Account").tag("create-new")
+            }
+            .pickerStyle(.menu)
+
+            Picker("First License Source", selection: $firstLicensePreference) {
+                Text("Whichever Is Generated First").tag("first-generated")
+                Text("Prefer Server License").tag("prefer-server")
+                Text("Prefer Desktop Client License").tag("prefer-client")
+            }
+            .pickerStyle(.menu)
+
+            Picker("Default Server Tier", selection: $defaultServerTier) {
+                Text("Free with Limits").tag("free-limited")
+                Text("Paid / Extended Features").tag("paid-extended")
+                Text("All Features Unlocked").tag("all-features")
+            }
+            .pickerStyle(.menu)
+
+            HStack(spacing: 20) {
+                ConfigToggle(label: "Auto-link VoiceLink and portal identities", isOn: $linkAllProviders)
+                ConfigToggle(label: "Reuse the first generated license key", isOn: $reuseFirstGeneratedLicense)
+            }
+
+            ConfigToggle(label: "Offer payments for extended or full features", isOn: $allowPaidFeatureUnlocks)
+
+            if let currentUser = authManager.currentUser {
+                Text("Signed-in owner account: \(currentUser.displayName)")
                     .font(.caption)
-                    .foregroundColor(.gray)
-            }
-
-            if selectedTransport == "http" || selectedTransport == "https" {
-                ConfigTextField(label: "Upload URL", text: $uploadUrl)
+                    .foregroundColor(.secondary)
             } else {
-                HStack(spacing: 12) {
-                    ConfigTextField(label: "Host", text: $targetHost)
-                    ConfigTextField(label: "Port", text: $targetPort)
-                    ConfigTextField(label: "Remote Path", text: $remotePath)
-                }
+                Text("No owner account is signed in on this Mac yet. The deployed server can still prompt the first admin to sign in or create one.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
-            HStack(spacing: 12) {
-                ConfigTextField(label: "Username", text: $username)
-                ConfigSecureField(label: "Password", text: $password)
-            }
-
-            if selectedTransport == "http" || selectedTransport == "https" {
-                Picker("HTTP Method", selection: $httpMethod) {
-                    Text("PUT").tag("PUT")
-                    Text("POST").tag("POST")
-                }
-                .pickerStyle(.segmented)
-                ConfigToggle(label: "Allow insecure TLS", isOn: $insecure)
-            }
+            Text("Recommended default: start new self-hosted installs on the free tier with feature limits, then unlock extended or full server features through the linked payment and portal flow.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
         .padding()
         .background(Color.white.opacity(0.05))
@@ -3915,20 +4701,39 @@ struct AdminDeploymentSection: View {
             targetServerUrl: targetServerUrl.isEmpty ? nil : targetServerUrl,
             linkedToMain: linkedToMain,
             trustedServers: trustedServersList,
-            extraConfig: DeploymentExtraConfig()
+            extraConfig: DeploymentExtraConfig(
+                server: [
+                    "siteType": effectiveSiteType,
+                    "siteRoot": effectiveSiteRoot,
+                    "remotePath": effectiveRemotePath
+                ],
+                onboarding: [
+                    "setupMode": setupMode,
+                    "accountLinkMode": accountLinkMode,
+                    "portalAccountAction": portalAccountAction,
+                    "autoLinkAllProviders": linkAllProviders ? "true" : "false",
+                    "reuseFirstGeneratedLicense": reuseFirstGeneratedLicense ? "true" : "false",
+                    "firstLicensePreference": firstLicensePreference,
+                    "defaultServerTier": defaultServerTier,
+                    "allowPaidFeatureUnlocks": allowPaidFeatureUnlocks ? "true" : "false",
+                    "mainApiRegistrationRequired": "true",
+                    "firstAdminConfiguresServer": "true"
+                ]
+            )
         )
     }
 
     private var targetRequest: DeploymentTargetRequest {
         DeploymentTargetRequest(
-            transport: selectedTransport,
-            host: targetHost.isEmpty ? nil : targetHost,
+            transport: effectiveTransport,
+            host: effectiveTargetHost.isEmpty ? nil : effectiveTargetHost,
             port: Int(targetPort),
-            remotePath: remotePath.isEmpty ? nil : remotePath,
-            uploadUrl: uploadUrl.isEmpty ? nil : uploadUrl,
+            remotePath: effectiveRemotePath.isEmpty ? nil : effectiveRemotePath,
+            siteRoot: effectiveSiteRoot.isEmpty ? nil : effectiveSiteRoot,
+            uploadUrl: effectiveUploadURL.isEmpty ? nil : effectiveUploadURL,
             username: username.isEmpty ? nil : username,
             password: password.isEmpty ? nil : password,
-            method: (selectedTransport == "http" || selectedTransport == "https") ? httpMethod : nil,
+            method: (effectiveTransport == "http" || effectiveTransport == "https") ? httpMethod : nil,
             insecure: insecure,
             apiBaseUrl: apiBaseUrl.isEmpty ? nil : apiBaseUrl,
             apiToken: apiToken.isEmpty ? nil : apiToken,
@@ -3938,6 +4743,212 @@ struct AdminDeploymentSection: View {
             restartUrl: restartUrl.isEmpty ? nil : restartUrl,
             restartMethod: restartAfterBootstrap ? restartMethod : nil
         )
+    }
+
+    private var effectiveTransport: String {
+        autoDetectDeployment ? detectedTransport : selectedTransport
+    }
+
+    private var effectiveTransportLabel: String {
+        autoDetectDeployment ? detectedTransportLabel : manualTransportLabel
+    }
+
+    private var effectiveSiteType: String {
+        if autoDetectDeployment { return detectedSiteType }
+        if selectedSiteType == "auto" { return detectedSiteType }
+        return selectedSiteType
+    }
+
+    private var effectiveSiteTypeLabel: String {
+        switch effectiveSiteType {
+        case "wordpress": return "WordPress"
+        case "whmcs": return "WHMCS"
+        case "composr": return "Composr"
+        case "cpanel": return "cPanel Account"
+        case "installatron": return "Installatron"
+        default: return "Plain App Install"
+        }
+    }
+
+    private var effectiveRemotePath: String {
+        if !remotePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return remotePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return detectedRemotePath
+    }
+
+    private var effectiveSiteRoot: String {
+        if !siteRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return siteRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return detectedSiteRoot
+    }
+
+    private var effectiveTargetHost: String {
+        if !targetHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return targetHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let host = URL(string: targetServerUrl)?.host {
+            return host
+        }
+        return targetServerUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "").split(separator: "/").first.map(String.init) ?? ""
+    }
+
+    private var effectiveUploadURL: String {
+        if !uploadUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return uploadUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if detectedTransport == "https" || detectedTransport == "http" {
+            return targetServerUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
+    }
+
+    private var detectedTransport: String {
+        let url = targetServerUrl.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if url.hasPrefix("https://") { return "https" }
+        if url.hasPrefix("http://") { return "http" }
+        return "sftp"
+    }
+
+    private var detectedTransportLabel: String {
+        switch detectedTransport {
+        case "https": return "HTTPS"
+        case "http": return "HTTP"
+        case "smb": return "SMB"
+        default: return "SFTP"
+        }
+    }
+
+    private var manualTransportLabel: String {
+        switch selectedTransport {
+        case "https": return "HTTPS"
+        case "http": return "HTTP"
+        case "smb": return "SMB"
+        default: return "SFTP"
+        }
+    }
+
+    private var detectedSiteType: String {
+        let combined = [
+            targetServerUrl.lowercased(),
+            targetLabel.lowercased(),
+            ownerEmail.lowercased(),
+            effectiveTargetHost.lowercased(),
+            remotePath.lowercased(),
+            siteRoot.lowercased()
+        ].joined(separator: " ")
+
+        if combined.contains("wp") || combined.contains("wordpress") || combined.contains("tappedin.fm") || combined.contains("walterharper.com") {
+            return "wordpress"
+        }
+        if combined.contains("whmcs") || combined.contains("devine-creations.com") || combined.contains("clientarea.php") {
+            return "whmcs"
+        }
+        if combined.contains("installatron") || combined.contains(".well-known/voicelink.json") || combined.contains("install.xml") {
+            return "installatron"
+        }
+        if combined.contains("composr") || combined.contains("devinecreations.net") || combined.contains("raywonderis.me") {
+            return "composr"
+        }
+        if combined.contains("/home/") || combined.contains("cpanel") || combined.contains("public_html") {
+            return "cpanel"
+        }
+        return "plain"
+    }
+
+    private var detectedSiteTypeLabel: String {
+        switch detectedSiteType {
+        case "wordpress": return "WordPress"
+        case "whmcs": return "WHMCS"
+        case "composr": return "Composr"
+        case "cpanel": return "cPanel Account"
+        case "installatron": return "Installatron"
+        default: return "Plain App Install"
+        }
+    }
+
+    private var detectedRemotePath: String {
+        if detectedSiteType == "whmcs" {
+            return "/home/devinecr/apps/voicelink"
+        }
+        if detectedSiteType == "wordpress" {
+            return "/home/\(detectedUserName)/apps/voicelink"
+        }
+        if detectedSiteType == "composr" {
+            return "/home/\(detectedUserName)/apps/voicelink"
+        }
+        if detectedSiteType == "cpanel" {
+            return "/home/\(detectedUserName)/apps/voicelink"
+        }
+        if detectedSiteType == "installatron" {
+            return "/home/\(detectedUserName)/apps/voicelink"
+        }
+        return remotePath.isEmpty ? "/home/\(detectedUserName.isEmpty ? "user" : detectedUserName)/apps/voicelink" : remotePath
+    }
+
+    private var detectedSiteRoot: String {
+        switch detectedSiteType {
+        case "whmcs":
+            return "/home/devinecr/public_html"
+        case "wordpress":
+            return "/home/\(detectedUserName)/public_html"
+        case "composr":
+            return "/home/\(detectedUserName)/public_html"
+        case "cpanel":
+            return "/home/\(detectedUserName)"
+        case "installatron":
+            return "/home/\(detectedUserName)/public_html"
+        default:
+            return detectedRemotePath
+        }
+    }
+
+    private var detectedRemotePathLabel: String {
+        detectedRemotePath
+    }
+
+    private var effectiveRemotePathLabel: String {
+        effectiveRemotePath
+    }
+
+    private var effectiveSiteRootLabel: String {
+        effectiveSiteRoot
+    }
+
+    private var detectedUserName: String {
+        let host = effectiveTargetHost.lowercased()
+        if host.contains("tappedin.fm") { return "tappedin" }
+        if host.contains("walterharper.com") { return "wharper" }
+        if host.contains("devine-creations.com") || host.contains("devinecreations.net") { return "devinecr" }
+        if host.contains("raywonderis.me") { return "dom" }
+        if !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return username.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return "user"
+    }
+
+    private var detectedReason: String {
+        switch detectedSiteType {
+        case "whmcs":
+            return "Detected WHMCS-style hosting and portal paths. VoiceLink will preserve the billing site and deploy side by side."
+        case "wordpress":
+            return "Detected WordPress-style hosting. VoiceLink will prefer the WordPress plugin path and a side-by-side app install."
+        case "composr":
+            return "Detected Composr-style hosting. VoiceLink will preserve the Composr site root and use the linked app path."
+        case "cpanel":
+            return "Detected a cPanel account-style host or path. VoiceLink will prefer cPanel-friendly app and shared file roots."
+        case "installatron":
+            return "Detected Installatron packaging or .well-known install metadata. VoiceLink will preserve the browser UI, sync Installatron app files, and keep WHMCS license state visible in web and desktop admin."
+        default:
+            return "No supported site type was strongly detected, so VoiceLink will use a plain side-by-side app install."
+        }
+    }
+
+    private func saveCurrentDeploymentDefaults() {
+        UserDefaults.standard.set(autoDetectDeployment, forKey: "voicelink.deployment.autoDetectDeployment")
+        UserDefaults.standard.set(showAdvancedDeploymentOptions, forKey: "voicelink.deployment.showAdvancedOptions")
+        UserDefaults.standard.set(selectedTransport, forKey: "voicelink.deployment.defaultTransport")
+        UserDefaults.standard.set(selectedSiteType, forKey: "voicelink.deployment.defaultSiteType")
+        adminManager.deploymentActionMessage = "Saved current deployment preferences as the default."
     }
 
     private var trustedServersList: [String] {
@@ -4050,8 +5061,10 @@ struct AdminModulesSection: View {
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 320)
 
-                TextField("Search modules", text: $query)
+                TextField("Search modules by name, category, or description", text: $query)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Module search")
+                    .accessibilityHint("Filter the module list by module name, category, or description.")
             }
 
             if adminManager.modulesLoading {
@@ -4209,6 +5222,7 @@ private struct ModuleConfigEditorSheet: View {
         case bool
         case string
         case number
+        case stringList
         case json
     }
 
@@ -4216,6 +5230,8 @@ private struct ModuleConfigEditorSheet: View {
         let id: String
         let path: [String]
         let label: String
+        let detailLabel: String
+        let helperText: String?
         let kind: FieldKind
         var textValue: String
         var boolValue: Bool
@@ -4253,53 +5269,22 @@ private struct ModuleConfigEditorSheet: View {
                                 .foregroundColor(.gray)
                                 .font(.caption)
                         } else {
-                            ForEach(fields.indices, id: \.self) { index in
-                                let field = fields[index]
-                                switch field.kind {
-                                case .bool:
-                                    Toggle(field.label, isOn: Binding(
-                                        get: { fields[index].boolValue },
-                                        set: { fields[index].boolValue = $0 }
-                                    ))
-                                    .tint(.blue)
-                                case .string:
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(field.label)
-                                            .foregroundColor(.gray)
-                                            .font(.caption)
-                                        TextField(field.label, text: Binding(
-                                            get: { fields[index].textValue },
-                                            set: { fields[index].textValue = $0 }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                    }
-                                case .number:
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(field.label)
-                                            .foregroundColor(.gray)
-                                            .font(.caption)
-                                        TextField("Number", text: Binding(
-                                            get: { fields[index].textValue },
-                                            set: { fields[index].textValue = $0 }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                    }
-                                case .json:
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(field.label)
-                                            .foregroundColor(.gray)
-                                            .font(.caption)
-                                        TextEditor(text: Binding(
-                                            get: { fields[index].textValue },
-                                            set: { fields[index].textValue = $0 }
-                                        ))
-                                        .font(.system(.caption, design: .monospaced))
-                                        .frame(minHeight: 64)
-                                        .padding(6)
-                                        .background(Color.white.opacity(0.08))
-                                        .cornerRadius(8)
+                            ForEach(groupedFields, id: \.group) { group in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(group.title)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .accessibilityAddTraits(.isHeader)
+
+                                    ForEach(group.items, id: \.id) { field in
+                                        if let index = fields.firstIndex(where: { $0.id == field.id }) {
+                                            fieldEditor(for: index)
+                                        }
                                     }
                                 }
+                                .padding(12)
+                                .background(Color.white.opacity(0.05))
+                                .cornerRadius(10)
                             }
                         }
                     }
@@ -4376,12 +5361,16 @@ private struct ModuleConfigEditorSheet: View {
                 continue
             }
 
-            let label = currentPath.joined(separator: " > ")
+            let label = humanizedPathLabel(currentPath)
+            let detailLabel = currentPath.joined(separator: " > ")
+            let helperText = helperText(for: currentPath)
             if let boolValue = value as? Bool {
                 output.append(ConfigField(
                     id: currentPath.joined(separator: "."),
                     path: currentPath,
                     label: label,
+                    detailLabel: detailLabel,
+                    helperText: helperText,
                     kind: .bool,
                     textValue: boolValue ? "true" : "false",
                     boolValue: boolValue
@@ -4394,6 +5383,8 @@ private struct ModuleConfigEditorSheet: View {
                     id: currentPath.joined(separator: "."),
                     path: currentPath,
                     label: label,
+                    detailLabel: detailLabel,
+                    helperText: helperText,
                     kind: .number,
                     textValue: number.stringValue,
                     boolValue: false
@@ -4406,8 +5397,24 @@ private struct ModuleConfigEditorSheet: View {
                     id: currentPath.joined(separator: "."),
                     path: currentPath,
                     label: label,
+                    detailLabel: detailLabel,
+                    helperText: helperText,
                     kind: .string,
                     textValue: stringValue,
+                    boolValue: false
+                ))
+                continue
+            }
+
+            if let stringList = value as? [String] {
+                output.append(ConfigField(
+                    id: currentPath.joined(separator: "."),
+                    path: currentPath,
+                    label: label,
+                    detailLabel: detailLabel,
+                    helperText: helperText ?? "Enter one item per line.",
+                    kind: .stringList,
+                    textValue: stringList.joined(separator: "\n"),
                     boolValue: false
                 ))
                 continue
@@ -4418,6 +5425,8 @@ private struct ModuleConfigEditorSheet: View {
                 id: currentPath.joined(separator: "."),
                 path: currentPath,
                 label: label,
+                detailLabel: detailLabel,
+                helperText: helperText,
                 kind: .json,
                 textValue: fallback,
                 boolValue: false
@@ -4445,6 +5454,11 @@ private struct ModuleConfigEditorSheet: View {
                     validationError = "Invalid number for \(field.label)."
                     return nil
                 }
+            case .stringList:
+                value = field.textValue
+                    .components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
             case .json:
                 let trimmed = field.textValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
@@ -4487,6 +5501,153 @@ private struct ModuleConfigEditorSheet: View {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    private var groupedFields: [(group: String, title: String, items: [ConfigField])] {
+        let grouped = Dictionary(grouping: fields) { field in
+            field.path.first ?? "general"
+        }
+
+        return grouped.keys.sorted().map { key in
+            (
+                group: key,
+                title: humanizeKey(key),
+                items: grouped[key, default: []].sorted { lhs, rhs in
+                    lhs.detailLabel.localizedCaseInsensitiveCompare(rhs.detailLabel) == .orderedAscending
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func fieldEditor(for index: Int) -> some View {
+        let field = fields[index]
+
+        VStack(alignment: .leading, spacing: 4) {
+            switch field.kind {
+            case .bool:
+                Toggle(field.label, isOn: Binding(
+                    get: { fields[index].boolValue },
+                    set: { fields[index].boolValue = $0 }
+                ))
+                .tint(.blue)
+            case .string:
+                labeledTextField(title: field.label, value: Binding(
+                    get: { fields[index].textValue },
+                    set: { fields[index].textValue = $0 }
+                ))
+            case .number:
+                labeledTextField(title: field.label, value: Binding(
+                    get: { fields[index].textValue },
+                    set: { fields[index].textValue = $0 }
+                ), placeholder: "Number")
+            case .stringList:
+                Text(field.label)
+                    .foregroundColor(.white)
+                    .font(.subheadline.weight(.semibold))
+                TextEditor(text: Binding(
+                    get: { fields[index].textValue },
+                    set: { fields[index].textValue = $0 }
+                ))
+                .font(.system(.body, design: .default))
+                .frame(minHeight: 96)
+                .padding(6)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(8)
+            case .json:
+                Text(field.label)
+                    .foregroundColor(.white)
+                    .font(.subheadline.weight(.semibold))
+                TextEditor(text: Binding(
+                    get: { fields[index].textValue },
+                    set: { fields[index].textValue = $0 }
+                ))
+                .font(.system(.caption, design: .monospaced))
+                .frame(minHeight: 64)
+                .padding(6)
+                .background(Color.white.opacity(0.08))
+                .cornerRadius(8)
+            }
+
+            if field.kind != .bool {
+                Text(field.detailLabel)
+                    .foregroundColor(.gray)
+                    .font(.caption2)
+            }
+
+            if let helperText = field.helperText, !helperText.isEmpty {
+                Text(helperText)
+                    .foregroundColor(.gray)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private func labeledTextField(title: String, value: Binding<String>, placeholder: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .foregroundColor(.white)
+                .font(.subheadline.weight(.semibold))
+            TextField(placeholder ?? title, text: value)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func humanizedPathLabel(_ path: [String]) -> String {
+        if path.count <= 1 {
+            return humanizeKey(path.first ?? "setting")
+        }
+        return humanizeKey(path.last ?? path.joined(separator: " "))
+    }
+
+    private func humanizeKey(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { chunk in
+                let lower = chunk.lowercased()
+                switch lower {
+                case "id", "url", "api", "sms", "totp", "smtp", "whmcs":
+                    return lower.uppercased()
+                default:
+                    return lower.prefix(1).uppercased() + lower.dropFirst()
+                }
+            }
+            .joined(separator: " ")
+    }
+
+    private func helperText(for path: [String]) -> String? {
+        let key = path.joined(separator: ".").lowercased()
+        let last = path.last?.lowercased() ?? ""
+
+        switch key {
+        case let value where value.contains("enabled"):
+            return "Turn this on to make the feature active without removing its saved settings."
+        case let value where value.contains("intervalseconds"):
+            return "How often this task should run, in seconds."
+        case let value where value.contains("retentiondays"):
+            return "How many days of data to keep before cleanup."
+        case let value where value.contains("maxqueuesize"):
+            return "Maximum number of waiting items allowed before the queue is considered full."
+        case let value where value.contains("minutesbefore"):
+            return "Enter one reminder lead time per line, in minutes."
+        case let value where value.contains("webhooks"):
+            return "Enter one webhook URL per line."
+        default:
+            switch last {
+            case "issuer":
+                return "Name shown by authenticator apps when users enroll."
+            case "provider":
+                return "Backend service used for this integration."
+            case "categories":
+                return "Enter one category per line."
+            case "priorities":
+                return "Enter one priority per line."
+            default:
+                return nil
+            }
+        }
     }
 }
 
@@ -4717,31 +5878,15 @@ struct AdminDocLink: Identifiable {
 }
 
 enum AdminDocsResolver {
-    private static let webBase = "https://voicelink.devinecreations.net"
-    private static let localDocRoots = [
-        "/Users/admin/DEV/APPS/voicelink-local/docs",
-        "/Users/admin/DEV/APPS/voicelink-local/swift-native/VoiceLinkNative/docs",
-        "/Users/admin/DEV/APPS/voicelink-local/source/docs",
-        "/Users/admin/DEV/APPS/voicelink-local/voicelink-app/docs"
-    ]
-
     static func resolve(_ doc: AdminDocLink, isAdmin: Bool) -> URL? {
         if let localRelativePath = doc.localRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !localRelativePath.isEmpty {
-            for root in localDocRoots {
-                let candidate = URL(fileURLWithPath: root).appendingPathComponent(localRelativePath)
-                if FileManager.default.fileExists(atPath: candidate.path) {
-                    return candidate
-                }
-            }
+           !localRelativePath.isEmpty,
+           let localURL = DocsManager.shared.resolveLocalDoc(relativePath: localRelativePath) {
+            return localURL
         }
 
         let selectedPath = (isAdmin ? doc.adminWebPath : nil) ?? doc.webPath
-        return URL(string: webBase + normalizedPath(selectedPath))
-    }
-
-    private static func normalizedPath(_ path: String) -> String {
-        path.hasPrefix("/") ? path : "/" + path
+        return DocsManager.shared.webURL(for: selectedPath)
     }
 }
 
@@ -4883,21 +6028,43 @@ struct ConfigTextField: View {
     let label: String
     var placeholder: String = ""
     var helpText: String? = nil
+    var defaultValueDescription: String? = nil
     @Binding var text: String
+
+    private var resolvedPlaceholder: String {
+        let trimmed = placeholder.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return "Enter \(label.lowercased())"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.caption)
                 .foregroundColor(.gray)
-            TextField(placeholder, text: $text)
+            TextField(resolvedPlaceholder, text: $text)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(label)
+                .accessibilityHint(resolvedAccessibilityHint)
             if let helpText, !helpText.isEmpty {
                 Text(helpText)
                     .font(.caption2)
                     .foregroundColor(.gray)
             }
+            if let defaultValueDescription, !defaultValueDescription.isEmpty {
+                Text("Default: \(defaultValueDescription)")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.9))
+            }
         }
+    }
+
+    private var resolvedAccessibilityHint: String {
+        let base = helpText ?? "Enter the value for \(label.lowercased())."
+        if let defaultValueDescription, !defaultValueDescription.isEmpty {
+            return "\(base) Default: \(defaultValueDescription)."
+        }
+        return base
     }
 }
 
@@ -4905,27 +6072,50 @@ struct ConfigSecureField: View {
     let label: String
     var placeholder: String = ""
     var helpText: String? = nil
+    var defaultValueDescription: String? = nil
     @Binding var text: String
+
+    private var resolvedPlaceholder: String {
+        let trimmed = placeholder.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return "Enter \(label.lowercased())"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.caption)
                 .foregroundColor(.gray)
-            SecureField(placeholder, text: $text)
+            SecureField(resolvedPlaceholder, text: $text)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(label)
+                .accessibilityHint(resolvedAccessibilityHint)
             if let helpText, !helpText.isEmpty {
                 Text(helpText)
                     .font(.caption2)
                     .foregroundColor(.gray)
             }
+            if let defaultValueDescription, !defaultValueDescription.isEmpty {
+                Text("Default: \(defaultValueDescription)")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.9))
+            }
         }
+    }
+
+    private var resolvedAccessibilityHint: String {
+        let base = helpText ?? "Enter the secure value for \(label.lowercased())."
+        if let defaultValueDescription, !defaultValueDescription.isEmpty {
+            return "\(base) Default: \(defaultValueDescription)."
+        }
+        return base
     }
 }
 
 struct ConfigNumberField: View {
     let label: String
     var helpText: String? = nil
+    var defaultValueDescription: String? = nil
     @Binding var value: Int
 
     var body: some View {
@@ -4936,39 +6126,71 @@ struct ConfigNumberField: View {
             TextField("", value: $value, format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 100)
+                .accessibilityLabel(label)
+                .accessibilityHint(resolvedAccessibilityHint)
             if let helpText, !helpText.isEmpty {
                 Text(helpText)
                     .font(.caption2)
                     .foregroundColor(.gray)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let defaultValueDescription, !defaultValueDescription.isEmpty {
+                Text("Default: \(defaultValueDescription)")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private var resolvedAccessibilityHint: String {
+        let base = helpText ?? "Enter the number for \(label.lowercased())."
+        if let defaultValueDescription, !defaultValueDescription.isEmpty {
+            return "\(base) Default: \(defaultValueDescription)."
+        }
+        return base
     }
 }
 
 struct ConfigToggle: View {
     let label: String
     var helpText: String? = nil
+    var defaultValueDescription: String? = nil
     @Binding var isOn: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle(label, isOn: $isOn)
                 .foregroundColor(.white)
+                .accessibilityHint(resolvedAccessibilityHint)
             if let helpText, !helpText.isEmpty {
                 Text(helpText)
                     .font(.caption2)
                     .foregroundColor(.gray)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let defaultValueDescription, !defaultValueDescription.isEmpty {
+                Text("Default: \(defaultValueDescription)")
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private var resolvedAccessibilityHint: String {
+        let base = helpText ?? "Toggles \(label.lowercased())."
+        if let defaultValueDescription, !defaultValueDescription.isEmpty {
+            return "\(base) Default: \(defaultValueDescription)."
+        }
+        return base
     }
 }
 
 // MARK: - ServerConfig Extensions
 extension ServerConfig {
     func with(serverName: String? = nil, serverDescription: String? = nil, maxUsers: Int? = nil,
-              maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, welcomeMessage: String?? = nil,
+              maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, lobbyWelcomeMessage: String?? = nil, welcomeMessage: String?? = nil,
               motd: String?? = nil, motdSettings: MOTDSettings? = nil,
               registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
               allowGuests: Bool? = nil, maxGuestDuration: Int?? = nil, enableRateLimiting: Bool? = nil,
@@ -4982,6 +6204,7 @@ extension ServerConfig {
             maxUsers: maxUsers ?? self.maxUsers,
             maxRooms: maxRooms ?? self.maxRooms,
             maxUsersPerRoom: maxUsersPerRoom ?? self.maxUsersPerRoom,
+            lobbyWelcomeMessage: lobbyWelcomeMessage ?? self.lobbyWelcomeMessage,
             welcomeMessage: welcomeMessage ?? self.welcomeMessage,
             motd: motd ?? self.motd,
             motdSettings: motdSettings ?? self.motdSettings,

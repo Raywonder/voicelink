@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<upgrade>
+  <preserve>
+    <path>.env</path>
+    <path>storage/</path>
+    <path>.well-known/acme-challenge</path>
+  </preserve>
+  <hooks>
+    <post_upgrade>hooks/post_upgrade.php</post_upgrade>
+  </hooks>
+</upgrade>
