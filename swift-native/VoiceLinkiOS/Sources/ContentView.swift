@@ -3,25 +3,19 @@ import UserNotifications
 
 struct ContentView: View {
     @Binding var serverURL: String
-    @State private var selectedTab: Tab = .home
+    @State private var selectedTab: Tab = .servers
     @StateObject private var roomState = IOSRoomMessagingState()
     @State private var showProfile = false
-    @State private var showServers = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            HomeTab(
-                serverURL: $serverURL,
-                roomState: roomState,
-                openProfile: { showProfile = true },
-                openServers: { showServers = true }
-            )
+            ServersTab(serverURL: $serverURL, roomState: roomState, openProfile: { showProfile = true })
                 .tabItem {
-                    Label("Main", systemImage: "house.fill")
+                    Label("Servers", systemImage: "server.rack")
                 }
-                .tag(Tab.home)
+                .tag(Tab.servers)
 
-            SettingsTab(roomState: roomState, openServers: { showServers = true })
+            SettingsTab(roomState: roomState, openServers: { selectedTab = .servers })
                 .tabItem {
                     Label("Settings", systemImage: "slider.horizontal.3")
                 }
@@ -36,34 +30,58 @@ struct ContentView: View {
             showProfile = true
         }
         .sheet(isPresented: $showProfile) {
-            MessagesTab(serverURL: $serverURL, roomState: roomState, openServers: { showServers = true })
+            MessagesTab(serverURL: $serverURL, roomState: roomState, openServers: { selectedTab = .servers })
         }
-        .sheet(isPresented: $showServers) {
-            FederationTab(serverURL: $serverURL)
+        .onAppear {
+            IOSActionSoundPlayer.playStartupIntroIfNeeded()
         }
     }
 }
 
 private enum Tab {
-    case home
+    case servers
     case settings
 }
 
-private struct IOSDirectMessageTarget: Identifiable, Hashable {
-    let id: String
-    let name: String
+private enum ServerScreenTab: String, CaseIterable, Identifiable {
+    case servers
+    case federation
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .servers: return "Servers"
+        case .federation: return "Federated Rooms"
+        }
+    }
 }
 
-private struct IOSRoomMessageItem: Identifiable, Hashable {
+struct IOSDirectMessageTarget: Identifiable, Hashable {
+    let id: String
+    let name: String
+    var isMuted: Bool = false
+    var isDeafened: Bool = false
+    var isSpeaking: Bool = false
+    var transmitEnabled: Bool = true
+}
+
+struct IOSRoomMessageItem: Identifiable, Hashable {
     let id: String
     let roomId: String
     let roomName: String
     let author: String
     let body: String
+    let type: String
     let timestamp: Date
+
+    var isSystemMessage: Bool {
+        type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "system"
+            || author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "system"
+    }
 }
 
-private struct IOSRoomTranscriptItem: Identifiable, Hashable {
+struct IOSRoomTranscriptItem: Identifiable, Hashable {
     let id: String
     let roomId: String
     let roomName: String
@@ -73,7 +91,7 @@ private struct IOSRoomTranscriptItem: Identifiable, Hashable {
 }
 
 @MainActor
-private final class IOSRoomMessagingState: ObservableObject {
+final class IOSRoomMessagingState: ObservableObject {
     @Published var isInRoom = false
     @Published var activeRoomId = ""
     @Published var activeRoomName = ""
@@ -227,14 +245,32 @@ private final class IOSRoomMessagingState: ObservableObject {
     private func handleRoomUsers(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
         let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
-        guard let users = info["users"] as? [[String: String]] else { return }
-        let mapped = users.compactMap { entry -> IOSDirectMessageTarget? in
-            guard let id = entry["id"], !id.isEmpty, let name = entry["name"], !name.isEmpty else { return nil }
-            return IOSDirectMessageTarget(id: id, name: name)
+        if activeRoomId.isEmpty, !roomId.isEmpty {
+            activeRoomId = roomId
+            isInRoom = true
         }
-        if isInRoom {
-            directTargets = mapped.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
+        guard let rawUsers = info["users"] as? [Any] else { return }
+        let mapped = rawUsers.compactMap { entry -> IOSDirectMessageTarget? in
+            guard let user = entry as? [String: Any] else { return nil }
+            let id = String(describing: user["id"] ?? user["userId"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = String(describing: user["name"] ?? user["userName"] ?? user["displayName"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, !name.isEmpty else { return nil }
+            return IOSDirectMessageTarget(
+                id: id,
+                name: name,
+                isMuted: (user["muted"] as? Bool) ?? (user["isMuted"] as? Bool) ?? false,
+                isDeafened: (user["deafened"] as? Bool) ?? (user["isDeafened"] as? Bool) ?? false,
+                isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
+                transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true
+            )
+        }
+        if isInRoom || !mapped.isEmpty {
+            directTargets = mapped.sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
         } else {
             for target in mapped {
                 upsertDirectTarget(target)
@@ -251,6 +287,7 @@ private final class IOSRoomMessagingState: ObservableObject {
         let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let author = (info["author"] as? String ?? "User").trimmingCharacters(in: .whitespacesAndNewlines)
         let body = (info["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let type = (info["type"] as? String ?? "text").trimmingCharacters(in: .whitespacesAndNewlines)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
         guard !roomId.isEmpty, !body.isEmpty else { return }
         roomMessages.append(
@@ -260,6 +297,7 @@ private final class IOSRoomMessagingState: ObservableObject {
                 roomName: roomName.isEmpty ? "Room" : roomName,
                 author: author.isEmpty ? "User" : author,
                 body: body,
+                type: type.isEmpty ? "text" : type,
                 timestamp: Date(timeIntervalSince1970: ts)
             )
         )
@@ -347,9 +385,14 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let serverDomain: String
     let federated: Bool
     let federationTier: String
+    let backgroundStream: String
+    let streamVolume: Double
+    let showChatInIOS: Bool
+    let iosChatMessageOrder: String
+    let iosChatMessageLimit: Int
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, visibility, accessType, serverSource, serverTitle, serverApiBase, serverDomain, federated, federationTier
+        case id, name, description, users, userCount, memberCount, visibility, accessType, serverSource, serverTitle, serverApiBase, serverDomain, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -357,9 +400,10 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         id = RoomSummary.decodeString(container, forKey: .id) ?? UUID().uuidString
         name = (try? container.decode(String.self, forKey: .name)) ?? "Untitled Room"
         description = (try? container.decode(String.self, forKey: .description)) ?? ""
-        let users = RoomSummary.decodeInt(container, forKey: .users) ?? 0
+        let users = RoomSummary.decodeUserCount(container, forKey: .users)
         let explicitUserCount = RoomSummary.decodeInt(container, forKey: .userCount)
-        userCount = explicitUserCount ?? users
+        let memberCount = RoomSummary.decodeInt(container, forKey: .memberCount)
+        userCount = explicitUserCount ?? users ?? memberCount ?? 0
         visibility = (try? container.decode(String.self, forKey: .visibility)) ?? "public"
         accessType = (try? container.decode(String.self, forKey: .accessType)) ?? "open"
         serverSource = (try? container.decode(String.self, forKey: .serverSource)) ?? "unknown"
@@ -368,6 +412,14 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         serverDomain = (try? container.decode(String.self, forKey: .serverDomain)) ?? ""
         federated = (try? container.decode(Bool.self, forKey: .federated)) ?? false
         federationTier = (try? container.decode(String.self, forKey: .federationTier)) ?? "none"
+        backgroundStream = (try? container.decode(String.self, forKey: .backgroundStream)) ?? ""
+        streamVolume = (try? container.decode(Double.self, forKey: .streamVolume))
+            ?? Double((try? container.decode(Int.self, forKey: .streamVolume)) ?? 30)
+        showChatInIOS = (try? container.decode(Bool.self, forKey: .showChatInIOS)) ?? true
+        let decodedOrder = (try? container.decode(String.self, forKey: .iosChatMessageOrder))?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "newest-first"
+        iosChatMessageOrder = ["oldest-first", "newest-first"].contains(decodedOrder) ? decodedOrder : "newest-first"
+        let decodedLimit = (try? container.decode(Int.self, forKey: .iosChatMessageLimit)) ?? 50
+        iosChatMessageLimit = [20, 50].contains(decodedLimit) ? decodedLimit : 50
     }
 
     private static func decodeString(_ container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> String? {
@@ -388,6 +440,41 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
             return intValue
         }
         return nil
+    }
+
+    private static func decodeUserCount(_ container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Int? {
+        if let intValue = decodeInt(container, forKey: key) {
+            return intValue
+        }
+        if let users = try? container.decode([[String: String]].self, forKey: key) {
+            return users.count
+        }
+        if let users = try? container.decode([[String: AnyRoomUserValue]].self, forKey: key) {
+            return users.count
+        }
+        if let users = try? container.decode([String].self, forKey: key) {
+            return users.count
+        }
+        return nil
+    }
+}
+
+private struct AnyRoomUserValue: Decodable, Hashable {
+    let rawValue: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            rawValue = value
+        } else if let value = try? container.decode(Int.self) {
+            rawValue = String(value)
+        } else if let value = try? container.decode(Bool.self) {
+            rawValue = value ? "true" : "false"
+        } else if let value = try? container.decode(Double.self) {
+            rawValue = String(value)
+        } else {
+            rawValue = ""
+        }
     }
 }
 
@@ -419,11 +506,52 @@ private struct ClientVisibilitySettings: Equatable {
     )
 }
 
+private struct ServersTab: View {
+    @AppStorage("voicelink.ios.serverScreenTab") private var storedTab = ServerScreenTab.servers.rawValue
+    @Binding var serverURL: String
+    @ObservedObject var roomState: IOSRoomMessagingState
+    let openProfile: () -> Void
+
+    private var selectedTabBinding: Binding<ServerScreenTab> {
+        Binding(
+            get: { ServerScreenTab(rawValue: storedTab) ?? .servers },
+            set: { storedTab = $0.rawValue }
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Server Screen", selection: selectedTabBinding) {
+                ForEach(ServerScreenTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding([.horizontal, .top])
+            .accessibilityLabel("Server screen")
+
+            switch ServerScreenTab(rawValue: storedTab) ?? .servers {
+            case .servers:
+                HomeTab(
+                    serverURL: $serverURL,
+                    roomState: roomState,
+                    openProfile: openProfile,
+                    openServers: { storedTab = ServerScreenTab.federation.rawValue }
+                )
+            case .federation:
+                FederationTab(serverURL: $serverURL, roomState: roomState)
+            }
+        }
+    }
+}
+
 private struct HomeTab: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
     @AppStorage("voicelink.authToken") private var authToken = ""
     @AppStorage("voicelink.displayName") private var displayName = ""
+    @AppStorage("voicelink.authProvider") private var authProvider = ""
+    @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
     let openProfile: () -> Void
@@ -443,15 +571,51 @@ private struct HomeTab: View {
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
     private var roomsEndpoint: String { "\(normalizedBaseURL)/api/rooms?source=app&sort=\(roomSortMode.rawValue)" }
-    private var filteredRooms: [RoomSummary] {
+    private var filteredServerSummaries: [HomeServerSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return rooms }
-        return rooms.filter { room in
-            room.name.lowercased().contains(query)
-            || room.description.lowercased().contains(query)
-            || room.serverTitle.lowercased().contains(query)
-            || room.serverDomain.lowercased().contains(query)
-            || room.serverSource.lowercased().contains(query)
+        let summaries = groupedServerSummaries
+        guard !query.isEmpty else { return summaries }
+        return summaries.filter { server in
+            server.name.lowercased().contains(query)
+            || server.baseURL.lowercased().contains(query)
+            || server.rooms.contains(where: { room in
+                room.name.lowercased().contains(query)
+                || room.description.lowercased().contains(query)
+                || room.serverTitle.lowercased().contains(query)
+                || room.serverDomain.lowercased().contains(query)
+                || room.serverSource.lowercased().contains(query)
+            })
+        }
+    }
+
+    private var groupedServerSummaries: [HomeServerSummary] {
+        let grouped = Dictionary(grouping: rooms) { room in
+            canonicalServerIdentity(
+                baseURL: room.serverApiBase.isEmpty ? normalizedBaseURL : room.serverApiBase,
+                room: room
+            )
+        }
+
+        return grouped.compactMap { key, serverRooms in
+            guard let first = serverRooms.first else { return nil }
+            let resolvedBase = normalizeBaseURL(first.serverApiBase.isEmpty ? normalizedBaseURL : first.serverApiBase)
+            let sortedRooms = serverRooms.sorted { lhs, rhs in
+                if lhs.userCount == rhs.userCount {
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+                return lhs.userCount > rhs.userCount
+            }
+            return HomeServerSummary(
+                id: key,
+                name: displayServerName(room: first, fallbackBase: resolvedBase),
+                baseURL: resolvedBase,
+                roomCount: sortedRooms.count,
+                totalUsers: sortedRooms.reduce(0) { $0 + $1.userCount },
+                rooms: sortedRooms
+            )
+        }
+        .sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }
 
@@ -473,11 +637,6 @@ private struct HomeTab: View {
                                 openProfile()
                             }
                             .buttonStyle(.borderedProminent)
-
-                            Button("Servers") {
-                                openServers()
-                            }
-                            .buttonStyle(.bordered)
 
                             Button("Leave Room") {
                                 roomState.requestLeaveActiveRoom()
@@ -515,25 +674,20 @@ private struct HomeTab: View {
                     }
                 }
 
-                Section("Rooms") {
-                    Text("Search by room name, server name, or server domain. Tap a room to join. Use Servers to browse connected or federated servers, or connect to a private server manually.")
+                Section("Servers") {
+                    Text("Tap a server to browse only that server’s rooms. Use Federated Rooms for one combined room browser across all trusted servers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
-                    TextField("Search rooms or server names", text: $searchText)
+                    TextField("Search servers or room names", text: $searchText)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Search rooms or servers")
 
                     HStack {
-                        Button("Servers") {
-                            openServers()
-                        }
-                        .buttonStyle(.borderedProminent)
-
                         Button("Profile") {
                             openProfile()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
                     }
 
                     Picker("Sort Rooms", selection: $roomSortMode) {
@@ -552,26 +706,28 @@ private struct HomeTab: View {
                             Text("Loading rooms…")
                                 .foregroundStyle(.secondary)
                         }
-                    } else if filteredRooms.isEmpty {
-                        Text("No rooms found yet.")
+                    } else if filteredServerSummaries.isEmpty {
+                        Text("No servers found yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(filteredRooms) { room in
-                            Button {
-                                openRoom(room, action: "join")
-                            } label: {
-                                RoomRow(room: room)
+                        ForEach(filteredServerSummaries) { server in
+                            NavigationLink(value: server) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(server.name)
+                                        .font(.headline)
+                                    Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(server.totalUsers) users")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 4)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("Double tap to join. Additional actions are available for preview and sharing.")
-                            .accessibilityAction(named: Text("Join")) { openRoom(room, action: "join") }
-                            .accessibilityAction(named: Text("Preview")) { openRoom(room, action: "preview") }
-                            .accessibilityAction(named: Text("Share")) { shareRoom(room) }
+                            .accessibilityLabel("\(server.name), \(server.roomCount) rooms, \(server.totalUsers) users")
+                            .accessibilityHint("Double tap to browse rooms on this server.")
                         }
                     }
                 }
             }
-            .navigationTitle("VoiceLink")
+            .navigationTitle("Servers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if isAdmin {
@@ -597,8 +753,17 @@ private struct HomeTab: View {
             .onChange(of: roomSortMode) { _ in
                 Task { await refreshRooms() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { _ in
+                Task { await refreshRooms() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRoomLeft)) { _ in
+                Task { await refreshRooms() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRoomUsersUpdated)) { _ in
+                Task { await refreshRooms() }
+            }
             .sheet(item: $activeSession) { session in
-                RoomSessionView(destination: session)
+                RoomSessionView(destination: session, roomState: roomState)
             }
             .sheet(item: $activePreview) { preview in
                 RoomPreviewView(destination: preview)
@@ -618,12 +783,23 @@ private struct HomeTab: View {
             .sheet(isPresented: $showAdmin) {
                 AdminTabView(serverURL: $serverURL)
             }
+            .navigationDestination(for: HomeServerSummary.self) { server in
+                HomeServerRoomsView(
+                    server: server,
+                    clientVisibleOnIOS: clientVisibility.ios,
+                    onOpenRoom: { room, action in openRoom(room, action: action) },
+                    onShareRoom: { room in shareRoom(room) }
+                )
+            }
         }
     }
 
     private func openRoom(_ room: RoomSummary, action: String, bypassGuestPrompt: Bool = false) {
         guard clientVisibility.ios else { return }
         guard activeSession == nil, activePreview == nil else { return }
+        let resolvedRoomBase = room.serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? normalizedBaseURL
+            : normalizeBaseURL(room.serverApiBase)
         if action == "join" {
             if !bypassGuestPrompt && authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -636,8 +812,13 @@ private struct HomeTab: View {
                 roomId: room.id,
                 roomName: room.name,
                 roomDescription: room.description,
-                baseURL: normalizedBaseURL,
-                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName
+                baseURL: resolvedRoomBase,
+                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
+                backgroundStream: room.backgroundStream,
+                backgroundStreamVolume: room.streamVolume,
+                showChatByDefault: room.showChatInIOS,
+                chatMessageOrder: room.iosChatMessageOrder,
+                chatMessageLimit: room.iosChatMessageLimit
             )
             return
         }
@@ -647,16 +828,19 @@ private struct HomeTab: View {
             roomId: room.id,
             roomName: room.name,
             roomDescription: room.description,
-            baseURL: normalizedBaseURL,
+            baseURL: resolvedRoomBase,
             room: room
         )
     }
 
     private func shareRoom(_ room: RoomSummary) {
+        let resolvedBase = room.serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? normalizedBaseURL
+            : normalizeBaseURL(room.serverApiBase)
         let shareBase = room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? normalizedBaseURL
             : "https://\(room.serverDomain)"
-        guard let url = URL(string: "\(shareBase)/?room=\(room.id)") else { return }
+        guard let url = URL(string: "\(room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? resolvedBase : shareBase)/?room=\(room.id)") else { return }
         openURL(url)
     }
 
@@ -669,26 +853,13 @@ private struct HomeTab: View {
             return
         }
 
-        guard let url = URL(string: roomsEndpoint) else {
-            errorMessage = "Invalid server URL."
-            rooms = []
-            return
-        }
         if !isLoading {
             isLoading = true
         }
         errorMessage = ""
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 12
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                errorMessage = "Server returned status \(http.statusCode)."
-                rooms = []
-            } else {
-                let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
-                rooms = deduplicateHomeRooms(decodedRooms, fallbackBase: normalizedBaseURL)
-            }
+            let (decodedRooms, resolvedBase) = try await fetchRoomsWithFallback(sortMode: roomSortMode, preferredBase: normalizedBaseURL)
+            rooms = deduplicateHomeRooms(decodedRooms, fallbackBase: resolvedBase)
         } catch {
             rooms = []
             errorMessage = "Could not load rooms. Check server URL and network."
@@ -800,9 +971,68 @@ private struct RoomRow: View {
     }
 }
 
+private struct HomeServerSummary: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let baseURL: String
+    let roomCount: Int
+    let totalUsers: Int
+    let rooms: [RoomSummary]
+}
+
+private struct HomeServerRoomsView: View {
+    let server: HomeServerSummary
+    let clientVisibleOnIOS: Bool
+    let onOpenRoom: (RoomSummary, String) -> Void
+    let onShareRoom: (RoomSummary) -> Void
+
+    var body: some View {
+        List {
+            Section("Server") {
+                LabeledContent("Name", value: server.name)
+                LabeledContent("Rooms", value: "\(server.roomCount)")
+                LabeledContent("Users", value: "\(server.totalUsers)")
+            }
+
+            Section("Rooms") {
+                if !clientVisibleOnIOS {
+                    Text("Rooms are hidden on iOS by this server’s policy.")
+                        .foregroundStyle(.secondary)
+                } else if server.rooms.isEmpty {
+                    Text("No rooms are visible on this server right now.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(server.rooms) { room in
+                        Button {
+                            onOpenRoom(room, "join")
+                        } label: {
+                            RoomRow(room: room)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Room Details") { onOpenRoom(room, "details") }
+                            Button("Join Room") { onOpenRoom(room, "join") }
+                            Button("Preview Room") { onOpenRoom(room, "preview") }
+                            Button("Share Room") { onShareRoom(room) }
+                        }
+                        .accessibilityHint("Double tap to join. Extra actions are available for details, preview, and sharing.")
+                        .accessibilityAction(named: Text("Room Details")) { onOpenRoom(room, "details") }
+                        .accessibilityAction(named: Text("Join Room")) { onOpenRoom(room, "join") }
+                        .accessibilityAction(named: Text("Preview Room")) { onOpenRoom(room, "preview") }
+                        .accessibilityAction(named: Text("Share Room")) { onShareRoom(room) }
+                    }
+                }
+            }
+        }
+        .navigationTitle(server.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 private struct FederationTab: View {
     @AppStorage("voicelink.displayName") private var displayName = ""
     @Binding var serverURL: String
+    @ObservedObject var roomState: IOSRoomMessagingState
     @State private var roomGroups: [FederatedRoomGroup] = []
     @State private var isLoading = false
     @State private var errorMessage = ""
@@ -826,7 +1056,7 @@ private struct FederationTab: View {
                 }
 
                 Section("Servers") {
-                    LabeledContent("Current Server", value: normalizedBaseURL)
+                    LabeledContent("Current Server", value: displayServerName(baseURL: normalizedBaseURL))
                     LabeledContent("Authentication", value: currentAuthenticationStatus())
                     LabeledContent("Connected Servers", value: "\(trustedServers.count + 1)")
 
@@ -836,7 +1066,7 @@ private struct FederationTab: View {
                     } else {
                         ForEach(trustedServers, id: \.self) { server in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(server)
+                                Text(displayServerName(baseURL: server))
                                 Text("Public server available for connection")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -889,7 +1119,7 @@ private struct FederationTab: View {
                     }
                 }
             }
-            .navigationTitle("Federation")
+            .navigationTitle("Federated Rooms")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: FederatedRoomGroup.self) { group in
                 FederationRoomChoicesView(group: group) { choice, action in
@@ -899,7 +1129,7 @@ private struct FederationTab: View {
             .onAppear { Task { await refreshRooms() } }
             .refreshable { await refreshRooms() }
             .sheet(item: $activeSession) { session in
-                RoomSessionView(destination: session)
+                RoomSessionView(destination: session, roomState: roomState)
             }
             .sheet(item: $activePreview) { preview in
                 RoomPreviewView(destination: preview)
@@ -916,7 +1146,12 @@ private struct FederationTab: View {
                 roomName: choice.room.name,
                 roomDescription: choice.room.description,
                 baseURL: choice.baseURL,
-                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName
+                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
+                backgroundStream: choice.room.backgroundStream,
+                backgroundStreamVolume: choice.room.streamVolume,
+                showChatByDefault: choice.room.showChatInIOS,
+                chatMessageOrder: choice.room.iosChatMessageOrder,
+                chatMessageLimit: choice.room.iosChatMessageLimit
             )
             return
         }
@@ -956,25 +1191,53 @@ private struct FederationTab: View {
     }
 
     private func fetchFederationBases() async -> [String] {
-        var bases: [String] = [normalizedBaseURL]
-        guard let statusURL = URL(string: "\(normalizedBaseURL)/api/federation/status") else {
-            return bases
-        }
-        var request = URLRequest(url: statusURL)
-        request.timeoutInterval = 8
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return bases
+        var discovered = iOSMainAPIBaseCandidates(preferredBase: normalizedBaseURL)
+        var index = 0
+        while index < discovered.count {
+            let base = discovered[index]
+            index += 1
+
+            guard let statusURL = URL(string: "\(base)/api/federation/status") else {
+                continue
             }
-            let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-            let trusted = (raw["trustedServers"] as? [String]) ?? []
-            let normalizedTrusted = trusted.map { normalizeBaseURL($0) }
-            bases.append(contentsOf: normalizedTrusted)
-        } catch {
-            // Keep base list with current server only.
+
+            var request = URLRequest(url: statusURL)
+            request.timeoutInterval = 8
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    continue
+                }
+                let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+                let trusted = (raw["trustedServers"] as? [String]) ?? []
+                for entry in trusted {
+                    let normalizedTrusted = normalizeBaseURL(entry)
+                    if !discovered.contains(normalizedTrusted) {
+                        discovered.append(normalizedTrusted)
+                    }
+                }
+            } catch {
+                continue
+            }
         }
-        return Array(Set(bases)).sorted()
+
+        var visibleBases: [String] = []
+        for base in discovered {
+            let visibility = await fetchClientVisibility(baseURL: base)
+            if visibility.ios {
+                visibleBases.append(normalizeBaseURL(base))
+            }
+        }
+
+        if visibleBases.isEmpty {
+            visibleBases = [normalizedBaseURL]
+        }
+
+        var seen = Set<String>()
+        return visibleBases.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }.sorted {
+            displayServerName(baseURL: $0).localizedCaseInsensitiveCompare(displayServerName(baseURL: $1)) == .orderedAscending
+        }
     }
 
     private func currentAuthenticationStatus() -> String {
@@ -987,7 +1250,7 @@ private struct FederationTab: View {
         try await withThrowingTaskGroup(of: [(RoomSummary, String)].self) { group in
             for base in bases {
                 group.addTask {
-                    let endpoint = "\(base)/api/rooms?source=app&sort=activity"
+                    let endpoint = "\(base)/api/rooms?source=app&client=ios&sort=activity"
                     guard let url = URL(string: endpoint) else { return [] }
                     var request = URLRequest(url: url)
                     request.timeoutInterval = 12
@@ -1076,18 +1339,22 @@ private struct FederationRoomChoicesView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button("Join") { onOpen(choice, "join") }
+                            Button("Details") { onOpen(choice, "details") }
                                 .buttonStyle(.borderedProminent)
+                            Button("Join") { onOpen(choice, "join") }
+                                .buttonStyle(.bordered)
                             Button("Preview") { onOpen(choice, "preview") }
                                 .buttonStyle(.bordered)
                         }
                     }
                     .contextMenu {
+                        Button("Room Details") { onOpen(choice, "details") }
                         Button("Join Room") { onOpen(choice, "join") }
                         Button("Preview Room") { onOpen(choice, "preview") }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(choice.room.userCount) users")
+                    .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
                     .accessibilityAction(named: Text("Preview Room")) { onOpen(choice, "preview") }
                 }
@@ -1151,13 +1418,25 @@ private struct MessagesTab: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(roomState.directTargets) { target in
-                            HStack {
-                                Text(target.name)
-                                Spacer()
-                                if roomState.selectedDirectTarget?.id == target.id {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
+                            Button {
+                                roomState.selectedDirectTarget = target
+                                roomState.selectedProfileName = target.name
+                                roomState.statusText = "Selected \(target.name)."
+                            } label: {
+                                HStack {
+                                    Text(target.name)
+                                    Spacer()
+                                    if roomState.selectedDirectTarget?.id == target.id {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
                                 }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Double tap to select this user. Use the direct message field below to send a private message.")
+                            .accessibilityAction(named: Text("Select User")) {
+                                roomState.selectedDirectTarget = target
+                                roomState.selectedProfileName = target.name
                             }
                         }
                     }
@@ -1424,11 +1703,18 @@ private struct SettingsTab: View {
     @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
     @AppStorage("voicelink.authToken") private var authToken = ""
     @AppStorage("voicelink.displayName") private var displayName = ""
+    @AppStorage("voicelink.authProvider") private var authProvider = ""
+    @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
     @AppStorage("voicelink.autoSendDiagnostics") private var autoSendDiagnostics = true
     @AppStorage("voicelink.shareCrashReports") private var shareCrashReports = true
     @State private var diagnosticsStatus = ""
     @State private var submittingDiagnostics = false
     @State private var showAuthOptions = false
+    @State private var showNativeAccountSignIn = false
+
+    private var isSignedIn: Bool {
+        !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
@@ -1509,10 +1795,28 @@ private struct SettingsTab: View {
                 }
 
                 Section("Account") {
-                    Button("Quick Pair or Sign In") {
+                    if isSignedIn {
+                        LabeledContent("Signed In As", value: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "VoiceLink Account" : displayName)
+                        Button("Manage Account Sign In") {
+                            showNativeAccountSignIn = true
+                        }
+                        Button("Sign Out", role: .destructive) {
+                            authToken = ""
+                            displayName = ""
+                            authProvider = ""
+                            authUserJSON = ""
+                        }
+                    } else {
+                        Button("Account Sign In") {
+                            showNativeAccountSignIn = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    Button(isSignedIn ? "Other Sign-In Methods" : "Quick Pair or Sign In") {
                         showAuthOptions = true
                     }
-                    Text("VoiceLink signs in through the server's internal account system first and keeps supported linked login methods attached in the background.")
+                    Text("Native account sign-in now uses the server login API directly. VoiceLink account sign-in stays local to the app, while Quick Pair and web sign-in are still available for other server flows.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1537,7 +1841,7 @@ private struct SettingsTab: View {
                 Button("Quick Pair") {
                     openServers()
                 }
-                Button("Sign In") {
+                Button("Server Web Sign In") {
                     openAuthAction("login")
                 }
                 Button("Mastodon") {
@@ -1549,6 +1853,9 @@ private struct SettingsTab: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Quick Pair lets you link this device to another signed-in device or enter a server pairing or invite code from a server admin.")
+            }
+            .sheet(isPresented: $showNativeAccountSignIn) {
+                IOSAccountSignInView(serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"))
             }
         }
     }
@@ -1592,6 +1899,278 @@ private struct SettingsTab: View {
     }
 }
 
+private struct IOSTwoFactorMethod: Identifiable, Hashable {
+    let type: String
+    let name: String
+    let supportsDelivery: Bool
+
+    var id: String { type }
+
+    static func parse(_ raw: Any?) -> [IOSTwoFactorMethod] {
+        guard let entries = raw as? [Any] else { return [] }
+        return entries.compactMap { entry in
+            guard let dict = entry as? [String: Any] else { return nil }
+            let type = String(describing: dict["type"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !type.isEmpty else { return nil }
+            let fallbackName = type.replacingOccurrences(of: "-", with: " ").capitalized
+            return IOSTwoFactorMethod(
+                type: type,
+                name: String(describing: dict["name"] ?? fallbackName),
+                supportsDelivery: (dict["supportsDelivery"] as? Bool) ?? ["email", "sms", "voice"].contains(type)
+            )
+        }
+    }
+}
+
+private struct IOSAccountSignInView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("voicelink.authToken") private var authToken = ""
+    @AppStorage("voicelink.displayName") private var displayName = ""
+    @AppStorage("voicelink.authProvider") private var authProvider = ""
+    @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
+
+    let serverURL: String
+
+    @State private var identity = ""
+    @State private var password = ""
+    @State private var twoFactorCode = ""
+    @State private var needsTwoFactor = false
+    @State private var isLoading = false
+    @State private var isSendingCode = false
+    @State private var statusMessage = ""
+    @State private var availableMethods: [IOSTwoFactorMethod] = []
+    @State private var selectedMethod = "email"
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("VoiceLink Account") {
+                    TextField("Email, username, or portal account", text: $identity)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .accessibilityLabel("Identity")
+                    SecureField("Password", text: $password)
+                        .accessibilityLabel("Password")
+                }
+
+                if needsTwoFactor {
+                    Section("Verification") {
+                        if !availableMethods.isEmpty {
+                            Picker("Delivery Method", selection: $selectedMethod) {
+                                ForEach(availableMethods) { method in
+                                    Text(method.name).tag(method.type)
+                                }
+                            }
+                            .accessibilityLabel("Verification delivery method")
+                        }
+
+                        if availableMethods.contains(where: { $0.supportsDelivery }) {
+                            Button(sendButtonTitle) {
+                                requestTwoFactorCode()
+                            }
+                            .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isSendingCode)
+                        }
+
+                        TextField("Verification code", text: $twoFactorCode)
+                            .keyboardType(.numberPad)
+                            .textContentType(.oneTimeCode)
+                            .accessibilityLabel("Verification code")
+                    }
+                }
+
+                if !statusMessage.isEmpty {
+                    Section("Status") {
+                        Text(statusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Actions") {
+                    Button(needsTwoFactor ? "Verify and Sign In" : "Sign In") {
+                        signIn()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isLoading)
+
+                    if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button("Sign Out", role: .destructive) {
+                            authToken = ""
+                            displayName = ""
+                            authProvider = ""
+                            authUserJSON = ""
+                            statusMessage = "Signed out."
+                            needsTwoFactor = false
+                            twoFactorCode = ""
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Account Sign In")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var sendButtonTitle: String {
+        switch selectedMethod {
+        case "voice":
+            return "Call Me the Code"
+        case "sms":
+            return "Text Me the Code"
+        default:
+            return "Send Code"
+        }
+    }
+
+    private func signIn() {
+        isLoading = true
+        statusMessage = needsTwoFactor ? "Verifying code..." : "Signing in..."
+        attemptSignIn(providers: ["local", "whmcs"])
+    }
+
+    private func attemptSignIn(providers: [String]) {
+        guard let provider = providers.first,
+              let url = URL(string: "\(serverURL)/api/auth/\(provider)/login") else {
+            isLoading = false
+            statusMessage = "Invalid server URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "identity": identity,
+            "password": password
+        ]
+        let trimmedCode = twoFactorCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCode.isEmpty {
+            body["twoFactorCode"] = trimmedCode
+        }
+        if provider == "whmcs" {
+            body["portalSite"] = "devine-creations.com"
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    isLoading = false
+                    statusMessage = error.localizedDescription
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    isLoading = false
+                    statusMessage = "Authentication failed."
+                    return
+                }
+
+                if (json["requires2FA"] as? Bool) == true {
+                    isLoading = false
+                    needsTwoFactor = true
+                    availableMethods = IOSTwoFactorMethod.parse(json["availableMethods"])
+                    if let first = availableMethods.first {
+                        selectedMethod = first.type
+                    }
+                    statusMessage = (json["error"] as? String) ?? (json["message"] as? String) ?? "Verification code required."
+                    return
+                }
+
+                if (json["success"] as? Bool) == true,
+                   let user = json["user"] as? [String: Any] {
+                    authToken = String(describing: json["token"] ?? json["accessToken"] ?? user["accessToken"] ?? "")
+                    let resolvedName = String(
+                        describing: user["displayName"] ?? user["fullName"] ?? user["username"] ?? user["email"] ?? "VoiceLink User"
+                    ).trimmingCharacters(in: .whitespacesAndNewlines)
+                    displayName = resolvedName
+                    let resolvedProvider = String(describing: user["authProvider"] ?? provider)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    authProvider = resolvedProvider.isEmpty ? provider : resolvedProvider
+                    authUserJSON = encodeAuthUserPayload(user)
+                    statusMessage = "Signed in as \(resolvedName)."
+                    needsTwoFactor = false
+                    twoFactorCode = ""
+                    availableMethods = []
+                    Task { @MainActor in
+                        await IOSPushNotificationManager.shared.syncRegistrationIfNeeded()
+                    }
+                    isLoading = false
+                    return
+                }
+
+                let message = (json["error"] as? String) ?? (json["message"] as? String) ?? "Authentication failed."
+                let isRetryable = provider == "local" && providers.count > 1 && {
+                    let lowered = message.lowercased()
+                    return lowered.contains("invalid credentials")
+                        || lowered.contains("account not found")
+                        || lowered.contains("user not found")
+                        || lowered.contains("unknown user")
+                }()
+                if isRetryable {
+                    attemptSignIn(providers: Array(providers.dropFirst()))
+                    return
+                }
+
+                isLoading = false
+                statusMessage = message
+            }
+        }.resume()
+    }
+
+    private func requestTwoFactorCode() {
+        guard let url = URL(string: "\(serverURL)/api/auth/local/2fa/challenge") else {
+            statusMessage = "Invalid server URL."
+            return
+        }
+
+        isSendingCode = true
+        statusMessage = "Sending verification code..."
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "identity": identity,
+            "password": password,
+            "method": selectedMethod
+        ])
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            DispatchQueue.main.async {
+                isSendingCode = false
+                if let error {
+                    statusMessage = error.localizedDescription
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    statusMessage = "Unable to send verification code."
+                    return
+                }
+
+                availableMethods = IOSTwoFactorMethod.parse(json["availableMethods"])
+                if (json["success"] as? Bool) == true {
+                    let hint = String(describing: json["hint"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if hint.isEmpty {
+                        statusMessage = "\(sendButtonTitle) requested."
+                    } else {
+                        statusMessage = "\(sendButtonTitle) requested for \(hint)."
+                    }
+                } else {
+                    statusMessage = (json["error"] as? String) ?? (json["message"] as? String) ?? "Unable to send verification code."
+                }
+            }
+        }.resume()
+    }
+}
+
 private func normalizeBaseURL(_ rawURL: String) -> String {
     let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
@@ -1603,6 +2182,40 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
     return "https://\(trimmed)"
 }
 
+private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
+    var candidates: [String] = []
+    let preferred = normalizeBaseURL(preferredBase)
+    if !preferred.isEmpty {
+        candidates.append(preferred)
+    }
+    candidates.append("https://node2.voicelink.devinecreations.net")
+    candidates.append("https://voicelink.devinecreations.net")
+
+    var seen = Set<String>()
+    return candidates.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }
+}
+
+private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: String) async throws -> ([RoomSummary], String) {
+    var lastError: Error?
+    for base in iOSMainAPIBaseCandidates(preferredBase: preferredBase) {
+        let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
+        guard let url = URL(string: endpoint) else { continue }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                continue
+            }
+            let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+            return (decodedRooms, normalizeBaseURL(base))
+        } catch {
+            lastError = error
+        }
+    }
+    throw lastError ?? URLError(.cannotConnectToHost)
+}
+
 private func canonicalRoomName(_ name: String) -> String {
     let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return lowered.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -1610,17 +2223,75 @@ private func canonicalRoomName(_ name: String) -> String {
 
 private func displayServerName(room: RoomSummary, fallbackBase: String) -> String {
     let trimmedTitle = room.serverTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !trimmedTitle.isEmpty {
+    if !trimmedTitle.isEmpty, !isIPAddressValue(trimmedTitle) {
         return trimmedTitle
     }
     let trimmedDomain = room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !trimmedDomain.isEmpty {
+    if !trimmedDomain.isEmpty, !isIPAddressValue(trimmedDomain) {
         return trimmedDomain
     }
-    if let host = URL(string: fallbackBase)?.host, !host.isEmpty {
-        return host
+    let canonical = canonicalServerIdentity(baseURL: fallbackBase, room: room)
+    switch canonical {
+    case "voicelink.devinecreations.net":
+        return "VoiceLink Main"
+    case "node2.voicelink.devinecreations.net":
+        return "VoiceLink Community"
+    default:
+        if let host = URL(string: fallbackBase)?.host, !host.isEmpty, !isIPAddressValue(host) {
+            return host
+        }
+        if let host = URL(string: canonical)?.host, !host.isEmpty, !isIPAddressValue(host) {
+            return host
+        }
     }
     return room.serverSource.isEmpty ? "Unknown Server" : room.serverSource.capitalized
+}
+
+private func displayServerName(baseURL: String) -> String {
+    switch canonicalServerIdentity(baseURL: baseURL, room: nil) {
+    case "voicelink.devinecreations.net":
+        return "VoiceLink Main"
+    case "node2.voicelink.devinecreations.net":
+        return "VoiceLink Community"
+    default:
+        if let host = URL(string: normalizeBaseURL(baseURL))?.host,
+           !host.isEmpty,
+           !isIPAddressValue(host) {
+            return host
+        }
+        return "Unknown Server"
+    }
+}
+
+private func canonicalServerIdentity(baseURL: String, room: RoomSummary?) -> String {
+    let baseHost = URL(string: normalizeBaseURL(baseURL))?.host?.lowercased() ?? ""
+    let roomDomain = room?.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let roomTitle = room?.serverTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let roomSource = room?.serverSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+
+    let candidates = [baseHost, roomDomain, roomTitle, roomSource].filter { !$0.isEmpty }
+    if candidates.contains(where: { ["64.20.46.178", "voicelink.devinecreations.net", "devinecreations.net"].contains($0) || $0.contains("voicelink main") }) {
+        return "voicelink.devinecreations.net"
+    }
+    if candidates.contains(where: { ["64.20.46.179", "node2.voicelink.devinecreations.net"].contains($0) || $0.contains("community") || $0.contains("node2") }) {
+        return "node2.voicelink.devinecreations.net"
+    }
+
+    if !roomDomain.isEmpty, !isIPAddressValue(roomDomain) {
+        return roomDomain
+    }
+    if !baseHost.isEmpty, !isIPAddressValue(baseHost) {
+        return baseHost
+    }
+    if !roomSource.isEmpty {
+        return roomSource
+    }
+    return normalizeBaseURL(baseURL)
+}
+
+private func isIPAddressValue(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.range(of: #"^\d{1,3}(?:\.\d{1,3}){3}$"#, options: .regularExpression) != nil
 }
 
 private func displayVisibilityLabel(_ raw: String) -> String {
@@ -1680,4 +2351,13 @@ private func fetchClientVisibility(baseURL: String) async -> ClientVisibilitySet
     } catch {
         return .allVisible
     }
+}
+
+private func encodeAuthUserPayload(_ payload: [String: Any]) -> String {
+    guard JSONSerialization.isValidJSONObject(payload),
+          let data = try? JSONSerialization.data(withJSONObject: payload),
+          let json = String(data: data, encoding: .utf8) else {
+        return ""
+    }
+    return json
 }
