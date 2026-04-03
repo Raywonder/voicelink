@@ -1,10 +1,10 @@
-VoiceLink TestFlight Build 46
+VoiceLink TestFlight Build 47
 
 Before testing, update to the newest TestFlight build:
 - Open TestFlight.
 - Select VoiceLink.
 - Tap Update if available.
-- Confirm the installed build number is 46 before retesting.
+- Confirm the installed build number is 47 before retesting.
 - If you still see an older expired build, pull down to refresh TestFlight and reopen VoiceLink from the updated build.
 
 Focus on these changes:
@@ -27,6 +27,7 @@ Audio and room checks:
 - Try joining while room media is already playing.
 - Preview room audio and confirm the preview closes on its own after a short review window.
 - Confirm people in room, device names/types, audio mute/output state, messages, and transcripts still update.
+- Turn on user audio state and confirm each person shows a live level meter while speaking; use Monitor to solo one user and confirm only that user's relay audio is heard.
 - In a room, double tap a user row to open that user's profile.
 - Open a direct message from the user actions menu and confirm it appears in its own conversation window.
 - Press and hold a user row to set or clear the whisper target, then confirm relay playback ducks while whisper mode is active.
@@ -43,6 +44,6 @@ UI checks:
 If something breaks, include:
 - device model
 - iOS version
-- build 46
+- build 47
 - server used
 - exact steps and result
