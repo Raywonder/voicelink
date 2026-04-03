@@ -18,7 +18,13 @@ node_modules/
 *.tmp
 
 # Local runtime state (admin-manageable via UI/API)
+data/local-auth-users.json
 data/rooms.json
+data/scheduler/
+data/uploads/
+voicelink-app/data/deploy.json
+server/tools/__pycache__/
+source/server/tools/__pycache__/
 
 # Large archives
 releases.zip
@@ -28,6 +34,10 @@ releases.zip
 build/
 dist/
 *.zip
+swift-native/VoiceLinkNative/VoiceLink.app/
+swift-native/VoiceLinkNative/VoiceLink-release.app/
+swift-native/VoiceLinkNative/build-temp/
+swift-native/VoiceLinkNative/build-universal/
 
 # Windows build artifacts
 windows-native/obj/
