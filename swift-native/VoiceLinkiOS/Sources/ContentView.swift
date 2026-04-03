@@ -237,6 +237,7 @@ final class IOSRoomMessagingState: ObservableObject {
         if !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
+            directTargets.removeAll()
             roomTranscripts.removeAll()
         }
         if !roomName.isEmpty {
@@ -265,17 +266,19 @@ final class IOSRoomMessagingState: ObservableObject {
         }
         guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
         guard let rawUsers = info["users"] as? [Any] else { return }
-        let mapped = rawUsers.compactMap { entry -> IOSDirectMessageTarget? in
+        let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in
             guard let user = entry as? [String: Any] else { return nil }
             let id = String(describing: user["id"] ?? user["userId"] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let rawName = String(describing: user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty else { return nil }
-            let fallbackName = id.count > 8 ? "User \(id.prefix(8))" : "User \(id)"
+            let resolvedId = id.isEmpty
+                ? "\(roomId.isEmpty ? activeRoomId : roomId)|\(rawName.isEmpty ? "user-\(index)" : rawName.lowercased())"
+                : id
+            let fallbackName = resolvedId.count > 8 ? "User \(resolvedId.prefix(8))" : "User \(resolvedId)"
             let name = rawName.isEmpty ? fallbackName : rawName
             return IOSDirectMessageTarget(
-                id: id,
+                id: resolvedId,
                 name: name,
                 isMuted: (user["muted"] as? Bool) ?? (user["isMuted"] as? Bool) ?? false,
                 isDeafened: (user["deafened"] as? Bool) ?? (user["isDeafened"] as? Bool) ?? false,
@@ -289,6 +292,9 @@ final class IOSRoomMessagingState: ObservableObject {
                 clientVersion: String(describing: user["clientVersion"] ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             )
+        }
+        if mapped.isEmpty, isInRoom, !directTargets.isEmpty {
+            return
         }
         if isInRoom || !mapped.isEmpty {
             directTargets = mapped.sorted { lhs, rhs in
@@ -403,6 +409,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let userCount: Int
     let visibility: String
     let accessType: String
+    let locked: Bool
     let serverSource: String
     let serverTitle: String
     let serverApiBase: String
@@ -417,7 +424,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let iosChatMessageLimit: Int
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, memberCount, visibility, accessType, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
+        case id, name, description, users, userCount, memberCount, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -431,6 +438,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         userCount = explicitUserCount ?? users ?? memberCount ?? 0
         visibility = (try? container.decode(String.self, forKey: .visibility)) ?? "public"
         accessType = (try? container.decode(String.self, forKey: .accessType)) ?? "open"
+        locked = (try? container.decode(Bool.self, forKey: .locked)) ?? false
         serverSource = (try? container.decode(String.self, forKey: .serverSource)) ?? "unknown"
         serverTitle = (try? container.decode(String.self, forKey: .serverTitle)) ?? ""
         serverApiBase = (try? container.decode(String.self, forKey: .serverApiBase)) ?? ""
@@ -505,6 +513,13 @@ private struct AnyRoomUserValue: Decodable, Hashable {
 }
 
 private struct FederatedRoomChoice: Identifiable, Hashable {
+    let id: String
+    let room: RoomSummary
+    let serverLabel: String
+    let baseURL: String
+}
+
+private struct RoomDetailsDestination: Identifiable, Hashable {
     let id: String
     let room: RoomSummary
     let serverLabel: String
@@ -587,6 +602,7 @@ private struct HomeTab: View {
     @State private var errorMessage = ""
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
+    @State private var activeDetails: RoomDetailsDestination?
     @State private var pendingGuestJoinRoom: RoomSummary?
     @State private var showGuestJoinPrompt = false
     @State private var isAdmin = false
@@ -801,6 +817,9 @@ private struct HomeTab: View {
             .sheet(item: $activePreview) { preview in
                 RoomPreviewView(destination: preview)
             }
+            .sheet(item: $activeDetails) { details in
+                RoomDetailsView(destination: details)
+            }
             .sheet(isPresented: $showGuestJoinPrompt) {
                 GuestJoinPromptView(
                     displayName: $displayName,
@@ -829,10 +848,21 @@ private struct HomeTab: View {
 
     private func openRoom(_ room: RoomSummary, action: String, bypassGuestPrompt: Bool = false) {
         guard clientVisibility.ios else { return }
-        guard activeSession == nil, activePreview == nil else { return }
+        guard activeSession == nil, activePreview == nil, activeDetails == nil else { return }
         let resolvedRoomBase = room.serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? normalizedBaseURL
             : normalizeBaseURL(room.serverApiBase)
+        if action == "details" {
+            activeSession = nil
+            activePreview = nil
+            activeDetails = RoomDetailsDestination(
+                id: "\(resolvedRoomBase)|\(room.id)|details",
+                room: room,
+                serverLabel: displayServerName(room: room, fallbackBase: resolvedRoomBase),
+                baseURL: resolvedRoomBase
+            )
+            return
+        }
         if action == "join" {
             if !bypassGuestPrompt && authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 !iosHasValidGuestDisplayName(displayName) {
@@ -859,6 +889,7 @@ private struct HomeTab: View {
         }
 
         activeSession = nil
+        activeDetails = nil
         activePreview = RoomPreviewDestination(
             roomId: room.id,
             roomName: room.name,
@@ -893,8 +924,11 @@ private struct HomeTab: View {
         }
         errorMessage = ""
         do {
-            let (decodedRooms, resolvedBase) = try await fetchRoomsWithFallback(sortMode: roomSortMode, preferredBase: normalizedBaseURL)
-            rooms = deduplicateHomeRooms(decodedRooms, fallbackBase: resolvedBase)
+            let bases = await fetchVisibleFederationBases(preferredBase: normalizedBaseURL)
+            rooms = deduplicateHomeRooms(
+                try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: roomSortMode),
+                fallbackBase: normalizedBaseURL
+            )
         } catch {
             rooms = []
             errorMessage = "Could not load rooms. Check server URL and network."
@@ -995,14 +1029,14 @@ private struct RoomRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Text("\(room.userCount) users • \(displayVisibilityLabel(room.visibility)) • \(displayAccessTypeLabel(room.accessType))")
+            Text("\(room.userCount) users • \(displayRoomLockLabel(room.locked)) • \(displayVisibilityLabel(room.visibility)) • \(displayAccessTypeLabel(room.accessType))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(room.name), \(room.userCount) users")
-        .accessibilityHint("Tap to join. Preview and share are available as actions.")
+        .accessibilityLabel("\(room.name), \(room.userCount) users, \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))")
+        .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
     }
 }
 
@@ -1040,7 +1074,7 @@ private struct HomeServerRoomsView: View {
                 } else {
                     ForEach(server.rooms) { room in
                         Button {
-                            onOpenRoom(room, "join")
+                            onOpenRoom(room, "details")
                         } label: {
                             RoomRow(room: room)
                         }
@@ -1051,7 +1085,7 @@ private struct HomeServerRoomsView: View {
                             Button("Preview Room") { onOpenRoom(room, "preview") }
                             Button("Share Room") { onShareRoom(room) }
                         }
-                        .accessibilityHint("Double tap to join. Extra actions are available for details, preview, and sharing.")
+                        .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
                         .accessibilityAction(named: Text("Room Details")) { onOpenRoom(room, "details") }
                         .accessibilityAction(named: Text("Join Room")) { onOpenRoom(room, "join") }
                         .accessibilityAction(named: Text("Preview Room")) { onOpenRoom(room, "preview") }
@@ -1065,7 +1099,50 @@ private struct HomeServerRoomsView: View {
     }
 }
 
+private struct RoomDetailsView: View {
+    @Environment(\.dismiss) private var dismiss
+    let destination: RoomDetailsDestination
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Room") {
+                    LabeledContent("Name", value: destination.room.name)
+                    LabeledContent("Server", value: destination.serverLabel)
+                    LabeledContent("Users", value: "\(destination.room.userCount)")
+                    LabeledContent("Lock Status", value: displayRoomLockLabel(destination.room.locked))
+                    LabeledContent("Visibility", value: displayVisibilityLabel(destination.room.visibility))
+                    LabeledContent("Access Type", value: displayAccessTypeLabel(destination.room.accessType))
+                    if !destination.room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(destination.room.description)
+                            .font(.body)
+                    }
+                }
+
+                Section("Server Details") {
+                    LabeledContent("Server", value: destination.serverLabel)
+                    if !destination.room.serverDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(destination.room.serverDescription)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Room Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
 private struct FederationTab: View {
+    @Environment(\.openURL) private var openURL
     @AppStorage("voicelink.displayName") private var displayName = ""
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
@@ -1074,12 +1151,25 @@ private struct FederationTab: View {
     @State private var errorMessage = ""
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
+    @State private var activeDetails: RoomDetailsDestination?
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
-    @State private var trustedServers: [String] = []
-    @State private var manualServerInput = ""
-    @State private var manualCodeInput = ""
+    @State private var searchText = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
+    private var filteredRoomGroups: [FederatedRoomGroup] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return roomGroups }
+        return roomGroups.filter { group in
+            group.displayName.lowercased().contains(query)
+                || group.choices.contains { choice in
+                    choice.serverLabel.lowercased().contains(query)
+                        || choice.room.description.lowercased().contains(query)
+                        || choice.room.serverDescription.lowercased().contains(query)
+                        || choice.room.visibility.lowercased().contains(query)
+                        || choice.room.accessType.lowercased().contains(query)
+                }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -1091,36 +1181,10 @@ private struct FederationTab: View {
                     }
                 }
 
-                Section("Servers") {
-                    LabeledContent("Current Server", value: displayServerName(baseURL: normalizedBaseURL))
-                    LabeledContent("Authentication", value: currentAuthenticationStatus())
-                    LabeledContent("Connected Servers", value: "\(trustedServers.count + 1)")
-
-                    if trustedServers.isEmpty {
-                        Text("No additional public servers are connected right now.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(trustedServers, id: \.self) { server in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(displayServerName(baseURL: server))
-                                Text("Public server available for connection")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-
-                Section("Private Server") {
-                    TextField("Server domain", text: $manualServerInput)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                    TextField("Pairing or invite code (optional)", text: $manualCodeInput)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                    Text("Use this when a private server is not listed publicly. Server admins can provide a pairing or invite code from their server settings.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                Section("Search") {
+                    TextField("Search federated rooms", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Search federated rooms")
                 }
 
                 if isLoading {
@@ -1131,25 +1195,33 @@ private struct FederationTab: View {
                             Text("Federated rooms are hidden on iOS by server settings.")
                                 .foregroundStyle(.secondary)
                         }
-                    } else if roomGroups.isEmpty {
+                    } else if filteredRoomGroups.isEmpty {
                         Section("Rooms") {
                             Text("No federated rooms found.")
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        Section("Rooms Across Servers") {
-                            ForEach(roomGroups) { group in
-                                NavigationLink(value: group) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(group.displayName)
-                                            .font(.headline)
-                                        Text("\(group.totalUsers) users across \(group.choices.count) server\(group.choices.count == 1 ? "" : "s")")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+                        Section("Rooms") {
+                            ForEach(filteredRoomGroups) { group in
+                                Button {
+                                    openGroupDetails(group)
+                                } label: {
+                                    federatedRoomRow(for: group)
                                 }
+                                .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button("Room Details") { openGroupDetails(group) }
+                                    Button("Preview Room") { openFirstChoice(in: group, action: "preview") }
+                                    Button("Join Room") { openFirstChoice(in: group, action: "join") }
+                                    Button("Share Room") { shareFirstChoice(in: group) }
+                                }
+                                .accessibilityElement(children: .combine)
                                 .accessibilityLabel("\(group.displayName), \(group.totalUsers) users across \(group.choices.count) servers")
-                                .accessibilityHint("Double-tap to choose server and join.")
+                                .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
+                                .accessibilityAction(named: Text("Room Details")) { openGroupDetails(group) }
+                                .accessibilityAction(named: Text("Preview Room")) { openFirstChoice(in: group, action: "preview") }
+                                .accessibilityAction(named: Text("Join Room")) { openFirstChoice(in: group, action: "join") }
+                                .accessibilityAction(named: Text("Share Room")) { shareFirstChoice(in: group) }
                             }
                         }
                     }
@@ -1157,11 +1229,6 @@ private struct FederationTab: View {
             }
             .navigationTitle("Federated Rooms")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: FederatedRoomGroup.self) { group in
-                FederationRoomChoicesView(group: group) { choice, action in
-                    openRoom(choice, action: action)
-                }
-            }
             .onAppear { Task { await refreshRooms() } }
             .refreshable { await refreshRooms() }
             .sheet(item: $activeSession) { session in
@@ -1170,11 +1237,25 @@ private struct FederationTab: View {
             .sheet(item: $activePreview) { preview in
                 RoomPreviewView(destination: preview)
             }
+            .sheet(item: $activeDetails) { details in
+                RoomDetailsView(destination: details)
+            }
         }
     }
 
     private func openRoom(_ choice: FederatedRoomChoice, action: String) {
-        guard activeSession == nil, activePreview == nil else { return }
+        guard activeSession == nil, activePreview == nil, activeDetails == nil else { return }
+        if action == "details" {
+            activeSession = nil
+            activePreview = nil
+            activeDetails = RoomDetailsDestination(
+                id: "\(choice.baseURL)|\(choice.room.id)|details",
+                room: choice.room,
+                serverLabel: choice.serverLabel,
+                baseURL: choice.baseURL
+            )
+            return
+        }
         if action == "join" {
             activePreview = nil
             activeSession = RoomSessionDestination(
@@ -1193,6 +1274,7 @@ private struct FederationTab: View {
         }
 
         activeSession = nil
+        activeDetails = nil
         activePreview = RoomPreviewDestination(
             roomId: choice.room.id,
             roomName: choice.room.name,
@@ -1216,9 +1298,10 @@ private struct FederationTab: View {
         defer { isLoading = false }
 
         do {
-            let bases = await fetchFederationBases()
-            trustedServers = bases.filter { $0 != normalizedBaseURL }
-            let allRooms = try await fetchRoomsAcrossServers(bases: bases)
+            let bases = await fetchVisibleFederationBases(preferredBase: normalizedBaseURL)
+            let allRooms = try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: .activity).map { room in
+                (room, room.serverApiBase.isEmpty ? normalizedBaseURL : normalizeBaseURL(room.serverApiBase))
+            }
             roomGroups = groupRooms(allRooms: allRooms, fallbackBase: normalizedBaseURL)
         } catch {
             roomGroups = []
@@ -1226,85 +1309,49 @@ private struct FederationTab: View {
         }
     }
 
-    private func fetchFederationBases() async -> [String] {
-        var discovered = iOSMainAPIBaseCandidates(preferredBase: normalizedBaseURL)
-        var index = 0
-        while index < discovered.count {
-            let base = discovered[index]
-            index += 1
-
-            guard let statusURL = URL(string: "\(base)/api/federation/status") else {
-                continue
-            }
-
-            var request = URLRequest(url: statusURL)
-            request.timeoutInterval = 8
-
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    continue
-                }
-                let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-                let trusted = (raw["trustedServers"] as? [String]) ?? []
-                for entry in trusted {
-                    let normalizedTrusted = normalizeBaseURL(entry)
-                    if !discovered.contains(normalizedTrusted) {
-                        discovered.append(normalizedTrusted)
-                    }
-                }
-            } catch {
-                continue
-            }
-        }
-
-        var visibleBases: [String] = []
-        for base in discovered {
-            let visibility = await fetchClientVisibility(baseURL: base)
-            if visibility.ios {
-                visibleBases.append(normalizeBaseURL(base))
-            }
-        }
-
-        if visibleBases.isEmpty {
-            visibleBases = [normalizedBaseURL]
-        }
-
-        var seen = Set<String>()
-        return visibleBases.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }.sorted {
-            displayServerName(baseURL: $0).localizedCaseInsensitiveCompare(displayServerName(baseURL: $1)) == .orderedAscending
-        }
+    private func openGroupDetails(_ group: FederatedRoomGroup) {
+        guard let choice = group.choices.first else { return }
+        openRoom(choice, action: "details")
     }
 
-    private func currentAuthenticationStatus() -> String {
-        let token = (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? "Guest or signed out" : "Signed in"
+    private func openFirstChoice(in group: FederatedRoomGroup, action: String) {
+        guard let choice = group.choices.first else { return }
+        openRoom(choice, action: action)
     }
 
-    private func fetchRoomsAcrossServers(bases: [String]) async throws -> [(RoomSummary, String)] {
-        try await withThrowingTaskGroup(of: [(RoomSummary, String)].self) { group in
-            for base in bases {
-                group.addTask {
-                    let endpoint = "\(base)/api/rooms?source=app&client=ios&sort=activity"
-                    guard let url = URL(string: endpoint) else { return [] }
-                    var request = URLRequest(url: url)
-                    request.timeoutInterval = 12
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                        return []
-                    }
-                    let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
-                    return rooms.map { ($0, base) }
-                }
-            }
+    private func shareFirstChoice(in group: FederatedRoomGroup) {
+        guard let choice = group.choices.first else { return }
+        let shareBase = choice.room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? choice.baseURL
+            : "https://\(choice.room.serverDomain)"
+        guard let url = URL(string: "\(shareBase)/?room=\(choice.room.id)") else { return }
+        openURL(url)
+    }
 
-            var combined: [(RoomSummary, String)] = []
-            for try await entries in group {
-                combined.append(contentsOf: entries)
+    private func federatedRoomRow(for group: FederatedRoomGroup) -> some View {
+        let primary = group.choices.first?.room
+        let serverNames = group.choices.map(\.serverLabel).prefix(2).joined(separator: ", ")
+        let extraCount = max(0, group.choices.count - 2)
+        let serverSuffix = extraCount > 0 ? "\(serverNames), +\(extraCount)" : serverNames
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(group.displayName)
+                .font(.headline)
+            if let primary, !primary.description.isEmpty {
+                Text(primary.description)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            return combined
+            Text("\(group.totalUsers) users • \(displayRoomLockLabel(primary?.locked ?? false)) • \(displayVisibilityLabel(primary?.visibility ?? "public")) • \(displayAccessTypeLabel(primary?.accessType ?? "open"))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !serverSuffix.isEmpty {
+                Text(serverSuffix)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
+        .padding(.vertical, 4)
     }
 
     private func groupRooms(allRooms: [(RoomSummary, String)], fallbackBase: String) -> [FederatedRoomGroup] {
@@ -1770,6 +1817,7 @@ private struct SettingsTab: View {
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
     @AppStorage("showUserStatusesInRoomList") private var showUserStatusesInRoomList = true
+    @AppStorage("voicelink.ios.showRoomRelayDebugDetails") private var showRoomRelayDebugDetails = false
     @AppStorage("allowVoiceInRoomPreview") private var allowVoiceInRoomPreview = true
     @AppStorage("systemActionNotifications") private var systemActionNotificationsEnabled = true
     @AppStorage("systemActionNotificationSound") private var systemActionNotificationSoundEnabled = true
@@ -1822,6 +1870,7 @@ private struct SettingsTab: View {
 
                 Section("Interface") {
                     Toggle("Show User Statuses in Room Lists", isOn: $showUserStatusesInRoomList)
+                    Toggle("Show Room Relay Debug Details", isOn: $showRoomRelayDebugDetails)
                     Toggle("Allow My Voice in Room Preview", isOn: $allowVoiceInRoomPreview)
                     Toggle("Show Web Frontend Shortcut on Home", isOn: $showWebFrontendShortcutOnHome)
                     Text("Room screens support VoiceOver actions. In a room, use two-finger double-tap to hear who is speaking.")
@@ -2289,6 +2338,83 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
     throw lastError ?? URLError(.cannotConnectToHost)
 }
 
+private func fetchVisibleFederationBases(preferredBase: String) async -> [String] {
+    var discovered = iOSMainAPIBaseCandidates(preferredBase: preferredBase)
+    var index = 0
+
+    while index < discovered.count {
+        let base = discovered[index]
+        index += 1
+
+        guard let statusURL = URL(string: "\(base)/api/federation/status") else {
+            continue
+        }
+
+        var request = URLRequest(url: statusURL)
+        request.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                continue
+            }
+            let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            let trusted = (raw["trustedServers"] as? [String]) ?? []
+            for entry in trusted {
+                let normalizedTrusted = normalizeBaseURL(entry)
+                if !discovered.contains(normalizedTrusted) {
+                    discovered.append(normalizedTrusted)
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    var visibleBases: [String] = []
+    for base in discovered {
+        let visibility = await fetchClientVisibility(baseURL: base)
+        if visibility.ios {
+            visibleBases.append(normalizeBaseURL(base))
+        }
+    }
+
+    if visibleBases.isEmpty {
+        visibleBases = [normalizeBaseURL(preferredBase)]
+    }
+
+    var seen = Set<String>()
+    return visibleBases
+        .filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }
+        .sorted {
+            displayServerName(baseURL: $0).localizedCaseInsensitiveCompare(displayServerName(baseURL: $1)) == .orderedAscending
+        }
+}
+
+private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortMode) async throws -> [RoomSummary] {
+    try await withThrowingTaskGroup(of: [RoomSummary].self) { group in
+        for base in bases {
+            group.addTask {
+                let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
+                guard let url = URL(string: endpoint) else { return [] }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 12
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    return []
+                }
+                return try JSONDecoder().decode([RoomSummary].self, from: data)
+            }
+        }
+
+        var rooms: [RoomSummary] = []
+        for try await serverRooms in group {
+            rooms.append(contentsOf: serverRooms)
+        }
+        return rooms
+    }
+}
+
 private func canonicalRoomName(_ name: String) -> String {
     let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return lowered.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -2378,6 +2504,10 @@ private func displayVisibilityLabel(_ raw: String) -> String {
     default:
         return raw.isEmpty ? "Public" : raw.capitalized
     }
+}
+
+private func displayRoomLockLabel(_ locked: Bool) -> String {
+    locked ? "Locked" : "Unlocked"
 }
 
 private func displayAccessTypeLabel(_ raw: String) -> String {

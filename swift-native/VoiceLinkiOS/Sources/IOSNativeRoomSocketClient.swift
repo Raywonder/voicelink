@@ -225,7 +225,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             guard let self,
                   let payload = data.first as? [String: Any] else { return }
             let room = payload["room"] as? [String: Any] ?? [:]
-            let roomId = String(describing: room["id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
+            let roomId = String(describing: room["id"] ?? fallbackRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
             let roomName = String(describing: room["name"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.joinedRoomId = roomId
             self.joinedRoomName = roomName
@@ -291,9 +292,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             self.connectionStatus = message
         }
 
-        socket.on("room-users") { data, _ in
-            guard let payload = data.first as? [String: Any] else { return }
-            let roomId = String(describing: payload["roomId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        socket.on("room-users") { [weak self] data, _ in
+            guard let self,
+                  let payload = data.first as? [String: Any] else { return }
+            let roomId = String(describing: payload["roomId"] ?? self.joinedRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
             let users = payload["users"] as? [Any] ?? []
             NotificationCenter.default.post(
                 name: .iosRoomUsersUpdated,

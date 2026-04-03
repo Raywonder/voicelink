@@ -36,6 +36,7 @@ struct RoomSessionView: View {
     @AppStorage("voicelink.audio.roomOutputMuted") private var roomOutputMuted = false
     @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = true
     @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = true
+    @AppStorage("voicelink.ios.showRoomRelayDebugDetails") private var showRoomRelayDebugDetails = false
     @AppStorage("voicelink.authProvider") private var authProvider = ""
     @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
     let destination: RoomSessionDestination
@@ -145,7 +146,9 @@ struct RoomSessionView: View {
     private var connectionSection: some View {
         Section("Connection") {
             LabeledContent("Room", value: destination.roomName)
-            LabeledContent("Status", value: socketClient.connectionStatus)
+            if showRoomRelayDebugDetails {
+                LabeledContent("Status", value: socketClient.connectionStatus)
+            }
             if !destination.roomDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(destination.roomDescription)
                     .font(.footnote)
@@ -227,7 +230,9 @@ struct RoomSessionView: View {
     private var roomAudioSection: some View {
         if showAudioControls {
             Section("Audio") {
-                LabeledContent("Relay", value: socketClient.audioRelayStatus)
+                if showRoomRelayDebugDetails {
+                    LabeledContent("Relay", value: socketClient.audioRelayStatus)
+                }
                 LabeledContent("Whisper Target", value: whisperTarget?.name ?? "None")
                 Toggle("Mute Microphone", isOn: $inputMuted)
                     .onChange(of: inputMuted) { _ in
@@ -746,6 +751,7 @@ struct RoomPreviewView: View {
     let destination: RoomPreviewDestination
     @State private var previewPlayer: AVPlayer?
     @State private var closeTask: Task<Void, Never>?
+    @State private var fadeTask: Task<Void, Never>?
     @State private var previewSecondsRemaining = 12
 
     var body: some View {
@@ -753,22 +759,7 @@ struct RoomPreviewView: View {
             List {
                 Section("Preview") {
                     LabeledContent("Room", value: destination.roomName)
-                    LabeledContent("Users", value: "\(destination.room.userCount)")
-                    LabeledContent("Auto Close", value: "\(previewSecondsRemaining)s")
-                    Text(destination.roomDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : destination.roomDescription)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Status") {
-                    Group {
-                        if destination.room.backgroundStream.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("No room background stream is available to preview right now. This screen closes automatically after a short review window.")
-                        } else {
-                            Text("Playing this room’s background stream briefly so you can review it before joining. Preview closes automatically after a short review window.")
-                        }
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    LabeledContent("Preview Time Remaining", value: "\(previewSecondsRemaining)s")
                 }
             }
             .navigationTitle("Preview")
@@ -776,13 +767,15 @@ struct RoomPreviewView: View {
         }
         .onAppear {
             IOSAudioSessionManager.shared.activate(for: .preview)
-            IOSActionSoundPlayer.playConfirm()
+            IOSActionSoundPlayer.playPreviewStart()
             startPreviewPlayback()
             scheduleAutoClose()
         }
         .onDisappear {
             closeTask?.cancel()
             closeTask = nil
+            fadeTask?.cancel()
+            fadeTask = nil
             stopPreviewPlayback()
             IOSAudioSessionManager.shared.deactivate(.preview)
         }
@@ -794,13 +787,16 @@ struct RoomPreviewView: View {
             return
         }
         let player = AVPlayer(url: url)
+        player.volume = 0
         previewPlayer = player
         player.play()
+        fadePreviewVolume(to: 1.0, durationSeconds: 0.8)
     }
 
     private func stopPreviewPlayback() {
-        previewPlayer?.pause()
-        previewPlayer = nil
+        guard let previewPlayer else { return }
+        previewPlayer.pause()
+        self.previewPlayer = nil
     }
 
     private func scheduleAutoClose() {
@@ -813,9 +809,33 @@ struct RoomPreviewView: View {
                 guard !Task.isCancelled else { return }
             }
             previewSecondsRemaining = 0
-            stopPreviewPlayback()
-            IOSActionSoundPlayer.playClose()
+            IOSActionSoundPlayer.playPreviewStop()
+            await fadePreviewOutAndStop()
             dismiss()
+        }
+    }
+
+    private func fadePreviewOutAndStop() async {
+        fadePreviewVolume(to: 0, durationSeconds: 0.8)
+        try? await Task.sleep(nanoseconds: 850_000_000)
+        guard !Task.isCancelled else { return }
+        stopPreviewPlayback()
+    }
+
+    private func fadePreviewVolume(to targetVolume: Float, durationSeconds: Double) {
+        fadeTask?.cancel()
+        guard let player = previewPlayer else { return }
+        let startVolume = player.volume
+        let steps = 12
+        let stepDuration = max(0.02, durationSeconds / Double(steps))
+        fadeTask = Task { @MainActor in
+            for step in 1...steps {
+                guard !Task.isCancelled else { return }
+                let progress = Float(step) / Float(steps)
+                player.volume = startVolume + (targetVolume - startVolume) * progress
+                try? await Task.sleep(nanoseconds: UInt64(stepDuration * 1_000_000_000))
+            }
+            player.volume = targetVolume
         }
     }
 }
