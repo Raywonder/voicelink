@@ -437,6 +437,10 @@ class ServerManager: ObservableObject {
             self?.cancelPendingSessionRegistrationRetry()
             self?.registeredSocketSession = true
             DispatchQueue.main.async {
+                DeviceRevocationManager.shared.markCurrentDeviceOnline()
+                if let serverURL = self?.baseURL ?? self?.currentServerURL, !serverURL.isEmpty {
+                    DeviceRevocationManager.shared.fetchDevices(serverURL: serverURL)
+                }
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self?.rejoinActiveRoomIfNeeded()
@@ -449,7 +453,21 @@ class ServerManager: ObservableObject {
                 ?? (data.first as? String)
                 ?? "Authentication required"
             DispatchQueue.main.async {
-                self?.errorMessage = message
+                if AuthenticationManager.shared.currentUser == nil {
+                    self?.errorMessage = message
+                } else if !message.lowercased().contains("invalid or expired whmcs session") {
+                    self?.errorMessage = message
+                }
+            }
+        }
+
+        socket.on("auth_token_refreshed") { data, ack in
+            guard let payload = data.first as? [String: Any],
+                  let token = payload["token"] as? String else {
+                return
+            }
+            DispatchQueue.main.async {
+                AuthenticationManager.shared.updateCurrentUserAccessToken(token)
             }
         }
 
@@ -528,6 +546,7 @@ class ServerManager: ObservableObject {
                 }
             }
             NotificationCenter.default.post(name: .roomJoined, object: joinedPayload)
+            AppSoundManager.shared.playSound(.userJoin)
         }
         let joinSuccessEvents = ["joined-room", "room-joined", "join-room-success"]
         for eventName in joinSuccessEvents {
@@ -755,6 +774,9 @@ class ServerManager: ObservableObject {
                         "type": messageType,
                         "roomId": roomId as Any,
                         "mentions": msgData["mentions"] as? [String] ?? [],
+                        "isBot": msgData["isBot"] as? Bool ?? false,
+                        "hasAudioControls": msgData["hasAudioControls"] as? Bool ?? false,
+                        "authProvider": msgData["authProvider"] as? String ?? "",
                         "transcript": msgData["transcript"] as? Bool ?? false,
                         "transcriptUserName": msgData["transcriptUserName"] as? String ?? ""
                     ]
@@ -784,6 +806,9 @@ class ServerManager: ObservableObject {
                         "type": messageType,
                         "roomId": roomId as Any,
                         "mentions": msgData["mentions"] as? [String] ?? [],
+                        "isBot": msgData["isBot"] as? Bool ?? false,
+                        "hasAudioControls": msgData["hasAudioControls"] as? Bool ?? false,
+                        "authProvider": msgData["authProvider"] as? String ?? "",
                         "transcript": msgData["transcript"] as? Bool ?? false,
                         "transcriptUserName": msgData["transcriptUserName"] as? String ?? "",
                         "historical": true
@@ -810,6 +835,15 @@ class ServerManager: ObservableObject {
                     "text": text,
                     "language": payload["language"] as? String ?? ""
                 ]
+            )
+        }
+
+        socket.on("bot-audio") { data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            NotificationCenter.default.post(
+                name: .botAudioReceived,
+                object: nil,
+                userInfo: payload
             )
         }
 
@@ -997,17 +1031,20 @@ class ServerManager: ObservableObject {
             "locale": Locale.current.identifier
         ]
 
-        if provider == "email" || provider == "mastodon" {
-            payload["user"] = [
-                "id": currentUser.id,
-                "username": currentUser.username,
-                "displayName": currentUser.displayName,
-                "email": currentUser.email as Any,
-                "role": currentUser.role as Any,
-                "permissions": currentUser.permissions,
-                "authProvider": currentUser.authProvider ?? provider
-            ]
-        }
+        payload["user"] = [
+            "id": currentUser.id,
+            "username": currentUser.username,
+            "displayName": currentUser.displayName,
+            "email": currentUser.email as Any,
+            "role": currentUser.role as Any,
+            "permissions": currentUser.permissions,
+            "authProvider": currentUser.authProvider ?? provider,
+            "contactCard": currentUser.contactCard.flatMap { try? JSONEncoder().encode($0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) } as Any,
+            "lastLoginAt": currentUser.lastLoginAt.map { ISO8601DateFormatter().string(from: $0) } as Any,
+            "lastSeenAt": currentUser.lastSeenAt.map { ISO8601DateFormatter().string(from: $0) } as Any,
+            "lastActiveAt": currentUser.lastActiveAt.map { ISO8601DateFormatter().string(from: $0) } as Any,
+            "presence": currentUser.presence
+        ]
 
         socket.emit("register-session", payload)
     }
@@ -1047,6 +1084,8 @@ class ServerManager: ObservableObject {
             switch user.authMethod {
             case .mastodon:
                 return "mastodon"
+            case .discord:
+                return "discord"
             case .whmcs:
                 return "whmcs"
             case .email, .adminInvite:
@@ -1326,6 +1365,7 @@ class ServerManager: ObservableObject {
         let mergedRoomType = (primary.roomType?.isEmpty == false ? primary.roomType : incoming.roomType)
         let mergedHostServerName = (primary.hostServerName?.isEmpty == false ? primary.hostServerName : incoming.hostServerName)
         let mergedHostServerOwner = (primary.hostServerOwner?.isEmpty == false ? primary.hostServerOwner : incoming.hostServerOwner)
+        let mergedLockedBy = (primary.lockedBy?.isEmpty == false ? primary.lockedBy : incoming.lockedBy)
 
         return ServerRoom(
             id: primary.id,
@@ -1335,6 +1375,7 @@ class ServerManager: ObservableObject {
             userCount: max(primary.userCount, incoming.userCount),
             isPrivate: primary.isPrivate || incoming.isPrivate,
             isLocked: primary.isLocked || incoming.isLocked,
+            recordingAllowed: primary.recordingAllowed || incoming.recordingAllowed,
             maxUsers: max(primary.maxUsers, incoming.maxUsers),
             createdBy: mergedCreatedBy,
             createdByRole: mergedCreatedByRole,
@@ -1344,7 +1385,8 @@ class ServerManager: ObservableObject {
             lastActiveUsername: preferIncoming ? (incoming.lastActiveUsername ?? primary.lastActiveUsername) : (primary.lastActiveUsername ?? incoming.lastActiveUsername),
             lastActivityAt: max(primaryDate, incomingDate) == .distantPast ? nil : max(primaryDate, incomingDate),
             hostServerName: mergedHostServerName,
-            hostServerOwner: mergedHostServerOwner
+            hostServerOwner: mergedHostServerOwner,
+            lockedBy: mergedLockedBy
         )
     }
 
@@ -1366,27 +1408,39 @@ class ServerManager: ObservableObject {
     }
 
     private func fetchActiveRoomStream(for roomId: String) {
-        roomStreamDidStopExplicitly = false
+        guard !roomStreamDidStopExplicitly else {
+            stopRoomStreamPlayback(explicit: false)
+            return
+        }
         guard let encodedRoomId = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(currentServerURL)/api/jellyfin/room-stream/\(encodedRoomId)") else {
-            startDefaultRoomStreamIfNeeded()
+            stopRoomStreamPlayback(explicit: false)
             return
         }
 
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let self else { return }
             guard let data else {
-                self.startDefaultRoomStreamIfNeeded()
+                self.stopRoomStreamPlayback(explicit: false)
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.startDefaultRoomStreamIfNeeded()
+                self.stopRoomStreamPlayback(explicit: false)
                 return
             }
             let isActive = json["active"] as? Bool ?? false
             guard isActive, let streamUrl = json["streamUrl"] as? String else {
-                self.startDefaultRoomStreamIfNeeded()
+                self.stopRoomStreamPlayback(explicit: false)
                 return
+            }
+            if let volumeValue = json["volume"] as? NSNumber {
+                let normalizedVolume = min(max(volumeValue.floatValue / 100.0, 0), 1.5)
+                DispatchQueue.main.async {
+                    self.currentRoomMediaVolume = normalizedVolume
+                    if let player = self.roomStreamPlayer, !self.currentRoomMediaMuted {
+                        player.volume = normalizedVolume
+                    }
+                }
             }
             self.startRoomStreamPlayback(from: streamUrl)
         }.resume()
@@ -1528,7 +1582,18 @@ class ServerManager: ObservableObject {
     func refreshRoomMedia(for roomId: String? = nil) {
         let targetRoomId = roomId ?? activeRoomId
         guard let targetRoomId, !targetRoomId.isEmpty else { return }
+        guard !roomStreamDidStopExplicitly || targetRoomId != activeRoomId else { return }
         fetchActiveRoomStream(for: targetRoomId)
+    }
+
+    func playCurrentRoomMedia(from rawURL: String, fadeDuration: TimeInterval? = nil) {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let fadeDuration {
+            setRoomMediaFadeDuration(fadeDuration)
+        }
+        roomStreamDidStopExplicitly = false
+        startRoomStreamPlayback(from: trimmed)
     }
 
     func setRoomMediaFadeDuration(_ duration: TimeInterval) {
@@ -1651,15 +1716,26 @@ class ServerManager: ObservableObject {
     }
 
     private func failPendingJoin(with message: String) {
-        guard pendingJoinRoomId != nil else { return }
+        guard let failedRoomId = pendingJoinRoomId else { return }
         cancelJoinTimeout()
         pendingJoinRoomId = nil
+        let alreadyJoined = activeRoomId == failedRoomId
         DispatchQueue.main.async {
-            self.audioTransmissionStatus = "Join failed"
-            self.errorMessage = message
+            if alreadyJoined {
+                if self.isAudioTransmitting {
+                    self.audioTransmissionStatus = LocalMonitorManager.shared.isMonitoring ? "Transmitting + monitoring" : "Transmitting"
+                } else {
+                    self.audioTransmissionStatus = "Joined room"
+                }
+            } else {
+                self.audioTransmissionStatus = "Join failed"
+                self.errorMessage = message
+            }
         }
-        pendingAudioStartWorkItem?.cancel()
-        pendingAudioStartWorkItem = nil
+        if !alreadyJoined {
+            pendingAudioStartWorkItem?.cancel()
+            pendingAudioStartWorkItem = nil
+        }
     }
 
     func startAudioTransmission() {
@@ -1832,6 +1908,7 @@ struct ServerRoom: Identifiable {
     let userCount: Int
     let isPrivate: Bool
     let isLocked: Bool
+    let recordingAllowed: Bool
     let maxUsers: Int
     let createdBy: String?
     let createdByRole: String?
@@ -1842,6 +1919,7 @@ struct ServerRoom: Identifiable {
     let lastActivityAt: Date?
     let hostServerName: String?
     let hostServerOwner: String?
+    let lockedBy: String?
 
     init(
         id: String,
@@ -1851,6 +1929,7 @@ struct ServerRoom: Identifiable {
         userCount: Int,
         isPrivate: Bool,
         isLocked: Bool,
+        recordingAllowed: Bool,
         maxUsers: Int,
         createdBy: String?,
         createdByRole: String?,
@@ -1860,7 +1939,8 @@ struct ServerRoom: Identifiable {
         lastActiveUsername: String?,
         lastActivityAt: Date?,
         hostServerName: String?,
-        hostServerOwner: String?
+        hostServerOwner: String?,
+        lockedBy: String?
     ) {
         self.id = id
         self.name = name
@@ -1869,6 +1949,7 @@ struct ServerRoom: Identifiable {
         self.userCount = userCount
         self.isPrivate = isPrivate
         self.isLocked = isLocked
+        self.recordingAllowed = recordingAllowed
         self.maxUsers = maxUsers
         self.createdBy = createdBy
         self.createdByRole = createdByRole
@@ -1879,6 +1960,7 @@ struct ServerRoom: Identifiable {
         self.lastActivityAt = lastActivityAt
         self.hostServerName = hostServerName
         self.hostServerOwner = hostServerOwner
+        self.lockedBy = lockedBy
     }
 
     init?(from dict: [String: Any]) {
@@ -1951,6 +2033,10 @@ struct ServerRoom: Identifiable {
         self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
         self.isLocked = dict["isLocked"] as? Bool ?? dict["locked"] as? Bool ?? false
+        self.recordingAllowed = dict["recordingAllowed"] as? Bool
+            ?? dict["allowRecording"] as? Bool
+            ?? dict["recordingEnabled"] as? Bool
+            ?? false
         self.maxUsers = intValue(dict["maxUsers"]) ?? 50
         self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"])
         self.createdByRole = stringValue(dict["createdByRole"]) ?? stringValue(dict["ownerRole"])
@@ -1974,6 +2060,9 @@ struct ServerRoom: Identifiable {
             ?? stringValue(dict["serverOwner"])
             ?? stringValue(dict["ownerUsername"])
             ?? stringValue(dict["createdBy"])
+        self.lockedBy = stringValue(dict["lockedBy"])
+            ?? stringValue(dict["lockedByUsername"])
+            ?? stringValue(dict["locked_by"])
     }
 }
 
@@ -2012,6 +2101,7 @@ struct RoomUser: Identifiable {
 extension Notification.Name {
     static let roomLeft = Notification.Name("roomLeft")
     static let roomTranscriptReceived = Notification.Name("roomTranscriptReceived")
+    static let botAudioReceived = Notification.Name("botAudioReceived")
     static let jellyfinWebhookEvent = Notification.Name("jellyfinWebhookEvent")
     static let jellyfinMediaStreamStarted = Notification.Name("jellyfinMediaStreamStarted")
     static let jellyfinMediaStreamStopped = Notification.Name("jellyfinMediaStreamStopped")
