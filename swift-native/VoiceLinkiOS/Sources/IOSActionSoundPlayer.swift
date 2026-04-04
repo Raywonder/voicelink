@@ -37,7 +37,13 @@ enum IOSActionSoundPlayer {
     static func playPreviewStart() {
         guard soundsEnabled else { return }
         playFirstAvailableBundledSound(
-            names: ["Peek-In-Of-Room-Blinds-Raised-Fast", "whoosh_fast1", "button-click", "success"],
+            names: [
+                "Peek-In-To-Room-Raised-Fast",
+                "Peek-In-Of-Room-Blinds-Raised-Fast",
+                "whoosh_fast1",
+                "button-click",
+                "success"
+            ],
             extensions: ["wav", "m4a", "mp3", "flac"]
         )
     }

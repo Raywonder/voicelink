@@ -1,6 +1,7 @@
-VoiceLink TestFlight Build 49
+VoiceLink TestFlight Build 51
 
 What to test:
+- Startup intro, preview start/stop, join, toggle, confirm, and Test Sound now play bundled VoiceLink sound assets.
 - Both public servers appear in `Servers`, with names/descriptions instead of IPs.
 - `Federated Rooms` shows search + one room list; double tap a room opens details, and VoiceOver actions expose Preview, Join, and Share.
 - Locked/Unlocked, Public/Private, and room details match desktop.
