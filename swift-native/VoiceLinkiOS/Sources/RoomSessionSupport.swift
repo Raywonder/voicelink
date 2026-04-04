@@ -141,6 +141,14 @@ struct RoomSessionView: View {
             IOSAudioSessionManager.shared.deactivate(.room)
             socketClient.leaveRoom(roomId: destination.roomId)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { notification in
+            let joinedRoomId = (notification.userInfo?["roomId"] as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard joinedRoomId == destination.roomId else { return }
+            startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
+            socketClient.requestRoomUsers()
+            socketClient.requestRoomMessages()
+        }
     }
 
     private var connectionSection: some View {
@@ -691,12 +699,20 @@ struct RoomSessionView: View {
         IOSActionSoundPlayer.playToggle()
     }
 
-    private func startRoomBackgroundPlaybackIfNeeded() {
+    private func startRoomBackgroundPlaybackIfNeeded(forceRestart: Bool = false) {
         let streamURL = destination.backgroundStream.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !streamURL.isEmpty, let url = URL(string: streamURL) else {
             roomBackgroundPlayer = nil
             return
         }
+        if !forceRestart,
+           let existingPlayer = roomBackgroundPlayer,
+           let existingURL = (existingPlayer.currentItem?.asset as? AVURLAsset)?.url,
+           existingURL.standardizedFileURL == url.standardizedFileURL {
+            syncRoomBackgroundPlaybackState()
+            return
+        }
+        roomBackgroundPlayer?.pause()
         let player = AVPlayer(url: url)
         roomBackgroundPlayer = player
         updateRoomBackgroundPlaybackVolume()

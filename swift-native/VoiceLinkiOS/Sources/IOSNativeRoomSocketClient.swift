@@ -223,7 +223,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("joined-room") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             let room = payload["room"] as? [String: Any] ?? [:]
             let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
             let roomId = normalizedSocketText(room["id"], fallback: fallbackRoomId)
@@ -276,7 +276,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
 
         socket.on("auth_token_refreshed") { data, _ in
-            guard let payload = data.first as? [String: Any] else { return }
+            guard let payload = Self.socketDictionaryValue(data.first) else { return }
             let token = String(describing: payload["token"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else { return }
             UserDefaults.standard.set(token, forKey: "voicelink.authToken")
@@ -294,7 +294,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("room-users") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
             let users = payload["users"] as? [Any] ?? []
             NotificationCenter.default.post(
@@ -310,9 +310,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("room-messages") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
-            let messages = payload["messages"] as? [[String: Any]] ?? []
+            let messages = Self.socketArrayDictionaryValue(payload["messages"])
             for message in messages {
                 self.postRoomMessage(message, fallbackRoomId: roomId)
             }
@@ -320,12 +320,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("chat-message") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             self.postRoomMessage(payload, fallbackRoomId: self.joinedRoomId)
         }
 
         socket.on("direct-message") { data, _ in
-            guard let payload = data.first as? [String: Any] else { return }
+            guard let payload = Self.socketDictionaryValue(data.first) else { return }
             let userId = normalizedSocketText(payload["senderId"] ?? payload["userId"], fallback: "")
             let userName = normalizedSocketText(payload["senderName"] ?? payload["userName"], fallback: "User")
             NotificationCenter.default.post(
@@ -337,7 +337,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("room-transcript") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
             let roomName = normalizedSocketText(payload["roomName"], fallback: self.joinedRoomName)
             let speaker = normalizedSocketText(
@@ -361,7 +361,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("relay-status") { [weak self] data, _ in
             guard let self else { return }
-            let payload = data.first as? [String: Any] ?? [:]
+            let payload = Self.socketDictionaryValue(data.first) ?? [:]
             let isActive = (payload["active"] as? Bool) ?? false
             self.audioRelayStatus = isActive ? "Relay active" : "Relay unavailable"
             if isActive {
@@ -373,7 +373,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("relayed-audio") { [weak self] data, _ in
             guard let self,
-                  let payload = data.first as? [String: Any] else { return }
+                  let payload = self.socketDictionary(from: data) else { return }
             self.updateIncomingAudioLevel(from: payload)
             self.relayPlayer.playPacket(payload)
         }
@@ -394,6 +394,33 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "userName": pendingSession.displayName
         ])
         connectionStatus = "Joining \(pendingSession.roomName)…"
+    }
+
+    private func socketDictionary(from data: [Any]) -> [String: Any]? {
+        Self.socketDictionaryValue(data.first)
+    }
+
+    private static func socketDictionaryValue(_ value: Any?) -> [String: Any]? {
+        if let dict = value as? [String: Any] {
+            return dict
+        }
+        if let dict = value as? NSDictionary {
+            return dict as? [String: Any]
+        }
+        return nil
+    }
+
+    private static func socketArrayDictionaryValue(_ value: Any?) -> [[String: Any]] {
+        if let array = value as? [[String: Any]] {
+            return array
+        }
+        if let array = value as? [NSDictionary] {
+            return array.compactMap { $0 as? [String: Any] }
+        }
+        if let array = value as? [Any] {
+            return array.compactMap { socketDictionaryValue($0) }
+        }
+        return []
     }
 
     private func publishAudioState() {

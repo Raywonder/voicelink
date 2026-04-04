@@ -967,35 +967,27 @@ private struct HomeTab: View {
         var dedupedByExactKey: [String: RoomSummary] = [:]
         for room in allRooms {
             let resolvedBase = room.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(room.serverApiBase)
-            let exactKey = "\(canonicalRoomName(room.name))|\(resolvedBase)|\(room.id)"
+            let exactKey = "\(resolvedBase)|\(room.id)"
             let existing = dedupedByExactKey[exactKey]
             if existing == nil || homeRoomScore(room, fallbackBase: fallbackBase) >= homeRoomScore(existing!, fallbackBase: fallbackBase) {
                 dedupedByExactKey[exactKey] = room
             }
         }
 
-        let grouped = Dictionary(grouping: Array(dedupedByExactKey.values)) { room in
-            canonicalRoomName(room.name)
-        }
-
-        return grouped.compactMap { _, candidates in
-            candidates.max { lhs, rhs in
-                let lhsUserCount = lhs.userCount
-                let rhsUserCount = rhs.userCount
-                if lhsUserCount == rhsUserCount {
-                    let lhsScore = homeRoomScore(lhs, fallbackBase: fallbackBase)
-                    let rhsScore = homeRoomScore(rhs, fallbackBase: fallbackBase)
-                    if lhsScore == rhsScore {
-                        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-                    }
-                    return lhsScore < rhsScore
-                }
-                return lhsUserCount < rhsUserCount
-            }
-        }
-        .sorted { lhs, rhs in
+        return Array(dedupedByExactKey.values).sorted { lhs, rhs in
             if lhs.userCount == rhs.userCount {
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                let lhsServer = displayServerName(
+                    room: lhs,
+                    fallbackBase: lhs.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(lhs.serverApiBase)
+                )
+                let rhsServer = displayServerName(
+                    room: rhs,
+                    fallbackBase: rhs.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(rhs.serverApiBase)
+                )
+                if lhsServer == rhsServer {
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                }
+                return lhsServer.localizedCaseInsensitiveCompare(rhsServer) == .orderedAscending
             }
             return lhs.userCount > rhs.userCount
         }
@@ -1385,38 +1377,23 @@ private struct FederationTab: View {
         var dedupedByExactKey: [String: (RoomSummary, String)] = [:]
         for (room, fetchedBase) in allRooms {
             let resolvedBase = room.serverApiBase.isEmpty ? fetchedBase : normalizeBaseURL(room.serverApiBase)
-            let exactKey = "\(canonicalRoomName(room.name))|\(resolvedBase)|\(room.id)"
+            let exactKey = "\(resolvedBase)|\(room.id)"
             dedupedByExactKey[exactKey] = (room, resolvedBase)
         }
 
-        let grouped = Dictionary(grouping: dedupedByExactKey.values) { entry in
-            canonicalRoomName(entry.0.name)
-        }
-
-        return grouped.map { key, entries in
-            let sortedChoices = entries
-                .map { room, resolvedBase in
-                    FederatedRoomChoice(
-                        id: "\(resolvedBase)|\(room.id)",
-                        room: room,
-                        serverLabel: displayServerName(room: room, fallbackBase: resolvedBase),
-                        baseURL: resolvedBase.isEmpty ? fallbackBase : resolvedBase
-                    )
-                }
-                .sorted {
-                    if $0.serverLabel == $1.serverLabel {
-                        return $0.room.userCount > $1.room.userCount
-                    }
-                    return $0.serverLabel.localizedCaseInsensitiveCompare($1.serverLabel) == .orderedAscending
-                }
-
-            let displayName = sortedChoices.first?.room.name ?? "Untitled Room"
-            let totalUsers = sortedChoices.reduce(0) { $0 + $1.room.userCount }
+        return dedupedByExactKey.values.map { room, resolvedBase in
+            let baseURL = resolvedBase.isEmpty ? fallbackBase : resolvedBase
+            let choice = FederatedRoomChoice(
+                id: "\(baseURL)|\(room.id)",
+                room: room,
+                serverLabel: displayServerName(room: room, fallbackBase: baseURL),
+                baseURL: baseURL
+            )
             return FederatedRoomGroup(
-                id: key,
-                displayName: displayName,
-                totalUsers: totalUsers,
-                choices: sortedChoices
+                id: choice.id,
+                displayName: room.name,
+                totalUsers: room.userCount,
+                choices: [choice]
             )
         }
         .sorted { lhs, rhs in

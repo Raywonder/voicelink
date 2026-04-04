@@ -1,19 +1,8 @@
-VoiceLink – TestFlight Build 52
+VoiceLink – TestFlight Build 53
 
 What to test:
-- Startup intro, preview sounds, join sounds, toggle sounds, confirm sounds, and Test Sound play the bundled VoiceLink audio effects.
-- Both public servers appear with names and descriptions.
-- Federated Rooms shows search plus one room list.
-- Double tap a federated room to open details.
-- VoiceOver actions expose Preview, Join, and Share.
-- Locked, Unlocked, Public, Private, and room details match desktop.
-- Preview fades audio in and out and closes automatically after the countdown.
-- People in Room shows users, bots, devices, mute state, output state, and per-user level meters.
-- Transient empty user updates should not clear the room member list.
-- Monitor isolates one user and Whisper lowers room audio.
-- Room chat shows user, system, and bot messages with links and room-order settings.
-- Room media starts and stops correctly, including when joining a room that already has media playing.
-- Room Actions can show or hide audio controls.
-- Settings remains available while in a room.
-- Relay debug text only appears when Show Room Relay Debug Details is enabled.
-- Native sign-in, WHMCS fallback, 2FA delivery, and token refresh after reconnect still work.
+- Both servers show in Servers, with names, descriptions, and their full room counts.
+- Federated Rooms shows the visible room list without collapsing rooms across servers.
+- Joining a room shows members, bots, and server/system messages.
+- Room media starts after join and preview/start-stop sounds do not double.
+- Test Sound restarts cleanly instead of layering over itself.

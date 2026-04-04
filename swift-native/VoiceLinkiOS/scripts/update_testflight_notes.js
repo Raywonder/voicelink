@@ -266,6 +266,37 @@ async function attachBuildToBetaGroup(token, { buildId, groupId }) {
   }
 }
 
+async function ensureExternalBetaReviewSubmission(token, { buildId }) {
+  try {
+    await apiRequest(token, '/betaAppReviewSubmissions', {
+      method: 'POST',
+      body: {
+        data: {
+          type: 'betaAppReviewSubmissions',
+          relationships: {
+            build: {
+              data: {
+                type: 'builds',
+                id: buildId
+              }
+            }
+          }
+        }
+      }
+    });
+    return 'submitted';
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (message.includes('409') || message.toLowerCase().includes('already')) {
+      return 'already-submitted';
+    }
+    if (message.includes('ENTITY_ERROR.ATTRIBUTE.INVALID') || message.toLowerCase().includes('beta app review')) {
+      return 'not-required';
+    }
+    throw error;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const scriptDir = __dirname;
@@ -314,7 +345,9 @@ async function main() {
       buildId: build.id,
       groupId: betaGroup.id
     });
-    console.log(`Build ${version} (${buildNumber}) ${attachState} to beta group ${betaGroupName} (${betaGroup.id})`);
+    console.log(`Build ${version} (${buildNumber}) ${attachState} to beta group ${betaGroupName}`);
+    const reviewState = await ensureExternalBetaReviewSubmission(token, { buildId: build.id });
+    console.log(`External beta review ${reviewState} for build ${version} (${buildNumber})`);
   }
 }
 

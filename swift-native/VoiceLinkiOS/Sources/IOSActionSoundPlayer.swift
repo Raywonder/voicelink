@@ -58,6 +58,7 @@ enum IOSActionSoundPlayer {
 
     static func playTest() {
         guard soundsEnabled else { return }
+        stopAllPlayers()
         playFirstAvailableBundledSound(
             names: ["your-sound-test", "success", "notification"],
             extensions: ["wav", "m4a", "mp3", "flac"]
@@ -103,6 +104,7 @@ enum IOSActionSoundPlayer {
 
             for url in candidateURLs {
                 do {
+                    stopPlayers(for: url)
                     try activateActionSoundSessionIfNeeded()
                     let player = try AVAudioPlayer(contentsOf: url)
                     player.volume = 1.0
@@ -141,6 +143,26 @@ enum IOSActionSoundPlayer {
 
     fileprivate static func cleanupPlayer(_ player: AVAudioPlayer) {
         activePlayers.removeAll { $0 === player }
+    }
+
+    private static func stopPlayers(for url: URL) {
+        let standardized = url.standardizedFileURL
+        activePlayers.removeAll { player in
+            let matches = player.url?.standardizedFileURL == standardized
+            if matches {
+                player.stop()
+                player.currentTime = 0
+            }
+            return matches
+        }
+    }
+
+    private static func stopAllPlayers() {
+        activePlayers.forEach {
+            $0.stop()
+            $0.currentTime = 0
+        }
+        activePlayers.removeAll()
     }
 }
 
