@@ -1,17 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0.0
-build: 26
+build: 31
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
-    size: 17792382
+    sha512: TT11Jwy1l8OfpF0jtPGxEEKlub0blEguyByAmeIXYbybuMFwhkfWuBBE17PoEavic5hidM5E7AuAPpXk4IzIcA==
+    size: 10224118
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: xFyjPW0r9VBcAO0o8vK5ze0PPfIteOfYW7oSg9HhVhV4acmem+ZhpapaXaW5+Gi4MeAtCrBY4tYl6fpa55Fz8Q==
-releaseDate: '2026-03-20T13:27:35.000Z'
+sha512: TT11Jwy1l8OfpF0jtPGxEEKlub0blEguyByAmeIXYbybuMFwhkfWuBBE17PoEavic5hidM5E7AuAPpXk4IzIcA==
+releaseDate: '2026-04-04T00:39:43.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Build 26)
-  - Signed the current desktop app build for direct download and updater use.
-  - Refreshed the website ZIP artifacts and macOS package from the latest tested app state.
-  - Updated the mac updater manifests to point at the new signed archive.
+  VoiceLink macOS Update (Build 31)
+  - Refreshed the signed desktop package from the current VoiceLinkNative source.
+  - Keeps the WHMCS token-refresh and room media/welcome-link fixes from the prior package.
+  - Pairs with the current server and iOS release pass.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip

@@ -1,4 +1,4 @@
-VoiceLink TestFlight Build 48
+VoiceLink TestFlight Build 49
 
 What to test:
 - Both public servers appear in `Servers`, with names/descriptions instead of IPs.
