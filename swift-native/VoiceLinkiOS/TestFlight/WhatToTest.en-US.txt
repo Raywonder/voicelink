@@ -1,15 +1,19 @@
-VoiceLink TestFlight Build 51
+VoiceLink – TestFlight Build 52
 
 What to test:
-- Startup intro, preview start/stop, join, toggle, confirm, and Test Sound now play bundled VoiceLink sound assets.
-- Both public servers appear in `Servers`, with names/descriptions instead of IPs.
-- `Federated Rooms` shows search + one room list; double tap a room opens details, and VoiceOver actions expose Preview, Join, and Share.
-- Locked/Unlocked, Public/Private, and room details match desktop.
-- Preview plays start/stop FX, crossfades the stream, and auto-closes after the countdown.
-- People in Room shows all users, device info, mute/output state, and live per-user level meters; transient empty payloads should not wipe the list.
-- Monitor solos one user’s relay audio; Whisper ducks room playback.
-- Room chat, system/bot messages, Markdown links, and message ordering/limits match room settings.
-- Room media starts/stops correctly, including when joining while media is already playing.
-- Room Actions can hide/show audio controls; Settings stays available in-room.
-- `Show Room Relay Debug Details` only shows relay/status text when enabled.
-- Native sign-in, WHMCS fallback, 2FA delivery, and silent WHMCS token refresh after reconnect still work.
+- Startup intro, preview sounds, join sounds, toggle sounds, confirm sounds, and Test Sound play the bundled VoiceLink audio effects.
+- Both public servers appear with names and descriptions.
+- Federated Rooms shows search plus one room list.
+- Double tap a federated room to open details.
+- VoiceOver actions expose Preview, Join, and Share.
+- Locked, Unlocked, Public, Private, and room details match desktop.
+- Preview fades audio in and out and closes automatically after the countdown.
+- People in Room shows users, bots, devices, mute state, output state, and per-user level meters.
+- Transient empty user updates should not clear the room member list.
+- Monitor isolates one user and Whisper lowers room audio.
+- Room chat shows user, system, and bot messages with links and room-order settings.
+- Room media starts and stops correctly, including when joining a room that already has media playing.
+- Room Actions can show or hide audio controls.
+- Settings remains available while in a room.
+- Relay debug text only appears when Show Room Relay Debug Details is enabled.
+- Native sign-in, WHMCS fallback, 2FA delivery, and token refresh after reconnect still work.

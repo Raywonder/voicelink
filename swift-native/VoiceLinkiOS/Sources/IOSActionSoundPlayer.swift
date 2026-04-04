@@ -96,9 +96,16 @@ enum IOSActionSoundPlayer {
     @discardableResult
     private static func playBundledSound(named name: String, extensions: [String]) -> Bool {
         for ext in extensions {
-            if let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Sounds") {
+            let candidateURLs = [
+                Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Sounds"),
+                Bundle.main.url(forResource: name, withExtension: ext)
+            ].compactMap { $0 }
+
+            for url in candidateURLs {
                 do {
+                    try activateActionSoundSessionIfNeeded()
                     let player = try AVAudioPlayer(contentsOf: url)
+                    player.volume = 1.0
                     player.prepareToPlay()
                     player.delegate = AudioPlayerCleanupDelegate.shared
                     activePlayers.append(player)
@@ -110,6 +117,16 @@ enum IOSActionSoundPlayer {
             }
         }
         return false
+    }
+
+    private static func activateActionSoundSessionIfNeeded() throws {
+        let session = AVAudioSession.sharedInstance()
+        if session.category != .playAndRecord,
+           session.category != .playback,
+           session.category != .ambient {
+            try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        }
+        try session.setActive(true, options: [])
     }
 
     @discardableResult

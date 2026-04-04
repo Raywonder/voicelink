@@ -259,7 +259,7 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomUsers(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: "")
         if activeRoomId.isEmpty, !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
@@ -267,11 +267,13 @@ final class IOSRoomMessagingState: ObservableObject {
         guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
         guard let rawUsers = info["users"] as? [Any] else { return }
         let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in
-            guard let user = entry as? [String: Any] else { return nil }
-            let id = String(describing: user["id"] ?? user["userId"] ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawName = String(describing: user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"] ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = (entry as? [String: Any]) ?? ((entry as? NSDictionary) as? [String: Any]) ?? [:]
+            guard !user.isEmpty else { return nil }
+            let id = normalizedIOSSocketValue(user["id"] ?? user["userId"], fallback: "")
+            let rawName = normalizedIOSSocketValue(
+                user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"],
+                fallback: ""
+            )
             let resolvedId = id.isEmpty
                 ? "\(roomId.isEmpty ? activeRoomId : roomId)|\(rawName.isEmpty ? "user-\(index)" : rawName.lowercased())"
                 : id
@@ -285,12 +287,9 @@ final class IOSRoomMessagingState: ObservableObject {
                 isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
                 transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
                 isBot: (user["isBot"] as? Bool) ?? false,
-                deviceName: String(describing: user["deviceName"] ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                deviceType: String(describing: user["deviceType"] ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                clientVersion: String(describing: user["clientVersion"] ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                deviceName: normalizedIOSSocketValue(user["deviceName"], fallback: ""),
+                deviceType: normalizedIOSSocketValue(user["deviceType"], fallback: ""),
+                clientVersion: normalizedIOSSocketValue(user["clientVersion"], fallback: "")
             )
         }
         if mapped.isEmpty, isInRoom, !directTargets.isEmpty {
@@ -312,14 +311,31 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomMessage(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let author = (info["author"] as? String ?? "User").trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = (info["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let incomingType = (info["type"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let senderId = normalizedIOSSocketValue(info["userId"], fallback: "")
+        let author = normalizedIOSSocketValue(info["author"], fallback: "User")
+        let body = normalizedIOSSocketValue(info["body"], fallback: "")
+        let incomingType = normalizedIOSSocketValue(info["type"], fallback: "")
         let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
         guard !roomId.isEmpty, !body.isEmpty else { return }
+        if ((info["isBot"] as? Bool) == true || type == "bot" || type == "system"), !senderId.isEmpty {
+            upsertDirectTarget(
+                IOSDirectMessageTarget(
+                    id: senderId,
+                    name: author.isEmpty ? "System" : author,
+                    isMuted: false,
+                    isDeafened: false,
+                    isSpeaking: false,
+                    transmitEnabled: false,
+                    isBot: true,
+                    deviceName: type == "system" ? "Server" : "VoiceLink",
+                    deviceType: "bot",
+                    clientVersion: ""
+                )
+            )
+        }
         roomMessages.append(
             IOSRoomMessageItem(
                 id: UUID().uuidString,
@@ -338,8 +354,8 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleDirectMessage(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let userId = (info["userId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let userName = (info["userName"] as? String ?? "User").trimmingCharacters(in: .whitespacesAndNewlines)
+        let userId = normalizedIOSSocketValue(info["userId"], fallback: "")
+        let userName = normalizedIOSSocketValue(info["userName"], fallback: "User")
         guard !userId.isEmpty else { return }
         let target = IOSDirectMessageTarget(id: userId, name: userName.isEmpty ? "User" : userName)
         upsertDirectTarget(target)
@@ -350,15 +366,13 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomTranscript(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let speaker = (
-            info["speaker"] as? String
-            ?? info["userName"] as? String
-            ?? info["author"] as? String
-            ?? "Speaker"
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = (info["body"] as? String ?? info["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let speaker = normalizedIOSSocketValue(
+            info["speaker"] ?? info["userName"] ?? info["author"],
+            fallback: "Speaker"
+        )
+        let body = normalizedIOSSocketValue(info["body"] ?? info["text"], fallback: "")
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
         guard !roomId.isEmpty, !body.isEmpty else { return }
         roomTranscripts.append(
@@ -384,6 +398,19 @@ final class IOSRoomMessagingState: ObservableObject {
         }
         directTargets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
+}
+
+private func normalizedIOSSocketValue(_ value: Any?, fallback: String) -> String {
+    if value == nil || value is NSNull {
+        return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    let text = String(describing: value ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let lowered = text.lowercased()
+    if text.isEmpty || lowered == "null" || lowered == "<null>" || lowered == "nil" {
+        return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return text
 }
 
 private enum RoomSortMode: String, CaseIterable, Identifiable {

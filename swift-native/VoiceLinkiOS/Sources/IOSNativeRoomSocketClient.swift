@@ -226,8 +226,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                   let payload = data.first as? [String: Any] else { return }
             let room = payload["room"] as? [String: Any] ?? [:]
             let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
-            let roomId = String(describing: room["id"] ?? fallbackRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
-            let roomName = String(describing: room["name"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let roomId = normalizedSocketText(room["id"], fallback: fallbackRoomId)
+            let roomName = normalizedSocketText(room["name"], fallback: self.joinedRoomName)
             self.joinedRoomId = roomId
             self.joinedRoomName = roomName
             self.connectionStatus = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
@@ -295,7 +295,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("room-users") { [weak self] data, _ in
             guard let self,
                   let payload = data.first as? [String: Any] else { return }
-            let roomId = String(describing: payload["roomId"] ?? self.joinedRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
+            let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
             let users = payload["users"] as? [Any] ?? []
             NotificationCenter.default.post(
                 name: .iosRoomUsersUpdated,
@@ -311,7 +311,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("room-messages") { [weak self] data, _ in
             guard let self,
                   let payload = data.first as? [String: Any] else { return }
-            let roomId = String(describing: payload["roomId"] ?? self.joinedRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
+            let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
             let messages = payload["messages"] as? [[String: Any]] ?? []
             for message in messages {
                 self.postRoomMessage(message, fallbackRoomId: roomId)
@@ -326,8 +326,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("direct-message") { data, _ in
             guard let payload = data.first as? [String: Any] else { return }
-            let userId = String(describing: payload["senderId"] ?? payload["userId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let userName = String(describing: payload["senderName"] ?? payload["userName"] ?? "User").trimmingCharacters(in: .whitespacesAndNewlines)
+            let userId = normalizedSocketText(payload["senderId"] ?? payload["userId"], fallback: "")
+            let userName = normalizedSocketText(payload["senderName"] ?? payload["userName"], fallback: "User")
             NotificationCenter.default.post(
                 name: .iosDirectMessageEvent,
                 object: nil,
@@ -335,13 +335,16 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             )
         }
 
-        socket.on("room-transcript") { data, _ in
-            guard let payload = data.first as? [String: Any] else { return }
-            let roomId = String(describing: payload["roomId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let roomName = String(describing: payload["roomName"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let speaker = String(describing: payload["speaker"] ?? payload["userName"] ?? payload["author"] ?? "Speaker")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let body = String(describing: payload["text"] ?? payload["body"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        socket.on("room-transcript") { [weak self] data, _ in
+            guard let self,
+                  let payload = data.first as? [String: Any] else { return }
+            let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
+            let roomName = normalizedSocketText(payload["roomName"], fallback: self.joinedRoomName)
+            let speaker = normalizedSocketText(
+                payload["speaker"] ?? payload["userName"] ?? payload["author"],
+                fallback: "Speaker"
+            )
+            let body = normalizedSocketText(payload["text"] ?? payload["body"], fallback: "")
             guard !roomId.isEmpty, !body.isEmpty else { return }
             NotificationCenter.default.post(
                 name: .iosRoomTranscriptEvent,
@@ -451,12 +454,18 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     }
 
     private func postRoomMessage(_ payload: [String: Any], fallbackRoomId: String) {
-        let roomId = String(describing: payload["roomId"] ?? fallbackRoomId).trimmingCharacters(in: .whitespacesAndNewlines)
-        let roomName = String(describing: payload["roomName"] ?? joinedRoomName).trimmingCharacters(in: .whitespacesAndNewlines)
-        let author = String(describing: payload["userName"] ?? payload["senderName"] ?? payload["author"] ?? "User")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = String(describing: payload["message"] ?? payload["content"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let type = String(describing: payload["type"] ?? "text").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomId = normalizedSocketText(payload["roomId"], fallback: fallbackRoomId)
+        let roomName = normalizedSocketText(payload["roomName"], fallback: joinedRoomName)
+        let author = normalizedSocketText(
+            payload["userName"] ?? payload["senderName"] ?? payload["author"],
+            fallback: "User"
+        )
+        let senderId = normalizedSocketText(
+            payload["userId"] ?? payload["senderId"] ?? payload["id"],
+            fallback: ""
+        )
+        let body = normalizedSocketText(payload["message"] ?? payload["content"], fallback: "")
+        let type = normalizedSocketText(payload["type"], fallback: "text")
         guard !roomId.isEmpty, !body.isEmpty else { return }
         NotificationCenter.default.post(
             name: .iosRoomMessageEvent,
@@ -464,8 +473,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             userInfo: [
                 "roomId": roomId,
                 "roomName": roomName,
+                "userId": senderId,
                 "author": author,
                 "body": body,
+                "isBot": (payload["isBot"] as? Bool) ?? false,
                 "type": type.isEmpty ? "text" : type,
                 "timestamp": Date().timeIntervalSince1970
             ]
@@ -473,8 +484,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     }
 
     private func updateIncomingAudioLevel(from payload: [String: Any]) {
-        let userId = String(describing: payload["userId"] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let userId = normalizedSocketText(payload["userId"], fallback: "")
         guard !userId.isEmpty else { return }
         let encoded = (payload["audioData"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let level = IOSRoomAudioRelayPlayer.packetLevel(fromBase64Audio: encoded)
@@ -493,6 +503,19 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
         return nil
     }
+}
+
+private func normalizedSocketText(_ value: Any?, fallback: String = "") -> String {
+    if value == nil || value is NSNull {
+        return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    let text = String(describing: value ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let lowered = text.lowercased()
+    if text.isEmpty || lowered == "null" || lowered == "<null>" || lowered == "nil" {
+        return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return text
 }
 
 private func decodeAuthUserPayload(_ rawJSON: String) -> [String: Any] {
