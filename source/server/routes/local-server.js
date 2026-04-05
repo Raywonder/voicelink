@@ -2078,7 +2078,8 @@ class VoiceLinkLocalServer {
         };
     }
 
-    getClientUploadRoot() {
+    getClientUploadRoot(options = {}) {
+        const ensureDirectories = options.ensureDirectories !== false;
         const fileSharingConfig = deployConfig.get('fileSharing') || {};
         const fallbackUploadPath = String(
             fileSharingConfig.fallbackUploadPath
@@ -2103,22 +2104,24 @@ class VoiceLinkLocalServer {
             }
         }
 
-        fs.mkdirSync(uploadRoot, { recursive: true });
+        if (ensureDirectories) {
+            fs.mkdirSync(uploadRoot, { recursive: true });
 
-        const sharedFolderName = String(fileSharingConfig.sharedFolderName || 'shared').trim() || 'shared';
-        const usersFolderName = String(fileSharingConfig.usersFolderName || 'users').trim() || 'users';
-        fs.mkdirSync(path.join(uploadRoot, sharedFolderName), { recursive: true });
-        fs.mkdirSync(path.join(uploadRoot, usersFolderName), { recursive: true });
+            const sharedFolderName = String(fileSharingConfig.sharedFolderName || 'shared').trim() || 'shared';
+            const usersFolderName = String(fileSharingConfig.usersFolderName || 'users').trim() || 'users';
+            fs.mkdirSync(path.join(uploadRoot, sharedFolderName), { recursive: true });
+            fs.mkdirSync(path.join(uploadRoot, usersFolderName), { recursive: true });
 
-        const retentionCategories = fileSharingConfig.retention?.categories || {};
-        for (const categoryName of Object.keys(retentionCategories)) {
-            fs.mkdirSync(path.join(uploadRoot, usersFolderName, categoryName), { recursive: true });
-        }
+            const retentionCategories = fileSharingConfig.retention?.categories || {};
+            for (const categoryName of Object.keys(retentionCategories)) {
+                fs.mkdirSync(path.join(uploadRoot, usersFolderName, categoryName), { recursive: true });
+            }
 
-        const jellyfinSync = fileSharingConfig.jellyfinSync || {};
-        if (jellyfinSync.enabled !== false) {
-            const mediaFolderName = String(jellyfinSync.mediaFolderName || 'media').trim() || 'media';
-            fs.mkdirSync(path.join(uploadRoot, sharedFolderName, mediaFolderName), { recursive: true });
+            const jellyfinSync = fileSharingConfig.jellyfinSync || {};
+            if (jellyfinSync.enabled !== false) {
+                const mediaFolderName = String(jellyfinSync.mediaFolderName || 'media').trim() || 'media';
+                fs.mkdirSync(path.join(uploadRoot, sharedFolderName, mediaFolderName), { recursive: true });
+            }
         }
 
         return uploadRoot;
@@ -2141,7 +2144,7 @@ class VoiceLinkLocalServer {
             return null;
         }
 
-        const uploadRoot = this.getClientUploadRoot();
+        const uploadRoot = this.getClientUploadRoot({ ensureDirectories: false });
         const absolutePath = path.join(uploadRoot, storageRelativePath);
         const relativeFsPath = path.relative(uploadRoot, absolutePath);
         if (!relativeFsPath || relativeFsPath.startsWith('..') || path.isAbsolute(relativeFsPath)) {
