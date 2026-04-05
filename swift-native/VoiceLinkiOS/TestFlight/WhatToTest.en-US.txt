@@ -1,8 +1,6 @@
-VoiceLink – TestFlight Build 54
+VoiceLink – TestFlight Build 55
 
 What to test:
-- Both servers show in Servers, with names, descriptions, and their full room counts.
-- Federated Rooms shows the visible room list without collapsing rooms across servers.
-- Joining a room shows members, bots, and server/system messages.
-- Room media starts after join and preview/start-stop sounds do not double.
-- Test Sound restarts cleanly instead of layering over itself.
+- Admin tab backups can refresh, create, restore, and save the selected backup to Files.
+- Main and Community server admin access still works while signed in.
+- SMB/file-sharing settings now load from both public server configs without breaking the app.
