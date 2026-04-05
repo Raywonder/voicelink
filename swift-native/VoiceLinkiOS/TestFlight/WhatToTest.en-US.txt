@@ -1,4 +1,4 @@
-VoiceLink – TestFlight Build 53
+VoiceLink – TestFlight Build 54
 
 What to test:
 - Both servers show in Servers, with names, descriptions, and their full room counts.
