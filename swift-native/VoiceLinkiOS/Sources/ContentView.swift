@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UserNotifications
 
 struct ContentView: View {
@@ -1695,6 +1696,14 @@ private struct AdminTabView: View {
     @State private var isAdmin = false
     @State private var adminRole = "user"
     @State private var adminAccessMessage = "Checking access..."
+    @State private var backups: [IOSConfigBackup] = []
+    @State private var backupLabel = ""
+    @State private var includeFederationSnapshot = true
+    @State private var includeLinkedServers = true
+    @State private var selectedBackupID: String?
+    @State private var backupStatus = ""
+    @State private var isRunningBackupAction = false
+    @State private var exportFile: IOSSharedFile?
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
 
@@ -1720,6 +1729,83 @@ private struct AdminTabView: View {
                             applyAdminServerURL()
                         }
                     }
+
+                    Section("Backups") {
+                        TextField("Optional backup label", text: $backupLabel)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        Toggle("Include federation snapshot", isOn: $includeFederationSnapshot)
+                        Toggle("Include linked server list", isOn: $includeLinkedServers)
+
+                        Button(isRunningBackupAction ? "Creating Backup…" : "Create Remote Backup") {
+                            Task { await createBackup() }
+                        }
+                        .disabled(isRunningBackupAction)
+
+                        if backups.isEmpty {
+                            Text("No backups loaded for this server yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(backups) { backup in
+                                Button {
+                                    selectedBackupID = backup.id
+                                } label: {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(backup.label?.isEmpty == false ? backup.label! : backup.filename)
+                                                .foregroundStyle(.primary)
+                                            Text(backup.filename)
+                                                .font(.caption.monospaced())
+                                                .foregroundStyle(.secondary)
+                                            HStack(spacing: 10) {
+                                                if let createdAt = backup.createdAt {
+                                                    Text(createdAt)
+                                                }
+                                                if let size = backup.size {
+                                                    Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                                                }
+                                            }
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if selectedBackupID == backup.id {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(.tint)
+                                                .accessibilityHidden(true)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(backup.label?.isEmpty == false ? backup.label! : backup.filename)
+                                .accessibilityValue(selectedBackupID == backup.id ? "Selected" : "Not selected")
+                            }
+                        }
+
+                        HStack {
+                            Button("Refresh Backups") {
+                                Task { await loadBackups() }
+                            }
+                            .disabled(isRunningBackupAction)
+
+                            Button("Restore Selected", role: .destructive) {
+                                Task { await restoreSelectedBackup() }
+                            }
+                            .disabled(selectedBackup == nil || isRunningBackupAction)
+                        }
+
+                        Button("Save Selected to Files") {
+                            Task { await exportSelectedBackupToFiles() }
+                        }
+                        .disabled(selectedBackup == nil || isRunningBackupAction)
+
+                        if !backupStatus.isEmpty {
+                            Text(backupStatus)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section("Server Health") {
@@ -1738,6 +1824,9 @@ private struct AdminTabView: View {
             .onAppear {
                 draftAdminURL = serverURL
                 Task { await refreshStatus() }
+            }
+            .sheet(item: $exportFile) { file in
+                IOSShareSheet(items: [file.url])
             }
         }
     }
@@ -1810,7 +1899,165 @@ private struct AdminTabView: View {
             adminRole = "user"
             adminAccessMessage = "Could not verify admin role right now."
         }
+
+        if isAdmin {
+            await loadBackups()
+        } else {
+            backups = []
+            selectedBackupID = nil
+        }
     }
+
+    @MainActor
+    private func loadBackups() async {
+        guard let url = URL(string: "\(normalizedBaseURL)/api/config/backups") else { return }
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 12
+            if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                return
+            }
+            let decoded = try JSONDecoder().decode(IOSConfigBackupEnvelope.self, from: data)
+            backups = decoded.backups
+            if selectedBackupID == nil {
+                selectedBackupID = decoded.backups.first?.id
+            }
+        } catch {
+            backupStatus = "Could not load backups right now."
+        }
+    }
+
+    @MainActor
+    private func createBackup() async {
+        guard let url = URL(string: "\(normalizedBaseURL)/api/config/backup") else { return }
+        isRunningBackupAction = true
+        defer { isRunningBackupAction = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 20
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            }
+            let payload: [String: Any] = [
+                "label": backupLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+                "includeFederationSnapshot": includeFederationSnapshot,
+                "includeLinkedServers": includeLinkedServers
+            ]
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                backupStatus = "Backup creation failed."
+                return
+            }
+            backupLabel = ""
+            backupStatus = "Remote backup created."
+            await loadBackups()
+        } catch {
+            backupStatus = "Backup creation failed."
+        }
+    }
+
+    @MainActor
+    private func restoreSelectedBackup() async {
+        guard let backup = selectedBackup,
+              let url = URL(string: "\(normalizedBaseURL)/api/config/restore") else { return }
+        isRunningBackupAction = true
+        defer { isRunningBackupAction = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 20
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["filename": backup.filename])
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                backupStatus = "Restore failed."
+                return
+            }
+            backupStatus = "Restored \(backup.filename)."
+            await refreshStatus()
+        } catch {
+            backupStatus = "Restore failed."
+        }
+    }
+
+    @MainActor
+    private func exportSelectedBackupToFiles() async {
+        guard let backup = selectedBackup,
+              let encodedFilename = backup.filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(normalizedBaseURL)/api/config/backups/\(encodedFilename)/download") else { return }
+        isRunningBackupAction = true
+        defer { isRunningBackupAction = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 20
+            if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                backupStatus = "Could not download the selected backup."
+                return
+            }
+            let destination = FileManager.default.temporaryDirectory.appendingPathComponent(backup.filename)
+            try? FileManager.default.removeItem(at: destination)
+            try data.write(to: destination, options: .atomic)
+            exportFile = IOSSharedFile(url: destination)
+            backupStatus = "Backup ready to save to Files."
+        } catch {
+            backupStatus = "Could not download the selected backup."
+        }
+    }
+
+    private var selectedBackup: IOSConfigBackup? {
+        backups.first(where: { $0.id == selectedBackupID })
+    }
+}
+
+private struct IOSConfigBackupEnvelope: Codable {
+    let backups: [IOSConfigBackup]
+}
+
+private struct IOSConfigBackup: Codable, Identifiable, Hashable {
+    let filename: String
+    let path: String?
+    let createdAt: String?
+    let label: String?
+    let size: Int?
+    let error: Bool?
+
+    var id: String { filename }
+}
+
+private struct IOSSharedFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct IOSShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private struct SettingsTab: View {

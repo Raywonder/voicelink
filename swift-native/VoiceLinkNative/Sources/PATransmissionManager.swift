@@ -584,6 +584,8 @@ struct PAIndicator: View {
                             .foregroundColor(.white)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Stop PA")
+                    .accessibilityHint("Stops public address broadcast.")
                 }
             }
             .padding(.horizontal, 12)
@@ -620,6 +622,9 @@ struct PAButton: View {
             }
             .buttonStyle(.plain)
             .help("PA Broadcast (Cmd+Shift+P)")
+            .accessibilityLabel("PA Broadcast")
+            .accessibilityValue(paManager.isTransmitting ? "On" : "Off")
+            .accessibilityHint(paManager.isTransmitting ? "Stops the current public address broadcast." : "Choose where to start a public address broadcast.")
             .popover(isPresented: $showTargetPicker) {
                 PATargetPicker(onSelect: { target in
                     paManager.startTransmission(target: target)
@@ -878,6 +883,7 @@ struct PASettingsView: View {
                 HStack {
                     Text("Chime volume:")
                     Slider(value: $paManager.settings.chimeVolume, in: 0.2...1.0, step: 0.1)
+                        .accessibilityLabel("Chime volume")
                     Text("\(Int(paManager.settings.chimeVolume * 100))%")
                         .frame(width: 45)
                 }

@@ -219,6 +219,53 @@ class CopyPartyManager: ObservableObject {
         }
     }
 
+    func applyServerFileSharingConfig(_ serverConfig: ServerFileSharingConfig?) {
+        guard let serverConfig else { return }
+
+        if let copyParty = serverConfig.copyParty {
+            let normalizedPrimary = APIEndpointResolver.normalize(copyParty.primaryServer)
+            if !normalizedPrimary.isEmpty {
+                config.primaryServer = normalizedPrimary
+            }
+        }
+
+        guard let smb = serverConfig.smb else {
+            saveConfig()
+            return
+        }
+
+        if let username = smb.username?.trimmingCharacters(in: .whitespacesAndNewlines), !username.isEmpty {
+            config.smbUsername = username
+        }
+
+        let mergedHosts = smb.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !mergedHosts.isEmpty {
+            config.smbHostnames = mergedHosts
+        }
+
+        let localHosts = smb.local?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !localHosts.isEmpty {
+            config.localSMBHostnames = localHosts
+        }
+
+        let centralHosts = smb.central?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !centralHosts.isEmpty {
+            config.centralSMBHostnames = centralHosts
+        }
+
+        if let preferredShare = smb.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !preferredShare.isEmpty {
+            config.smbPreferredShare = preferredShare
+        }
+        if let localShare = smb.local?.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !localShare.isEmpty {
+            config.localSMBPreferredShare = localShare
+        }
+        if let centralShare = smb.central?.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !centralShare.isEmpty {
+            config.centralSMBPreferredShare = centralShare
+        }
+
+        saveConfig()
+    }
+
     func updateCredentials(username: String, password: String) {
         config.username = username
         config.password = password
