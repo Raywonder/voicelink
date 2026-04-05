@@ -18,6 +18,7 @@ struct VoiceLinkApp: App {
     @StateObject private var appState = AppState()
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var localDiscovery = LocalServerDiscovery.shared
+    @StateObject private var licensing = LicensingManager.shared
     @State private var showUpdaterSheet = false
 
     var body: some Scene {
@@ -385,7 +386,6 @@ struct VoiceLinkApp: App {
             }
 
             CommandMenu("License") {
-                let licensing = LicensingManager.shared
                 Button("View License") {
                     appState.currentScreen = .licensing
                 }
@@ -429,7 +429,7 @@ struct VoiceLinkApp: App {
                 .help("Open Deployment Manager to deploy the latest server build and finish first-admin setup")
 
                 // Local server discovery - requires license
-                if LicensingManager.shared.licenseStatus == .licensed {
+                if licensing.licenseStatus == .licensed {
                     Divider()
 
                     Button("Discover Local Servers") {

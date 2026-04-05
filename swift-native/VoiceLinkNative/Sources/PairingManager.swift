@@ -29,6 +29,10 @@ class PairingManager: ObservableObject {
         membershipLevel.maxDevices + paidTier.bonusDevices
     }
 
+    var managedServerLimit: Int {
+        max(2, maxLinkedDevices)
+    }
+
     var canUpgradeLevel: Bool {
         membershipStats.canUpgradeTo(level: membershipLevel.nextLevel) && trustScore >= 50
     }
@@ -100,7 +104,7 @@ class PairingManager: ObservableObject {
 
         var description: String {
             switch self {
-            case .newbie: return "New community member - 1 device, 2 rooms"
+            case .newbie: return "New community member - 2 managed servers, 2 rooms"
             case .regular: return "Active member - 2 devices, 5 rooms"
             case .outstanding: return "Outstanding member - 3 devices, 10 rooms"
             }
@@ -108,7 +112,7 @@ class PairingManager: ObservableObject {
 
         var maxDevices: Int {
             switch self {
-            case .newbie: return 1
+            case .newbie: return 2
             case .regular: return 2
             case .outstanding: return 3
             }
@@ -247,22 +251,87 @@ class PairingManager: ObservableObject {
 
     // MARK: - Pairing Code Generation (Server Side)
 
-    func generatePairingCode() -> String {
-        // Generate 6-digit alphanumeric code
-        let characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Removed confusing chars (0, O, 1, I)
-        let code = String((0..<6).map { _ in characters.randomElement()! })
-
+    func generatePairingCode(serverURL: String? = nil, completion: ((Bool, String?) -> Void)? = nil) {
         DispatchQueue.main.async {
-            self.currentPairingCode = code
-            self.pairingCodeExpiry = Date().addingTimeInterval(60) // 60 second expiry
-            self.isPairingMode = true
-            self.pairingStatus = .waitingForPair
+            self.pairingStatus = .generatingCode
+            self.pairingError = nil
         }
 
-        // Start expiry timer
-        startExpiryTimer()
+        let trimmedServerURL = (serverURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        let resolvedServerURL = !trimmedServerURL.isEmpty
+            ? trimmedServerURL
+            : (ServerManager.shared.baseURL ?? APIEndpointResolver.canonicalMainBase)
+        guard let url = URL(string: "\(resolvedServerURL)/api/pairing/generate") else {
+            DispatchQueue.main.async {
+                self.pairingStatus = .failed
+                self.pairingError = "Invalid server URL"
+                completion?(false, "Invalid server URL")
+            }
+            return
+        }
 
-        return code
+        guard let accessToken = AuthenticationManager.shared.currentUser?.accessToken,
+              !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DispatchQueue.main.async {
+                self.pairingStatus = .failed
+                self.pairingError = "Sign in as a server admin before generating a pairing code."
+                completion?(false, self.pairingError)
+            }
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "authToken": accessToken
+        ])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error {
+                    self.pairingStatus = .failed
+                    self.pairingError = error.localizedDescription
+                    completion?(false, error.localizedDescription)
+                    return
+                }
+
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.pairingStatus = .failed
+                    self.pairingError = "Invalid response from server"
+                    completion?(false, self.pairingError)
+                    return
+                }
+
+                let success = (json["success"] as? Bool) ?? false
+                guard success else {
+                    let message = json["error"] as? String ?? "Could not generate pairing code"
+                    self.pairingStatus = .failed
+                    self.pairingError = message
+                    completion?(false, message)
+                    return
+                }
+
+                let code = (json["code"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let expiresAt = (json["expiresAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+                    ?? Date().addingTimeInterval(60)
+                guard !code.isEmpty else {
+                    self.pairingStatus = .failed
+                    self.pairingError = "Server returned an empty pairing code"
+                    completion?(false, self.pairingError)
+                    return
+                }
+
+                self.currentPairingCode = code
+                self.pairingCodeExpiry = expiresAt
+                self.isPairingMode = true
+                self.pairingStatus = .waitingForPair
+                self.startExpiryTimer()
+                completion?(true, nil)
+            }
+        }.resume()
     }
 
     private func startExpiryTimer() {
@@ -421,13 +490,14 @@ class PairingManager: ObservableObject {
     // MARK: - Linked Servers Management
 
     func addLinkedServer(_ server: LinkedServer) {
-        guard linkedServers.count < maxLinkedDevices else {
-            pairingError = "Maximum \(maxLinkedDevices) devices can be linked"
+        let alreadyLinked = linkedServers.contains(where: { $0.url == server.url || $0.id == server.id })
+        guard alreadyLinked || linkedServers.count < managedServerLimit else {
+            pairingError = "Maximum \(managedServerLimit) servers can be linked"
             return
         }
 
         // Check if already linked
-        if !linkedServers.contains(where: { $0.url == server.url }) {
+        if !alreadyLinked {
             linkedServers.append(server)
             saveLinkedServers()
 
@@ -438,6 +508,90 @@ class PairingManager: ObservableObject {
                 userInfo: ["server": server]
             )
         }
+    }
+
+    func canLinkAnotherServer() -> Bool {
+        trustLevel != .banned && linkedServers.count < managedServerLimit
+    }
+
+    func syncServersFromAuthority(_ installs: [[String: Any]]) {
+        guard !installs.isEmpty else { return }
+
+        var mergedLinked = linkedServers
+        var mergedOwned = ownedServers
+
+        for install in installs {
+            let serverId = String(install["serverId"] as? String ?? install["id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let nodeUrl = String(install["nodeUrl"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !serverId.isEmpty || !nodeUrl.isEmpty else { continue }
+
+            let name = serverDisplayName(for: install, fallbackURL: nodeUrl)
+            let linkedAt = parseAuthorityDate(install["linkedAt"] as? String) ?? Date()
+            let lastSeen = parseAuthorityDate(install["lastSeen"] as? String)
+            let linkedId = !serverId.isEmpty ? serverId : (nodeUrl.isEmpty ? UUID().uuidString : nodeUrl)
+
+            if let index = mergedLinked.firstIndex(where: { $0.id == linkedId || (!nodeUrl.isEmpty && $0.url == nodeUrl) }) {
+                var existing = mergedLinked[index]
+                existing.isOnline = lastSeen != nil
+                mergedLinked[index] = existing
+            } else if !nodeUrl.isEmpty {
+                mergedLinked.append(
+                    LinkedServer(
+                        id: linkedId,
+                        name: name,
+                        url: nodeUrl,
+                        ownerId: nil,
+                        pairedAt: linkedAt,
+                        accessToken: nil,
+                        isOnline: lastSeen != nil,
+                        authMethod: .whmcs,
+                        authUserId: AuthenticationManager.shared.currentUser?.id,
+                        authUsername: AuthenticationManager.shared.currentUser?.username
+                    )
+                )
+            }
+
+            let ownedId = !serverId.isEmpty ? serverId : linkedId
+            if let index = mergedOwned.firstIndex(where: { $0.id == ownedId || (!nodeUrl.isEmpty && $0.url == nodeUrl) }) {
+                var existing = mergedOwned[index]
+                existing.isRunning = lastSeen != nil
+                mergedOwned[index] = existing
+            } else if !nodeUrl.isEmpty {
+                mergedOwned.append(
+                    OwnedServer(
+                        id: ownedId,
+                        name: name,
+                        url: nodeUrl,
+                        ownerWallet: nil,
+                        mintedAt: linkedAt,
+                        nftTokenId: nil,
+                        isRunning: lastSeen != nil
+                    )
+                )
+            }
+        }
+
+        linkedServers = mergedLinked
+        ownedServers = mergedOwned
+        saveLinkedServers()
+    }
+
+    private func serverDisplayName(for install: [String: Any], fallbackURL: String) -> String {
+        let explicitName = String(install["name"] as? String ?? install["serverName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicitName.isEmpty {
+            return explicitName
+        }
+
+        guard let url = URL(string: fallbackURL), let host = url.host, !host.isEmpty else {
+            return "VoiceLink Server"
+        }
+
+        return host
+    }
+
+    private func parseAuthorityDate(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        return ISO8601DateFormatter().date(from: value)
     }
 
     func unlinkServer(_ server: LinkedServer) {
