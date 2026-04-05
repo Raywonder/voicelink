@@ -12705,7 +12705,8 @@ class VoiceLinkLocalServer {
                 visibilityOverrideActive: serverPolicies.visibilityOverride.active,
                 backgroundStreams: config.backgroundStreams || null,
                 pushover: config.pushover || null,
-                messageSettings: this.getMessageSettingsConfig()
+                messageSettings: this.getMessageSettingsConfig(),
+                fileSharing: this.getFileSharingAccessConfig()
             };
             res.json(flattened);
         });
@@ -13094,27 +13095,6 @@ class VoiceLinkLocalServer {
             res.json({ success: true, streams });
         });
 
-        // Get specific config section
-        this.app.get('/api/config/:section', (req, res) => {
-            const section = deployConfig.get(req.params.section);
-            if (section) {
-                res.json(section);
-            } else {
-                res.status(404).json({ error: 'Section not found' });
-            }
-        });
-
-        // Update specific config section
-        this.app.put('/api/config/:section', async (req, res) => {
-            try {
-                deployConfig.updateSection(req.params.section, req.body);
-                await deployConfig.save();
-                res.json({ success: true });
-            } catch (error) {
-                res.status(500).json({ error: error.message });
-            }
-        });
-
         // Get available presets
         this.app.get('/api/config/presets/list', (req, res) => {
             res.json({ presets: deployConfig.getPresets() });
@@ -13185,12 +13165,47 @@ class VoiceLinkLocalServer {
             res.json({ backups });
         });
 
+        // Download backup
+        this.app.get('/api/config/backups/:filename/download', (req, res) => {
+            const filename = path.basename(req.params.filename || '');
+            const backups = deployConfig.listBackups();
+            const backup = backups.find((entry) => entry.filename === filename);
+            if (!backup?.path || !fs.existsSync(backup.path)) {
+                return res.status(404).json({ error: 'Backup not found' });
+            }
+
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.sendFile(backup.path);
+        });
+
         // Restore from backup
         this.app.post('/api/config/restore', async (req, res) => {
             try {
                 const { filename } = req.body;
                 const config = await deployConfig.restoreBackup(filename);
                 res.json({ success: true, message: 'Configuration restored', config });
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Get specific config section
+        this.app.get('/api/config/:section', (req, res) => {
+            const section = deployConfig.get(req.params.section);
+            if (section) {
+                res.json(section);
+            } else {
+                res.status(404).json({ error: 'Section not found' });
+            }
+        });
+
+        // Update specific config section
+        this.app.put('/api/config/:section', async (req, res) => {
+            try {
+                deployConfig.updateSection(req.params.section, req.body);
+                await deployConfig.save();
+                res.json({ success: true });
             } catch (error) {
                 res.status(500).json({ error: error.message });
             }

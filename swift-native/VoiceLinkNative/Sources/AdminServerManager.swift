@@ -266,6 +266,7 @@ class AdminServerManager: ObservableObject {
                 }
                 if httpResponse.statusCode == 200 {
                     serverConfig = try decoder.decode(ServerConfig.self, from: data)
+                    CopyPartyManager.shared.applyServerFileSharingConfig(serverConfig?.fileSharing)
                     currentServerURL = base
                     error = nil
                     return
@@ -1727,10 +1728,12 @@ class AdminServerManager: ObservableObject {
     func fetchAvailableModules(sortBy: String = "recommended", category: String? = nil) async {
         modulesLoading = true
         defer { modulesLoading = false }
+        let cacheBust = String(Int(Date().timeIntervalSince1970))
 
         var components = URLComponents(string: "\(effectiveServerURL)/api/modules")
         components?.queryItems = [
-            URLQueryItem(name: "sortBy", value: sortBy)
+            URLQueryItem(name: "sortBy", value: sortBy),
+            URLQueryItem(name: "cb", value: cacheBust)
         ]
         if let category, !category.isEmpty {
             components?.queryItems?.append(URLQueryItem(name: "category", value: category))
@@ -1782,11 +1785,15 @@ class AdminServerManager: ObservableObject {
     }
 
     func fetchInstalledModules() async {
-        guard let url = URL(string: "\(effectiveServerURL)/api/modules/installed") else {
+        guard var components = URLComponents(string: "\(effectiveServerURL)/api/modules/installed") else {
             error = "Invalid server URL"
             return
         }
-
+        components.queryItems = [URLQueryItem(name: "cb", value: String(Int(Date().timeIntervalSince1970)))]
+        guard let url = components.url else {
+            error = "Invalid server URL"
+            return
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = 6
         if let token = authToken {
@@ -2036,6 +2043,104 @@ class AdminServerManager: ObservableObject {
         } catch {
             self.error = "Failed to sync FlexPBX hold media: \(error.localizedDescription)"
             return nil
+        }
+    }
+
+    func fetchConfigBackups() async -> [ServerConfigBackup] {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/backups") else {
+            error = "Invalid server URL"
+            return []
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to fetch server backups"
+                return []
+            }
+            return try JSONDecoder().decode(ServerConfigBackupsEnvelope.self, from: data).backups
+        } catch {
+            self.error = "Failed to fetch server backups: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    func createConfigBackup(label: String?, includeFederationSnapshot: Bool, includeLinkedServers: Bool) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/backup") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        let payload: [String: Any] = [
+            "label": label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            "includeFederationSnapshot": includeFederationSnapshot,
+            "includeLinkedServers": includeLinkedServers
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to create server backup"
+                return false
+            }
+            if let result = try? JSONDecoder().decode(ServerConfigBackupCreateResponse.self, from: data) {
+                moduleActionMessage = "Created backup: \(result.filename)"
+            } else {
+                moduleActionMessage = "Created server backup"
+            }
+            return true
+        } catch {
+            self.error = "Failed to create server backup: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func restoreConfigBackup(filename: String) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/restore") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["filename": filename], options: [])
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to restore server backup"
+                return false
+            }
+            moduleActionMessage = "Restored backup: \(filename)"
+            await fetchServerConfig()
+            return true
+        } catch {
+            self.error = "Failed to restore server backup: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -2367,6 +2472,7 @@ struct ServerConfig: Codable {
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
     var recordingEnabled: Bool
+    var fileSharing: ServerFileSharingConfig?
 
     enum CodingKeys: String, CodingKey {
         case serverName
@@ -2389,6 +2495,7 @@ struct ServerConfig: Codable {
         case backgroundStreams
         case pushover
         case recordingEnabled
+        case fileSharing
     }
 
     init(
@@ -2412,6 +2519,8 @@ struct ServerConfig: Codable {
         backgroundStreams: BackgroundStreamsConfig? = nil,
         pushover: PushoverConfig? = nil,
         recordingEnabled: Bool = false
+        ,
+        fileSharing: ServerFileSharingConfig? = nil
     ) {
         self.serverName = serverName
         self.serverDescription = serverDescription
@@ -2433,6 +2542,7 @@ struct ServerConfig: Codable {
         self.backgroundStreams = backgroundStreams
         self.pushover = pushover
         self.recordingEnabled = recordingEnabled
+        self.fileSharing = fileSharing
     }
 
     init(from decoder: Decoder) throws {
@@ -2457,7 +2567,38 @@ struct ServerConfig: Codable {
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
         recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
+        fileSharing = try container.decodeIfPresent(ServerFileSharingConfig.self, forKey: .fileSharing)
     }
+}
+
+struct ServerFileSharingConfig: Codable, Equatable {
+    var enabled: Bool
+    var uploadRoot: String?
+    var smb: ServerSMBAccessConfig?
+    var copyParty: ServerCopyPartyAccessConfig?
+}
+
+struct ServerSMBAccessConfig: Codable, Equatable {
+    var enabled: Bool
+    var username: String?
+    var hostnames: [String]?
+    var local: ServerSMBLayerConfig?
+    var central: ServerSMBLayerConfig?
+    var preferredShareKey: String?
+    var preferredShareName: String?
+}
+
+struct ServerSMBLayerConfig: Codable, Equatable {
+    var enabled: Bool?
+    var hostnames: [String]?
+    var preferredShareKey: String?
+    var preferredShareName: String?
+}
+
+struct ServerCopyPartyAccessConfig: Codable, Equatable {
+    var primaryServer: String
+    var alternativeServers: [String]?
+    var externalShareBaseURL: String?
 }
 
 struct ServerVisibilityConfig: Codable, Equatable {
@@ -3584,6 +3725,27 @@ struct VoiceLinkFlexPBXSyncedClass: Codable, Hashable, Identifiable {
     let success: Bool
 
     var id: String { "\(name)|\(roomId ?? "global")" }
+}
+
+struct ServerConfigBackupsEnvelope: Codable, Hashable {
+    let backups: [ServerConfigBackup]
+}
+
+struct ServerConfigBackupCreateResponse: Codable, Hashable {
+    let success: Bool
+    let path: String?
+    let filename: String
+}
+
+struct ServerConfigBackup: Codable, Hashable, Identifiable {
+    let filename: String
+    let path: String?
+    let createdAt: String?
+    let label: String?
+    let size: Int?
+    let error: Bool?
+
+    var id: String { filename }
 }
 
 struct DeploymentManagerStatus: Codable {

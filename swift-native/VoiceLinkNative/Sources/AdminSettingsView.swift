@@ -4978,6 +4978,7 @@ struct AdminModulesSection: View {
     @State private var configEditorModule: ModuleEditorRequest?
     @State private var configEditorText: String = "{}"
     @State private var showFlexPBXHoldMediaManager = false
+    @State private var showBackupManager = false
 
     struct ModuleEditorRequest: Identifiable {
         let module: AdminModuleInfo
@@ -5141,6 +5142,11 @@ struct AdminModulesSection: View {
                                             showFlexPBXHoldMediaManager = true
                                         }
                                     }
+                                    if module.id == "backup-manager" {
+                                        Button("Backup Manager") {
+                                            showBackupManager = true
+                                        }
+                                    }
                                     Button("Standard Controls") {
                                         configEditorModule = ModuleEditorRequest(module: module, useAdvancedJSON: false)
                                         configEditorText = module.configJSON
@@ -5215,6 +5221,9 @@ struct AdminModulesSection: View {
         .sheet(isPresented: $showFlexPBXHoldMediaManager) {
             VoiceLinkFlexPBXHoldMediaManagerSheet()
         }
+        .sheet(isPresented: $showBackupManager) {
+            BackupManagerSheet()
+        }
     }
 
     private func runAction(_ key: String, operation: @escaping () async -> Bool) {
@@ -5223,6 +5232,180 @@ struct AdminModulesSection: View {
             _ = await operation()
             actionInFlight = nil
         }
+    }
+}
+
+private struct BackupManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var adminManager = AdminServerManager.shared
+    @State private var backups: [ServerConfigBackup] = []
+    @State private var isLoading = false
+    @State private var isSaving = false
+    @State private var backupLabel = ""
+    @State private var includeFederationSnapshot = true
+    @State private var includeLinkedServers = true
+    @State private var selectedBackupID: String?
+    @State private var restoreConfirmationShown = false
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if isLoading && backups.isEmpty {
+                    ProgressView("Loading backups…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Form {
+                        Section("Current Target") {
+                            HStack(alignment: .top) {
+                                Text("Server")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Text(adminManager.selectedManagementTargetName)
+                                    .multilineTextAlignment(.trailing)
+                                    .foregroundColor(.secondary)
+                            }
+                            HStack(alignment: .top) {
+                                Text("URL")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Text(adminManager.resolvedServerURL)
+                                    .multilineTextAlignment(.trailing)
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+
+                        Section("Create Backup") {
+                            TextField("Optional label", text: $backupLabel)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Backup label")
+                            Toggle("Include federation snapshot", isOn: $includeFederationSnapshot)
+                            Toggle("Include linked server list", isOn: $includeLinkedServers)
+
+                            Button(isSaving ? "Creating Backup…" : "Create Backup") {
+                                Task {
+                                    isSaving = true
+                                    let success = await adminManager.createConfigBackup(
+                                        label: backupLabel.isEmpty ? nil : backupLabel,
+                                        includeFederationSnapshot: includeFederationSnapshot,
+                                        includeLinkedServers: includeLinkedServers
+                                    )
+                                    if success {
+                                        backupLabel = ""
+                                        backups = await adminManager.fetchConfigBackups()
+                                    }
+                                    isSaving = false
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isSaving)
+                        }
+
+                        Section("Available Backups") {
+                            if backups.isEmpty {
+                                Text("No backups found on this server.")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(backups) { backup in
+                                    Button {
+                                        selectedBackupID = backup.id
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(backup.label?.isEmpty == false ? backup.label! : backup.filename)
+                                                        .font(.headline)
+                                                    Text(backup.filename)
+                                                        .font(.caption.monospaced())
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                if selectedBackupID == backup.id {
+                                                    Image(systemName: "checkmark.circle.fill")
+                                                        .foregroundColor(.accentColor)
+                                                        .accessibilityHidden(true)
+                                                }
+                                            }
+
+                                            HStack(spacing: 12) {
+                                                if let createdAt = backup.createdAt {
+                                                    Text(createdAt)
+                                                }
+                                                if let size = backup.size {
+                                                    Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                                                }
+                                            }
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityAddTraits(selectedBackupID == backup.id ? [.isSelected] : [])
+                                }
+                            }
+                        }
+
+                        Section("Restore") {
+                            Text("Restore will replace the current server configuration after creating a pre-restore backup.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Button("Restore Selected Backup", role: .destructive) {
+                                restoreConfirmationShown = true
+                            }
+                            .disabled(selectedBackup == nil || isSaving)
+                        }
+
+                        if let message = adminManager.moduleActionMessage, !message.isEmpty {
+                            Section("Status") {
+                                Text(message)
+                                    .foregroundColor(.green)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Backup Manager")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button("Refresh") {
+                        Task {
+                            isLoading = true
+                            backups = await adminManager.fetchConfigBackups()
+                            isLoading = false
+                        }
+                    }
+                    .disabled(isLoading || isSaving)
+                }
+            }
+            .task {
+                isLoading = true
+                backups = await adminManager.fetchConfigBackups()
+                isLoading = false
+            }
+            .alert("Restore Backup", isPresented: $restoreConfirmationShown, presenting: selectedBackup) { backup in
+                Button("Cancel", role: .cancel) {}
+                Button("Restore", role: .destructive) {
+                    Task {
+                        isSaving = true
+                        _ = await adminManager.restoreConfigBackup(filename: backup.filename)
+                        backups = await adminManager.fetchConfigBackups()
+                        isSaving = false
+                    }
+                }
+            } message: { backup in
+                Text("Restore \(backup.label?.isEmpty == false ? backup.label! : backup.filename) on \(adminManager.selectedManagementTargetName)?")
+            }
+        }
+        .frame(minWidth: 760, minHeight: 640)
+    }
+
+    private var selectedBackup: ServerConfigBackup? {
+        backups.first(where: { $0.id == selectedBackupID })
     }
 }
 
