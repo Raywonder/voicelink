@@ -266,7 +266,8 @@ final class IOSRoomMessagingState: ObservableObject {
             isInRoom = true
         }
         guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
-        guard let rawUsers = info["users"] as? [Any] else { return }
+        let rawUsers = iosUsersArray(from: info)
+        guard !rawUsers.isEmpty || !directTargets.isEmpty else { return }
         let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in
             let user = (entry as? [String: Any]) ?? ((entry as? NSDictionary) as? [String: Any]) ?? [:]
             guard !user.isEmpty else { return nil }
@@ -412,6 +413,28 @@ private func normalizedIOSSocketValue(_ value: Any?, fallback: String) -> String
         return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     return text
+}
+
+private func iosUsersArray(from info: [AnyHashable: Any]) -> [Any] {
+    if let users = info["users"] as? [Any] {
+        return users
+    }
+    if let payloadUsers = info["payload"] as? [String: Any], let users = payloadUsers["users"] as? [Any] {
+        return users
+    }
+    if let room = info["room"] as? [String: Any], let users = room["users"] as? [Any] {
+        return users
+    }
+    if let room = info["room"] as? NSDictionary, let users = room["users"] as? [Any] {
+        return users
+    }
+    if let members = info["members"] as? [Any] {
+        return members
+    }
+    if let participants = info["participants"] as? [Any] {
+        return participants
+    }
+    return []
 }
 
 private enum RoomSortMode: String, CaseIterable, Identifiable {
