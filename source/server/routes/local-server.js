@@ -15232,6 +15232,51 @@ class VoiceLinkLocalServer {
             }
         });
 
+        this.app.get('/api/modules/voicelink-flexpbx/hold-media', (req, res) => {
+            if (!this.modules.voiceLinkFlexPBX) {
+                return res.status(503).json({ success: false, error: 'VoiceLink FlexPBX module not installed or enabled' });
+            }
+            res.json({
+                success: true,
+                holdMedia: this.modules.voiceLinkFlexPBX.buildHoldMediaStatus()
+            });
+        });
+
+        this.app.put('/api/modules/voicelink-flexpbx/hold-media', (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const normalizedHoldMedia = this.modules.voiceLinkFlexPBX
+                ? this.modules.voiceLinkFlexPBX.normalizeHoldMediaConfig((req.body && typeof req.body === 'object') ? req.body : {})
+                : ((req.body && typeof req.body === 'object') ? req.body : {});
+            const result = this.moduleRegistry.updateModuleConfig('voicelink-flexpbx', {
+                holdMedia: normalizedHoldMedia
+            });
+            if (result.success) {
+                this.initializeModules();
+            }
+            res.json({
+                success: !!result.success,
+                holdMedia: this.modules.voiceLinkFlexPBX?.buildHoldMediaStatus() || normalizedHoldMedia,
+                error: result.error || null
+            });
+        });
+
+        this.app.post('/api/modules/voicelink-flexpbx/hold-media/sync', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            if (!this.modules.voiceLinkFlexPBX) {
+                return res.status(503).json({ success: false, error: 'VoiceLink FlexPBX module not installed or enabled' });
+            }
+            try {
+                const result = await this.modules.voiceLinkFlexPBX.syncHoldMediaToPBX();
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         // ============================================
         // DEPLOYMENT MANAGER MODULE API
         // ============================================

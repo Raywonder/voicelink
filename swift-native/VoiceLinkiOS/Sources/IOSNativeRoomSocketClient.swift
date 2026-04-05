@@ -224,7 +224,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("joined-room") { [weak self] data, _ in
             guard let self,
                   let payload = self.socketDictionary(from: data) else { return }
-            let room = payload["room"] as? [String: Any] ?? [:]
+            let room = Self.socketDictionaryValue(payload["room"]) ?? [:]
             let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
             let roomId = normalizedSocketText(room["id"], fallback: fallbackRoomId)
             let roomName = normalizedSocketText(room["name"], fallback: self.joinedRoomName)
@@ -236,7 +236,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 object: nil,
                 userInfo: ["roomId": roomId, "roomName": roomName]
             )
-            if let users = room["users"] as? [Any] {
+            let users = (room["users"] as? [Any]) ?? (payload["users"] as? [Any]) ?? []
+            if !users.isEmpty {
                 NotificationCenter.default.post(
                     name: .iosRoomUsersUpdated,
                     object: nil,

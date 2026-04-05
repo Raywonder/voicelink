@@ -378,6 +378,93 @@ const AVAILABLE_MODULES = {
             },
             cacheTTL: 300000
         }
+    },
+
+    'voicelink-flexpbx': {
+        id: 'voicelink-flexpbx',
+        name: 'VoiceLink FlexPBX Bridge',
+        description: 'Room-aware telephony helpers, voice OTP delivery, and PBX-aware call actions for VoiceLink',
+        version: '1.0.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: false,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'US voice OTP fallback when email is unavailable',
+            'Room telephony capability checks for admins and moderators',
+            'FlexPBX API call initiation helpers',
+            'Per-room or per-server outbound policy controls',
+            'Call audit trail for verification and support flows',
+            'Optional VoiceLink-managed hold media assignment and PBX MOH sync'
+        ],
+        defaultConfig: {
+            enabled: true,
+            pbxApiUrl: 'https://pbx.devinecreations.net/api',
+            apiKey: '',
+            defaultExtension: '2000',
+            allowedRoomRoles: ['admin', 'moderator'],
+            holdMedia: {
+                enabled: true,
+                optionalSource: true,
+                autoReload: true,
+                allowedSourceTypes: ['server-stream', 'room-background', 'room-stream', 'room-mix'],
+                globalAssignment: {
+                    enabled: false,
+                    sourceType: 'server-stream',
+                    sourceId: 'server-default',
+                    mohClass: 'voicelink-global',
+                    targetIds: ['community-pbx']
+                },
+                roomAssignments: {},
+                pbxTargets: [
+                    {
+                        id: 'community-pbx',
+                        name: 'Community PBX',
+                        apiUrl: 'https://pbx.devinecreations.net/api',
+                        enabled: true
+                    },
+                    {
+                        id: 'dev-pbx',
+                        name: 'Development PBX',
+                        apiUrl: 'https://flexpbx.devinecreations.net/api',
+                        enabled: true
+                    }
+                ]
+            },
+            otpVoice: {
+                enabled: true,
+                usOnly: true,
+                expiryMinutes: 10,
+                maxAttemptsPerHour: 5,
+                fromExtension: '2000',
+                endpoint: 'textnow-calling.php',
+                messageTemplate: 'Hello from VoiceLink. Your verification code is {code}. This code expires in {expiryMinutes} minutes.'
+            },
+            voiceEngine: {
+                provider: 'piper',
+                defaultVoice: 'piper-female',
+                allowClonedVoice: true,
+                allowRecordedName: true,
+                selectionMode: 'prefer-recorded-name'
+            },
+            promptTextOverrides: {
+                otpMessageTemplate: 'Hello from VoiceLink. Your verification code is {code}. This code expires in {expiryMinutes} minutes.',
+                verificationIntro: 'This is your VoiceLink verification call.',
+                callIsFor: 'This call is for.',
+                personNameUnavailable: 'This call is for the intended VoiceLink user.',
+                codeIntro: 'Your verification code is.',
+                codeValidForMinutes: 'You have this many minutes to enter the code before it expires.',
+                stayOnTheLine: 'Stay on the line while we wait for your code to be entered.',
+                waitingForCode: 'We are still waiting for your code to be entered.',
+                repeatOptions: 'Press 1 to repeat the code, press 2 to hear it more slowly, or press 3 if you are not the intended person.',
+                wrongPersonPrompt: 'If you are not the intended person, press 3 and we will stop calling this number for verification.',
+                codeAccepted: 'Your code was accepted. You may hang up now.',
+                codeExpired: 'This code has expired. Please request a new code.',
+                wrongPersonReported: 'We will stop using this number for verification and notify support if needed.'
+            }
+        }
     }
 };
 

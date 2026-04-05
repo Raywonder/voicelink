@@ -165,6 +165,29 @@ class ServerManager: ObservableObject {
         }
     }
 
+    private func socketDictionaryValue(_ value: Any?) -> [String: Any]? {
+        if let dict = value as? [String: Any] {
+            return dict
+        }
+        if let dict = value as? NSDictionary {
+            return dict as? [String: Any]
+        }
+        return nil
+    }
+
+    private func socketArrayDictionaryValue(_ value: Any?) -> [[String: Any]] {
+        if let array = value as? [[String: Any]] {
+            return array
+        }
+        if let array = value as? [NSDictionary] {
+            return array.compactMap { $0 as? [String: Any] }
+        }
+        if let array = value as? [Any] {
+            return array.compactMap { socketDictionaryValue($0) }
+        }
+        return []
+    }
+
     func connect(toMain: Bool = true) {
         // Disconnect existing connection
         socket?.disconnect()
@@ -502,11 +525,14 @@ class ServerManager: ObservableObject {
         let handleJoinedRoomEvent: ([Any]) -> Void = { [weak self] data in
             print("Joined room: \(data)")
             guard let self = self else { return }
-            let responseData = data.first as? [String: Any] ?? [:]
-            let roomData = (responseData["room"] as? [String: Any]) ?? responseData
-            let joinedUserData = responseData["user"] as? [String: Any]
+            let responseData = self.socketDictionaryValue(data.first) ?? [:]
+            let roomData = self.socketDictionaryValue(responseData["room"]) ?? responseData
+            let joinedUserData = self.socketDictionaryValue(responseData["user"])
 
-            if let usersData = (roomData["users"] as? [[String: Any]]) ?? (responseData["users"] as? [[String: Any]]) {
+            let usersData = self.socketArrayDictionaryValue(roomData["users"]).isEmpty
+                ? self.socketArrayDictionaryValue(responseData["users"])
+                : self.socketArrayDictionaryValue(roomData["users"])
+            if !usersData.isEmpty {
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
                     self.currentRoomUsers = users
@@ -531,6 +557,7 @@ class ServerManager: ObservableObject {
                     self.activeRoomId = roomId
                     self.audioTransmissionStatus = "Joined room"
                 }
+                self.socket?.emit("get-room-users", ["roomId": roomId])
                 self.socket?.emit("get-room-messages", ["roomId": roomId, "limit": 50])
                 self.fetchActiveRoomStream(for: roomId)
                 self.scheduleAudioTransmissionStart(for: roomId)
@@ -558,10 +585,10 @@ class ServerManager: ObservableObject {
         // User joined room
         socket.on("user-joined") { [weak self] data, ack in
             print("User joined: \(data)")
-            if let userData = data[0] as? [String: Any],
+            if let self,
+               let userData = self.socketDictionaryValue(data.first),
                let user = RoomUser(from: userData) {
                 DispatchQueue.main.async {
-                    guard let self = self else { return }
                     if !self.currentRoomUsers.contains(where: { $0.id == user.id }) {
                         self.currentRoomUsers.append(user)
                         // Play user join sound
@@ -576,12 +603,15 @@ class ServerManager: ObservableObject {
         // User left room
         socket.on("user-left") { [weak self] data, ack in
             print("User left: \(data)")
-            if let userData = data[0] as? [String: Any],
-               let userId = userData["userId"] as? String {
+            if let self,
+               let userData = self.socketDictionaryValue(data.first) {
+                let userId = (userData["userId"] as? String ?? userData["odId"] as? String ?? userData["id"] as? String ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !userId.isEmpty else { return }
                 DispatchQueue.main.async {
                     // Get username before removing for announcement
-                    let userName = self?.currentRoomUsers.first(where: { $0.id == userId })?.username
-                    self?.currentRoomUsers.removeAll { $0.id == userId }
+                    let userName = self.currentRoomUsers.first(where: { $0.id == userId })?.username
+                    self.currentRoomUsers.removeAll { $0.id == userId }
                     // Play user leave sound
                     AppSoundManager.shared.playSound(.userLeave)
                     // Announce user left
@@ -595,11 +625,12 @@ class ServerManager: ObservableObject {
         // Room users list
         socket.on("room-users") { [weak self] data, ack in
             print("Room users: \(data)")
-            if let responseData = data[0] as? [String: Any],
-               let usersData = responseData["users"] as? [[String: Any]] {
+            if let self,
+               let responseData = self.socketDictionaryValue(data.first) {
+                let usersData = self.socketArrayDictionaryValue(responseData["users"])
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
-                    self?.currentRoomUsers = users
+                    self.currentRoomUsers = users
                 }
             }
         }
@@ -607,11 +638,12 @@ class ServerManager: ObservableObject {
         // Room user count update (broadcast when users join/leave)
         socket.on("room-user-count") { [weak self] data, ack in
             print("Room user count update: \(data)")
-            if let responseData = data[0] as? [String: Any],
-               let usersData = responseData["users"] as? [[String: Any]] {
+            if let self,
+               let responseData = self.socketDictionaryValue(data.first) {
+                let usersData = self.socketArrayDictionaryValue(responseData["users"])
                 let users = usersData.compactMap { RoomUser(from: $0) }
                 DispatchQueue.main.async {
-                    self?.currentRoomUsers = users
+                    self.currentRoomUsers = users
                 }
             }
         }

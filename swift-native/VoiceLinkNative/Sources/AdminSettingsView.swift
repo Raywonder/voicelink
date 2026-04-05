@@ -4977,6 +4977,7 @@ struct AdminModulesSection: View {
     @State private var actionInFlight: String?
     @State private var configEditorModule: ModuleEditorRequest?
     @State private var configEditorText: String = "{}"
+    @State private var showFlexPBXHoldMediaManager = false
 
     struct ModuleEditorRequest: Identifiable {
         let module: AdminModuleInfo
@@ -5135,6 +5136,11 @@ struct AdminModulesSection: View {
                                 .buttonStyle(.bordered)
 
                                 Menu("Configure") {
+                                    if module.id == "voicelink-flexpbx" {
+                                        Button("Hold Media Manager") {
+                                            showFlexPBXHoldMediaManager = true
+                                        }
+                                    }
                                     Button("Standard Controls") {
                                         configEditorModule = ModuleEditorRequest(module: module, useAdvancedJSON: false)
                                         configEditorText = module.configJSON
@@ -5206,6 +5212,9 @@ struct AdminModulesSection: View {
                 }
             )
         }
+        .sheet(isPresented: $showFlexPBXHoldMediaManager) {
+            VoiceLinkFlexPBXHoldMediaManagerSheet()
+        }
     }
 
     private func runAction(_ key: String, operation: @escaping () async -> Bool) {
@@ -5214,6 +5223,203 @@ struct AdminModulesSection: View {
             _ = await operation()
             actionInFlight = nil
         }
+    }
+}
+
+private struct VoiceLinkFlexPBXHoldMediaManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var adminManager = AdminServerManager.shared
+    @State private var holdMedia: VoiceLinkFlexPBXHoldMediaStatus?
+    @State private var isLoading = false
+    @State private var isSaving = false
+    @State private var syncResult: VoiceLinkFlexPBXHoldMediaSyncResult?
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if isLoading && holdMedia == nil {
+                    ProgressView("Loading hold media manager…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let holdMedia {
+                    Form {
+                        Section("Mode") {
+                            Toggle("Enable VoiceLink hold media", isOn: binding(\.enabled))
+                            Toggle("VoiceLink is optional, not required", isOn: binding(\.optionalSource))
+                            Toggle("Reload MOH after sync", isOn: binding(\.autoReload))
+                        }
+
+                        Section("Allowed Sources") {
+                            ForEach(["server-stream", "room-background", "room-stream", "room-mix", "individual-room"], id: \.self) { sourceType in
+                                Toggle(sourceType.replacingOccurrences(of: "-", with: " ").capitalized, isOn: allowedSourceBinding(sourceType))
+                            }
+                        }
+
+                        Section("PBX Targets") {
+                            ForEach(holdMedia.pbxTargets.indices, id: \.self) { index in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Toggle(holdMedia.pbxTargets[index].name, isOn: Binding(
+                                        get: { holdMedia.pbxTargets[index].enabled },
+                                        set: { updateTargetEnabled(at: index, enabled: $0) }
+                                    ))
+                                    Text(holdMedia.pbxTargets[index].apiUrl)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+
+                        Section("Global Assignment") {
+                            Toggle("Use a global hold source", isOn: binding(\.globalAssignment.enabled))
+                            Picker("Source", selection: binding(\.globalAssignment.sourceId)) {
+                                ForEach(holdMedia.sources.filter(\.supported)) { source in
+                                    Text(source.name).tag(source.id)
+                                }
+                            }
+                            TextField("MOH Class", text: binding(\.globalAssignment.mohClass))
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Global MOH class")
+                        }
+
+                        Section("Per-Room Assignments") {
+                            ForEach(roomSources(from: holdMedia), id: \.id) { source in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    let assignment = roomAssignment(for: source, in: holdMedia)
+                                    Toggle(source.name, isOn: Binding(
+                                        get: { assignment.enabled },
+                                        set: { updateRoomAssignment(for: source, enabled: $0) }
+                                    ))
+                                    HStack {
+                                        Text("MOH Class")
+                                            .foregroundColor(.secondary)
+                                        Spacer()
+                                        Text(assignment.mohClass)
+                                            .font(.caption.monospaced())
+                                    }
+                                    .accessibilityElement(children: .combine)
+                                    Text(source.description)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+
+                        if let syncResult {
+                            Section("Last Sync") {
+                                Text(syncResult.success ? "Sync completed." : "Sync completed with issues.")
+                                ForEach(syncResult.targets) { target in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(target.targetName)
+                                        if let error = target.error, !error.isEmpty {
+                                            Text(error)
+                                                .font(.caption)
+                                                .foregroundColor(.red)
+                                        } else {
+                                            Text("\(target.classes.count) class\(target.classes.count == 1 ? "" : "es") updated")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("Hold media manager unavailable.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("FlexPBX Hold Media")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    Button("Sync") {
+                        Task {
+                            guard let current = holdMedia else { return }
+                            isSaving = true
+                            if await adminManager.saveVoiceLinkFlexPBXHoldMedia(current) {
+                                syncResult = await adminManager.syncVoiceLinkFlexPBXHoldMedia()
+                            }
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving || holdMedia == nil)
+
+                    Button("Save") {
+                        Task {
+                            guard let current = holdMedia else { return }
+                            isSaving = true
+                            _ = await adminManager.saveVoiceLinkFlexPBXHoldMedia(current)
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving || holdMedia == nil)
+                }
+            }
+            .task {
+                isLoading = true
+                holdMedia = await adminManager.fetchVoiceLinkFlexPBXHoldMediaStatus()
+                isLoading = false
+            }
+        }
+        .frame(minWidth: 760, minHeight: 640)
+    }
+
+    private func binding<T>(_ keyPath: WritableKeyPath<VoiceLinkFlexPBXHoldMediaStatus, T>) -> Binding<T> {
+        Binding(
+            get: { holdMedia?[keyPath: keyPath] ?? (VoiceLinkFlexPBXHoldMediaStatus(enabled: false, optionalSource: true, autoReload: true, allowedSourceTypes: [], globalAssignment: .init(enabled: false, sourceType: "server-stream", sourceId: "", mohClass: "", targetIds: []), roomAssignments: [:], pbxTargets: [], sources: [], roomCount: 0))[keyPath: keyPath] },
+            set: { holdMedia?[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private func roomSources(from status: VoiceLinkFlexPBXHoldMediaStatus) -> [VoiceLinkFlexPBXHoldMediaSource] {
+        status.sources.filter { ($0.roomId?.isEmpty == false) && $0.supported }
+    }
+
+    private func roomAssignment(for source: VoiceLinkFlexPBXHoldMediaSource, in status: VoiceLinkFlexPBXHoldMediaStatus) -> VoiceLinkFlexPBXHoldMediaAssignment {
+        let roomId = source.roomId ?? ""
+        return status.roomAssignments[roomId] ?? VoiceLinkFlexPBXHoldMediaAssignment(
+            enabled: false,
+            sourceType: source.sourceType,
+            sourceId: source.id,
+            mohClass: "voicelink-room-\(roomId)",
+            targetIds: status.pbxTargets.filter(\.enabled).map(\.id)
+        )
+    }
+
+    private func updateRoomAssignment(for source: VoiceLinkFlexPBXHoldMediaSource, enabled: Bool) {
+        guard let roomId = source.roomId, var current = holdMedia else { return }
+        var assignment = roomAssignment(for: source, in: current)
+        assignment.enabled = enabled
+        assignment.sourceType = source.sourceType
+        assignment.sourceId = source.id
+        current.roomAssignments[roomId] = assignment
+        holdMedia = current
+    }
+
+    private func allowedSourceBinding(_ sourceType: String) -> Binding<Bool> {
+        Binding(
+            get: { holdMedia?.allowedSourceTypes.contains(sourceType) ?? false },
+            set: { enabled in
+                guard var current = holdMedia else { return }
+                if enabled {
+                    if current.allowedSourceTypes.contains(sourceType) == false {
+                        current.allowedSourceTypes.append(sourceType)
+                    }
+                } else {
+                    current.allowedSourceTypes.removeAll { $0 == sourceType }
+                }
+                holdMedia = current
+            }
+        )
+    }
+
+    private func updateTargetEnabled(at index: Int, enabled: Bool) {
+        guard var current = holdMedia, current.pbxTargets.indices.contains(index) else { return }
+        current.pbxTargets[index].enabled = enabled
+        holdMedia = current
     }
 }
 
