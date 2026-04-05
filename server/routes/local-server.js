@@ -2190,7 +2190,7 @@ class VoiceLinkLocalServer {
         ])];
         const shares = smb.shares && typeof smb.shares === 'object' ? smb.shares : {};
         const appShareMap = smb.appShareMap && typeof smb.appShareMap === 'object' ? smb.appShareMap : {};
-        const uploadRoot = this.getClientUploadRoot();
+        const uploadRoot = this.getClientUploadRoot({ ensureDirectories: false });
         const uploadRootNormalized = String(uploadRoot || '').replace(/\/+$/, '');
 
         let inferredShare = String(smb.preferredShare || '').trim();
