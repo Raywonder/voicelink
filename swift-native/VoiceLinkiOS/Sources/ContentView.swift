@@ -260,12 +260,12 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomUsers(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: "")
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
         if activeRoomId.isEmpty, !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
         }
-        guard roomId == activeRoomId || activeRoomId.isEmpty else { return }
+        guard roomId.isEmpty || roomId == activeRoomId || activeRoomId.isEmpty else { return }
         let rawUsers = iosUsersArray(from: info)
         guard !rawUsers.isEmpty || !directTargets.isEmpty else { return }
         let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in

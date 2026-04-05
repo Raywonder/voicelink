@@ -236,7 +236,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 object: nil,
                 userInfo: ["roomId": roomId, "roomName": roomName]
             )
-            let users = (room["users"] as? [Any]) ?? (payload["users"] as? [Any]) ?? []
+            var users = Self.socketUsersValue(payload)
+            if users.isEmpty, let joinedUser = Self.socketDictionaryValue(payload["user"]) {
+                users = [joinedUser]
+            }
             if !users.isEmpty {
                 NotificationCenter.default.post(
                     name: .iosRoomUsersUpdated,
@@ -296,8 +299,24 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("room-users") { [weak self] data, _ in
             guard let self,
                   let payload = self.socketDictionary(from: data) else { return }
-            let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
-            let users = payload["users"] as? [Any] ?? []
+            let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
+            let users = Self.socketUsersValue(payload)
+            NotificationCenter.default.post(
+                name: .iosRoomUsersUpdated,
+                object: nil,
+                userInfo: ["roomId": roomId, "users": users]
+            )
+        }
+
+        socket.on("room-user-count") { [weak self] data, _ in
+            guard let self,
+                  let payload = self.socketDictionary(from: data) else { return }
+            let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
+            let users = Self.socketUsersValue(payload)
+            guard !users.isEmpty else {
+                self.requestRoomUsers()
+                return
+            }
             NotificationCenter.default.post(
                 name: .iosRoomUsersUpdated,
                 object: nil,
@@ -312,8 +331,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("room-messages") { [weak self] data, _ in
             guard let self,
                   let payload = self.socketDictionary(from: data) else { return }
-            let roomId = normalizedSocketText(payload["roomId"], fallback: self.joinedRoomId)
-            let messages = Self.socketArrayDictionaryValue(payload["messages"])
+            let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
+            let messages = Self.socketMessagesValue(payload)
             for message in messages {
                 self.postRoomMessage(message, fallbackRoomId: roomId)
             }
@@ -420,6 +439,62 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
         if let array = value as? [Any] {
             return array.compactMap { socketDictionaryValue($0) }
+        }
+        return []
+    }
+
+    private static func socketRoomId(_ payload: [String: Any], fallback: String) -> String {
+        let room = socketDictionaryValue(payload["room"]) ?? [:]
+        return normalizedSocketText(
+            payload["roomId"] ?? payload["id"] ?? room["roomId"] ?? room["id"],
+            fallback: fallback
+        )
+    }
+
+    private static func socketUsersValue(_ payload: [String: Any]) -> [Any] {
+        if let users = payload["users"] as? [Any] {
+            return users
+        }
+        if let payloadData = socketDictionaryValue(payload["payload"]),
+           let users = payloadData["users"] as? [Any] {
+            return users
+        }
+        if let room = socketDictionaryValue(payload["room"]) {
+            if let users = room["users"] as? [Any] {
+                return users
+            }
+            if let members = room["members"] as? [Any] {
+                return members
+            }
+            if let participants = room["participants"] as? [Any] {
+                return participants
+            }
+        }
+        if let members = payload["members"] as? [Any] {
+            return members
+        }
+        if let participants = payload["participants"] as? [Any] {
+            return participants
+        }
+        return []
+    }
+
+    private static func socketMessagesValue(_ payload: [String: Any]) -> [[String: Any]] {
+        if let payloadData = socketDictionaryValue(payload["payload"]) {
+            let payloadMessages = socketArrayDictionaryValue(payloadData["messages"])
+            if !payloadMessages.isEmpty {
+                return payloadMessages
+            }
+        }
+        let directMessages = socketArrayDictionaryValue(payload["messages"])
+        if !directMessages.isEmpty {
+            return directMessages
+        }
+        if let room = socketDictionaryValue(payload["room"]) {
+            let roomMessages = socketArrayDictionaryValue(room["messages"])
+            if !roomMessages.isEmpty {
+                return roomMessages
+            }
         }
         return []
     }
