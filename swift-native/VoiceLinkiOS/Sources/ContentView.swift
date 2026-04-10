@@ -601,6 +601,14 @@ private struct FederatedRoomGroup: Identifiable, Hashable {
     let choices: [FederatedRoomChoice]
 }
 
+private func normalizedFederatedRoomGroupKey(_ rawName: String) -> String {
+    let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let collapsedWhitespace = trimmed.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    return collapsedWhitespace
+        .replacingOccurrences(of: "[^\\p{L}\\p{N} ]+", with: "", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 private struct ClientVisibilitySettings: Equatable {
     let desktop: Bool
     let ios: Bool
@@ -1232,6 +1240,15 @@ private struct FederationTab: View {
         }
     }
 
+    private func openGroupedRoom(_ group: FederatedRoomGroup, action: String) {
+        guard let firstChoice = group.choices.first else { return }
+        if group.choices.count == 1 {
+            openRoom(firstChoice, action: action)
+        } else {
+            activeGroup = group
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -1265,7 +1282,7 @@ private struct FederationTab: View {
                         Section("Rooms") {
                             ForEach(filteredRoomGroups) { group in
                                 Button {
-                                    activeGroup = group
+                                    openGroupedRoom(group, action: "details")
                                 } label: {
                                     federatedRoomRow(for: group)
                                 }
@@ -1273,9 +1290,9 @@ private struct FederationTab: View {
                                 .contextMenu {
                                     Button("Choose Server") { activeGroup = group }
                                     if let firstChoice = group.choices.first {
-                                        Button("Room Details") { openRoom(firstChoice, action: "details") }
-                                        Button("Preview Room") { openRoom(firstChoice, action: "preview") }
-                                        Button("Join Room") { openRoom(firstChoice, action: "join") }
+                                        Button("Room Details") { openGroupedRoom(group, action: "details") }
+                                        Button("Preview Room") { openGroupedRoom(group, action: "preview") }
+                                        Button("Join Room") { openGroupedRoom(group, action: "join") }
                                         Button("Share Room") { shareChoice(firstChoice) }
                                     }
                                 }
@@ -1283,6 +1300,8 @@ private struct FederationTab: View {
                                 .accessibilityLabel("\(group.displayName), \(group.totalUsers) users across \(group.choices.count) servers")
                                 .accessibilityHint("Double tap to choose which server copy of this room to open.")
                                 .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
+                                .accessibilityAction(named: Text("Preview Room")) { openGroupedRoom(group, action: "preview") }
+                                .accessibilityAction(named: Text("Join Room")) { openGroupedRoom(group, action: "join") }
                             }
                         }
                     }
@@ -1422,7 +1441,7 @@ private struct FederationTab: View {
         }
 
         let grouped = Dictionary(grouping: choices) { choice in
-            choice.room.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            normalizedFederatedRoomGroupKey(choice.room.name)
         }
 
         return grouped.values.compactMap { choices in
@@ -1431,7 +1450,7 @@ private struct FederationTab: View {
             }
             guard let firstChoice = sortedChoices.first else { return nil }
             return FederatedRoomGroup(
-                id: firstChoice.room.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                id: normalizedFederatedRoomGroupKey(firstChoice.room.name),
                 displayName: firstChoice.room.name,
                 totalUsers: sortedChoices.reduce(0) { $0 + $1.room.userCount },
                 choices: sortedChoices
@@ -1500,10 +1519,20 @@ private struct MessagesTab: View {
     @AppStorage("voicelink.displayName") private var displayName = ""
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
+    @ObservedObject private var socketClient = IOSNativeRoomSocketClient.shared
     let openServers: () -> Void
 
     private var isSignedIn: Bool {
         !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var visibleTargets: [IOSDirectMessageTarget] {
+        var merged: [String: IOSDirectMessageTarget] = [:]
+        socketClient.roomUsers.forEach { merged[$0.id] = $0 }
+        roomState.directTargets.forEach { merged[$0.id] = $0 }
+        return merged.values.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -1542,11 +1571,11 @@ private struct MessagesTab: View {
                 }
 
                 Section(roomState.isInRoom ? "People in Room" : "Known People") {
-                    if roomState.directTargets.isEmpty {
+                    if visibleTargets.isEmpty {
                         Text("No room users available yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(roomState.directTargets) { target in
+                        ForEach(visibleTargets) { target in
                             Button {
                                 roomState.selectedDirectTarget = target
                                 roomState.selectedProfileName = target.name
@@ -2146,6 +2175,9 @@ struct SettingsTab: View {
                         Text("300%")
                     }
                     .accessibilityValue("\(Int(inputGain * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        adjustSettingsGain(&inputGain, direction: direction)
+                    }
 
                     Slider(value: $outputGain, in: 0...3) {
                         Text("Output Level")
@@ -2155,6 +2187,9 @@ struct SettingsTab: View {
                         Text("300%")
                     }
                     .accessibilityValue("\(Int(outputGain * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        adjustSettingsGain(&outputGain, direction: direction)
+                    }
 
                     Button("Test Sound") {
                         if roomState.isInRoom {
@@ -2320,6 +2355,18 @@ struct SettingsTab: View {
                 UIAccessibility.post(notification: .announcement, argument: diagnosticsStatus)
             }
         }
+    }
+}
+
+private func adjustSettingsGain(_ value: inout Double, direction: AccessibilityAdjustmentDirection) {
+    let step = 0.05
+    switch direction {
+    case .increment:
+        value = min(3.0, value + step)
+    case .decrement:
+        value = max(0.0, value - step)
+    @unknown default:
+        break
     }
 }
 

@@ -6854,6 +6854,27 @@ class VoiceLinkLocalServer {
             });
         });
 
+        this.app.get('/api/rooms/:roomId/users', (req, res) => {
+            const { roomId } = req.params;
+            const room = this.rooms.get(roomId);
+            if (!room) {
+                return res.status(404).json({ error: 'Room not found' });
+            }
+
+            const users = this.normalizeRoomUsers(roomId)
+                .map((user) => this.serializeRoomUser(user, roomId))
+                .filter(Boolean);
+
+            res.json({
+                roomId,
+                roomName: room.name || null,
+                locked: !!room.locked,
+                users,
+                count: this.getHumanRoomUsers(roomId).length,
+                totalVisible: users.length
+            });
+        });
+
 
         // Update room autoplay settings (admin only)
         this.app.put('/api/rooms/:roomId/autoplay', (req, res) => {

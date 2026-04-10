@@ -136,6 +136,14 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 100])
     }
 
+    func refreshRoomSnapshotViaHTTP() async {
+        let roomId = joinedRoomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = activeBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !roomId.isEmpty, !baseURL.isEmpty else { return }
+        await refreshRoomUsersViaHTTP(baseURL: baseURL, roomId: roomId)
+        await refreshRoomMessagesViaHTTP(baseURL: baseURL, roomId: roomId)
+    }
+
     func setPlaybackGain(_ gain: Float) {
         relayPlayer.setGain(gain)
     }
@@ -268,6 +276,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 self?.requestRoomUsers()
                 self?.requestRoomMessages()
             }
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await self?.refreshRoomSnapshotViaHTTP()
+            }
             self.socket?.emit("enable-audio-relay", [
                 "enabled": true,
                 "sampleRate": 48000,
@@ -335,6 +347,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             let users = Self.socketUsersValue(payload)
             guard !users.isEmpty else {
                 self.requestRoomUsers()
+                Task { [weak self] in
+                    await self?.refreshRoomUsersViaHTTP(
+                        baseURL: self?.activeBaseURL ?? "",
+                        roomId: roomId
+                    )
+                }
                 return
             }
             self.updateRoomUsers(Self.socketUserDictionaries(users), fallbackRoomId: roomId)
@@ -458,6 +476,80 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         guard !mapped.isEmpty else { return }
         roomUsers = mapped.sorted { lhs, rhs in
             lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func authorizedRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        let sessionToken = pendingSession?.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sessionToken.isEmpty {
+            request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+            request.setValue(sessionToken, forHTTPHeaderField: "x-session-token")
+        }
+        return request
+    }
+
+    private func refreshRoomUsersViaHTTP(baseURL: String, roomId: String) async {
+        let normalizedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBaseURL = baseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        guard !normalizedRoomId.isEmpty,
+              let encodedRoomId = normalizedRoomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)/users") else {
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: authorizedRequest(url: url))
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            let users = Self.socketArrayDictionaryValue(payload["users"])
+            guard !users.isEmpty else { return }
+            self.updateRoomUsers(users, fallbackRoomId: normalizedRoomId)
+            NotificationCenter.default.post(
+                name: .iosRoomUsersUpdated,
+                object: nil,
+                userInfo: [
+                    "roomId": normalizedRoomId,
+                    "users": users
+                ]
+            )
+        } catch {
+            return
+        }
+    }
+
+    private func refreshRoomMessagesViaHTTP(baseURL: String, roomId: String) async {
+        let normalizedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBaseURL = baseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        guard !normalizedRoomId.isEmpty,
+              let encodedRoomId = normalizedRoomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)/messages?limit=100") else {
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: authorizedRequest(url: url))
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+            let messages = Self.socketArrayDictionaryValue(payload["messages"])
+            guard !messages.isEmpty else { return }
+            for message in messages {
+                self.postRoomMessage(message, fallbackRoomId: normalizedRoomId)
+            }
+        } catch {
+            return
         }
     }
 
@@ -631,15 +723,15 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         let roomId = normalizedSocketText(payload["roomId"], fallback: fallbackRoomId)
         let roomName = normalizedSocketText(payload["roomName"], fallback: joinedRoomName)
         let author = normalizedSocketText(
-            payload["userName"] ?? payload["senderName"] ?? payload["author"],
+            payload["userName"] ?? payload["senderName"] ?? payload["author"] ?? payload["botName"] ?? payload["name"],
             fallback: "User"
         )
         let senderId = normalizedSocketText(
-            payload["userId"] ?? payload["senderId"] ?? payload["id"],
+            payload["userId"] ?? payload["senderId"] ?? payload["botId"] ?? payload["id"],
             fallback: ""
         )
-        let body = normalizedSocketText(payload["message"] ?? payload["content"], fallback: "")
-        let type = normalizedSocketText(payload["type"], fallback: "text")
+        let body = normalizedSocketText(payload["message"] ?? payload["content"] ?? payload["text"] ?? payload["body"], fallback: "")
+        let type = normalizedSocketText(payload["type"] ?? payload["messageType"], fallback: "text")
         guard !roomId.isEmpty, !body.isEmpty else { return }
         NotificationCenter.default.post(
             name: .iosRoomMessageEvent,

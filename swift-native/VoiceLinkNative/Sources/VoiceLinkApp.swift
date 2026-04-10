@@ -28,6 +28,9 @@ struct VoiceLinkApp: App {
                 .environmentObject(localDiscovery)
                 .frame(minWidth: 900, minHeight: 700)
                 .frame(width: 1000, height: 750)
+                .onAppear {
+                    AppSoundManager.shared.playStartupWelcomeIfNeeded()
+                }
                 .sheet(isPresented: $appState.showAnnouncements) {
                     AnnouncementsView()
                 }

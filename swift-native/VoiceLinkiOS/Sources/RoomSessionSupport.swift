@@ -104,7 +104,6 @@ struct RoomSessionView: View {
                 roomChatSection
                 liveTranscriptsSection
                 roomAudioSection
-                settingsSection
             }
             .navigationTitle(destination.roomName)
             .navigationBarTitleDisplayMode(.inline)
@@ -141,6 +140,9 @@ struct RoomSessionView: View {
             memberRefreshTask = Task { @MainActor in
                 while !Task.isCancelled {
                     socketClient.requestRoomUsers()
+                    if socketClient.roomUsers.isEmpty {
+                        await socketClient.refreshRoomSnapshotViaHTTP()
+                    }
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                 }
             }
@@ -165,6 +167,7 @@ struct RoomSessionView: View {
             startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
             socketClient.requestRoomUsers()
             socketClient.requestRoomMessages()
+            Task { await socketClient.refreshRoomSnapshotViaHTTP() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosPlayTestSound)) { _ in
             playTestSoundWithRoomDuck()
@@ -280,6 +283,9 @@ struct RoomSessionView: View {
                     Text("300%")
                 }
                 .accessibilityValue("\(Int(outputGain * 100)) percent")
+                .accessibilityAdjustableAction { direction in
+                    adjustGainValue(&outputGain, direction: direction)
+                }
                 .onChange(of: outputGain) { newValue in
                     socketClient.setPlaybackGain(Float(newValue))
                     updateRoomBackgroundPlaybackVolume()
@@ -306,15 +312,6 @@ struct RoomSessionView: View {
         }
     }
 
-    private var settingsSection: some View {
-        Section {
-            Button("Open Full Settings") {
-                showSettings = true
-                IOSActionSoundPlayer.playConfirm()
-            }
-        }
-    }
-
     private var roomActionsToolbarItem: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
@@ -331,12 +328,8 @@ struct RoomSessionView: View {
                     showChat.toggle()
                     IOSActionSoundPlayer.playToggle()
                 }
-                Button("Room Settings") {
+                Button("Audio and Room Controls") {
                     showControls = true
-                    IOSActionSoundPlayer.playConfirm()
-                }
-                Button("App Settings") {
-                    showSettings = true
                     IOSActionSoundPlayer.playConfirm()
                 }
                 Button("People in Room") {
@@ -431,6 +424,9 @@ struct RoomSessionView: View {
                         Text("300%")
                     }
                     .accessibilityValue("\(Int(inputGain * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        adjustGainValue(&inputGain, direction: direction)
+                    }
 
                     Slider(value: $outputGain, in: 0...3) {
                         Text("Master Output")
@@ -440,6 +436,9 @@ struct RoomSessionView: View {
                         Text("300%")
                     }
                     .accessibilityValue("\(Int(outputGain * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        adjustGainValue(&outputGain, direction: direction)
+                    }
 
                     Toggle("Mute Media Playback", isOn: $mediaMuted)
                         .onChange(of: mediaMuted) { _ in
@@ -854,6 +853,18 @@ struct RoomSessionView: View {
             return "Monitor target"
         }
         return ""
+    }
+
+    private func adjustGainValue(_ value: inout Double, direction: AccessibilityAdjustmentDirection) {
+        let step = 0.05
+        switch direction {
+        case .increment:
+            value = min(3.0, value + step)
+        case .decrement:
+            value = max(0.0, value - step)
+        @unknown default:
+            break
+        }
     }
 }
 
