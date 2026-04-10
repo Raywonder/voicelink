@@ -4980,6 +4980,7 @@ struct AdminModulesSection: View {
     @State private var configEditorText: String = "{}"
     @State private var showFlexPBXHoldMediaManager = false
     @State private var showBackupManager = false
+    @State private var showSSLManager = false
 
     struct ModuleEditorRequest: Identifiable {
         let module: AdminModuleInfo
@@ -5123,21 +5124,28 @@ struct AdminModulesSection: View {
 
                         HStack(spacing: 10) {
                             if module.installed {
-                                Button(module.enabled ? "Disable" : "Enable") {
-                                    runAction("toggle-\(module.id)") {
-                                        await adminManager.setModuleEnabled(module.id, enabled: !module.enabled)
+                                if module.id != "ssl-manager" {
+                                    Button(module.enabled ? "Disable" : "Enable") {
+                                        runAction("toggle-\(module.id)") {
+                                            await adminManager.setModuleEnabled(module.id, enabled: !module.enabled)
+                                        }
                                     }
-                                }
-                                .buttonStyle(.bordered)
+                                    .buttonStyle(.bordered)
 
-                                Button("Update") {
-                                    runAction("update-\(module.id)") {
-                                        await adminManager.updateModule(module.id, enabled: module.enabled)
+                                    Button("Update") {
+                                        runAction("update-\(module.id)") {
+                                            await adminManager.updateModule(module.id, enabled: module.enabled)
+                                        }
                                     }
+                                    .buttonStyle(.bordered)
                                 }
-                                .buttonStyle(.bordered)
 
                                 Menu("Configure") {
+                                    if module.id == "ssl-manager" {
+                                        Button("SSL Manager") {
+                                            showSSLManager = true
+                                        }
+                                    }
                                     if module.id == "voicelink-flexpbx" {
                                         Button("Hold Media Manager") {
                                             showFlexPBXHoldMediaManager = true
@@ -5159,12 +5167,14 @@ struct AdminModulesSection: View {
                                 }
                                 .buttonStyle(.bordered)
 
-                                Button("Uninstall", role: .destructive) {
-                                    runAction("uninstall-\(module.id)") {
-                                        await adminManager.uninstallModule(module.id)
+                                if module.id != "ssl-manager" {
+                                    Button("Uninstall", role: .destructive) {
+                                        runAction("uninstall-\(module.id)") {
+                                            await adminManager.uninstallModule(module.id)
+                                        }
                                     }
+                                    .buttonStyle(.bordered)
                                 }
-                                .buttonStyle(.bordered)
                             } else {
                                 Button("Install") {
                                     runAction("install-\(module.id)") {
@@ -5179,10 +5189,15 @@ struct AdminModulesSection: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             if module.installed {
-                                Text(module.enabled ? "Disable stops this module without removing its saved configuration." : "Enable turns this module back on with its saved configuration.")
-                                Text("Update fetches the latest version of this module from the server.")
-                                Text("Configure opens standard controls first. Advanced JSON is available from the Configure menu for power users.")
-                                Text("Uninstall removes the module from this server.")
+                                if module.id == "ssl-manager" {
+                                    Text("SSL Manager is built in on every server. Use Configure to review live certificate paths, renew settings, and reload behavior.")
+                                    Text("Auto-detect syncs known cPanel, reverse-proxy, and internal certificate defaults.")
+                                } else {
+                                    Text(module.enabled ? "Disable stops this module without removing its saved configuration." : "Enable turns this module back on with its saved configuration.")
+                                    Text("Update fetches the latest version of this module from the server.")
+                                    Text("Configure opens standard controls first. Advanced JSON is available from the Configure menu for power users.")
+                                    Text("Uninstall removes the module from this server.")
+                                }
                             } else {
                                 Text("Install adds this module to the server and enables its standard controls.")
                             }
@@ -5225,6 +5240,9 @@ struct AdminModulesSection: View {
         .sheet(isPresented: $showBackupManager) {
             BackupManagerSheet()
         }
+        .sheet(isPresented: $showSSLManager) {
+            SSLManagerSheet()
+        }
     }
 
     private func runAction(_ key: String, operation: @escaping () async -> Bool) {
@@ -5233,6 +5251,186 @@ struct AdminModulesSection: View {
             _ = await operation()
             actionInFlight = nil
         }
+    }
+}
+
+private struct SSLManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var adminManager = AdminServerManager.shared
+    @State private var sslManager = ServerSSLManagerConfig()
+    @State private var isLoading = false
+    @State private var isSaving = false
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Status") {
+                    LabeledContent("Server") {
+                        Text(adminManager.selectedManagementTargetName)
+                            .foregroundColor(.secondary)
+                    }
+                    LabeledContent("Status") {
+                        Text(sslManager.status.capitalized)
+                            .foregroundColor(sslManager.status == "ready" ? .green : .orange)
+                    }
+                    LabeledContent("Provider") {
+                        Text(sslManager.provider.isEmpty ? "Auto" : sslManager.provider.capitalized)
+                            .foregroundColor(.secondary)
+                    }
+                    LabeledContent("Control Panel") {
+                        Text(sslManager.controlPanel == "none" ? "Internal / None" : sslManager.controlPanel.capitalized)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Behavior") {
+                    Toggle("Enable SSL Manager", isOn: $sslManager.enabled)
+                    Toggle("Auto Renew", isOn: $sslManager.autoRenew)
+                    Toggle("Sync With Reverse Proxy", isOn: $sslManager.syncToReverseProxy)
+                    Picker("Mode", selection: $sslManager.mode) {
+                        Text("Auto").tag("auto")
+                        Text("Control Panel").tag("control-panel")
+                        Text("Internal").tag("internal")
+                        Text("Manual").tag("manual")
+                    }
+                    Picker("Provider", selection: $sslManager.provider) {
+                        Text("Auto").tag("auto")
+                        ForEach(sslManager.supportedManagers.isEmpty ? ["cpanel", "plesk", "virtualmin", "certbot", "internal", "manual"] : sslManager.supportedManagers, id: \.self) { option in
+                            Text(option.capitalized).tag(option)
+                        }
+                    }
+                }
+
+                Section("Certificates") {
+                    TextField("Domains (comma separated)", text: Binding(
+                        get: { sslManager.domains.joined(separator: ", ") },
+                        set: { sslManager.domains = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    TextField("Certificate Path", text: binding(\.certificatePath))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Private Key Path", text: binding(\.privateKeyPath))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Chain Path", text: binding(\.chainPath))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("ACME Web Root", text: binding(\.acmeWebRoot))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("ACME Email", text: binding(\.acmeEmail))
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Section("Commands") {
+                    TextField("Renew Command", text: binding(\.renewCommand))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Reload Command", text: binding(\.reloadCommand))
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Notes", text: binding(\.notes))
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Section("Detected Tools") {
+                    if sslManager.availableTools.isEmpty {
+                        Text("No SSL tools were detected yet.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(sslManager.availableTools.joined(separator: ", "))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Actions") {
+                    Button(isSaving ? "Detecting…" : "Auto-Detect and Apply") {
+                        Task {
+                            isSaving = true
+                            if await adminManager.autodetectSSLManager(),
+                               let refreshed = await adminManager.fetchSSLManagerStatus() {
+                                sslManager = refreshed
+                            }
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving)
+
+                    Button(isSaving ? "Saving…" : "Save SSL Settings") {
+                        Task {
+                            isSaving = true
+                            _ = await adminManager.updateSSLManager(sslManager)
+                            if let refreshed = await adminManager.fetchSSLManagerStatus() {
+                                sslManager = refreshed
+                            }
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving)
+
+                    Button("Run Renew") {
+                        Task {
+                            isSaving = true
+                            _ = await adminManager.renewSSLManagerCertificates()
+                            if let refreshed = await adminManager.fetchSSLManagerStatus() {
+                                sslManager = refreshed
+                            }
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving)
+
+                    Button("Reload Web Services") {
+                        Task {
+                            isSaving = true
+                            _ = await adminManager.reloadSSLManagerServices()
+                            if let refreshed = await adminManager.fetchSSLManagerStatus() {
+                                sslManager = refreshed
+                            }
+                            isSaving = false
+                        }
+                    }
+                    .disabled(isSaving)
+                }
+
+                if let message = adminManager.moduleActionMessage, !message.isEmpty {
+                    Section("Last Result") {
+                        Text(message)
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+            .navigationTitle("SSL Manager")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button("Refresh") {
+                        Task {
+                            isLoading = true
+                            if let refreshed = await adminManager.fetchSSLManagerStatus() {
+                                sslManager = refreshed
+                            }
+                            isLoading = false
+                        }
+                    }
+                    .disabled(isLoading || isSaving)
+                }
+            }
+            .task {
+                isLoading = true
+                if let refreshed = await adminManager.fetchSSLManagerStatus() {
+                    sslManager = refreshed
+                } else if let existing = adminManager.serverConfig?.sslManager {
+                    sslManager = existing
+                }
+                isLoading = false
+            }
+        }
+        .frame(minWidth: 760, minHeight: 680)
+    }
+
+    private func binding(_ keyPath: WritableKeyPath<ServerSSLManagerConfig, String?>) -> Binding<String> {
+        Binding(
+            get: { sslManager[keyPath: keyPath] ?? "" },
+            set: { sslManager[keyPath: keyPath] = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        )
     }
 }
 
@@ -6587,7 +6785,8 @@ extension ServerConfig {
               serverVisibility: ServerVisibilityConfig? = nil,
               handoffPromptMode: String? = nil,
               messageSettings: MessageSettings? = nil,
-              pushover: PushoverConfig?? = nil) -> ServerConfig {
+              pushover: PushoverConfig?? = nil,
+              sslManager: ServerSSLManagerConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
             serverDescription: serverDescription ?? self.serverDescription,
@@ -6607,7 +6806,10 @@ extension ServerConfig {
             handoffPromptMode: handoffPromptMode ?? self.handoffPromptMode,
             messageSettings: messageSettings ?? self.messageSettings,
             backgroundStreams: self.backgroundStreams,
-            pushover: pushover ?? self.pushover
+            pushover: pushover ?? self.pushover,
+            recordingEnabled: self.recordingEnabled,
+            fileSharing: self.fileSharing,
+            sslManager: sslManager ?? self.sslManager
         )
     }
 

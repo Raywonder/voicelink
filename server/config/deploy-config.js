@@ -85,6 +85,35 @@ const DEFAULT_CONFIG = {
             trustedNodes: [] // Manually verified node operator wallet addresses
         }
     },
+    siteIntegration: {
+        detectedSites: [],
+        preferNativeSchedulerWhenAvailable: true,
+        preferSystemCronFallback: true
+    },
+    database: {
+        sqlite: {
+            enabled: true
+        },
+        mariadb: {
+            enabled: true,
+            supportedManagers: ['cpanel', 'whmcs', 'wordpress', 'manual']
+        },
+        mysql: {
+            enabled: true,
+            supportedManagers: ['cpanel', 'whmcs', 'wordpress', 'manual']
+        },
+        postgres: {
+            enabled: false,
+            supportedManagers: ['manual']
+        },
+        existingManagers: {
+            cpanel: { enabled: true, canCreate: true, canMigrate: true },
+            whmcs: { enabled: true, canCreate: false, canMigrate: true },
+            wordpress: { enabled: true, canCreate: false, canMigrate: true },
+            composr: { enabled: true, canCreate: false, canMigrate: true },
+            manual: { enabled: true, canCreate: true, canMigrate: true }
+        }
+    },
     mastodon: {
         enabled: false,
         botEnabled: false,
@@ -166,6 +195,23 @@ const DEFAULT_CONFIG = {
             syncVideo: true,
             syncAudio: true
         }
+    },
+    sslManager: {
+        enabled: true,
+        provider: 'auto',
+        mode: 'auto',
+        controlPanel: 'none',
+        autoRenew: true,
+        syncToReverseProxy: true,
+        domains: [],
+        certificatePath: null,
+        privateKeyPath: null,
+        chainPath: null,
+        acmeWebRoot: null,
+        acmeEmail: null,
+        renewCommand: null,
+        reloadCommand: null,
+        notes: null
     },
     // Jellyfin Media Server Integration
     jellyfin: {
@@ -297,6 +343,30 @@ const DEFAULT_CONFIG = {
             staffGroups: [],
             adminAddons: [],
             staffAddons: []
+        }
+    },
+    licensing: {
+        registrationDelayMinutes: 15,
+        defaultMaxDevices: 3,
+        defaultInstallSlots: 1,
+        defaultServerSlots: 0,
+        autoRemoveOldestDeviceOnOverflow: true,
+        machineHistoryRetentionDays: 90,
+        retention: {
+            enabled: true,
+            inactivityPurgeDays: 365,
+            warningDaysBeforePurge: [60, 30, 14, 7, 1],
+            preserveMainServers: true,
+            preservedDomains: [
+                'voicelink.devinecreations.net',
+                'pbx.devinecreations.net',
+                'tappedin.fm',
+                'vps1.tappedin.fm'
+            ],
+            preservedServerIds: ['main', 'community', 'dev'],
+            allowPaidRetentionExtension: true,
+            paidRetentionExtensionDays: 365,
+            defaultGraceAfterWarningDays: 7
         }
     },
     ecripto: {

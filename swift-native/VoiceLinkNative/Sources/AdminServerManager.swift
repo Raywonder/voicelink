@@ -71,6 +71,7 @@ class AdminServerManager: ObservableObject {
 
     private var currentServerURL: String = ""
     private var authToken: String?
+    private var secureTransportRecoveryTask: Task<Void, Never>?
     private var canManageUsersEffective: Bool { isAdmin || adminRole.canManageUsers }
     private var canManageRoomsEffective: Bool { isAdmin || adminRole.canManageRooms }
     private var canManageConfigEffective: Bool { isAdmin || adminRole.canManageConfig }
@@ -182,6 +183,57 @@ class AdminServerManager: ObservableObject {
         selectedManagementTarget?.name ?? "Current Connected Server"
     }
 
+    private func updateSecureTransportRecoveryState() {
+        let normalizedCurrent = APIEndpointResolver.normalize(currentServerURL)
+        guard !normalizedCurrent.isEmpty else {
+            secureTransportRecoveryTask?.cancel()
+            secureTransportRecoveryTask = nil
+            return
+        }
+
+        let currentScheme = URLComponents(string: normalizedCurrent)?.scheme?.lowercased()
+        guard currentScheme == "http",
+              let secureCandidate = APIEndpointResolver.preferredSecureCandidate(for: normalizedCurrent),
+              secureCandidate != normalizedCurrent else {
+            secureTransportRecoveryTask?.cancel()
+            secureTransportRecoveryTask = nil
+            return
+        }
+
+        if let existing = secureTransportRecoveryTask, !existing.isCancelled {
+            return
+        }
+
+        secureTransportRecoveryTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                guard !Task.isCancelled else { return }
+                guard self.currentServerURL == normalizedCurrent else { return }
+
+                var request = URLRequest(url: APIEndpointResolver.url(base: secureCandidate, path: "/api/admin/status")!)
+                request.timeoutInterval = 6
+                if let token = self.authToken {
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+                request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+                do {
+                    let (_, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          httpResponse.statusCode == 200 else {
+                        continue
+                    }
+                    self.currentServerURL = secureCandidate
+                    self.secureTransportRecoveryTask?.cancel()
+                    self.secureTransportRecoveryTask = nil
+                    return
+                } catch {
+                    continue
+                }
+            }
+        }
+    }
+
     // MARK: - Check Admin Status
 
     func checkAdminStatus(serverURL: String, token: String?) async {
@@ -219,6 +271,7 @@ class AdminServerManager: ObservableObject {
                         isAdmin = fallbackRole == .admin || fallbackRole == .owner
                     }
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     return
                 }
             } catch {
@@ -267,7 +320,9 @@ class AdminServerManager: ObservableObject {
                 if httpResponse.statusCode == 200 {
                     serverConfig = try decoder.decode(ServerConfig.self, from: data)
                     CopyPartyManager.shared.applyServerFileSharingConfig(serverConfig?.fileSharing)
+                    mergeBuiltInModules()
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     error = nil
                     return
                 }
@@ -310,6 +365,7 @@ class AdminServerManager: ObservableObject {
                 if httpResponse.statusCode == 200 {
                     advancedServerSettings = try decoder.decode(AdvancedServerSettings.self, from: data)
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     error = nil
                     return
                 }
@@ -325,6 +381,7 @@ class AdminServerManager: ObservableObject {
                         )
                     }
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     return
                 }
             } catch {
@@ -1779,6 +1836,7 @@ class AdminServerManager: ObservableObject {
                 merged.enabled = existing.enabled
                 return merged
             }
+            mergeBuiltInModules()
         } catch {
             self.error = "Failed to fetch module catalog: \(error.localizedDescription)"
         }
@@ -1837,6 +1895,7 @@ class AdminServerManager: ObservableObject {
                     return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
                 }
             }
+            mergeBuiltInModules()
         } catch {
             self.error = "Failed to fetch installed modules: \(error.localizedDescription)"
         }
@@ -2046,6 +2105,87 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func fetchSSLManagerStatus() async -> ServerSSLManagerConfig? {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/ssl-manager/status") else {
+            error = "Invalid SSL manager URL"
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to fetch SSL manager status"
+                return nil
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            mergeBuiltInModules()
+            return envelope.sslManager
+        } catch {
+            self.error = "Failed to fetch SSL manager status: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func updateSSLManager(_ sslManager: ServerSSLManagerConfig) async -> Bool {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/ssl-manager") else {
+            error = "Invalid SSL manager URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(ServerSSLManagerUpdateRequest(sslManager: sslManager))
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to update SSL manager"
+                return false
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            moduleActionMessage = "Saved SSL manager settings"
+            mergeBuiltInModules()
+            return true
+        } catch {
+            self.error = "Failed to update SSL manager: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func autodetectSSLManager() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/autodetect", successPrefix: "Auto-detected SSL settings")
+    }
+
+    func renewSSLManagerCertificates() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/renew", successPrefix: "SSL renew completed")
+    }
+
+    func reloadSSLManagerServices() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/reload", successPrefix: "Web server reload completed")
+    }
+
     func fetchConfigBackups() async -> [ServerConfigBackup] {
         guard let url = URL(string: "\(effectiveServerURL)/api/config/backups") else {
             error = "Invalid server URL"
@@ -2183,11 +2323,11 @@ class AdminServerManager: ObservableObject {
     }
 
     private var effectiveServerURL: String {
-        if let selected = selectedManagementTarget?.url, !selected.isEmpty {
-            return selected
-        }
         if !currentServerURL.isEmpty {
             return currentServerURL
+        }
+        if let selected = selectedManagementTarget?.url, !selected.isEmpty {
+            return selected
         }
         if let connected = ServerManager.shared.baseURL, !connected.isEmpty {
             return connected
@@ -2434,6 +2574,79 @@ class AdminServerManager: ObservableObject {
         )
     }
 
+    private func mergeBuiltInModules() {
+        var mergedById = Dictionary(uniqueKeysWithValues: availableModules.map { ($0.id, $0) })
+        let sslManager = serverConfig?.sslManager ?? ServerSSLManagerConfig()
+        let configData = (try? JSONEncoder().encode(sslManager)) ?? Data("{}".utf8)
+        let configJSON = (try? JSONSerialization.jsonObject(with: configData))
+            .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]) }
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+        mergedById["ssl-manager"] = AdminModuleInfo(
+            id: "ssl-manager",
+            name: "SSL Manager",
+            description: "Manage certificates, sync live SSL paths, and control renew or reload actions for this server.",
+            version: "builtin",
+            category: "security",
+            installed: true,
+            enabled: sslManager.enabled,
+            recommended: true,
+            popular: true,
+            dependencies: [],
+            features: ["ssl", "certificates", "renewal", "reverse-proxy"],
+            configJSON: configJSON
+        )
+
+        availableModules = Array(mergedById.values).sorted { lhs, rhs in
+            if lhs.installed != rhs.installed {
+                return lhs.installed && !rhs.installed
+            }
+            if lhs.recommended != rhs.recommended {
+                return lhs.recommended && !rhs.recommended
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func performSSLManagerAction(path: String, successPrefix: String) async -> Bool {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: path) else {
+            error = "Invalid SSL manager action URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                error = "Invalid SSL manager response"
+                return false
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerActionEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            mergeBuiltInModules()
+            if envelope.success {
+                moduleActionMessage = envelope.message?.isEmpty == false ? envelope.message : successPrefix
+                return true
+            }
+            error = envelope.message ?? "SSL manager action failed"
+            return false
+        } catch {
+            self.error = "Failed SSL manager action: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func getClientId() -> String {
         if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
@@ -2473,6 +2686,7 @@ struct ServerConfig: Codable {
     var pushover: PushoverConfig?
     var recordingEnabled: Bool
     var fileSharing: ServerFileSharingConfig?
+    var sslManager: ServerSSLManagerConfig?
 
     enum CodingKeys: String, CodingKey {
         case serverName
@@ -2496,6 +2710,7 @@ struct ServerConfig: Codable {
         case pushover
         case recordingEnabled
         case fileSharing
+        case sslManager
     }
 
     init(
@@ -2520,7 +2735,8 @@ struct ServerConfig: Codable {
         pushover: PushoverConfig? = nil,
         recordingEnabled: Bool = false
         ,
-        fileSharing: ServerFileSharingConfig? = nil
+        fileSharing: ServerFileSharingConfig? = nil,
+        sslManager: ServerSSLManagerConfig? = nil
     ) {
         self.serverName = serverName
         self.serverDescription = serverDescription
@@ -2543,6 +2759,7 @@ struct ServerConfig: Codable {
         self.pushover = pushover
         self.recordingEnabled = recordingEnabled
         self.fileSharing = fileSharing
+        self.sslManager = sslManager
     }
 
     init(from decoder: Decoder) throws {
@@ -2568,6 +2785,7 @@ struct ServerConfig: Codable {
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
         recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
         fileSharing = try container.decodeIfPresent(ServerFileSharingConfig.self, forKey: .fileSharing)
+        sslManager = try container.decodeIfPresent(ServerSSLManagerConfig.self, forKey: .sslManager)
     }
 }
 
@@ -2601,6 +2819,97 @@ struct ServerCopyPartyAccessConfig: Codable, Equatable {
     var primaryServer: String
     var alternativeServers: [String]?
     var externalShareBaseURL: String?
+}
+
+struct ServerSSLManagerEnvelope: Codable, Hashable {
+    let success: Bool
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerUpdateRequest: Codable, Hashable {
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerActionEnvelope: Codable, Hashable {
+    let success: Bool
+    let message: String?
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerConfig: Codable, Equatable, Hashable {
+    var enabled: Bool
+    var provider: String
+    var mode: String
+    var controlPanel: String
+    var autoRenew: Bool
+    var syncToReverseProxy: Bool
+    var domains: [String]
+    var certificatePath: String?
+    var privateKeyPath: String?
+    var chainPath: String?
+    var acmeWebRoot: String?
+    var acmeEmail: String?
+    var renewCommand: String?
+    var reloadCommand: String?
+    var notes: String?
+    var status: String
+    var certificatePresent: Bool
+    var privateKeyPresent: Bool
+    var chainPresent: Bool
+    var availableTools: [String]
+    var supportedManagers: [String]
+    var internalManagerAvailable: Bool
+    var detectedAt: String?
+
+    init(
+        enabled: Bool = true,
+        provider: String = "auto",
+        mode: String = "auto",
+        controlPanel: String = "none",
+        autoRenew: Bool = true,
+        syncToReverseProxy: Bool = true,
+        domains: [String] = [],
+        certificatePath: String? = nil,
+        privateKeyPath: String? = nil,
+        chainPath: String? = nil,
+        acmeWebRoot: String? = nil,
+        acmeEmail: String? = nil,
+        renewCommand: String? = nil,
+        reloadCommand: String? = nil,
+        notes: String? = nil,
+        status: String = "unknown",
+        certificatePresent: Bool = false,
+        privateKeyPresent: Bool = false,
+        chainPresent: Bool = false,
+        availableTools: [String] = [],
+        supportedManagers: [String] = [],
+        internalManagerAvailable: Bool = true,
+        detectedAt: String? = nil
+    ) {
+        self.enabled = enabled
+        self.provider = provider
+        self.mode = mode
+        self.controlPanel = controlPanel
+        self.autoRenew = autoRenew
+        self.syncToReverseProxy = syncToReverseProxy
+        self.domains = domains
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+        self.chainPath = chainPath
+        self.acmeWebRoot = acmeWebRoot
+        self.acmeEmail = acmeEmail
+        self.renewCommand = renewCommand
+        self.reloadCommand = reloadCommand
+        self.notes = notes
+        self.status = status
+        self.certificatePresent = certificatePresent
+        self.privateKeyPresent = privateKeyPresent
+        self.chainPresent = chainPresent
+        self.availableTools = availableTools
+        self.supportedManagers = supportedManagers
+        self.internalManagerAvailable = internalManagerAvailable
+        self.detectedAt = detectedAt
+    }
 }
 
 struct ServerVisibilityConfig: Codable, Equatable {

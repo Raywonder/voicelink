@@ -2233,6 +2233,145 @@ class VoiceLinkLocalServer {
         };
     }
 
+    getSSLManagerAccessConfig(req = null) {
+        const config = deployConfig.getConfig() || {};
+        const sslManager = deployConfig.get('sslManager') || {};
+        const security = config.security || {};
+        const publicUrl = String(config.server?.publicUrl || '').trim();
+        const requestHost = String(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '')
+            .split(',')[0]
+            .trim();
+
+        let publicHost = '';
+        try {
+            publicHost = publicUrl ? (new URL(publicUrl).hostname || '') : '';
+        } catch {
+            publicHost = '';
+        }
+
+        const normalizedHost = requestHost || publicHost || 'localhost';
+        const hostParts = normalizedHost.split('.').filter(Boolean);
+        const baseDomain = hostParts.length >= 2 ? hostParts.slice(-2).join('.') : normalizedHost;
+        const letsEncryptBase = `/etc/letsencrypt/live/${normalizedHost}`;
+        const certificatePath = String(
+            sslManager.certificatePath || security.sslCertPath || `${letsEncryptBase}/fullchain.pem`
+        ).trim() || null;
+        const privateKeyPath = String(
+            sslManager.privateKeyPath || security.sslKeyPath || `${letsEncryptBase}/privkey.pem`
+        ).trim() || null;
+        const chainPath = String(
+            sslManager.chainPath || `${letsEncryptBase}/chain.pem`
+        ).trim() || null;
+
+        const toolPaths = {
+            certbot: ['/usr/bin/certbot', '/usr/local/bin/certbot'],
+            acmesh: ['/root/.acme.sh/acme.sh', '/usr/local/bin/acme.sh'],
+            nginx: ['/usr/sbin/nginx', '/usr/bin/nginx'],
+            apachectl: ['/usr/sbin/apachectl', '/usr/bin/apachectl'],
+            httpd: ['/usr/sbin/httpd', '/usr/bin/httpd'],
+            caddy: ['/usr/bin/caddy', '/usr/local/bin/caddy']
+        };
+        const hasTool = (paths) => paths.some(candidate => fs.existsSync(candidate));
+        const availableTools = [];
+        if (hasTool(toolPaths.certbot)) availableTools.push('certbot');
+        if (hasTool(toolPaths.acmesh)) availableTools.push('acme.sh');
+        if (hasTool(toolPaths.nginx)) availableTools.push('nginx');
+        if (hasTool(toolPaths.apachectl)) availableTools.push('apachectl');
+        if (hasTool(toolPaths.httpd)) availableTools.push('httpd');
+        if (hasTool(toolPaths.caddy)) availableTools.push('caddy');
+
+        const detectedControlPanel = (() => {
+            if (fs.existsSync('/usr/local/cpanel') || fs.existsSync('/usr/local/cpanel/cpanel')) return 'cpanel';
+            if (fs.existsSync('/usr/local/psa/admin/bin/httpdmng')) return 'plesk';
+            if (fs.existsSync('/etc/webmin/virtual-server')) return 'virtualmin';
+            return 'none';
+        })();
+
+        const configuredProvider = String(sslManager.provider || '').trim().toLowerCase();
+        const configuredMode = String(sslManager.mode || '').trim().toLowerCase();
+        const provider = (
+            configuredProvider && configuredProvider != "auto"
+                ? configuredProvider
+                : (detectedControlPanel !== 'none' ? detectedControlPanel : '')
+        ) || (availableTools.includes('certbot') ? 'certbot' : 'internal');
+        const mode = (
+            configuredMode && configuredMode != "auto"
+                ? configuredMode
+                : (detectedControlPanel !== 'none' ? 'control-panel' : '')
+        ) || (provider === 'manual' ? 'manual' : 'internal');
+
+        const domains = Array.from(new Set([
+            ...(Array.isArray(sslManager.domains) ? sslManager.domains : []),
+            normalizedHost,
+            baseDomain !== normalizedHost ? baseDomain : null
+        ].filter(Boolean).map(value => String(value).trim()).filter(Boolean)));
+
+        const renewCommand = String(
+            sslManager.renewCommand
+            || (provider === 'certbot' ? 'certbot renew' : '')
+        ).trim() || null;
+        const reloadCommand = String(
+            sslManager.reloadCommand
+            || (availableTools.includes('nginx') ? 'nginx -s reload' : '')
+            || (availableTools.includes('apachectl') ? 'apachectl graceful' : '')
+            || (availableTools.includes('httpd') ? 'httpd -k graceful' : '')
+            || (availableTools.includes('caddy') ? 'caddy reload' : '')
+        ).trim() || null;
+
+        const certificatePresent = !!certificatePath && fs.existsSync(certificatePath);
+        const privateKeyPresent = !!privateKeyPath && fs.existsSync(privateKeyPath);
+        const chainPresent = !!chainPath && fs.existsSync(chainPath);
+
+        const configuredControlPanel = String(sslManager.controlPanel || '').trim().toLowerCase();
+        const controlPanel = configuredControlPanel && configuredControlPanel !== 'none'
+            ? configuredControlPanel
+            : detectedControlPanel;
+
+        return {
+            enabled: sslManager.enabled !== false,
+            provider,
+            mode,
+            controlPanel: controlPanel || 'none',
+            autoRenew: sslManager.autoRenew !== false,
+            syncToReverseProxy: sslManager.syncToReverseProxy !== false,
+            domains,
+            certificatePath,
+            privateKeyPath,
+            chainPath,
+            acmeWebRoot: String(sslManager.acmeWebRoot || '/var/www/html').trim() || null,
+            acmeEmail: String(sslManager.acmeEmail || config.admin?.adminEmails?.[0] || '').trim() || null,
+            renewCommand,
+            reloadCommand,
+            notes: typeof sslManager.notes === 'string' ? sslManager.notes : null,
+            status: certificatePresent && privateKeyPresent ? 'ready' : ((certificatePresent || privateKeyPresent) ? 'partial' : 'missing'),
+            certificatePresent,
+            privateKeyPresent,
+            chainPresent,
+            availableTools,
+            supportedManagers: ['cpanel', 'plesk', 'virtualmin', 'certbot', 'internal', 'manual'],
+            internalManagerAvailable: detectedControlPanel === 'none' || provider === 'internal',
+            detectedAt: new Date().toISOString()
+        };
+    }
+
+    async runSSLManagerShellAction(command, fallbackMessage) {
+        if (!command) {
+            return { success: false, message: fallbackMessage || 'No command configured' };
+        }
+        try {
+            const { stdout, stderr } = await execFileAsync('sh', ['-lc', command], { timeout: 30000 });
+            return {
+                success: true,
+                message: String(stdout || stderr || 'Command completed').trim() || 'Command completed'
+            };
+        } catch (error) {
+            return {
+                success: false,
+                message: String(error.stderr || error.stdout || error.message || 'Command failed').trim() || 'Command failed'
+            };
+        }
+    }
+
     buildSMBShareLink(relativePath = '') {
         const access = this.getFileSharingAccessConfig();
         const smb = access.smb || {};
@@ -4005,12 +4144,53 @@ class VoiceLinkLocalServer {
         return this.getLiveRoomUsers(roomId).filter((user) => !user?.isBot);
     }
 
+    getCanonicalPublicServerBase(req = null) {
+        const config = deployConfig.getConfig() || {};
+        const configuredPublicUrl = String(
+            process.env.PUBLIC_URL
+            || config.server?.publicUrl
+            || ''
+        ).trim();
+        if (configuredPublicUrl) {
+            return configuredPublicUrl.replace(/\/+$/, '');
+        }
+
+        const configuredDomain = String(config.server?.domain || '').trim();
+        if (configuredDomain) {
+            return `https://${configuredDomain}`.replace(/\/+$/, '');
+        }
+
+        const requestHost = String(req?.get?.('host') || '').trim();
+        if (requestHost) {
+            return `https://${requestHost}`.replace(/\/+$/, '');
+        }
+
+        return MAIN_SERVER_URL.replace(/\/+$/, '');
+    }
+
+    getCanonicalServerTitle(req = null) {
+        const config = deployConfig.getConfig() || {};
+        const configuredName = String(config.server?.name || '').trim();
+        if (configuredName) {
+            return configuredName;
+        }
+        const configuredDomain = String(config.server?.domain || '').trim();
+        if (configuredDomain) {
+            return configuredDomain;
+        }
+        const requestHost = String(req?.get?.('host') || '').trim();
+        if (requestHost) {
+            return requestHost;
+        }
+        return 'VoiceLink';
+    }
+
     getVisibleVirtualRoomUsers(roomId) {
         const room = this.rooms.get(roomId);
         if (!room) return [];
 
         const humanUsers = this.getHumanRoomUsers(roomId);
-        const botVisibility = String(room.botVisibility || room.visibleBots || 'with-users').trim().toLowerCase();
+        const botVisibility = String(room.botVisibility || room.visibleBots || 'always').trim().toLowerCase();
         const shouldShowBots = botVisibility === 'always' || (botVisibility !== 'never' && humanUsers.length > 0);
         if (!shouldShowBots) return [];
 
@@ -4026,6 +4206,7 @@ class VoiceLinkLocalServer {
                 isSpeaking: false,
                 isAuthenticated: true,
                 isBot: true,
+                botType: 'text',
                 hasAudioControls: false,
                 authProvider: 'voicelink_bot',
                 role: 'bot',
@@ -4047,6 +4228,7 @@ class VoiceLinkLocalServer {
                 isSpeaking: false,
                 isAuthenticated: true,
                 isBot: true,
+                botType: 'audio',
                 hasAudioControls: true,
                 authProvider: 'sapphire_bot',
                 role: 'bot',
@@ -4068,6 +4250,7 @@ class VoiceLinkLocalServer {
                 isSpeaking: false,
                 isAuthenticated: true,
                 isBot: true,
+                botType: 'audio',
                 hasAudioControls: true,
                 authProvider: 'sophia_bot',
                 role: 'bot',
@@ -4111,6 +4294,7 @@ class VoiceLinkLocalServer {
             authProvider: resolvedAuthProvider,
             isAuthenticated,
             isBot,
+            botType: isBot ? String(user.botType || (user.hasAudioControls ? 'audio' : 'text')).trim().toLowerCase() || 'text' : null,
             hasAudioControls: user.isBot ? !!user.hasAudioControls : true,
             statusMessage: user.statusMessage || (user.isBot ? 'Use /bot help or @VoiceLink Bot to interact.' : null),
             joinedAt: user.joinedAt || null,
@@ -5823,6 +6007,7 @@ class VoiceLinkLocalServer {
             count: this.getHumanRoomUsers(roomId).length,
             users: serializedUsers
         };
+        console.log(`[RoomUsers] Snapshot ${room.name} (${roomId}) humans=${payload.count} visible=${serializedUsers.length}`);
         this.io.to(roomId).emit('room-users', payload);
         this.io.to(roomId).emit('room-user-count', payload);
     }
@@ -6436,11 +6621,9 @@ class VoiceLinkLocalServer {
             const includeHidden = req.query.includeHidden === 'true';
             const authUser = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : null;
             const requestUserName = String(req.query.userName || req.headers['x-voicelink-user'] || '').trim();
-            const localServerApiBase = (
-                process.env.PUBLIC_URL
-                || deployConfig.getConfig()?.server?.publicUrl
-                || `${req.protocol}://${req.get('host')}`
-            ).replace(/\/+$/, '');
+            const localServerApiBase = this.getCanonicalPublicServerBase(req);
+            const localServerTitle = this.getCanonicalServerTitle(req);
+            const localServerDomain = String(deployConfig.getConfig()?.server?.domain || '').trim() || null;
 
             // Fetch rooms from main server first
             let mainServerRooms = [];
@@ -6512,8 +6695,8 @@ class VoiceLinkLocalServer {
                     updatedBy: room.updatedBy || room.createdBy || room.creatorHandle || null,
                     updatedAt: room.updatedAt || room.lastUpdated || room.createdAt || null,
                     previousNames: Array.isArray(room.previousNames) ? room.previousNames : [],
-                    serverTitle: this.serverName || null,
-                    serverDomain: deployConfig.getConfig()?.server?.domain || null,
+                    serverTitle: localServerTitle,
+                    serverDomain: localServerDomain,
                     serverApiBase: localServerApiBase,
                     motd: deployConfig.getConfig()?.server?.motd || null,
                     hostServerName: room.hostServerName || this.serverName || null,
@@ -12739,7 +12922,8 @@ class VoiceLinkLocalServer {
                 backgroundStreams: config.backgroundStreams || null,
                 pushover: config.pushover || null,
                 messageSettings: this.getMessageSettingsConfig(),
-                fileSharing: this.getFileSharingAccessConfig()
+                fileSharing: this.getFileSharingAccessConfig(),
+                sslManager: this.getSSLManagerAccessConfig(req)
             };
             res.json(flattened);
         });
@@ -12860,6 +13044,13 @@ class VoiceLinkLocalServer {
                     deployConfig.updateSection('messageSettings', {
                         ...this.getMessageSettingsConfig(),
                         ...updates.messageSettings
+                    });
+                }
+                if (updates.sslManager && typeof updates.sslManager === 'object') {
+                    const currentSSLManager = deployConfig.get('sslManager') || {};
+                    deployConfig.updateSection('sslManager', {
+                        ...currentSSLManager,
+                        ...updates.sslManager
                     });
                 }
 
@@ -17770,7 +17961,8 @@ class VoiceLinkLocalServer {
                 messageSettings: this.getMessageSettingsConfig(),
                 serverPolicies,
                 database,
-                fileSharing: this.getFileSharingAccessConfig()
+                fileSharing: this.getFileSharingAccessConfig(),
+                sslManager: this.getSSLManagerAccessConfig(req)
             });
         });
 
@@ -17860,6 +18052,9 @@ class VoiceLinkLocalServer {
                     : null;
                 const incomingFileSharing = req.body?.fileSharing && typeof req.body.fileSharing === 'object'
                     ? req.body.fileSharing
+                    : null;
+                const incomingSSLManager = req.body?.sslManager && typeof req.body.sslManager === 'object'
+                    ? req.body.sslManager
                     : null;
 
                 if (!Number.isNaN(maxRooms) && maxRooms > 0) {
@@ -17970,12 +18165,115 @@ class VoiceLinkLocalServer {
                             : currentSMB
                     });
                 }
+                if (incomingSSLManager) {
+                    const currentSSLManager = deployConfig.get('sslManager') || {};
+                    deployConfig.updateSection('sslManager', {
+                        ...currentSSLManager,
+                        ...incomingSSLManager
+                    });
+                }
 
                 await deployConfig.save();
                 res.json({ success: true });
             } catch (error) {
                 res.status(500).json({ success: false, error: error.message });
             }
+        });
+
+        this.app.get('/api/admin/ssl-manager/status', (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            res.json({
+                success: true,
+                sslManager: this.getSSLManagerAccessConfig(req)
+            });
+        });
+
+        this.app.put('/api/admin/ssl-manager', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const incoming = req.body?.sslManager && typeof req.body.sslManager === 'object'
+                    ? req.body.sslManager
+                    : (req.body || {});
+                const current = deployConfig.get('sslManager') || {};
+                deployConfig.updateSection('sslManager', {
+                    ...current,
+                    ...incoming
+                });
+                await deployConfig.save();
+                res.json({ success: true, sslManager: this.getSSLManagerAccessConfig(req) });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/ssl-manager/autodetect', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const detected = this.getSSLManagerAccessConfig(req);
+                const current = deployConfig.get('sslManager') || {};
+                deployConfig.updateSection('sslManager', {
+                    ...current,
+                    ...detected
+                });
+                await deployConfig.save();
+                res.json({ success: true, sslManager: this.getSSLManagerAccessConfig(req) });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/admin/ssl-manager/renew', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const sslManager = this.getSSLManagerAccessConfig(req);
+            const result = await this.runSSLManagerShellAction(
+                sslManager.renewCommand,
+                'No renew command is configured for this server.'
+            );
+            if (result.success) {
+                const current = deployConfig.get('sslManager') || {};
+                deployConfig.updateSection('sslManager', {
+                    ...current,
+                    lastRenewedAt: new Date().toISOString()
+                });
+                await deployConfig.save();
+            }
+            res.status(result.success ? 200 : 500).json({
+                success: result.success,
+                message: result.message,
+                sslManager: this.getSSLManagerAccessConfig(req)
+            });
+        });
+
+        this.app.post('/api/admin/ssl-manager/reload', async (req, res) => {
+            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            const sslManager = this.getSSLManagerAccessConfig(req);
+            const result = await this.runSSLManagerShellAction(
+                sslManager.reloadCommand,
+                'No reload command is configured for this server.'
+            );
+            if (result.success) {
+                const current = deployConfig.get('sslManager') || {};
+                deployConfig.updateSection('sslManager', {
+                    ...current,
+                    lastReloadedAt: new Date().toISOString()
+                });
+                await deployConfig.save();
+            }
+            res.status(result.success ? 200 : 500).json({
+                success: result.success,
+                message: result.message,
+                sslManager: this.getSSLManagerAccessConfig(req)
+            });
         });
 
         this.app.get('/api/admin/server-visibility', (req, res) => {
@@ -20405,6 +20703,7 @@ class VoiceLinkLocalServer {
                     roomName: room.name,
                     joinedAt: user.joinedAt instanceof Date ? user.joinedAt.toISOString() : new Date().toISOString()
                 });
+                console.log(`[RoomJoin] ${user.name} (${socket.id}) joined ${room.name} (${roomId}) authenticated=${isAuthenticated} humans=${this.getHumanRoomUsers(roomId).length}`);
 
                 socket.join(roomId);
 
@@ -21208,6 +21507,7 @@ class VoiceLinkLocalServer {
                 const room = this.rooms.get(roomId);
                 if (room) {
                     const liveUsers = this.normalizeRoomUsers(roomId);
+                    console.log(`[RoomUsers] Request ${room.name} (${roomId}) by ${socket.id} humans=${this.getHumanRoomUsers(roomId).length} visible=${liveUsers.length}`);
                     socket.emit('room-users', {
                         roomId,
                         users: liveUsers.map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
