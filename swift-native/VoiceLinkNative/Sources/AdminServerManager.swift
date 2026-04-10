@@ -2586,6 +2586,8 @@ struct ServerSMBAccessConfig: Codable, Equatable {
     var central: ServerSMBLayerConfig?
     var preferredShareKey: String?
     var preferredShareName: String?
+    var shares: [String: String]?
+    var appShareMap: [String: String]?
 }
 
 struct ServerSMBLayerConfig: Codable, Equatable {

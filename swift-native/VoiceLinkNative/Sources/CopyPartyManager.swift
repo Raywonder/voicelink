@@ -246,11 +246,15 @@ class CopyPartyManager: ObservableObject {
         let localHosts = smb.local?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
         if !localHosts.isEmpty {
             config.localSMBHostnames = localHosts
+        } else if !mergedHosts.isEmpty {
+            config.localSMBHostnames = mergedHosts
         }
 
         let centralHosts = smb.central?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
         if !centralHosts.isEmpty {
             config.centralSMBHostnames = centralHosts
+        } else if !mergedHosts.isEmpty {
+            config.centralSMBHostnames = mergedHosts
         }
 
         if let preferredShare = smb.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !preferredShare.isEmpty {
