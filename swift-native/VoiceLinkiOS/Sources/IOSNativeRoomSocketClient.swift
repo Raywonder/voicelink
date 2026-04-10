@@ -15,6 +15,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     @Published private(set) var outputMuted = false
     @Published private(set) var userAudioLevels: [String: Float] = [:]
     @Published private(set) var roomUsers: [IOSDirectMessageTarget] = []
+    @Published private(set) var userPlaybackGains: [String: Float] = [:]
+    @Published private(set) var userPlaybackMuted: [String: Bool] = [:]
 
     private struct PendingSession {
         let baseURL: String
@@ -110,6 +112,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         audioRelayStatus = "Relay stopped"
         userAudioLevels = [:]
         roomUsers = []
+        userPlaybackGains = [:]
+        userPlaybackMuted = [:]
         relayPlayer.setMonitorUserId(nil)
         microphoneCapture.stop()
         relayPlayer.stop()
@@ -173,6 +177,21 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         let normalizedUserId = (userId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         relayPlayer.setMonitorUserId(normalizedUserId.isEmpty ? nil : normalizedUserId)
         audioRelayStatus = normalizedUserId.isEmpty ? "Relay active" : "Monitoring one user"
+    }
+
+    func setUserPlaybackGain(_ gain: Float, for userId: String) {
+        let normalizedUserId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedUserId.isEmpty else { return }
+        let clampedGain = max(0, min(3, gain))
+        userPlaybackGains[normalizedUserId] = clampedGain
+        relayPlayer.setUserGain(clampedGain, for: normalizedUserId)
+    }
+
+    func setUserPlaybackMuted(_ muted: Bool, for userId: String) {
+        let normalizedUserId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedUserId.isEmpty else { return }
+        userPlaybackMuted[normalizedUserId] = muted
+        relayPlayer.setUserMuted(muted, for: normalizedUserId)
     }
 
     private func reconnect(to baseURL: String) {
@@ -467,6 +486,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
                 transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
                 isBot: (user["isBot"] as? Bool) ?? false,
+                hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
                 deviceName: normalizedSocketText(user["deviceName"], fallback: ""),
                 deviceType: normalizedSocketText(user["deviceType"], fallback: ""),
                 clientVersion: normalizedSocketText(user["clientVersion"], fallback: "")
@@ -804,6 +824,8 @@ private final class IOSRoomAudioRelayPlayer {
     private var isMuted = false
     private var isConfigured = false
     private var monitorUserId: String?
+    private var userGains: [String: Float] = [:]
+    private var userMuted: [String: Bool] = [:]
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
@@ -868,6 +890,20 @@ private final class IOSRoomAudioRelayPlayer {
         }
     }
 
+    func setUserGain(_ gain: Float, for userId: String) {
+        renderQueue.async { [weak self] in
+            guard let self else { return }
+            self.userGains[userId] = max(0, min(3, gain))
+        }
+    }
+
+    func setUserMuted(_ muted: Bool, for userId: String) {
+        renderQueue.async { [weak self] in
+            guard let self else { return }
+            self.userMuted[userId] = muted
+        }
+    }
+
     func playPacket(_ payload: [String: Any]) {
         guard let encoded = payload["audioData"] as? String,
               let data = Data(base64Encoded: encoded) else {
@@ -884,6 +920,9 @@ private final class IOSRoomAudioRelayPlayer {
                senderId != monitorUserId {
                 return
             }
+            if self.userMuted[senderId] == true {
+                return
+            }
             if self.playbackFormat?.sampleRate != sampleRate || self.playbackFormat?.channelCount != channels {
                 self.rebuildEngine(sampleRate: sampleRate, channels: channels)
             }
@@ -898,13 +937,16 @@ private final class IOSRoomAudioRelayPlayer {
             buffer.frameLength = frameCount
             data.withUnsafeBytes { rawBuffer in
                 guard let source = rawBuffer.bindMemory(to: Float.self).baseAddress else { return }
+                let userGain = max(0, min(3, self.userGains[senderId] ?? 1.0))
                 if channels == 1, let channel = buffer.floatChannelData?[0] {
-                    channel.update(from: source, count: Int(frameCount))
+                    for frame in 0..<Int(frameCount) {
+                        channel[frame] = source[frame] * userGain
+                    }
                 } else if channels >= 2, let channelData = buffer.floatChannelData {
                     let frames = Int(frameCount)
                     for frame in 0..<frames {
                         for channelIndex in 0..<min(Int(channels), Int(format.channelCount)) {
-                            channelData[channelIndex][frame] = source[frame * Int(channels) + channelIndex]
+                            channelData[channelIndex][frame] = source[frame * Int(channels) + channelIndex] * userGain
                         }
                     }
                 }

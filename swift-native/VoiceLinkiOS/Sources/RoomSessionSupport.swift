@@ -49,6 +49,7 @@ struct RoomSessionView: View {
     @State private var showSettings = false
     @State private var showAudioControls = true
     @State private var showPeopleAudioState = true
+    @State private var expandedUserAudioControls: Set<String> = []
     @State private var showDirectMessages = false
     @State private var whisperTarget: IOSDirectMessageTarget?
     @State private var monitorTarget: IOSDirectMessageTarget?
@@ -101,9 +102,9 @@ struct RoomSessionView: View {
             List {
                 connectionSection
                 peopleSection
+                roomAudioSection
                 roomChatSection
                 liveTranscriptsSection
-                roomAudioSection
             }
             .navigationTitle(destination.roomName)
             .navigationBarTitleDisplayMode(.inline)
@@ -275,6 +276,17 @@ struct RoomSessionView: View {
                         syncRoomAudioState()
                         IOSActionSoundPlayer.playToggle()
                     }
+                Slider(value: $inputGain, in: 0...3) {
+                    Text("Mic Level")
+                } minimumValueLabel: {
+                    Text("0%")
+                } maximumValueLabel: {
+                    Text("300%")
+                }
+                .accessibilityValue("\(Int(inputGain * 100)) percent")
+                .accessibilityAdjustableAction { direction in
+                    adjustGainValue(&inputGain, direction: direction)
+                }
                 Slider(value: $outputGain, in: 0...3) {
                     Text("Output Volume")
                 } minimumValueLabel: {
@@ -341,7 +353,7 @@ struct RoomSessionView: View {
                     showDetails = true
                     IOSActionSoundPlayer.playConfirm()
                 }
-                Button(showAudioControls ? "Hide Audio Controls" : "Show Audio Controls") {
+                Button(showAudioControls ? "Hide Room Audio Controls" : "Show Room Audio Controls") {
                     showAudioControls.toggle()
                     IOSActionSoundPlayer.playToggle()
                 }
@@ -541,44 +553,50 @@ struct RoomSessionView: View {
     }
 
     private func roomUserRow(for target: IOSDirectMessageTarget, includeRoleBadges: Bool) -> some View {
-        Button {
-            openProfile(for: target)
-        } label: {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: iosUserAudioIconName(target))
-                    .foregroundStyle(target.isSpeaking ? .green : .secondary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(target.name)
-                        .font(.body)
-                    if showPeopleAudioState {
-                        Text(roomAudioStatusLabel(for: target))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        userAudioLevelMeter(for: target)
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                openProfile(for: target)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: iosUserAudioIconName(target))
+                        .foregroundStyle(target.isSpeaking ? .green : .secondary)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(target.name)
+                            .font(.body)
+                        if showPeopleAudioState {
+                            Text(roomAudioStatusLabel(for: target))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            userAudioLevelMeter(for: target)
+                        }
+                        if let deviceSummary = iosUserDeviceSummary(target) {
+                            Text(deviceSummary)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                    if let deviceSummary = iosUserDeviceSummary(target) {
-                        Text(deviceSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                Spacer()
-                if includeRoleBadges {
-                    if whisperTarget?.id == target.id {
-                        Text("Whisper")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    } else if monitorTarget?.id == target.id {
-                        Text("Monitor")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.blue)
+                    Spacer()
+                    if includeRoleBadges {
+                        if whisperTarget?.id == target.id {
+                            Text("Whisper")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        } else if monitorTarget?.id == target.id {
+                            Text("Monitor")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.blue)
+                        }
                     }
                 }
             }
+            .buttonStyle(.plain)
+
+            if isShowingUserAudioControls(for: target) {
+                userAudioControlsView(for: target)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(roomUserAccessibilityLabel(for: target))
         .accessibilityValue(roomUserAccessibilityValue(for: target))
         .contextMenu {
@@ -594,12 +612,13 @@ struct RoomSessionView: View {
             Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
                 toggleMonitorTarget(target)
             }
+            if canShowPerUserAudioControls(for: target) {
+                Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
+                    toggleUserAudioControls(for: target)
+                }
+            }
             Button(showPeopleAudioState ? "Hide User Audio State" : "Show User Audio State") {
                 showPeopleAudioState.toggle()
-                IOSActionSoundPlayer.playToggle()
-            }
-            Button(showAudioControls ? "Hide Audio Controls" : "Show Audio Controls") {
-                showAudioControls.toggle()
                 IOSActionSoundPlayer.playToggle()
             }
         }
@@ -609,7 +628,7 @@ struct RoomSessionView: View {
                     toggleWhisperTarget(target)
                 }
         )
-        .accessibilityHint("Double tap to open this user's profile. Press and hold to set or clear whisper target. Open the context menu for direct messages and audio controls.")
+        .accessibilityHint("Double tap to open this user's profile. Press and hold to set or clear whisper target. Open actions for direct messages, monitoring, and audio controls.")
         .accessibilityAction(named: Text("View Profile")) {
             openProfile(for: target)
         }
@@ -621,6 +640,11 @@ struct RoomSessionView: View {
         }
         .accessibilityAction(named: Text(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")) {
             toggleWhisperTarget(target)
+        }
+        .accessibilityAction(named: Text(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls")) {
+            if canShowPerUserAudioControls(for: target) {
+                toggleUserAudioControls(for: target)
+            }
         }
     }
 
@@ -738,6 +762,57 @@ struct RoomSessionView: View {
             roomState.statusText = "Monitoring \(target.name)."
         }
         IOSActionSoundPlayer.playToggle()
+    }
+
+    private func canShowPerUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
+        target.hasAudioControls
+    }
+
+    private func isShowingUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
+        expandedUserAudioControls.contains(target.id) && canShowPerUserAudioControls(for: target)
+    }
+
+    private func toggleUserAudioControls(for target: IOSDirectMessageTarget) {
+        guard canShowPerUserAudioControls(for: target) else { return }
+        if expandedUserAudioControls.contains(target.id) {
+            expandedUserAudioControls.remove(target.id)
+        } else {
+            expandedUserAudioControls.insert(target.id)
+        }
+        IOSActionSoundPlayer.playToggle()
+    }
+
+    @ViewBuilder
+    private func userAudioControlsView(for target: IOSDirectMessageTarget) -> some View {
+        let mutedBinding = Binding<Bool>(
+            get: { socketClient.userPlaybackMuted[target.id] ?? false },
+            set: { socketClient.setUserPlaybackMuted($0, for: target.id) }
+        )
+        let volumeBinding = Binding<Double>(
+            get: { Double(socketClient.userPlaybackGains[target.id] ?? 1.0) },
+            set: { socketClient.setUserPlaybackGain(Float($0), for: target.id) }
+        )
+
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Mute \(target.name)", isOn: mutedBinding)
+                .onChange(of: mutedBinding.wrappedValue) { _ in
+                    IOSActionSoundPlayer.playToggle()
+                }
+            Slider(value: volumeBinding, in: 0...3) {
+                Text("\(target.name) Volume")
+            } minimumValueLabel: {
+                Text("0%")
+            } maximumValueLabel: {
+                Text("300%")
+            }
+            .accessibilityValue("\(Int(volumeBinding.wrappedValue * 100)) percent")
+            .accessibilityAdjustableAction { direction in
+                var nextValue = volumeBinding.wrappedValue
+                adjustGainValue(&nextValue, direction: direction)
+                volumeBinding.wrappedValue = nextValue
+            }
+        }
+        .padding(.leading, 36)
     }
 
     private func startRoomBackgroundPlaybackIfNeeded(forceRestart: Bool = false) {

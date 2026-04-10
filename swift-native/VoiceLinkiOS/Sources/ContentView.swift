@@ -66,6 +66,7 @@ struct IOSDirectMessageTarget: Identifiable, Hashable {
     var isSpeaking: Bool = false
     var transmitEnabled: Bool = true
     var isBot: Bool = false
+    var hasAudioControls: Bool = true
     var deviceName: String = ""
     var deviceType: String = ""
     var clientVersion: String = ""
@@ -300,6 +301,7 @@ final class IOSRoomMessagingState: ObservableObject {
                 isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
                 transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
                 isBot: (user["isBot"] as? Bool) ?? false,
+                hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
                 deviceName: normalizedIOSSocketValue(user["deviceName"], fallback: ""),
                 deviceType: normalizedIOSSocketValue(user["deviceType"], fallback: ""),
                 clientVersion: normalizedIOSSocketValue(user["clientVersion"], fallback: "")
@@ -343,6 +345,7 @@ final class IOSRoomMessagingState: ObservableObject {
                     isSpeaking: false,
                     transmitEnabled: false,
                     isBot: true,
+                    hasAudioControls: false,
                     deviceName: type == "system" ? "Server" : "VoiceLink",
                     deviceType: "bot",
                     clientVersion: ""
