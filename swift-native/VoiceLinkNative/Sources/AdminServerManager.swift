@@ -3010,6 +3010,7 @@ struct BackgroundStreamConfig: Codable, Identifiable {
     var autoPlay: Bool
     var rooms: [String]?
     var roomPatterns: [String]?
+    var excludedRooms: [String]?
 }
 
 struct AdminUserInfo: Codable, Identifiable {

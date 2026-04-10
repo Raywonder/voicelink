@@ -4135,11 +4135,16 @@ struct VoiceChatView: View {
             var updated = stream
             var rooms = (updated.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
+            var excludedRooms = (updated.excludedRooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
             if let selectedStream, updated.id == selectedStream.id {
                 rooms.append(contentsOf: normalizedRoomIDs)
                 updated.autoPlay = true
+            } else {
+                excludedRooms.append(contentsOf: normalizedRoomIDs)
             }
             updated.rooms = rooms.isEmpty ? nil : Array(Set(rooms)).sorted()
+            updated.excludedRooms = excludedRooms.isEmpty ? nil : Array(Set(excludedRooms)).sorted()
             return updated
         }
 
@@ -4153,6 +4158,7 @@ struct VoiceChatView: View {
                     appState.serverManager.refreshRoomMedia(for: room.id)
                 }
             }
+            await adminManager.fetchServerConfig()
         }
     }
 

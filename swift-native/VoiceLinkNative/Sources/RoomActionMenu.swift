@@ -204,9 +204,16 @@ struct RoomActionMenu: View {
     }
 
     private var currentBackgroundStreamName: String? {
+        if let title = serverManager.currentRoomMedia?.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
         guard let activeURL = serverManager.currentRoomMedia?.streamURL.trimmingCharacters(in: .whitespacesAndNewlines),
               !activeURL.isEmpty else { return nil }
-        return availableBackgroundStreams.first(where: { normalizedStreamURL(for: $0) == activeURL })?.name
+        return availableBackgroundStreams.first(where: {
+            normalizedStreamURL(for: $0).trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(activeURL) == .orderedSame
+        })?.name
     }
 
     private var assignedBackgroundStream: BackgroundStreamConfig? {
@@ -611,6 +618,10 @@ struct RoomActionMenu: View {
     private func isStreamAssignedToRoom(_ stream: BackgroundStreamConfig) -> Bool {
         let roomId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
         let roomName = room.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excludedRooms = (stream.excludedRooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if excludedRooms.contains(roomId) {
+            return false
+        }
         let explicitRooms = (stream.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         if explicitRooms.contains(roomId) {
             return true
@@ -682,11 +693,16 @@ struct RoomActionMenu: View {
             var updated = stream
             var rooms = (updated.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
+            var excludedRooms = (updated.excludedRooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
             if let selectedStream, updated.id == selectedStream.id {
                 rooms.append(contentsOf: normalizedRoomIDs)
                 updated.autoPlay = true
+            } else {
+                excludedRooms.append(contentsOf: normalizedRoomIDs)
             }
             updated.rooms = rooms.isEmpty ? nil : Array(Set(rooms)).sorted()
+            updated.excludedRooms = excludedRooms.isEmpty ? nil : Array(Set(excludedRooms)).sorted()
             return updated
         }
 
@@ -708,6 +724,9 @@ struct RoomActionMenu: View {
                     serverManager.stopCurrentRoomMedia()
                     if selectedStream != nil {
                         serverManager.refreshRoomMedia(for: room.id)
+                    }
+                    Task {
+                        await adminManager.fetchServerConfig()
                     }
                     refreshRoomMediaStatus()
                 } else {
@@ -862,7 +881,12 @@ struct RoomActionMenu: View {
 
     private func refreshRoomMediaStatus() {
         if serverManager.activeRoomId == room.id {
-            roomMediaStatusText = serverManager.isCurrentRoomMediaPlaying ? "Broadcasting in room" : "Stopped in room"
+            if serverManager.isCurrentRoomMediaPlaying {
+                let title = currentBackgroundStreamName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                roomMediaStatusText = title.isEmpty ? "Broadcasting in room" : "Broadcasting in room (\(title))"
+            } else {
+                roomMediaStatusText = assignedBackgroundStream == nil ? "Stopped in room" : "Assigned but stopped"
+            }
             return
         }
 

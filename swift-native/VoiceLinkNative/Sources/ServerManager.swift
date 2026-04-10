@@ -36,6 +36,7 @@ class ServerManager: ObservableObject {
     private var pendingJoinTimeoutWorkItem: DispatchWorkItem?
     private var roomStreamPlayer: AVPlayer?
     private var currentRoomStreamURL: URL?
+    private var currentRoomStreamTitle: String?
     private var roomStreamDidStopExplicitly = false
     private var roomStreamKeepAliveTimer: Timer?
     private var roomStreamEndObserver: NSObjectProtocol?
@@ -51,6 +52,7 @@ class ServerManager: ObservableObject {
     struct CurrentRoomMediaState {
         let active: Bool
         let streamURL: String
+        let title: String?
     }
 
     // Public accessor for the current server URL
@@ -66,7 +68,8 @@ class ServerManager: ObservableObject {
         let activePlayback = player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         return CurrentRoomMediaState(
             active: activePlayback,
-            streamURL: url.absoluteString
+            streamURL: url.absoluteString,
+            title: currentRoomStreamTitle
         )
     }
 
@@ -954,7 +957,7 @@ class ServerManager: ObservableObject {
             let streamUrl = payload["streamUrl"] as? String
             if let streamUrl {
                 self.roomStreamDidStopExplicitly = false
-                self.startRoomStreamPlayback(from: streamUrl)
+                self.startRoomStreamPlayback(from: streamUrl, title: mediaTitle)
             }
             DispatchQueue.main.async {
                 AccessibilityManager.shared.announceStatus("\(mediaTitle) started.")
@@ -972,6 +975,7 @@ class ServerManager: ObservableObject {
                 ?? (payload["itemName"] as? String)
                 ?? (payload["itemId"] as? String)
                 ?? "Media"
+            self.currentRoomStreamTitle = mediaTitle
             self.stopRoomStreamPlayback(explicit: false)
             if let activeRoomId = self.activeRoomId {
                 self.fetchActiveRoomStream(for: activeRoomId)
@@ -1465,6 +1469,7 @@ class ServerManager: ObservableObject {
                 self.stopRoomStreamPlayback(explicit: false)
                 return
             }
+            let mediaTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let volumeValue = json["volume"] as? NSNumber {
                 let normalizedVolume = min(max(volumeValue.floatValue / 100.0, 0), 1.5)
                 DispatchQueue.main.async {
@@ -1474,13 +1479,15 @@ class ServerManager: ObservableObject {
                     }
                 }
             }
-            self.startRoomStreamPlayback(from: streamUrl)
+            self.startRoomStreamPlayback(from: streamUrl, title: mediaTitle)
         }.resume()
     }
 
-    private func startRoomStreamPlayback(from rawURL: String) {
+    private func startRoomStreamPlayback(from rawURL: String, title: String? = nil) {
         guard let url = normalizedRoomStreamURL(from: rawURL) else { return }
         DispatchQueue.main.async {
+            let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.currentRoomStreamTitle = trimmedTitle?.isEmpty == false ? trimmedTitle : self.currentRoomStreamTitle
             if self.currentRoomStreamURL == url, let player = self.roomStreamPlayer {
                 self.roomStreamFadeTimer?.invalidate()
                 self.roomStreamFadeTimer = nil
@@ -1575,6 +1582,7 @@ class ServerManager: ObservableObject {
             self.roomStreamPlayer?.pause()
             self.roomStreamPlayer?.replaceCurrentItem(with: nil)
             self.currentRoomStreamURL = nil
+            self.currentRoomStreamTitle = nil
             self.currentRoomMediaMuted = false
         }
     }

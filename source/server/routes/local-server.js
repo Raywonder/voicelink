@@ -4272,7 +4272,9 @@ class VoiceLinkLocalServer {
         for (const stream of streams) {
             if (!stream) continue;
             const explicitRooms = Array.isArray(stream.rooms) ? stream.rooms.map((value) => String(value).trim()) : [];
+            const excludedRooms = Array.isArray(stream.excludedRooms) ? stream.excludedRooms.map((value) => String(value).trim()) : [];
             const patterns = Array.isArray(stream.roomPatterns) ? stream.roomPatterns : [];
+            if (roomId && excludedRooms.includes(roomId)) continue;
             const matchesRoom = roomId && explicitRooms.includes(roomId);
             const matchesPattern = roomName && patterns.some((pattern) => {
                 try {

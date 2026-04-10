@@ -3010,7 +3010,8 @@ struct AdminStreamsSection: View {
                     hidden: false,
                     autoPlay: false,
                     rooms: [],
-                    roomPatterns: []
+                    roomPatterns: [],
+                    excludedRooms: []
                 ),
                 isAddMode: true,
                 availableRooms: adminManager.serverRooms
