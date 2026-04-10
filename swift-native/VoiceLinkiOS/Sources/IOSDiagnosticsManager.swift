@@ -1,6 +1,84 @@
 import Foundation
 import UIKit
 
+private enum IOSDiagnosticsSubmissionLogger {
+    private static let storageKey = "voicelink.iosDiagnosticsSubmissionLog"
+    private static let maxEntries = 80
+
+    static func log(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "\(timestamp) [iOS] \(message)"
+        NSLog("%@", entry)
+        var entries = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+        entries.append(entry)
+        if entries.count > maxEntries {
+            entries.removeFirst(entries.count - maxEntries)
+        }
+        UserDefaults.standard.set(entries, forKey: storageKey)
+    }
+}
+
+private enum IOSDiagnosticsSubmissionMessage {
+    static func starting(title: String, category: String, severity: String) -> String {
+        "Sending diagnostics report \"\(title)\" in \(category) with \(severity) priority."
+    }
+
+    static func attemptingPrimaryRoute() -> String {
+        "Trying the server diagnostics route."
+    }
+
+    static func routeStatus(_ statusCode: Int?) -> String {
+        guard let statusCode else {
+            return "The server replied, but the response could not be read clearly."
+        }
+        switch statusCode {
+        case 200 ... 299:
+            return "The server accepted the diagnostics report."
+        case 401, 403:
+            return "The server refused the diagnostics report because this account is not allowed to send it."
+        case 404:
+            return "The diagnostics route is not available on this server."
+        case 500 ... 599:
+            return "The server hit an internal error while processing the diagnostics report."
+        default:
+            return "The server replied with status \(statusCode) while processing the diagnostics report."
+        }
+    }
+
+    static func attemptingSupportLogs() -> String {
+        "Sending the attached support logs."
+    }
+
+    static func supportLogStatus(_ statusCode: Int?) -> String {
+        guard let statusCode else {
+            return "The support logs were sent, but the response could not be read clearly."
+        }
+        switch statusCode {
+        case 200 ... 299:
+            return "The support logs were delivered successfully."
+        case 401, 403:
+            return "The server would not accept the support logs from this account."
+        case 404:
+            return "The support-log route is not available on this server."
+        case 500 ... 599:
+            return "The server hit an internal error while processing the support logs."
+        default:
+            return "The server replied with status \(statusCode) while processing the support logs."
+        }
+    }
+
+    static func failed(_ error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.isEmpty {
+            return "The diagnostics report could not be delivered."
+        }
+        if message.lowercased().contains("timed out") {
+            return "The diagnostics report timed out before the server replied."
+        }
+        return "The diagnostics report could not be delivered: \(message)"
+    }
+}
+
 @MainActor
 final class IOSDiagnosticsManager {
     static let shared = IOSDiagnosticsManager()
@@ -40,9 +118,12 @@ final class IOSDiagnosticsManager {
                     sessionStatus: sessionStatus,
                     displayName: displayName
                 )
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.starting(title: trimmedTitle, category: category, severity: severity))
                 try await submitPayload(payload, serverURL: serverURL)
+                IOSDiagnosticsSubmissionLogger.log("bug report submission succeeded")
                 completion(.success(()))
             } catch {
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.failed(error))
                 completion(.failure(error))
             }
         }
@@ -100,6 +181,7 @@ final class IOSDiagnosticsManager {
 
         for base in bases {
             guard let url = URL(string: "\(base)/api/bugs/submit") else { continue }
+            IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.attemptingPrimaryRoute())
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 15
@@ -109,8 +191,10 @@ final class IOSDiagnosticsManager {
             do {
                 let (_, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
+                    IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.routeStatus(nil))
                     continue
                 }
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.routeStatus(http.statusCode))
                 if (200...299).contains(http.statusCode) {
                     if let supportLogsPayload {
                         try? await submitSupportLogs(supportLogsPayload, base: base)
@@ -121,6 +205,7 @@ final class IOSDiagnosticsManager {
                     NSLocalizedDescriptionKey: "Server returned status \(http.statusCode)."
                 ])
             } catch {
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.failed(error))
                 lastError = error
             }
         }
@@ -200,12 +285,23 @@ final class IOSDiagnosticsManager {
 
     private func submitSupportLogs(_ payload: Data, base: String) async throws {
         guard let url = URL(string: "\(base)/api/support/logs") else { return }
+        IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.attemptingSupportLogs())
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = payload
-        _ = try await URLSession.shared.data(for: request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.supportLogStatus(http.statusCode))
+            } else {
+                IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.supportLogStatus(nil))
+            }
+        } catch {
+            IOSDiagnosticsSubmissionLogger.log(IOSDiagnosticsSubmissionMessage.failed(error))
+            throw error
+        }
     }
 
     private func candidateBases(from raw: String) -> [String] {

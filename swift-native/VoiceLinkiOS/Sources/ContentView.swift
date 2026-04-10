@@ -2192,7 +2192,7 @@ private struct SettingsTab: View {
                                 .font(.subheadline.weight(.semibold))
                             ForEach(Array(submissionEntries.suffix(8).reversed()), id: \.self) { entry in
                                 Text(entry)
-                                    .font(.caption.monospaced())
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
                             }
@@ -2299,8 +2299,10 @@ private struct SettingsTab: View {
             switch result {
             case .success:
                 diagnosticsStatus = "Diagnostics report sent."
+                UIAccessibility.post(notification: .announcement, argument: diagnosticsStatus)
             case .failure(let error):
                 diagnosticsStatus = "Failed to send diagnostics: \(error.localizedDescription)"
+                UIAccessibility.post(notification: .announcement, argument: diagnosticsStatus)
             }
         }
     }

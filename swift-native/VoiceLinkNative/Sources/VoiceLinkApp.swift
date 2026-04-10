@@ -7342,7 +7342,7 @@ struct SettingsView: View {
             } else {
                 ForEach(Array(submissionEntries.suffix(10).reversed()), id: \.self) { entry in
                     Text(entry)
-                        .font(.caption.monospaced())
+                        .font(.caption)
                         .foregroundColor(.white.opacity(0.85))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -7384,8 +7384,10 @@ struct SettingsView: View {
             switch result {
             case .success:
                 diagnosticsSubmissionStatus = "Diagnostics sent. VoiceLink shared a support snapshot from this Mac so we can see what went wrong and what the app tried next."
+                AccessibilityManager.shared.announceStatus(diagnosticsSubmissionStatus ?? "Diagnostics sent.")
             case .failure(let error):
                 diagnosticsSubmissionStatus = "VoiceLink could not send the diagnostics just yet. \(error.localizedDescription) You can keep using the app and try again after the connection settles."
+                AccessibilityManager.shared.announceStatus(diagnosticsSubmissionStatus ?? "Diagnostics could not be sent.", isUrgent: true)
             }
         }
     }
