@@ -46,6 +46,7 @@ struct RoomSessionView: View {
     @State private var showDetails = false
     @State private var showControls = false
     @State private var showPeople = false
+    @State private var showSettings = false
     @State private var showAudioControls = true
     @State private var showPeopleAudioState = true
     @State private var showDirectMessages = false
@@ -102,6 +103,7 @@ struct RoomSessionView: View {
             .sheet(isPresented: $showDetails) { roomDetailsSheet }
             .sheet(isPresented: $showControls) { roomControlsSheet }
             .sheet(isPresented: $showPeople) { peopleSheet }
+            .sheet(isPresented: $showSettings) { roomSettingsSheet }
             .sheet(isPresented: $showDirectMessages) { directMessagesSheet }
         }
         .onAppear {
@@ -291,6 +293,10 @@ struct RoomSessionView: View {
             Text("Settings stay available in-room here so volume and room chat controls can be changed without leaving the session.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            Button("Open Full Settings") {
+                showSettings = true
+                IOSActionSoundPlayer.playConfirm()
+            }
         }
     }
 
@@ -303,6 +309,10 @@ struct RoomSessionView: View {
                 }
                 Button("Room Settings") {
                     showControls = true
+                    IOSActionSoundPlayer.playConfirm()
+                }
+                Button("App Settings") {
+                    showSettings = true
                     IOSActionSoundPlayer.playConfirm()
                 }
                 Button("People in Room") {
@@ -337,7 +347,7 @@ struct RoomSessionView: View {
                     .background(.thinMaterial, in: Capsule())
             }
             .accessibilityLabel("Room Actions")
-            .accessibilityHint("Opens room actions including chat, people, room details, room settings, and leave room.")
+            .accessibilityHint("Opens room actions including chat, people, room details, app settings, room settings, and leave room.")
         }
     }
 
@@ -501,6 +511,10 @@ struct RoomSessionView: View {
                 }
             }
         }
+    }
+
+    private var roomSettingsSheet: some View {
+        SettingsTab(roomState: roomState, openServers: {})
     }
 
     private func roomUserRow(for target: IOSDirectMessageTarget, includeRoleBadges: Bool) -> some View {

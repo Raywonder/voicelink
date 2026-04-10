@@ -2094,7 +2094,7 @@ private struct IOSShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-private struct SettingsTab: View {
+struct SettingsTab: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject var roomState: IOSRoomMessagingState
     let openServers: () -> Void
