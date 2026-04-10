@@ -235,14 +235,25 @@ final class IOSRoomMessagingState: ObservableObject {
         guard let info else { return }
         let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let switchingRooms = !activeRoomId.isEmpty && !roomId.isEmpty && activeRoomId != roomId
+        if switchingRooms {
+            directTargets.removeAll()
+            roomMessages.removeAll()
+        }
         if !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
-            directTargets.removeAll()
             roomTranscripts.removeAll()
         }
         if !roomName.isEmpty {
             activeRoomName = roomName
+        }
+        let seededUsers = iosUsersArray(from: info)
+        if !seededUsers.isEmpty {
+            handleRoomUsers([
+                "roomId": roomId.isEmpty ? activeRoomId : roomId,
+                "users": seededUsers
+            ])
         }
     }
 

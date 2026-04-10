@@ -231,16 +231,23 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             self.joinedRoomId = roomId
             self.joinedRoomName = roomName
             self.connectionStatus = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
+            let users = Self.socketUsersValue(payload)
             NotificationCenter.default.post(
                 name: .iosRoomJoined,
                 object: nil,
-                userInfo: ["roomId": roomId, "roomName": roomName]
+                userInfo: [
+                    "roomId": roomId,
+                    "roomName": roomName,
+                    "users": users
+                ]
             )
-            var users = Self.socketUsersValue(payload)
             if users.isEmpty, let joinedUser = Self.socketDictionaryValue(payload["user"]) {
-                users = [joinedUser]
-            }
-            if !users.isEmpty {
+                NotificationCenter.default.post(
+                    name: .iosRoomUsersUpdated,
+                    object: nil,
+                    userInfo: ["roomId": roomId, "users": [joinedUser]]
+                )
+            } else if !users.isEmpty {
                 NotificationCenter.default.post(
                     name: .iosRoomUsersUpdated,
                     object: nil,
@@ -249,6 +256,14 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             }
             self.requestRoomUsers()
             self.requestRoomMessages()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.requestRoomUsers()
+                self?.requestRoomMessages()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.requestRoomUsers()
+                self?.requestRoomMessages()
+            }
             self.socket?.emit("enable-audio-relay", [
                 "enabled": true,
                 "sampleRate": 48000,
