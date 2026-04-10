@@ -277,7 +277,7 @@ struct RoomSessionView: View {
                         IOSActionSoundPlayer.playToggle()
                     }
                 Slider(value: $inputGain, in: 0...3) {
-                    Text("Mic Level")
+                    Text("Input Level")
                 } minimumValueLabel: {
                     Text("0%")
                 } maximumValueLabel: {
@@ -288,7 +288,7 @@ struct RoomSessionView: View {
                     adjustGainValue(&inputGain, direction: direction)
                 }
                 Slider(value: $outputGain, in: 0...3) {
-                    Text("Output Volume")
+                    Text("Output Level")
                 } minimumValueLabel: {
                     Text("0%")
                 } maximumValueLabel: {
@@ -582,23 +582,40 @@ struct RoomSessionView: View {
                             Text("Whisper")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.orange)
+                                .accessibilityHidden(true)
                         } else if monitorTarget?.id == target.id {
                             Text("Monitor")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.blue)
+                                .accessibilityHidden(true)
                         }
                     }
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(roomUserAccessibilityLabel(for: target))
+            .accessibilityValue(roomUserAccessibilityValue(for: target))
+            .accessibilityHint("Double tap to open this user's profile. Use actions for direct messages, monitoring, whisper, and audio controls.")
+            .accessibilityAction(named: Text("Direct Message")) {
+                openDirectMessages(with: target)
+            }
+            .accessibilityAction(named: Text(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring")) {
+                toggleMonitorTarget(target)
+            }
+            .accessibilityAction(named: Text(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")) {
+                toggleWhisperTarget(target)
+            }
+            .accessibilityAction(named: Text(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls")) {
+                if canShowPerUserAudioControls(for: target) {
+                    toggleUserAudioControls(for: target)
+                }
+            }
 
             if isShowingUserAudioControls(for: target) {
                 userAudioControlsView(for: target)
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(roomUserAccessibilityLabel(for: target))
-        .accessibilityValue(roomUserAccessibilityValue(for: target))
         .contextMenu {
             Button("View Profile") {
                 openProfile(for: target)
@@ -628,24 +645,6 @@ struct RoomSessionView: View {
                     toggleWhisperTarget(target)
                 }
         )
-        .accessibilityHint("Double tap to open this user's profile. Press and hold to set or clear whisper target. Open actions for direct messages, monitoring, and audio controls.")
-        .accessibilityAction(named: Text("View Profile")) {
-            openProfile(for: target)
-        }
-        .accessibilityAction(named: Text("Direct Message")) {
-            openDirectMessages(with: target)
-        }
-        .accessibilityAction(named: Text(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring")) {
-            toggleMonitorTarget(target)
-        }
-        .accessibilityAction(named: Text(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")) {
-            toggleWhisperTarget(target)
-        }
-        .accessibilityAction(named: Text(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls")) {
-            if canShowPerUserAudioControls(for: target) {
-                toggleUserAudioControls(for: target)
-            }
-        }
     }
 
     private func roomMessageRow(for message: IOSRoomMessageItem) -> some View {
@@ -746,6 +745,7 @@ struct RoomSessionView: View {
             updateRoomBackgroundPlaybackVolume()
             roomState.statusText = "Whisper target set to \(target.name)."
         }
+        UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
         IOSActionSoundPlayer.playToggle()
     }
 
@@ -761,6 +761,7 @@ struct RoomSessionView: View {
             socketClient.setMonitorUserId(target.id)
             roomState.statusText = "Monitoring \(target.name)."
         }
+        UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
         IOSActionSoundPlayer.playToggle()
     }
 
@@ -778,6 +779,7 @@ struct RoomSessionView: View {
             expandedUserAudioControls.remove(target.id)
         } else {
             expandedUserAudioControls.insert(target.id)
+            UIAccessibility.post(notification: .layoutChanged, argument: nil)
         }
         IOSActionSoundPlayer.playToggle()
     }

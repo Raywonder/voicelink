@@ -1608,10 +1608,6 @@ private struct MessagesTab: View {
                             .accessibilityElement(children: .combine)
                             .accessibilityAddTraits(roomState.selectedDirectTarget?.id == target.id ? .isSelected : [])
                             .accessibilityHint("Double tap to select this user. Use the direct message field below to send a private message.")
-                            .accessibilityAction(named: Text("Select User")) {
-                                roomState.selectedDirectTarget = target
-                                roomState.selectedProfileName = target.name
-                            }
                         }
                     }
 
