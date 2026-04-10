@@ -1206,26 +1206,29 @@ private struct FederationTab: View {
     @AppStorage("voicelink.displayName") private var displayName = ""
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
-    @State private var roomChoices: [FederatedRoomChoice] = []
+    @State private var roomGroups: [FederatedRoomGroup] = []
     @State private var isLoading = false
     @State private var errorMessage = ""
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
+    @State private var activeGroup: FederatedRoomGroup?
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
-    private var filteredRoomChoices: [FederatedRoomChoice] {
+    private var filteredRoomGroups: [FederatedRoomGroup] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return roomChoices }
-        return roomChoices.filter { choice in
-            choice.room.name.lowercased().contains(query)
-                || choice.serverLabel.lowercased().contains(query)
-                || choice.room.description.lowercased().contains(query)
-                || choice.room.serverDescription.lowercased().contains(query)
-                || choice.room.visibility.lowercased().contains(query)
-                || choice.room.accessType.lowercased().contains(query)
+        guard !query.isEmpty else { return roomGroups }
+        return roomGroups.filter { group in
+            group.displayName.lowercased().contains(query)
+                || group.choices.contains { choice in
+                    choice.serverLabel.lowercased().contains(query)
+                        || choice.room.description.lowercased().contains(query)
+                        || choice.room.serverDescription.lowercased().contains(query)
+                        || choice.room.visibility.lowercased().contains(query)
+                        || choice.room.accessType.lowercased().contains(query)
+                }
         }
     }
 
@@ -1253,33 +1256,33 @@ private struct FederationTab: View {
                             Text("Federated rooms are hidden on iOS by server settings.")
                                 .foregroundStyle(.secondary)
                         }
-                    } else if filteredRoomChoices.isEmpty {
+                    } else if filteredRoomGroups.isEmpty {
                         Section("Rooms") {
                             Text("No federated rooms found.")
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         Section("Rooms") {
-                            ForEach(filteredRoomChoices) { choice in
+                            ForEach(filteredRoomGroups) { group in
                                 Button {
-                                    openRoom(choice, action: "details")
+                                    activeGroup = group
                                 } label: {
-                                    federatedRoomRow(for: choice)
+                                    federatedRoomRow(for: group)
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
-                                    Button("Room Details") { openRoom(choice, action: "details") }
-                                    Button("Preview Room") { openRoom(choice, action: "preview") }
-                                    Button("Join Room") { openRoom(choice, action: "join") }
-                                    Button("Share Room") { shareChoice(choice) }
+                                    Button("Choose Server") { activeGroup = group }
+                                    if let firstChoice = group.choices.first {
+                                        Button("Room Details") { openRoom(firstChoice, action: "details") }
+                                        Button("Preview Room") { openRoom(firstChoice, action: "preview") }
+                                        Button("Join Room") { openRoom(firstChoice, action: "join") }
+                                        Button("Share Room") { shareChoice(firstChoice) }
+                                    }
                                 }
                                 .accessibilityElement(children: .combine)
-                                .accessibilityLabel("\(choice.room.name), \(choice.room.userCount) users on \(choice.serverLabel)")
-                                .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
-                                .accessibilityAction(named: Text("Room Details")) { openRoom(choice, action: "details") }
-                                .accessibilityAction(named: Text("Preview Room")) { openRoom(choice, action: "preview") }
-                                .accessibilityAction(named: Text("Join Room")) { openRoom(choice, action: "join") }
-                                .accessibilityAction(named: Text("Share Room")) { shareChoice(choice) }
+                                .accessibilityLabel("\(group.displayName), \(group.totalUsers) users across \(group.choices.count) servers")
+                                .accessibilityHint("Double tap to choose which server copy of this room to open.")
+                                .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
                             }
                         }
                     }
@@ -1297,6 +1300,9 @@ private struct FederationTab: View {
             }
             .sheet(item: $activeDetails) { details in
                 RoomDetailsView(destination: details)
+            }
+            .sheet(item: $activeGroup) { group in
+                FederationRoomChoicesView(group: group, onOpen: openRoom)
             }
         }
     }
@@ -1346,7 +1352,7 @@ private struct FederationTab: View {
     private func refreshRooms() async {
         clientVisibility = await fetchClientVisibility(baseURL: normalizedBaseURL)
         guard clientVisibility.ios else {
-            roomChoices = []
+            roomGroups = []
             errorMessage = ""
             return
         }
@@ -1360,9 +1366,9 @@ private struct FederationTab: View {
             let allRooms = try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: .activity).map { room in
                 (room, room.serverApiBase.isEmpty ? normalizedBaseURL : normalizeBaseURL(room.serverApiBase))
             }
-            roomChoices = mapFederatedChoices(allRooms: allRooms, fallbackBase: normalizedBaseURL)
+            roomGroups = groupFederatedChoices(allRooms: allRooms, fallbackBase: normalizedBaseURL)
         } catch {
-            roomChoices = []
+            roomGroups = []
             errorMessage = "Could not load federated rooms."
         }
     }
@@ -1375,26 +1381,29 @@ private struct FederationTab: View {
         openURL(url)
     }
 
-    private func federatedRoomRow(for choice: FederatedRoomChoice) -> some View {
+    private func federatedRoomRow(for group: FederatedRoomGroup) -> some View {
+        let firstChoice = group.choices.first
         return VStack(alignment: .leading, spacing: 6) {
-            Text(choice.room.name)
+            Text(group.displayName)
                 .font(.headline)
-            if !choice.room.description.isEmpty {
-                Text(choice.room.description)
+            if let firstChoice, !firstChoice.room.description.isEmpty {
+                Text(firstChoice.room.description)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Text("\(choice.room.userCount) users • \(displayRoomLockLabel(choice.room.locked)) • \(displayVisibilityLabel(choice.room.visibility)) • \(displayAccessTypeLabel(choice.room.accessType))")
+            Text("\(group.totalUsers) users • \(group.choices.count) servers")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(choice.serverLabel)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            if let firstChoice {
+                Text("\(displayRoomLockLabel(firstChoice.room.locked)) • \(displayVisibilityLabel(firstChoice.room.visibility)) • \(displayAccessTypeLabel(firstChoice.room.accessType))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.vertical, 4)
     }
 
-    private func mapFederatedChoices(allRooms: [(RoomSummary, String)], fallbackBase: String) -> [FederatedRoomChoice] {
+    private func groupFederatedChoices(allRooms: [(RoomSummary, String)], fallbackBase: String) -> [FederatedRoomGroup] {
         var dedupedByExactKey: [String: (RoomSummary, String)] = [:]
         for (room, fetchedBase) in allRooms {
             let resolvedBase = room.serverApiBase.isEmpty ? fetchedBase : normalizeBaseURL(room.serverApiBase)
@@ -1402,7 +1411,7 @@ private struct FederationTab: View {
             dedupedByExactKey[exactKey] = (room, resolvedBase)
         }
 
-        return dedupedByExactKey.values.map { room, resolvedBase in
+        let choices = dedupedByExactKey.values.map { room, resolvedBase in
             let baseURL = resolvedBase.isEmpty ? fallbackBase : resolvedBase
             return FederatedRoomChoice(
                 id: "\(baseURL)|\(room.id)",
@@ -1411,14 +1420,28 @@ private struct FederationTab: View {
                 baseURL: baseURL
             )
         }
-        .sorted { lhs, rhs in
-            if lhs.room.userCount == rhs.room.userCount {
-                if lhs.room.name.caseInsensitiveCompare(rhs.room.name) == .orderedSame {
-                    return lhs.serverLabel.localizedCaseInsensitiveCompare(rhs.serverLabel) == .orderedAscending
-                }
-                return lhs.room.name.localizedCaseInsensitiveCompare(rhs.room.name) == .orderedAscending
+
+        let grouped = Dictionary(grouping: choices) { choice in
+            choice.room.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        return grouped.values.compactMap { choices in
+            let sortedChoices = choices.sorted { lhs, rhs in
+                lhs.serverLabel.localizedCaseInsensitiveCompare(rhs.serverLabel) == .orderedAscending
             }
-            return lhs.room.userCount > rhs.room.userCount
+            guard let firstChoice = sortedChoices.first else { return nil }
+            return FederatedRoomGroup(
+                id: firstChoice.room.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                displayName: firstChoice.room.name,
+                totalUsers: sortedChoices.reduce(0) { $0 + $1.room.userCount },
+                choices: sortedChoices
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.totalUsers == rhs.totalUsers {
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+            return lhs.totalUsers > rhs.totalUsers
         }
     }
 }
@@ -1459,6 +1482,7 @@ private struct FederationRoomChoicesView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(choice.room.userCount) users")
+                    .accessibilityHint("Double tap for room details. Swipe down for preview and join actions.")
                     .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
                     .accessibilityAction(named: Text("Preview Room")) { onOpen(choice, "preview") }
@@ -1531,6 +1555,7 @@ private struct MessagesTab: View {
                                 HStack(spacing: 10) {
                                     Image(systemName: iosUserAudioIconName(target))
                                         .foregroundStyle(target.isSpeaking ? .green : .secondary)
+                                        .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(target.name)
                                         if let deviceSummary = iosUserDeviceSummary(target) {
@@ -1543,10 +1568,13 @@ private struct MessagesTab: View {
                                     if roomState.selectedDirectTarget?.id == target.id {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(.green)
+                                            .accessibilityHidden(true)
                                     }
                                 }
                             }
                             .buttonStyle(.plain)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityAddTraits(roomState.selectedDirectTarget?.id == target.id ? .isSelected : [])
                             .accessibilityHint("Double tap to select this user. Use the direct message field below to send a private message.")
                             .accessibilityAction(named: Text("Select User")) {
                                 roomState.selectedDirectTarget = target
@@ -2129,7 +2157,11 @@ struct SettingsTab: View {
                     .accessibilityValue("\(Int(outputGain * 100)) percent")
 
                     Button("Test Sound") {
-                        IOSActionSoundPlayer.playTest()
+                        if roomState.isInRoom {
+                            NotificationCenter.default.post(name: .iosPlayTestSound, object: nil)
+                        } else {
+                            IOSActionSoundPlayer.playTest()
+                        }
                     }
                     Text("Audio can be boosted up to 300 percent on iOS for quieter rooms or devices.")
                         .font(.footnote)

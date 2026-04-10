@@ -56,6 +56,8 @@ struct RoomSessionView: View {
     @State private var joinSoundTask: Task<Void, Never>?
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
+    @State private var roomBackgroundFadeTask: Task<Void, Never>?
+    @State private var roomAudioDuckTask: Task<Void, Never>?
     @State private var draftMessage = ""
     @State private var draftDirectMessage = ""
 
@@ -83,6 +85,15 @@ struct RoomSessionView: View {
             .filter { $0.roomId == destination.roomId }
             .suffix(50)
             .reversed()
+    }
+
+    private var visibleRoomUsers: [IOSDirectMessageTarget] {
+        var merged: [String: IOSDirectMessageTarget] = [:]
+        socketClient.roomUsers.forEach { merged[$0.id] = $0 }
+        roomState.directTargets.forEach { merged[$0.id] = $0 }
+        return merged.values.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -139,6 +150,10 @@ struct RoomSessionView: View {
             joinSoundTask = nil
             memberRefreshTask?.cancel()
             memberRefreshTask = nil
+            roomBackgroundFadeTask?.cancel()
+            roomBackgroundFadeTask = nil
+            roomAudioDuckTask?.cancel()
+            roomAudioDuckTask = nil
             stopRoomBackgroundPlayback()
             IOSAudioSessionManager.shared.deactivate(.room)
             socketClient.leaveRoom(roomId: destination.roomId)
@@ -150,6 +165,9 @@ struct RoomSessionView: View {
             startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
             socketClient.requestRoomUsers()
             socketClient.requestRoomMessages()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .iosPlayTestSound)) { _ in
+            playTestSoundWithRoomDuck()
         }
     }
 
@@ -169,11 +187,11 @@ struct RoomSessionView: View {
 
     private var peopleSection: some View {
         Section("People in Room") {
-            if roomState.directTargets.isEmpty {
+            if visibleRoomUsers.isEmpty {
                 Text("No room users reported yet.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(roomState.directTargets) { target in
+                ForEach(visibleRoomUsers) { target in
                     roomUserRow(for: target, includeRoleBadges: true)
                 }
             }
@@ -470,11 +488,11 @@ struct RoomSessionView: View {
         NavigationStack {
             List {
                 Section("People in Room") {
-                    if roomState.directTargets.isEmpty {
+                    if visibleRoomUsers.isEmpty {
                         Text("No room users reported yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(roomState.directTargets) { target in
+                        ForEach(visibleRoomUsers) { target in
                             roomUserRow(for: target, includeRoleBadges: false)
                         }
                     }
@@ -530,6 +548,7 @@ struct RoomSessionView: View {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: iosUserAudioIconName(target))
                     .foregroundStyle(target.isSpeaking ? .green : .secondary)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(target.name)
                         .font(.body)
@@ -560,6 +579,9 @@ struct RoomSessionView: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(roomUserAccessibilityLabel(for: target))
+        .accessibilityValue(roomUserAccessibilityValue(for: target))
         .contextMenu {
             Button("View Profile") {
                 openProfile(for: target)
@@ -632,7 +654,7 @@ struct RoomSessionView: View {
                 draftMessage = "@\(message.author) "
                 IOSActionSoundPlayer.playConfirm()
             }
-            if let target = roomState.directTargets.first(where: { $0.name == message.author }) {
+            if let target = visibleRoomUsers.first(where: { $0.name == message.author }) {
                 Button("Direct Message \(target.name)") {
                     openDirectMessages(with: target)
                 }
@@ -762,6 +784,41 @@ struct RoomSessionView: View {
         roomBackgroundPlayer?.volume = mediaMuted ? 0 : Float(max(0, min(3, outputGain * roomVolume * duckScale)))
     }
 
+    private func fadeRoomBackgroundVolume(to targetVolume: Float, durationSeconds: Double) {
+        roomBackgroundFadeTask?.cancel()
+        guard let player = roomBackgroundPlayer else { return }
+        let startVolume = player.volume
+        let steps = 10
+        let stepDuration = max(0.02, durationSeconds / Double(steps))
+        roomBackgroundFadeTask = Task { @MainActor in
+            for step in 1...steps {
+                guard !Task.isCancelled else { return }
+                let progress = Float(step) / Float(steps)
+                player.volume = startVolume + (targetVolume - startVolume) * progress
+                try? await Task.sleep(nanoseconds: UInt64(stepDuration * 1_000_000_000))
+            }
+            player.volume = targetVolume
+        }
+    }
+
+    private func playTestSoundWithRoomDuck() {
+        roomAudioDuckTask?.cancel()
+        let restoredGain = Float(outputGain)
+        fadeRoomBackgroundVolume(to: 0, durationSeconds: 0.18)
+        socketClient.setPlaybackGain(max(0, restoredGain * 0.2))
+        IOSActionSoundPlayer.playTest()
+        roomAudioDuckTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled else { return }
+            socketClient.setPlaybackGain(restoredGain)
+            updateRoomBackgroundPlaybackVolume()
+            fadeRoomBackgroundVolume(
+                to: mediaMuted ? 0 : Float(max(0, min(3, outputGain * max(0, min(3, destination.backgroundStreamVolume / 100.0)) * (whisperTarget == nil ? 1.0 : 0.25)))),
+                durationSeconds: 0.22
+            )
+        }
+    }
+
     private func stopRoomBackgroundPlayback() {
         roomBackgroundPlayer?.pause()
         roomBackgroundPlayer = nil
@@ -779,6 +836,24 @@ struct RoomSessionView: View {
             labels.append("Output muted")
         }
         return labels.isEmpty ? "Available" : labels.joined(separator: " · ")
+    }
+
+    private func roomUserAccessibilityLabel(for target: IOSDirectMessageTarget) -> String {
+        var parts = [target.name, roomAudioStatusLabel(for: target)]
+        if let deviceSummary = iosUserDeviceSummary(target) {
+            parts.append(deviceSummary)
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func roomUserAccessibilityValue(for target: IOSDirectMessageTarget) -> String {
+        if whisperTarget?.id == target.id {
+            return "Whisper target"
+        }
+        if monitorTarget?.id == target.id {
+            return "Monitor target"
+        }
+        return ""
     }
 }
 
@@ -879,6 +954,7 @@ struct RoomPreviewView: View {
 extension Notification.Name {
     static let iosOpenMessagesTab = Notification.Name("iosOpenMessagesTab")
     static let iosShowUserProfile = Notification.Name("iosShowUserProfile")
+    static let iosPlayTestSound = Notification.Name("iosPlayTestSound")
     static let iosRoomJoined = Notification.Name("iosRoomJoined")
     static let iosRoomLeft = Notification.Name("iosRoomLeft")
     static let iosRoomUsersUpdated = Notification.Name("iosRoomUsersUpdated")
