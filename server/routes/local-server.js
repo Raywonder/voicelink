@@ -3793,11 +3793,12 @@ class VoiceLinkLocalServer {
 
         this.mainServerRoomFetchPromise = new Promise((resolve) => {
             const fetchSingleServer = (origin) => new Promise((serverResolve) => {
-                const clientQuery = client ? `&client=${encodeURIComponent(client)}` : '';
+                const clientName = String(client || '').trim().toLowerCase();
+                const clientQuery = clientName ? `&client=${encodeURIComponent(clientName)}` : '';
                 const url = `${origin}/api/rooms?source=${encodeURIComponent(source || 'app')}${clientQuery}`;
-                const client = origin.startsWith('https://') ? https : http;
+                const transport = origin.startsWith('https://') ? https : http;
 
-                client.get(url, { timeout: 5000 }, (response) => {
+                transport.get(url, { timeout: 5000 }, (response) => {
                     let data = '';
                     response.on('data', (chunk) => { data += chunk; });
                     response.on('end', () => {
