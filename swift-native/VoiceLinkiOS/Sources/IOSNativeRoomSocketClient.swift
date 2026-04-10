@@ -439,8 +439,19 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         if let dict = value as? [String: Any] {
             return dict
         }
+        if let dict = value as? [AnyHashable: Any] {
+            var normalized: [String: Any] = [:]
+            for (key, value) in dict {
+                normalized[String(describing: key)] = value
+            }
+            return normalized
+        }
         if let dict = value as? NSDictionary {
-            return dict as? [String: Any]
+            var normalized: [String: Any] = [:]
+            for (key, value) in dict {
+                normalized[String(describing: key)] = value
+            }
+            return normalized
         }
         return nil
     }

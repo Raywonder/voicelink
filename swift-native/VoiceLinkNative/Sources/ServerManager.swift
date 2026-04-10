@@ -172,8 +172,19 @@ class ServerManager: ObservableObject {
         if let dict = value as? [String: Any] {
             return dict
         }
+        if let dict = value as? [AnyHashable: Any] {
+            var normalized: [String: Any] = [:]
+            for (key, value) in dict {
+                normalized[String(describing: key)] = value
+            }
+            return normalized
+        }
         if let dict = value as? NSDictionary {
-            return dict as? [String: Any]
+            var normalized: [String: Any] = [:]
+            for (key, value) in dict {
+                normalized[String(describing: key)] = value
+            }
+            return normalized
         }
         return nil
     }
@@ -995,7 +1006,13 @@ class ServerManager: ObservableObject {
             let roomId = (payload["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !roomId.isEmpty else { return }
             if self.activeRoomId == roomId {
-                self.roomStreamDidStopExplicitly = false
+                let payloadHasPlayableMedia = !((payload["streamUrl"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    || !((payload["backgroundStream"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    || ((payload["active"] as? Bool) == true)
+                    || ((payload["playing"] as? Bool) == true)
+                if payloadHasPlayableMedia {
+                    self.roomStreamDidStopExplicitly = false
+                }
                 self.fetchActiveRoomStream(for: roomId)
             }
             DispatchQueue.main.async {

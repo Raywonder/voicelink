@@ -289,10 +289,7 @@ struct RoomSessionView: View {
     }
 
     private var settingsSection: some View {
-        Section("Settings") {
-            Text("Settings stay available in-room here so volume and room chat controls can be changed without leaving the session.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        Section {
             Button("Open Full Settings") {
                 showSettings = true
                 IOSActionSoundPlayer.playConfirm()
@@ -301,7 +298,16 @@ struct RoomSessionView: View {
     }
 
     private var roomActionsToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                showSettings = true
+                IOSActionSoundPlayer.playConfirm()
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .accessibilityLabel("App Settings")
+            .accessibilityHint("Open full settings without leaving the room.")
+
             Menu {
                 Button(showChat ? "Hide Chat" : "Show Chat") {
                     showChat.toggle()

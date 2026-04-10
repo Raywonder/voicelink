@@ -1,6 +1,7 @@
-VoiceLink – TestFlight Build 57
+VoiceLink – TestFlight Build 59
 
 What to test:
-- People in Room should show immediately after join, including yourself first and then the full room list.
-- Bot and system messages should appear in room chat on iPhone like desktop.
-- Joined room media and room activity should still work while the user list stays populated.
+- People in Room should populate after join on iPhone.
+- Federated Rooms should show one entry per server copy of a room.
+- App Settings should stay reachable from the room toolbar.
+- Room background media should start after join and stop cleanly.
