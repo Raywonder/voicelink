@@ -1,6 +1,6 @@
-VoiceLink – TestFlight Build 55
+VoiceLink – TestFlight Build 57
 
 What to test:
-- Admin tab backups can refresh, create, restore, and save the selected backup to Files.
-- Main and Community server admin access still works while signed in.
-- SMB/file-sharing settings now load from both public server configs without breaking the app.
+- People in Room should show immediately after join, including yourself first and then the full room list.
+- Bot and system messages should appear in room chat on iPhone like desktop.
+- Joined room media and room activity should still work while the user list stays populated.
