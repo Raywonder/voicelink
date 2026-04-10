@@ -1,7 +1,7 @@
-VoiceLink – TestFlight Build 60
+VoiceLink – TestFlight Build 61
 
 What to test:
 - People in Room should populate after join on iPhone.
-- Federated Rooms should group same-name rooms and let you choose the server copy after opening details.
-- App Settings should stay reachable from the room toolbar.
+- Federated Rooms should group same-name rooms and only ask you to choose a server when more than one copy exists.
+- The room toolbar should show one settings button and startup audio should play on launch.
 - Test Sound in a room should duck room audio, play once, then restore room audio cleanly.
