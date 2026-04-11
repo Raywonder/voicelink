@@ -1,7 +1,7 @@
-VoiceLink – TestFlight Build 62
+VoiceLink – TestFlight Build 64
 
 What to test:
-- People in Room should populate after join on iPhone, including bots and system activity.
-- Room audio controls should be above chat, and per-user audio controls should open from the focused user actions.
-- Federated Rooms should keep same-name rooms grouped before asking you to choose a server.
-- Test Sound in a room should duck room audio, play once, then restore room audio cleanly.
+- People in Room should show the active room users immediately after join instead of the empty-state text.
+- Bots, welcome messages, and system messages should appear in room chat and room state.
+- Same-name rooms should still group correctly, while the chosen room copy stays tied to its own server.
+- Room audio controls should stay above chat, and Test Sound should duck room audio and restore it cleanly.

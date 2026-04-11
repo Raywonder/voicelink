@@ -89,12 +89,15 @@ struct RoomSessionView: View {
     }
 
     private var visibleRoomUsers: [IOSDirectMessageTarget] {
-        var merged: [String: IOSDirectMessageTarget] = [:]
-        socketClient.roomUsers.forEach { merged[$0.id] = $0 }
-        roomState.directTargets.forEach { merged[$0.id] = $0 }
-        return merged.values.sorted { lhs, rhs in
-            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+        iosMergedVisibleTargets(primary: roomState.directTargets, secondary: socketClient.roomUsers)
+    }
+
+    private var visibleHumanRoomUsers: [IOSDirectMessageTarget] {
+        visibleRoomUsers.filter { !$0.isBot }
+    }
+
+    private var visibleBotRoomUsers: [IOSDirectMessageTarget] {
+        visibleRoomUsers.filter { $0.isBot }
     }
 
     private var isPresentingAuxiliarySheet: Bool {
@@ -197,11 +200,18 @@ struct RoomSessionView: View {
 
     private var peopleSection: some View {
         Section("People in Room") {
-            if visibleRoomUsers.isEmpty {
-                Text("No room users reported yet.")
+            if visibleHumanRoomUsers.isEmpty {
+                Text("No people reported in this room yet.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(visibleRoomUsers) { target in
+                ForEach(visibleHumanRoomUsers) { target in
+                    roomUserRow(for: target, includeRoleBadges: true)
+                }
+            }
+        }
+        if !visibleBotRoomUsers.isEmpty {
+            Section("Room Bots") {
+                ForEach(visibleBotRoomUsers) { target in
                     roomUserRow(for: target, includeRoleBadges: true)
                 }
             }
@@ -514,11 +524,18 @@ struct RoomSessionView: View {
         NavigationStack {
             List {
                 Section("People in Room") {
-                    if visibleRoomUsers.isEmpty {
-                        Text("No room users reported yet.")
+                    if visibleHumanRoomUsers.isEmpty {
+                        Text("No people reported in this room yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(visibleRoomUsers) { target in
+                        ForEach(visibleHumanRoomUsers) { target in
+                            roomUserRow(for: target, includeRoleBadges: false)
+                        }
+                    }
+                }
+                if !visibleBotRoomUsers.isEmpty {
+                    Section("Room Bots") {
+                        ForEach(visibleBotRoomUsers) { target in
                             roomUserRow(for: target, includeRoleBadges: false)
                         }
                     }

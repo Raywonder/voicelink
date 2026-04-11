@@ -24,6 +24,8 @@ class VoiceLinkApp {
         this.lastEscapePressAt = 0;
         this.escapeDoublePressWindowMs = 1300;
         this.escapeMenuOpen = false;
+        this.lastFocusedTrigger = null;
+        this.authModalKeydownHandler = null;
 
         // Audio playback management
         this.currentAudio = null;
@@ -2244,6 +2246,15 @@ class VoiceLinkApp {
             setTimeout(() => focusTarget.focus(), 0);
         }
 
+        const politeRegion = document.getElementById('app-status-live');
+        const label = targetScreen?.querySelector('h1, h2')?.textContent?.trim() || screenId.replace(/-/g, ' ');
+        if (politeRegion) {
+            politeRegion.textContent = '';
+            setTimeout(() => {
+                politeRegion.textContent = `${label} screen opened`;
+            }, 10);
+        }
+
         console.log('Switched to screen:', screenId);
     }
 
@@ -2984,11 +2995,12 @@ class VoiceLinkApp {
             : 'room-description no-description';
 
         // User count message for accessibility
-        const userCountText = roomData.users === 0
+        const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+        const userCountText = liveUserCount === 0
             ? 'Empty'
-            : roomData.users === 1
+            : liveUserCount === 1
                 ? '1 user'
-                : `${roomData.users} users`;
+                : `${liveUserCount} users`;
 
         const isCurrentRoom = !!this.currentRoom && (this.currentRoom.id === roomData.id || this.currentRoom.roomId === roomData.id);
         const canManageGlobalMedia = this.isCurrentUserAdmin();
@@ -3081,11 +3093,12 @@ class VoiceLinkApp {
             ...roomData
         });
 
-        const userCountText = roomData.users === 0
+        const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+        const userCountText = liveUserCount === 0
             ? 'Empty'
-            : roomData.users === 1
+            : liveUserCount === 1
                 ? '1 user'
-                : `${roomData.users} users`;
+                : `${liveUserCount} users`;
         const descriptionText = roomData.description && roomData.description.trim()
             ? roomData.description
             : 'No description for this room';
@@ -3134,7 +3147,7 @@ class VoiceLinkApp {
             return { enabled: false, reason: 'Preview restricted to room creator/admin.', reasonCode: 'creator_admin_only' };
         }
 
-        if ((roomData.users || 0) <= 0) {
+        if (Number(roomData.userCount ?? roomData.users ?? 0) <= 0) {
             return { enabled: false, reason: 'No active room audio to preview yet.', reasonCode: 'no_audio' };
         }
 
@@ -3639,8 +3652,9 @@ class VoiceLinkApp {
                 roomData.description || 'No description for this room';
 
             // User count
-            const userText = roomData.users === 0 ? 'Empty' :
-                roomData.users === 1 ? '1 user' : `${roomData.users} users`;
+            const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+            const userText = liveUserCount === 0 ? 'Empty' :
+                liveUserCount === 1 ? '1 user' : `${liveUserCount} users`;
             document.getElementById('join-room-users').textContent = `${userText} / ${roomData.maxUsers} max`;
 
             // Privacy label
@@ -5620,8 +5634,10 @@ class VoiceLinkApp {
     showMastodonLoginModal(tabId = 'local-login') {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
+            this.lastFocusedTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             modal.style.display = 'flex';
             this.setActiveAuthTab(tabId);
+            this.activateAuthModalFocusManagement();
             const closeBtn = document.getElementById('close-login-modal');
             if (closeBtn) {
                 setTimeout(() => closeBtn.focus(), 0);
@@ -5630,7 +5646,8 @@ class VoiceLinkApp {
     }
 
     setActiveAuthTab(tabId) {
-        document.querySelectorAll('.auth-tab').forEach(tab => {
+        const tabs = Array.from(document.querySelectorAll('.auth-tab'));
+        tabs.forEach(tab => {
             const isActive = tab.dataset.tab === tabId;
             tab.classList.toggle('active', isActive);
             tab.setAttribute('aria-selected', String(isActive));
@@ -5652,10 +5669,86 @@ class VoiceLinkApp {
         if (modal) {
             modal.style.display = 'none';
         }
+        this.deactivateAuthModalFocusManagement();
         // Hide code entry section
         const codeEntry = document.getElementById('oauth-code-entry');
         if (codeEntry) {
             codeEntry.style.display = 'none';
+        }
+        if (this.lastFocusedTrigger && typeof this.lastFocusedTrigger.focus === 'function') {
+            setTimeout(() => this.lastFocusedTrigger.focus(), 0);
+        }
+        this.lastFocusedTrigger = null;
+    }
+
+    getFocusableElements(container) {
+        if (!container) return [];
+        return Array.from(container.querySelectorAll(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => element.offsetParent !== null);
+    }
+
+    activateAuthModalFocusManagement() {
+        const modal = document.getElementById('mastodon-login-modal');
+        const dialog = modal?.querySelector('.modal-content.auth-modal');
+        if (!modal || !dialog) return;
+
+        this.deactivateAuthModalFocusManagement();
+
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.hideMastodonLoginModal();
+                return;
+            }
+
+            const tabs = Array.from(dialog.querySelectorAll('.auth-tab'));
+            const currentTabIndex = tabs.findIndex((tab) => tab.getAttribute('aria-selected') === 'true');
+            if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && tabs.length > 1 && tabs.includes(document.activeElement)) {
+                event.preventDefault();
+                const delta = event.key === 'ArrowRight' ? 1 : -1;
+                const nextIndex = (currentTabIndex + delta + tabs.length) % tabs.length;
+                const nextTab = tabs[nextIndex];
+                this.setActiveAuthTab(nextTab.dataset.tab);
+                nextTab.focus();
+                return;
+            }
+
+            if (event.key !== 'Tab') return;
+
+            const focusable = this.getFocusableElements(dialog);
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        this.authModalKeydownHandler = handleKeydown;
+        modal.addEventListener('keydown', handleKeydown);
+        modal.addEventListener('click', this.handleAuthModalBackdropClick);
+    }
+
+    deactivateAuthModalFocusManagement() {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (!modal) return;
+        if (this.authModalKeydownHandler) {
+            modal.removeEventListener('keydown', this.authModalKeydownHandler);
+            this.authModalKeydownHandler = null;
+        }
+        modal.removeEventListener('click', this.handleAuthModalBackdropClick);
+    }
+
+    handleAuthModalBackdropClick = (event) => {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (event.target === modal) {
+            this.hideMastodonLoginModal();
         }
     }
 
@@ -7122,7 +7215,7 @@ class VoiceLinkApp {
                     rooms.forEach(room => {
                         const item = this.createAdminListItem(
                             room.name,
-                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
+                            'Users: ' + (room.userCount ?? room.users ?? 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
                             [
                                 { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
                                 { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }

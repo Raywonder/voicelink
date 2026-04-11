@@ -1881,11 +1881,12 @@ class VoiceLinkApp {
             : 'room-description no-description';
 
         // User count message for accessibility
-        const userCountText = roomData.users === 0
+        const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+        const userCountText = liveUserCount === 0
             ? 'Empty'
-            : roomData.users === 1
+            : liveUserCount === 1
                 ? '1 user'
-                : `${roomData.users} users`;
+                : `${liveUserCount} users`;
 
         return `
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
@@ -4298,7 +4299,7 @@ class VoiceLinkApp {
                     rooms.forEach(room => {
                         const item = this.createAdminListItem(
                             room.name,
-                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
+                            'Users: ' + (room.userCount ?? room.users ?? 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
                             [
                                 { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
                                 { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }

@@ -6041,10 +6041,11 @@ class VoiceLinkLocalServer {
         const rooms = [];
         for (const room of this.rooms.values()) {
             const users = this.normalizeRoomUsers(room.id);
+            const humanUsers = this.getHumanRoomUsers(room.id);
             rooms.push({
                 roomId: room.id,
                 name: room.name,
-                userCount: users.length,
+                userCount: humanUsers.length,
                 users: users.map(user => ({
                     id: user.id,
                     name: user.name,
@@ -6662,8 +6663,8 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: this.normalizeRoomUsers(room.id).length,
-                    userCount: this.normalizeRoomUsers(room.id).length,
+                    users: this.getHumanRoomUsers(room.id).length,
+                    userCount: this.getHumanRoomUsers(room.id).length,
                     maxUsers: room.maxUsers,
                     hasPassword: !!room.password,
                     visibility: room.visibility,
@@ -16347,7 +16348,7 @@ class VoiceLinkLocalServer {
                 .map((room) => ({
                     id: room.id,
                     name: room.name,
-                    userCount: this.normalizeRoomUsers(room.id).length,
+                    userCount: this.getHumanRoomUsers(room.id).length,
                     visibility: room.visibility || 'private',
                     accessType: room.accessType || 'hidden',
                     locked: !!room.locked,

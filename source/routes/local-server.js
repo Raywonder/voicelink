@@ -5078,10 +5078,11 @@ class VoiceLinkLocalServer {
         const room = this.rooms.get(roomId);
         if (!room) return;
         const liveUsers = this.normalizeRoomUsers(roomId);
+        const humanUsers = this.getHumanRoomUsers(roomId);
         const serializedUsers = liveUsers.map(user => this.serializeRoomUser(user, roomId)).filter(Boolean);
         const payload = {
             roomId,
-            count: serializedUsers.length,
+            count: humanUsers.length,
             users: serializedUsers
         };
         this.io.to(roomId).emit('room-users', payload);
@@ -5698,8 +5699,8 @@ class VoiceLinkLocalServer {
                     id: room.id,
                     name: room.name,
                     description: room.description || '',
-                    users: this.normalizeRoomUsers(room.id).length,
-                    userCount: this.normalizeRoomUsers(room.id).length,
+                    users: this.getHumanRoomUsers(room.id).length,
+                    userCount: this.getHumanRoomUsers(room.id).length,
                     maxUsers: room.maxUsers,
                     hasPassword: !!room.password,
                     visibility: room.visibility,
@@ -14427,7 +14428,7 @@ class VoiceLinkLocalServer {
                 .map((room) => ({
                     id: room.id,
                     name: room.name,
-                    userCount: this.normalizeRoomUsers(room.id).length,
+                    userCount: this.getHumanRoomUsers(room.id).length,
                     visibility: room.visibility || 'private',
                     accessType: room.accessType || 'hidden',
                     locked: !!room.locked,

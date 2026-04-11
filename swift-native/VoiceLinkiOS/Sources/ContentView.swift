@@ -1802,12 +1802,7 @@ private struct MessagesTab: View {
     }
 
     private var visibleTargets: [IOSDirectMessageTarget] {
-        var merged: [String: IOSDirectMessageTarget] = [:]
-        socketClient.roomUsers.forEach { merged[$0.id] = $0 }
-        roomState.directTargets.forEach { merged[$0.id] = $0 }
-        return merged.values.sorted { lhs, rhs in
-            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
+        iosMergedVisibleTargets(primary: roomState.directTargets, secondary: socketClient.roomUsers)
     }
 
     var body: some View {
@@ -2027,6 +2022,36 @@ func iosUserDeviceSummary(_ target: IOSDirectMessageTarget) -> String? {
         .filter { !$0.isEmpty }
         .joined(separator: " • ")
     return summary.isEmpty ? nil : summary
+}
+
+func iosMergedVisibleTargets(primary: [IOSDirectMessageTarget], secondary: [IOSDirectMessageTarget]) -> [IOSDirectMessageTarget] {
+    func normalizedKey(for target: IOSDirectMessageTarget) -> String {
+        let id = target.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !id.isEmpty {
+            return id
+        }
+        let name = target.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            return name.lowercased()
+        }
+        return UUID().uuidString
+    }
+
+    let preferred = primary.isEmpty ? secondary : primary
+    let fallback = primary.isEmpty ? [] : secondary
+    var merged: [String: IOSDirectMessageTarget] = [:]
+
+    preferred.forEach { merged[normalizedKey(for: $0)] = $0 }
+    fallback.forEach { target in
+        let key = normalizedKey(for: target)
+        if merged[key] == nil {
+            merged[key] = target
+        }
+    }
+
+    return merged.values.sorted { lhs, rhs in
+        lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
 }
 
 private struct AdminTabView: View {
