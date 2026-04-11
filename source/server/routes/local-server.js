@@ -4170,6 +4170,10 @@ class VoiceLinkLocalServer {
 
     getCanonicalServerTitle(req = null) {
         const config = deployConfig.getConfig() || {};
+        const configuredDisplayName = String(config.server?.displayName || '').trim();
+        if (configuredDisplayName) {
+            return configuredDisplayName;
+        }
         const configuredName = String(config.server?.name || '').trim();
         if (configuredName) {
             return configuredName;
@@ -12895,8 +12899,13 @@ class VoiceLinkLocalServer {
         this.app.get('/api/config', (req, res) => {
             const config = deployConfig.getConfig() || {};
             const serverPolicies = getServerPolicyConfig();
+            const configuredServerName = String(config.server?.name || '').trim();
+            const configuredDisplayName = String(config.server?.displayName || configuredServerName || '').trim();
+            const configuredPublicUrl = String(config.server?.publicUrl || '').trim() || null;
             const flattened = {
-                serverName: config.server?.name || 'VoiceLink',
+                serverName: configuredServerName || configuredDisplayName || 'VoiceLink',
+                displayName: configuredDisplayName || configuredServerName || 'VoiceLink',
+                publicUrl: configuredPublicUrl,
                 serverDescription: config.server?.description || config.server?.tagline || '',
                 maxUsers: Number(config.server?.maxUsers || config.rooms?.maxUsers || 500),
                 maxRooms: Number(config.rooms?.maxRooms || config.server?.maxRooms || 100),
@@ -12934,7 +12943,14 @@ class VoiceLinkLocalServer {
             try {
                 const updates = req.body || {};
                 const hasKey = (key) => Object.prototype.hasOwnProperty.call(updates, key);
-                if (typeof updates.serverName === 'string') {
+                if (
+                    typeof updates.serverName === 'string'
+                    || typeof updates.displayName === 'string'
+                    || typeof updates.serverDisplayName === 'string'
+                    || typeof updates.publicUrl === 'string'
+                ) {
+                    const existingConfig = deployConfig.getConfig() || {};
+                    const existingServer = existingConfig.server || {};
                     const motdSettings = updates.motdSettings && typeof updates.motdSettings === 'object'
                         ? {
                             enabled: updates.motdSettings.enabled !== false,
@@ -12948,18 +12964,30 @@ class VoiceLinkLocalServer {
                             showInRoom: true,
                             appendToWelcomeMessage: false
                         });
+                    const requestedDisplayName = typeof updates.displayName === 'string'
+                        ? updates.displayName.trim()
+                        : (typeof updates.serverDisplayName === 'string' ? updates.serverDisplayName.trim() : '');
+                    const nextServerName = typeof updates.serverName === 'string'
+                        ? (updates.serverName.trim() || existingServer.name || 'VoiceLink')
+                        : (existingServer.name || 'VoiceLink');
                     deployConfig.updateSection('server', {
-                        name: updates.serverName,
+                        name: nextServerName,
+                        displayName: requestedDisplayName || existingServer.displayName || nextServerName,
                         description: updates.serverDescription || '',
                         welcomeMessage: updates.welcomeMessage || null,
                         lobbyWelcomeMessage: typeof updates.lobbyWelcomeMessage === 'string'
                             ? (updates.lobbyWelcomeMessage.trim() || this.getDefaultLobbyWelcomeMessage())
-                            : (deployConfig.getConfig()?.server?.lobbyWelcomeMessage || this.getDefaultLobbyWelcomeMessage()),
+                            : (existingServer.lobbyWelcomeMessage || this.getDefaultLobbyWelcomeMessage()),
                         motd: updates.motd || null,
                         motdSettings,
-                        handoffPromptMode: typeof updates.handoffPromptMode === 'string' ? updates.handoffPromptMode : (deployConfig.getConfig()?.server?.handoffPromptMode || 'serverRecommended'),
-                        maxUsers: Number(updates.maxUsers) || 500,
-                        maxUsersPerRoom: Number(updates.maxUsersPerRoom) || 50
+                        handoffPromptMode: typeof updates.handoffPromptMode === 'string'
+                            ? updates.handoffPromptMode
+                            : (existingServer.handoffPromptMode || 'serverRecommended'),
+                        publicUrl: typeof updates.publicUrl === 'string'
+                            ? (updates.publicUrl.trim() || null)
+                            : (existingServer.publicUrl || null),
+                        maxUsers: Number(updates.maxUsers) || existingServer.maxUsers || 500,
+                        maxUsersPerRoom: Number(updates.maxUsersPerRoom) || existingServer.maxUsersPerRoom || 50
                     });
                 }
                 if (hasKey('maxRooms') || hasKey('maxUsersPerRoom')) {
@@ -20235,6 +20263,7 @@ class VoiceLinkLocalServer {
                 const config = {
                     server: {
                         name: serverName,
+                        displayName: serverName,
                         port: parseInt(serverPort) || 3010,
                         publicUrl: publicUrl || null,
                         maxRooms: 100,

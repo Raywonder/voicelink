@@ -2257,7 +2257,19 @@ private struct AdminTabView: View {
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return
             }
-            serverName = (json["serverName"] as? String) ?? serverName
+            let resolvedServerName = (
+                (json["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? (json["displayName"] as? String)
+                    : (json["serverName"] as? String)
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let resolvedServerName, !resolvedServerName.isEmpty {
+                serverName = resolvedServerName
+                cacheServerDisplayName(
+                    resolvedServerName,
+                    forBaseURL: serverURL,
+                    publicURL: (json["publicUrl"] as? String)
+                )
+            }
             if let value = json["maxUsers"] as? Int { maxUsers = "\(value)" }
             if let value = json["maxRooms"] as? Int { maxRooms = "\(value)" }
         } catch {
@@ -3103,46 +3115,66 @@ private func canonicalRoomName(_ name: String) -> String {
     return lowered.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
 }
 
+private let serverDisplayNameDefaultsKey = "voicelink.serverDisplayNameMap"
+
+private func cachedServerDisplayName(forBaseURL baseURL: String) -> String? {
+    let identity = canonicalServerIdentity(baseURL: baseURL, room: nil)
+    guard !identity.isEmpty,
+          let mapping = UserDefaults.standard.dictionary(forKey: serverDisplayNameDefaultsKey) as? [String: String],
+          let value = mapping[identity]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty else {
+        return nil
+    }
+    return value
+}
+
+private func cacheServerDisplayName(_ displayName: String, forBaseURL baseURL: String, publicURL: String? = nil) {
+    let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedDisplayName.isEmpty else { return }
+    var mapping = UserDefaults.standard.dictionary(forKey: serverDisplayNameDefaultsKey) as? [String: String] ?? [:]
+    let identities = [
+        canonicalServerIdentity(baseURL: baseURL, room: nil),
+        canonicalServerIdentity(baseURL: publicURL ?? "", room: nil)
+    ].filter { !$0.isEmpty }
+    for identity in identities {
+        mapping[identity] = trimmedDisplayName
+    }
+    UserDefaults.standard.set(mapping, forKey: serverDisplayNameDefaultsKey)
+}
+
+private func fallbackServerLabel(baseURL: String) -> String {
+    if let host = URL(string: normalizeBaseURL(baseURL))?.host,
+       !host.isEmpty,
+       !isIPAddressValue(host) {
+        return host
+    }
+    return "Unknown Server"
+}
+
 private func displayServerName(room: RoomSummary, fallbackBase: String) -> String {
     let trimmedTitle = room.serverTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !trimmedTitle.isEmpty, !isIPAddressValue(trimmedTitle) {
+    if !trimmedTitle.isEmpty {
+        cacheServerDisplayName(trimmedTitle, forBaseURL: room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase)
         return trimmedTitle
+    }
+    if let cached = cachedServerDisplayName(forBaseURL: room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase) {
+        return cached
     }
     let trimmedDomain = room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedDomain.isEmpty, !isIPAddressValue(trimmedDomain) {
         return trimmedDomain
     }
-    let canonical = canonicalServerIdentity(baseURL: fallbackBase, room: room)
-    switch canonical {
-    case "voicelink.devinecreations.net":
-        return "VoiceLink Main"
-    case "node2.voicelink.devinecreations.net":
-        return "VoiceLink Community"
-    default:
-        if let host = URL(string: fallbackBase)?.host, !host.isEmpty, !isIPAddressValue(host) {
-            return host
-        }
-        if let host = URL(string: canonical)?.host, !host.isEmpty, !isIPAddressValue(host) {
-            return host
-        }
+    if let host = URL(string: fallbackBase)?.host, !host.isEmpty, !isIPAddressValue(host) {
+        return host
     }
-    return room.serverSource.isEmpty ? "Unknown Server" : room.serverSource.capitalized
+    return room.serverSource.isEmpty ? fallbackServerLabel(baseURL: fallbackBase) : room.serverSource.capitalized
 }
 
 private func displayServerName(baseURL: String) -> String {
-    switch canonicalServerIdentity(baseURL: baseURL, room: nil) {
-    case "voicelink.devinecreations.net":
-        return "VoiceLink Main"
-    case "node2.voicelink.devinecreations.net":
-        return "VoiceLink Community"
-    default:
-        if let host = URL(string: normalizeBaseURL(baseURL))?.host,
-           !host.isEmpty,
-           !isIPAddressValue(host) {
-            return host
-        }
-        return "Unknown Server"
+    if let cached = cachedServerDisplayName(forBaseURL: baseURL) {
+        return cached
     }
+    return fallbackServerLabel(baseURL: baseURL)
 }
 
 private func canonicalServerIdentity(baseURL: String, room: RoomSummary?) -> String {
