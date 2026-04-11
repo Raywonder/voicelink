@@ -3,6 +3,7 @@ import AVFoundation
 import AppKit
 import SocketIO
 import CoreAudio
+import AudioToolbox
 import Combine
 import UserNotifications
 
@@ -5663,6 +5664,20 @@ class SettingsManager: ObservableObject {
         var id: String { url }
     }
 
+    struct DetectedAudioPlugin: Identifiable {
+        let identifier: String
+        let name: String
+        let manufacturer: String
+        let typeName: String
+        let component: AVAudioUnitComponent
+
+        var id: String { identifier }
+
+        var displayLabel: String {
+            manufacturer.isEmpty ? name : "\(name) (\(manufacturer))"
+        }
+    }
+
     private static let managedFederationServersKey = "managedFederationServers"
 
     static let defaultManagedFederationServers: [ManagedFederationServer] = [
@@ -5694,6 +5709,11 @@ class SettingsManager: ObservableObject {
     @Published var noiseSuppression: Bool = true
     @Published var echoCancellation: Bool = true
     @Published var autoGainControl: Bool = true
+    @Published var localMonitorEffect: LocalMonitorEffect = .off
+    @Published var localMonitorEffectAmount: Double = 50
+    @Published var localMonitorLatencyMode: LocalMonitorLatencyMode = .balanced
+    @Published var localMonitorPluginIdentifier: String = ""
+    @Published var availableMonitorPlugins: [DetectedAudioPlugin] = []
 
     // Sync Settings
     @Published var syncMode: SyncMode = .all {
@@ -5780,6 +5800,11 @@ class SettingsManager: ObservableObject {
     @Published private(set) var hasDetectedInputDevice: Bool = false
     @Published private(set) var hasDetectedOutputDevice: Bool = false
 
+    var selectedLocalMonitorPluginComponent: AVAudioUnitComponent? {
+        guard !localMonitorPluginIdentifier.isEmpty else { return nil }
+        return availableMonitorPlugins.first(where: { $0.identifier == localMonitorPluginIdentifier })?.component
+    }
+
     var effectiveInputVolume: Double {
         boostedVolume(inputVolume)
     }
@@ -5791,6 +5816,7 @@ class SettingsManager: ObservableObject {
     init() {
         loadSettings()
         detectAudioDevices()
+        detectMonitorPlugins()
     }
 
     func loadSettings() {
@@ -5816,6 +5842,17 @@ class SettingsManager: ObservableObject {
         noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
         echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
         autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
+        if let savedMonitorEffect = UserDefaults.standard.string(forKey: "localMonitorEffect"),
+           let parsedMonitorEffect = LocalMonitorEffect(rawValue: savedMonitorEffect) {
+            localMonitorEffect = parsedMonitorEffect
+        }
+        let savedMonitorEffectAmount = UserDefaults.standard.object(forKey: "localMonitorEffectAmount") as? Double ?? 50
+        localMonitorEffectAmount = min(max(savedMonitorEffectAmount, 0), 100)
+        if let savedLatencyMode = UserDefaults.standard.string(forKey: "localMonitorLatencyMode"),
+           let parsedLatencyMode = LocalMonitorLatencyMode(rawValue: savedLatencyMode) {
+            localMonitorLatencyMode = parsedLatencyMode
+        }
+        localMonitorPluginIdentifier = UserDefaults.standard.string(forKey: "localMonitorPluginIdentifier") ?? ""
         autoConnect = UserDefaults.standard.object(forKey: "autoConnect") as? Bool ?? true
         preferLocalServer = UserDefaults.standard.object(forKey: "preferLocalServer") as? Bool ?? false
         pttEnabled = UserDefaults.standard.bool(forKey: "pttEnabled")
@@ -5893,6 +5930,10 @@ class SettingsManager: ObservableObject {
             showOnlineStatus = true
             allowDirectMessages = true
             spatialAudioEnabled = true
+            localMonitorEffect = .off
+            localMonitorEffectAmount = 50
+            localMonitorLatencyMode = .balanced
+            localMonitorPluginIdentifier = ""
             reconnectOnDisconnect = true
             showAudioControlsOnStartup = true
             closeButtonBehavior = .goToMainThenHide
@@ -5926,6 +5967,10 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(noiseSuppression, forKey: "noiseSuppression")
         UserDefaults.standard.set(echoCancellation, forKey: "echoCancellation")
         UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
+        UserDefaults.standard.set(localMonitorEffect.rawValue, forKey: "localMonitorEffect")
+        UserDefaults.standard.set(localMonitorEffectAmount, forKey: "localMonitorEffectAmount")
+        UserDefaults.standard.set(localMonitorLatencyMode.rawValue, forKey: "localMonitorLatencyMode")
+        UserDefaults.standard.set(localMonitorPluginIdentifier, forKey: "localMonitorPluginIdentifier")
         UserDefaults.standard.set(autoConnect, forKey: "autoConnect")
         UserDefaults.standard.set(preferLocalServer, forKey: "preferLocalServer")
         UserDefaults.standard.set(pttEnabled, forKey: "pttEnabled")
@@ -6140,6 +6185,56 @@ class SettingsManager: ObservableObject {
             audioRecoveryStatusMessage = "No audio devices were detected from macOS CoreAudio."
         } else {
             audioRecoveryStatusMessage = nil
+        }
+    }
+
+    func detectMonitorPlugins() {
+        let manager = AVAudioUnitComponentManager.shared()
+        let effectDescriptions = [
+            AudioComponentDescription(
+                componentType: kAudioUnitType_Effect,
+                componentSubType: 0,
+                componentManufacturer: 0,
+                componentFlags: 0,
+                componentFlagsMask: 0
+            ),
+            AudioComponentDescription(
+                componentType: kAudioUnitType_MusicEffect,
+                componentSubType: 0,
+                componentManufacturer: 0,
+                componentFlags: 0,
+                componentFlagsMask: 0
+            )
+        ]
+
+        let detected = effectDescriptions
+            .flatMap { manager.components(matching: $0) }
+            .reduce(into: [String: DetectedAudioPlugin]()) { partialResult, component in
+                let identifier = component.audioComponentDescription.componentType.description
+                    + ":"
+                    + component.audioComponentDescription.componentSubType.description
+                    + ":"
+                    + component.audioComponentDescription.componentManufacturer.description
+                partialResult[identifier] = DetectedAudioPlugin(
+                    identifier: identifier,
+                    name: component.name,
+                    manufacturer: component.manufacturerName,
+                    typeName: component.typeName,
+                    component: component
+                )
+            }
+
+        availableMonitorPlugins = detected.values.sorted {
+            if $0.manufacturer == $1.manufacturer {
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            return $0.manufacturer.localizedCaseInsensitiveCompare($1.manufacturer) == .orderedAscending
+        }
+
+        if !localMonitorPluginIdentifier.isEmpty,
+           !availableMonitorPlugins.contains(where: { $0.identifier == localMonitorPluginIdentifier }) {
+            localMonitorPluginIdentifier = ""
+            saveSettings()
         }
     }
 
@@ -6802,6 +6897,73 @@ struct SettingsView: View {
             Toggle("Noise Suppression", isOn: $settings.noiseSuppression)
             Toggle("Echo Cancellation", isOn: $settings.echoCancellation)
             Toggle("Auto Gain Control", isOn: $settings.autoGainControl)
+        }
+
+        SettingsSection(title: "Local Monitoring") {
+            Toggle("Enable Local Monitoring", isOn: Binding(
+                get: { LocalMonitorManager.shared.isMonitoring },
+                set: { newValue in
+                    LocalMonitorManager.shared.setMonitoringEnabled(newValue)
+                }
+            ))
+
+            Picker("Monitor Effect", selection: $settings.localMonitorEffect) {
+                ForEach(LocalMonitorEffect.allCases) { effect in
+                    Text(effect.displayName).tag(effect)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: settings.localMonitorEffect) { newValue in
+                settings.saveSettings()
+                LocalMonitorManager.shared.setEffect(newValue)
+            }
+
+            if settings.localMonitorEffect != .off {
+                HStack {
+                    Text("Effect Amount")
+                    Slider(value: $settings.localMonitorEffectAmount, in: 0...100, step: 1)
+                    Text("\(Int(settings.localMonitorEffectAmount.rounded()))%")
+                        .frame(width: 48)
+                }
+                .onChange(of: settings.localMonitorEffectAmount) { newValue in
+                    settings.saveSettings()
+                    LocalMonitorManager.shared.setEffectAmount(newValue)
+                }
+            }
+
+            Picker("Monitor Latency", selection: $settings.localMonitorLatencyMode) {
+                ForEach(LocalMonitorLatencyMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: settings.localMonitorLatencyMode) { newValue in
+                settings.saveSettings()
+                LocalMonitorManager.shared.setLatencyMode(newValue)
+            }
+
+            Picker("System Audio Plugin", selection: $settings.localMonitorPluginIdentifier) {
+                Text("None").tag("")
+                ForEach(settings.availableMonitorPlugins) { plugin in
+                    Text(plugin.displayLabel).tag(plugin.identifier)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: settings.localMonitorPluginIdentifier) { _ in
+                settings.saveSettings()
+                LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "monitorPluginChanged")
+            }
+
+            HStack(spacing: 12) {
+                Button("Refresh Plugins") {
+                    settings.detectMonitorPlugins()
+                }
+                .buttonStyle(.bordered)
+
+                Text(settings.availableMonitorPlugins.isEmpty ? "No system Audio Unit effects detected." : "\(settings.availableMonitorPlugins.count) system audio plugins detected.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
 
         SettingsSection(title: "3D Spatial Audio") {

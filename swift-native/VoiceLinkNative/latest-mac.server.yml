@@ -1,17 +1,17 @@
 url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 version: 1.0.0
-build: 31
+build: 33
 files:
   - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: TT11Jwy1l8OfpF0jtPGxEEKlub0blEguyByAmeIXYbybuMFwhkfWuBBE17PoEavic5hidM5E7AuAPpXk4IzIcA==
-    size: 10224118
+    sha512: Ec/5SYk+VaZugPOAHIyZAKklUO0tmLUWvJaqDsP/PZdbJ0ohNRr0eNHpHp6mwo8DX7KUNoBlAJ90IilbHigbhA==
+    size: 23763627
 path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: TT11Jwy1l8OfpF0jtPGxEEKlub0blEguyByAmeIXYbybuMFwhkfWuBBE17PoEavic5hidM5E7AuAPpXk4IzIcA==
-releaseDate: '2026-04-04T00:39:43.000Z'
+sha512: Ec/5SYk+VaZugPOAHIyZAKklUO0tmLUWvJaqDsP/PZdbJ0ohNRr0eNHpHp6mwo8DX7KUNoBlAJ90IilbHigbhA==
+releaseDate: '2026-04-11T07:35:00.000Z'
 releaseNotes: |
-  VoiceLink macOS Update (Build 31)
-  - Refreshed the signed desktop package from the current VoiceLinkNative source.
-  - Keeps the WHMCS token-refresh and room media/welcome-link fixes from the prior package.
-  - Pairs with the current server and iOS release pass.
+  VoiceLink macOS Update (Build 33)
+  - Adds native local-monitor effect controls and low-latency monitor modes.
+  - Detects installed system Audio Unit effects for monitor routing.
+  - Keeps the current room media, pairing, and admin SSL-manager fixes.
 mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
 copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
