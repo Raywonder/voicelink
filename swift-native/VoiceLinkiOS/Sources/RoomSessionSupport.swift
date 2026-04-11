@@ -73,8 +73,14 @@ struct RoomSessionView: View {
     }
 
     private var roomMessages: [IOSRoomMessageItem] {
+        let targetRoomId = normalizedIOSRoomIdentity(destination.roomId)
+        let targetRoomName = normalizedIOSRoomIdentity(destination.roomName)
         let roomItems = roomState.roomMessages
-            .filter { $0.roomId == destination.roomId }
+            .filter { message in
+                let messageRoomId = normalizedIOSRoomIdentity(message.roomId)
+                let messageRoomName = normalizedIOSRoomIdentity(message.roomName)
+                return messageRoomId == targetRoomId || messageRoomName == targetRoomName
+            }
             .suffix(destination.chatMessageLimit)
         return destination.chatMessageOrder == "oldest-first"
             ? Array(roomItems)
@@ -82,8 +88,14 @@ struct RoomSessionView: View {
     }
 
     private var roomTranscripts: [IOSRoomTranscriptItem] {
-        roomState.roomTranscripts
-            .filter { $0.roomId == destination.roomId }
+        let targetRoomId = normalizedIOSRoomIdentity(destination.roomId)
+        let targetRoomName = normalizedIOSRoomIdentity(destination.roomName)
+        return roomState.roomTranscripts
+            .filter { transcript in
+                let transcriptRoomId = normalizedIOSRoomIdentity(transcript.roomId)
+                let transcriptRoomName = normalizedIOSRoomIdentity(transcript.roomName)
+                return transcriptRoomId == targetRoomId || transcriptRoomName == targetRoomName
+            }
             .suffix(50)
             .reversed()
     }
@@ -221,7 +233,7 @@ struct RoomSessionView: View {
 
     @ViewBuilder
     private var roomChatSection: some View {
-        if showChat {
+        if showChat || !roomMessages.isEmpty {
             Section("Room Chat") {
                 if roomMessages.isEmpty {
                     Text("No room messages yet.")

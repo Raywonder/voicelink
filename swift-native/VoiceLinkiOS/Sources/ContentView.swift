@@ -260,7 +260,9 @@ final class IOSRoomMessagingState: ObservableObject {
         guard let info else { return }
         let roomId = (info["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let roomName = (info["roomName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let switchingRooms = !activeRoomId.isEmpty && !roomId.isEmpty && activeRoomId != roomId
+        let switchingRooms = !activeRoomId.isEmpty
+            && !roomId.isEmpty
+            && normalizedIOSRoomIdentity(activeRoomId) != normalizedIOSRoomIdentity(roomId)
         if switchingRooms {
             directTargets.removeAll()
             roomMessages.removeAll()
@@ -323,11 +325,19 @@ final class IOSRoomMessagingState: ObservableObject {
     private func handleRoomUsers(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
         let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        let roomName = normalizedIOSSocketValue(
+            info["roomName"] ?? (info["room"] as? [String: Any])?["name"] ?? (info["room"] as? NSDictionary)?["name"],
+            fallback: activeRoomName
+        )
         if activeRoomId.isEmpty, !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
         }
-        guard roomId.isEmpty || roomId == activeRoomId || activeRoomId.isEmpty else { return }
+        let roomMatchesActive = roomId.isEmpty
+            || activeRoomId.isEmpty
+            || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+            || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
+        guard roomMatchesActive else { return }
         let rawUsers = iosUsersArray(from: info)
         guard !rawUsers.isEmpty || !directTargets.isEmpty else { return }
         let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in
@@ -386,9 +396,17 @@ final class IOSRoomMessagingState: ObservableObject {
             selectedDirectTarget = directTargets.first
         }
         if isInRoom {
-            let visibleCount = directTargets.count
-            if visibleCount > 0 {
-                statusText = "\(visibleCount) room user\(visibleCount == 1 ? "" : "s") available."
+            let humanCount = directTargets.filter { !$0.isBot }.count
+            let botCount = directTargets.filter(\.isBot).count
+            if humanCount > 0 || botCount > 0 {
+                var parts: [String] = []
+                if humanCount > 0 {
+                    parts.append("\(humanCount) \(humanCount == 1 ? "person" : "people")")
+                }
+                if botCount > 0 {
+                    parts.append("\(botCount) \(botCount == 1 ? "bot" : "bots")")
+                }
+                statusText = "\(parts.joined(separator: ", ")) in the room."
             }
         }
     }
@@ -396,7 +414,11 @@ final class IOSRoomMessagingState: ObservableObject {
     private func handleRoomUserJoined(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
         let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
-        guard roomId == activeRoomId || (activeRoomId.isEmpty && !roomId.isEmpty) else { return }
+        let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let roomMatchesActive = activeRoomId.isEmpty
+            || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+            || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
+        guard roomMatchesActive || (activeRoomId.isEmpty && !roomId.isEmpty) else { return }
         if activeRoomId.isEmpty, !roomId.isEmpty {
             activeRoomId = roomId
             isInRoom = true
@@ -414,7 +436,11 @@ final class IOSRoomMessagingState: ObservableObject {
     private func handleRoomUserLeft(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
         let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
-        guard roomId == activeRoomId || roomId.isEmpty else { return }
+        let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let roomMatchesActive = roomId.isEmpty
+            || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+            || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
+        guard roomMatchesActive else { return }
         let userId = normalizedIOSSocketValue(info["userId"], fallback: "")
         let userName = normalizedIOSSocketValue(info["userName"], fallback: "User")
         if !userId.isEmpty {
@@ -428,8 +454,9 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomMessage(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        let incomingRoomId = normalizedIOSSocketValue(info["roomId"], fallback: "")
         let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let roomId = incomingRoomId.isEmpty ? activeRoomId : incomingRoomId
         let senderId = normalizedIOSSocketValue(info["userId"], fallback: "")
         let author = normalizedIOSSocketValue(
             info["author"] ?? info["userName"] ?? info["senderName"] ?? info["botName"] ?? info["name"],
@@ -442,9 +469,12 @@ final class IOSRoomMessagingState: ObservableObject {
         let incomingType = normalizedIOSSocketValue(info["type"], fallback: "")
         let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
-        guard !roomId.isEmpty, !body.isEmpty else { return }
+        let roomMatchesActive = activeRoomId.isEmpty
+            || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+            || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
+        guard !roomId.isEmpty, !body.isEmpty, roomMatchesActive else { return }
         if roomMessages.contains(where: {
-            $0.roomId == roomId
+            normalizedIOSRoomIdentity($0.roomId) == normalizedIOSRoomIdentity(roomId)
                 && $0.author.caseInsensitiveCompare(author.isEmpty ? "User" : author) == .orderedSame
                 && $0.body == body
                 && $0.type.caseInsensitiveCompare(type.isEmpty ? "text" : type) == .orderedSame
@@ -489,7 +519,7 @@ final class IOSRoomMessagingState: ObservableObject {
         if roomMessages.count > 400 {
             roomMessages = Array(roomMessages.suffix(400))
         }
-        if roomId == activeRoomId, type == "system" || type == "bot" {
+        if normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId), type == "system" || type == "bot" {
             announcementManager.announceSystemMessage(body, author: author)
         }
     }
@@ -508,15 +538,19 @@ final class IOSRoomMessagingState: ObservableObject {
 
     private func handleRoomTranscript(_ info: [AnyHashable: Any]?) {
         guard let info else { return }
-        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        let incomingRoomId = normalizedIOSSocketValue(info["roomId"], fallback: "")
         let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
+        let roomId = incomingRoomId.isEmpty ? activeRoomId : incomingRoomId
         let speaker = normalizedIOSSocketValue(
             info["speaker"] ?? info["userName"] ?? info["author"],
             fallback: "Speaker"
         )
         let body = normalizedIOSSocketValue(info["body"] ?? info["text"], fallback: "")
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
-        guard !roomId.isEmpty, !body.isEmpty else { return }
+        let roomMatchesActive = activeRoomId.isEmpty
+            || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+            || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
+        guard !roomId.isEmpty, !body.isEmpty, roomMatchesActive else { return }
         roomTranscripts.append(
             IOSRoomTranscriptItem(
                 id: UUID().uuidString,
@@ -583,6 +617,10 @@ private func normalizedIOSSocketValue(_ value: Any?, fallback: String) -> String
         return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     return text
+}
+
+func normalizedIOSRoomIdentity(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 }
 
 private func iosUsersArray(from info: [AnyHashable: Any]) -> [Any] {
@@ -655,11 +693,28 @@ private func iosMessagesArray(from info: [AnyHashable: Any]) -> [[AnyHashable: A
         }
     }
 
+    func extractMessages(from payload: Any?) -> [[AnyHashable: Any]] {
+        if let messages = payload as? [Any] {
+            return normalizeArray(messages)
+        }
+        if let messages = payload as? NSArray {
+            return normalizeArray(messages.compactMap { $0 })
+        }
+        return []
+    }
+
     if let messages = info["messages"] as? [Any] {
         return normalizeArray(messages)
     }
     if let messages = info["messages"] as? NSArray {
         return normalizeArray(messages.compactMap { $0 })
+    }
+    let directFallbackKeys: [AnyHashable] = ["history", "items", "entries"]
+    for key in directFallbackKeys {
+        let resolved = extractMessages(from: info[key])
+        if !resolved.isEmpty {
+            return resolved
+        }
     }
     if let payload = info["payload"] as? [String: Any], let messages = payload["messages"] as? [Any] {
         return normalizeArray(messages)
@@ -670,6 +725,30 @@ private func iosMessagesArray(from info: [AnyHashable: Any]) -> [[AnyHashable: A
     if let payload = info["payload"] as? NSDictionary, let messages = payload["messages"] as? [Any] {
         return normalizeArray(messages)
     }
+    if let payload = info["payload"] as? [String: Any] {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: payload[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
+    }
+    if let payload = info["payload"] as? [AnyHashable: Any] {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: payload[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
+    }
+    if let payload = info["payload"] as? NSDictionary {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: payload[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
+    }
     if let room = info["room"] as? [String: Any], let messages = room["messages"] as? [Any] {
         return normalizeArray(messages)
     }
@@ -678,6 +757,30 @@ private func iosMessagesArray(from info: [AnyHashable: Any]) -> [[AnyHashable: A
     }
     if let room = info["room"] as? NSDictionary, let messages = room["messages"] as? [Any] {
         return normalizeArray(messages)
+    }
+    if let room = info["room"] as? [String: Any] {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: room[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
+    }
+    if let room = info["room"] as? [AnyHashable: Any] {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: room[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
+    }
+    if let room = info["room"] as? NSDictionary {
+        for key in ["history", "items", "entries"] {
+            let resolved = extractMessages(from: room[key])
+            if !resolved.isEmpty {
+                return resolved
+            }
+        }
     }
     return []
 }

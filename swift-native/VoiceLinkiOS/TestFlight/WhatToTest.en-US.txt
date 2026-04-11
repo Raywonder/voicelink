@@ -1,7 +1,7 @@
-VoiceLink – TestFlight Build 64
+VoiceLink – TestFlight Build 65
 
 What to test:
-- People in Room should show the active room users immediately after join instead of the empty-state text.
-- Bots, welcome messages, and system messages should appear in room chat and room state.
-- Same-name rooms should still group correctly, while the chosen room copy stays tied to its own server.
-- Room audio controls should stay above chat, and Test Sound should duck room audio and restore it cleanly.
+- People in Room should keep showing the joined room users instead of dropping back to the empty state.
+- Room chat should now show welcome messages, system messages, and bot messages for the active room.
+- Same-name rooms should still group correctly while the chosen room copy stays tied to its own server.
+- Room audio controls should stay above chat, and Test Sound should still duck room audio and restore it cleanly.

@@ -793,20 +793,42 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     }
 
     private static func socketMessagesValue(_ payload: [String: Any]) -> [[String: Any]] {
+        func extractMessages(_ value: Any?) -> [[String: Any]] {
+            socketArrayDictionaryValue(value)
+        }
+
         if let payloadData = socketDictionaryValue(payload["payload"]) {
-            let payloadMessages = socketArrayDictionaryValue(payloadData["messages"])
+            let payloadMessages = extractMessages(payloadData["messages"])
             if !payloadMessages.isEmpty {
                 return payloadMessages
             }
+            for key in ["history", "items", "entries"] {
+                let payloadMessages = extractMessages(payloadData[key])
+                if !payloadMessages.isEmpty {
+                    return payloadMessages
+                }
+            }
         }
-        let directMessages = socketArrayDictionaryValue(payload["messages"])
+        let directMessages = extractMessages(payload["messages"])
         if !directMessages.isEmpty {
             return directMessages
         }
+        for key in ["history", "items", "entries"] {
+            let directMessages = extractMessages(payload[key])
+            if !directMessages.isEmpty {
+                return directMessages
+            }
+        }
         if let room = socketDictionaryValue(payload["room"]) {
-            let roomMessages = socketArrayDictionaryValue(room["messages"])
+            let roomMessages = extractMessages(room["messages"])
             if !roomMessages.isEmpty {
                 return roomMessages
+            }
+            for key in ["history", "items", "entries"] {
+                let roomMessages = extractMessages(room[key])
+                if !roomMessages.isEmpty {
+                    return roomMessages
+                }
             }
         }
         return []
