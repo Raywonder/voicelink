@@ -4476,6 +4476,7 @@ class VoiceLinkLocalServer {
                 id: String(stream.id || '').trim() || `background:${roomId || roomName}`,
                 name: String(stream.name || 'Background Stream').trim() || 'Background Stream',
                 streamUrl,
+                sourceType: String(stream.sourceType || 'remote').trim().toLowerCase() || 'remote',
                 volume: Number.isFinite(Number(stream.volume)) ? Number(stream.volume) : (Number.isFinite(Number(backgroundConfig.defaultVolume)) ? Number(backgroundConfig.defaultVolume) : null),
                 hidden: !!stream.hidden
             });

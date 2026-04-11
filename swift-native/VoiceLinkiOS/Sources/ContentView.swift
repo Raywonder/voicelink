@@ -364,12 +364,21 @@ final class IOSRoomMessagingState: ObservableObject {
         if mapped.isEmpty, isInRoom, !directTargets.isEmpty {
             return
         }
+        var stabilizedMapped = mapped
+        let mappedHasHumanUsers = stabilizedMapped.contains { !$0.isBot }
+        if isInRoom && !mappedHasHumanUsers {
+            for existing in directTargets where !existing.isBot {
+                if !stabilizedMapped.contains(where: { $0.id == existing.id || $0.name.caseInsensitiveCompare(existing.name) == .orderedSame }) {
+                    stabilizedMapped.append(existing)
+                }
+            }
+        }
         if isInRoom || !mapped.isEmpty {
-            directTargets = mapped.sorted { lhs, rhs in
+            directTargets = stabilizedMapped.sorted { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
         } else {
-            for target in mapped {
+            for target in stabilizedMapped {
                 upsertDirectTarget(target)
             }
         }
@@ -434,6 +443,14 @@ final class IOSRoomMessagingState: ObservableObject {
         let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
         guard !roomId.isEmpty, !body.isEmpty else { return }
+        if roomMessages.contains(where: {
+            $0.roomId == roomId
+                && $0.author.caseInsensitiveCompare(author.isEmpty ? "User" : author) == .orderedSame
+                && $0.body == body
+                && $0.type.caseInsensitiveCompare(type.isEmpty ? "text" : type) == .orderedSame
+        }) {
+            return
+        }
         if ((info["isBot"] as? Bool) == true || type == "bot" || type == "system"), !senderId.isEmpty {
             upsertDirectTarget(
                 IOSDirectMessageTarget(
@@ -454,6 +471,9 @@ final class IOSRoomMessagingState: ObservableObject {
                     role: type == "system" ? "system" : "bot"
                 )
             )
+            if activeRoomId.isEmpty {
+                activeRoomId = roomId
+            }
         }
         roomMessages.append(
             IOSRoomMessageItem(

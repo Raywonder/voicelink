@@ -336,6 +336,44 @@ const DEFAULT_CONFIG = {
         primaryColor: '#6364FF',
         secondaryColor: '#563ACC'
     },
+    backgroundStreams: {
+        enabled: true,
+        defaultVolume: 60,
+        fadeInDuration: 1500,
+        shuffleEnabled: false,
+        shuffleIntervalMinutes: 15,
+        autoRefreshEnabled: true,
+        autoReconnectDropped: true,
+        metadataRefreshIntervalSeconds: 20,
+        preJoinEnabled: false,
+        preJoinStreamId: null,
+        streams: [
+            {
+                id: 'chrismix-radio',
+                name: 'ChrisMix Radio',
+                url: 'http://streammadness.com:8030/stream',
+                streamUrl: 'http://streammadness.com:8030/stream',
+                volume: 60,
+                hidden: false,
+                autoPlay: false,
+                rooms: [],
+                roomPatterns: [],
+                excludedRooms: []
+            },
+            {
+                id: 'soulfood-radio',
+                name: 'Soul Food Radio',
+                url: 'https://soulfoodradio.media/',
+                streamUrl: 'https://soulfoodradio.media/',
+                volume: 60,
+                hidden: false,
+                autoPlay: false,
+                rooms: [],
+                roomPatterns: [],
+                excludedRooms: []
+            }
+        ]
+    },
     whmcs: {
         portalUrl: 'https://devine-creations.com/clientarea.php',
         roles: {

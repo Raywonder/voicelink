@@ -554,12 +554,25 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
                 deviceName: normalizedSocketText(user["deviceName"], fallback: ""),
                 deviceType: normalizedSocketText(user["deviceType"], fallback: ""),
-                clientVersion: normalizedSocketText(user["clientVersion"], fallback: "")
+                clientVersion: normalizedSocketText(user["clientVersion"], fallback: ""),
+                botType: normalizedSocketText(user["botType"], fallback: ""),
+                statusMessage: normalizedSocketText(user["statusMessage"], fallback: ""),
+                authProvider: normalizedSocketText(user["authProvider"], fallback: ""),
+                role: normalizedSocketText(user["role"], fallback: "")
             )
         }
 
         guard !mapped.isEmpty else { return }
-        roomUsers = mapped.sorted { lhs, rhs in
+        var stabilized = mapped
+        let mappedHasHumanUsers = stabilized.contains { !$0.isBot }
+        if !mappedHasHumanUsers {
+            for existing in roomUsers where !existing.isBot {
+                if !stabilized.contains(where: { $0.id == existing.id || $0.name.caseInsensitiveCompare(existing.name) == .orderedSame }) {
+                    stabilized.append(existing)
+                }
+            }
+        }
+        roomUsers = stabilized.sorted { lhs, rhs in
             lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }

@@ -3314,8 +3314,12 @@ struct BackgroundStreamsConfig: Codable {
 struct BackgroundStreamConfig: Codable, Identifiable {
     var id: String
     var name: String
+    var sourceType: String?
     var url: String
     var streamUrl: String
+    var uploadPath: String?
+    var localFilePath: String?
+    var clientRelayUserId: String?
     var volume: Int
     var hidden: Bool
     var autoPlay: Bool
