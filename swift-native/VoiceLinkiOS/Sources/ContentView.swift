@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import AVFoundation
 
 struct ContentView: View {
     @Binding var serverURL: String
@@ -70,6 +71,10 @@ struct IOSDirectMessageTarget: Identifiable, Hashable {
     var deviceName: String = ""
     var deviceType: String = ""
     var clientVersion: String = ""
+    var botType: String = ""
+    var statusMessage: String = ""
+    var authProvider: String = ""
+    var role: String = ""
 }
 
 struct IOSRoomMessageItem: Identifiable, Hashable {
@@ -117,6 +122,7 @@ final class IOSRoomMessagingState: ObservableObject {
     @Published var selectedDirectTarget: IOSDirectMessageTarget?
     @Published var selectedProfileName: String?
     @Published var statusText = ""
+    private let announcementManager = IOSRoomAnnouncementManager.shared
 
     init() {
         NotificationCenter.default.addObserver(
@@ -171,6 +177,24 @@ final class IOSRoomMessagingState: ObservableObject {
         ) { [weak self] notification in
             Task { @MainActor [weak self] in
                 self?.handleRoomTranscript(notification.userInfo)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .iosRoomUserJoined,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleRoomUserJoined(notification.userInfo)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .iosRoomUserLeft,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleRoomUserLeft(notification.userInfo)
             }
         }
     }
@@ -249,12 +273,36 @@ final class IOSRoomMessagingState: ObservableObject {
         if !roomName.isEmpty {
             activeRoomName = roomName
         }
+        statusText = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
         let seededUsers = iosUsersArray(from: info)
         if !seededUsers.isEmpty {
             handleRoomUsers([
                 "roomId": roomId.isEmpty ? activeRoomId : roomId,
                 "users": seededUsers
             ])
+        } else if let joinedUser = iosUserDictionary(from: info["user"]) {
+            handleRoomUsers([
+                "roomId": roomId.isEmpty ? activeRoomId : roomId,
+                "users": [joinedUser]
+            ])
+        } else {
+            let displayName = normalizedIOSSocketValue(info["displayName"], fallback: "")
+            if !displayName.isEmpty {
+                handleRoomUsers([
+                    "roomId": roomId.isEmpty ? activeRoomId : roomId,
+                    "users": [[
+                        "id": "local:\(displayName.lowercased())",
+                        "userId": "local:\(displayName.lowercased())",
+                        "name": displayName,
+                        "displayName": displayName,
+                        "deviceName": UIDevice.current.name,
+                        "deviceType": "ios"
+                    ]]
+                ])
+            }
+        }
+        for message in iosMessagesArray(from: info) {
+            handleRoomMessage(message)
         }
     }
 
@@ -267,6 +315,8 @@ final class IOSRoomMessagingState: ObservableObject {
             selectedDirectTarget = nil
             statusText = "Left room."
             roomTranscripts.removeAll()
+            directTargets.removeAll()
+            roomMessages.removeAll()
         }
     }
 
@@ -304,7 +354,11 @@ final class IOSRoomMessagingState: ObservableObject {
                 hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
                 deviceName: normalizedIOSSocketValue(user["deviceName"], fallback: ""),
                 deviceType: normalizedIOSSocketValue(user["deviceType"], fallback: ""),
-                clientVersion: normalizedIOSSocketValue(user["clientVersion"], fallback: "")
+                clientVersion: normalizedIOSSocketValue(user["clientVersion"], fallback: ""),
+                botType: normalizedIOSSocketValue(user["botType"], fallback: ""),
+                statusMessage: normalizedIOSSocketValue(user["statusMessage"], fallback: ""),
+                authProvider: normalizedIOSSocketValue(user["authProvider"], fallback: ""),
+                role: normalizedIOSSocketValue(user["role"], fallback: "")
             )
         }
         if mapped.isEmpty, isInRoom, !directTargets.isEmpty {
@@ -322,6 +376,45 @@ final class IOSRoomMessagingState: ObservableObject {
         if let selected = selectedDirectTarget, !directTargets.contains(selected) {
             selectedDirectTarget = directTargets.first
         }
+        if isInRoom {
+            let visibleCount = directTargets.count
+            if visibleCount > 0 {
+                statusText = "\(visibleCount) room user\(visibleCount == 1 ? "" : "s") available."
+            }
+        }
+    }
+
+    private func handleRoomUserJoined(_ info: [AnyHashable: Any]?) {
+        guard let info else { return }
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        guard roomId == activeRoomId || (activeRoomId.isEmpty && !roomId.isEmpty) else { return }
+        if activeRoomId.isEmpty, !roomId.isEmpty {
+            activeRoomId = roomId
+            isInRoom = true
+        }
+        if let user = iosUserDictionary(from: info["user"]) {
+            let mapped = mapIOSRoomUser(user, roomId: roomId, index: directTargets.count)
+            upsertDirectTarget(mapped)
+            statusText = "\(mapped.name) joined \(activeRoomName.isEmpty ? "the room" : activeRoomName)."
+            if !mapped.isBot {
+                announcementManager.announce("\(mapped.name) joined the room.")
+            }
+        }
+    }
+
+    private func handleRoomUserLeft(_ info: [AnyHashable: Any]?) {
+        guard let info else { return }
+        let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
+        guard roomId == activeRoomId || roomId.isEmpty else { return }
+        let userId = normalizedIOSSocketValue(info["userId"], fallback: "")
+        let userName = normalizedIOSSocketValue(info["userName"], fallback: "User")
+        if !userId.isEmpty {
+            directTargets.removeAll { $0.id == userId }
+        } else if !userName.isEmpty {
+            directTargets.removeAll { $0.name.caseInsensitiveCompare(userName) == .orderedSame }
+        }
+        statusText = "\(userName) left \(activeRoomName.isEmpty ? "the room" : activeRoomName)."
+        announcementManager.announce("\(userName) left the room.")
     }
 
     private func handleRoomMessage(_ info: [AnyHashable: Any]?) {
@@ -348,7 +441,11 @@ final class IOSRoomMessagingState: ObservableObject {
                     hasAudioControls: false,
                     deviceName: type == "system" ? "Server" : "VoiceLink",
                     deviceType: "bot",
-                    clientVersion: ""
+                    clientVersion: "",
+                    botType: type == "system" ? "system" : "text",
+                    statusMessage: type == "system" ? "Server system message." : "Use direct message or mentions to interact.",
+                    authProvider: type == "system" ? "system" : "voicelink_bot",
+                    role: type == "system" ? "system" : "bot"
                 )
             )
         }
@@ -365,6 +462,9 @@ final class IOSRoomMessagingState: ObservableObject {
         )
         if roomMessages.count > 400 {
             roomMessages = Array(roomMessages.suffix(400))
+        }
+        if roomId == activeRoomId, type == "system" || type == "bot" {
+            announcementManager.announceSystemMessage(body, author: author)
         }
     }
 
@@ -414,6 +514,36 @@ final class IOSRoomMessagingState: ObservableObject {
         }
         directTargets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
+
+    private func mapIOSRoomUser(_ user: [String: Any], roomId: String, index: Int) -> IOSDirectMessageTarget {
+        let id = normalizedIOSSocketValue(user["id"] ?? user["userId"], fallback: "")
+        let rawName = normalizedIOSSocketValue(
+            user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"],
+            fallback: ""
+        )
+        let resolvedId = id.isEmpty
+            ? "\(roomId)|\(rawName.isEmpty ? "user-\(index)" : rawName.lowercased())"
+            : id
+        let fallbackName = resolvedId.count > 8 ? "User \(resolvedId.prefix(8))" : "User \(resolvedId)"
+        let name = rawName.isEmpty ? fallbackName : rawName
+        return IOSDirectMessageTarget(
+            id: resolvedId,
+            name: name,
+            isMuted: (user["muted"] as? Bool) ?? (user["isMuted"] as? Bool) ?? false,
+            isDeafened: (user["deafened"] as? Bool) ?? (user["isDeafened"] as? Bool) ?? false,
+            isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
+            transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
+            isBot: (user["isBot"] as? Bool) ?? false,
+            hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
+            deviceName: normalizedIOSSocketValue(user["deviceName"], fallback: ""),
+            deviceType: normalizedIOSSocketValue(user["deviceType"], fallback: ""),
+            clientVersion: normalizedIOSSocketValue(user["clientVersion"], fallback: ""),
+            botType: normalizedIOSSocketValue(user["botType"], fallback: ""),
+            statusMessage: normalizedIOSSocketValue(user["statusMessage"], fallback: ""),
+            authProvider: normalizedIOSSocketValue(user["authProvider"], fallback: ""),
+            role: normalizedIOSSocketValue(user["role"], fallback: "")
+        )
+    }
 }
 
 private func normalizedIOSSocketValue(_ value: Any?, fallback: String) -> String {
@@ -433,10 +563,22 @@ private func iosUsersArray(from info: [AnyHashable: Any]) -> [Any] {
     if let users = info["users"] as? [Any] {
         return users
     }
+    if let users = info["users"] as? NSArray {
+        return users.compactMap { $0 }
+    }
+    if let roomUsers = info["roomUsers"] as? [Any] {
+        return roomUsers
+    }
+    if let roomUsers = info["roomUsers"] as? NSArray {
+        return roomUsers.compactMap { $0 }
+    }
     if let payloadUsers = info["payload"] as? [String: Any], let users = payloadUsers["users"] as? [Any] {
         return users
     }
     if let payloadUsers = info["payload"] as? [AnyHashable: Any], let users = payloadUsers["users"] as? [Any] {
+        return users
+    }
+    if let payloadUsers = info["payload"] as? NSDictionary, let users = payloadUsers["users"] as? [Any] {
         return users
     }
     if let room = info["room"] as? [String: Any], let users = room["users"] as? [Any] {
@@ -448,6 +590,12 @@ private func iosUsersArray(from info: [AnyHashable: Any]) -> [Any] {
     if let room = info["room"] as? NSDictionary, let users = room["users"] as? [Any] {
         return users
     }
+    if let room = info["room"] as? NSDictionary, let members = room["members"] as? [Any] {
+        return members
+    }
+    if let room = info["room"] as? NSDictionary, let participants = room["participants"] as? [Any] {
+        return participants
+    }
     if let members = info["members"] as? [Any] {
         return members
     }
@@ -455,6 +603,124 @@ private func iosUsersArray(from info: [AnyHashable: Any]) -> [Any] {
         return participants
     }
     return []
+}
+
+private func iosMessagesArray(from info: [AnyHashable: Any]) -> [[AnyHashable: Any]] {
+    func normalizeArray(_ values: [Any]) -> [[AnyHashable: Any]] {
+        values.compactMap { value in
+            if let dict = value as? [AnyHashable: Any] {
+                return dict
+            }
+            if let dict = value as? [String: Any] {
+                var normalized: [AnyHashable: Any] = [:]
+                dict.forEach { normalized[$0.key] = $0.value }
+                return normalized
+            }
+            if let dict = value as? NSDictionary {
+                var normalized: [AnyHashable: Any] = [:]
+                for (key, value) in dict {
+                    if let hashableKey = key as? AnyHashable {
+                        normalized[hashableKey] = value
+                    }
+                }
+                return normalized
+            }
+            return nil
+        }
+    }
+
+    if let messages = info["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let messages = info["messages"] as? NSArray {
+        return normalizeArray(messages.compactMap { $0 })
+    }
+    if let payload = info["payload"] as? [String: Any], let messages = payload["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let payload = info["payload"] as? [AnyHashable: Any], let messages = payload["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let payload = info["payload"] as? NSDictionary, let messages = payload["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let room = info["room"] as? [String: Any], let messages = room["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let room = info["room"] as? [AnyHashable: Any], let messages = room["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    if let room = info["room"] as? NSDictionary, let messages = room["messages"] as? [Any] {
+        return normalizeArray(messages)
+    }
+    return []
+}
+
+private func iosUserDictionary(from value: Any?) -> [String: Any]? {
+    if let user = value as? [String: Any] {
+        return user
+    }
+    if let user = value as? [AnyHashable: Any] {
+        var normalized: [String: Any] = [:]
+        for (key, value) in user {
+            normalized[String(describing: key)] = value
+        }
+        return normalized
+    }
+    if let user = value as? NSDictionary {
+        var normalized: [String: Any] = [:]
+        for (key, value) in user {
+            normalized[String(describing: key)] = value
+        }
+        return normalized
+    }
+    return nil
+}
+
+@MainActor
+private final class IOSRoomAnnouncementManager {
+    static let shared = IOSRoomAnnouncementManager()
+
+    private let synthesizer = AVSpeechSynthesizer()
+
+    func announce(_ message: String, interrupt: Bool = false) {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        UIAccessibility.post(notification: .announcement, argument: text)
+        guard announcementsEnabled else { return }
+        if interrupt, synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        if synthesizer.isSpeaking && !interrupt {
+            return
+        }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = 0.48
+        utterance.pitchMultiplier = 1.0
+        utterance.volume = 0.85
+        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.language.languageCode?.identifier == "en" ? "en-US" : nil)
+        synthesizer.speak(utterance)
+    }
+
+    func announceSystemMessage(_ body: String, author: String) {
+        guard shouldSpeakSystemMessages else { return }
+        let prefix = author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "System" : author
+        announce("\(prefix). \(body)", interrupt: false)
+    }
+
+    private var announcementsEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "voicelink.ios.ttsAnnouncementsEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "voicelink.ios.ttsAnnouncementsEnabled")
+    }
+
+    private var shouldSpeakSystemMessages: Bool {
+        if UserDefaults.standard.object(forKey: "voicelink.ios.systemAnnouncementsEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "voicelink.ios.systemAnnouncementsEnabled")
+    }
 }
 
 private enum RoomSortMode: String, CaseIterable, Identifiable {
@@ -2145,6 +2411,8 @@ struct SettingsTab: View {
     @AppStorage("allowVoiceInRoomPreview") private var allowVoiceInRoomPreview = true
     @AppStorage("systemActionNotifications") private var systemActionNotificationsEnabled = true
     @AppStorage("systemActionNotificationSound") private var systemActionNotificationSoundEnabled = true
+    @AppStorage("voicelink.ios.ttsAnnouncementsEnabled") private var ttsAnnouncementsEnabled = true
+    @AppStorage("voicelink.ios.systemAnnouncementsEnabled") private var systemAnnouncementsEnabled = true
     @AppStorage("voicelink.showWebFrontendShortcutOnHome") private var showWebFrontendShortcutOnHome = false
     @AppStorage("voicelink.authToken") private var authToken = ""
     @AppStorage("voicelink.displayName") private var displayName = ""
@@ -2220,6 +2488,11 @@ struct SettingsTab: View {
                             }
                     }
                     Toggle("Play Sound for System Action Notifications", isOn: $systemActionNotificationSoundEnabled)
+                    Toggle("Speak Room Announcements", isOn: $ttsAnnouncementsEnabled)
+                    Toggle("Speak System Messages in Rooms", isOn: $systemAnnouncementsEnabled)
+                    Text("Room join, leave, and system updates can be spoken aloud. Turn these off if you only want visual updates.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Diagnostics") {
@@ -2647,7 +2920,18 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
         return "https://voicelink.devinecreations.net"
     }
     if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
-        return trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        let normalized = trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        if let url = URL(string: normalized),
+           let host = url.host?.lowercased(),
+           [
+               "voicelink.devinecreations.net",
+               "node2.voicelink.devinecreations.net",
+               "voicelink.tappedin.fm",
+               "tappedin.fm"
+           ].contains(host) {
+            return "https://\(host)"
+        }
+        return normalized
     }
     return "https://\(trimmed)"
 }

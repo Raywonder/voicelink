@@ -257,26 +257,54 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
             let roomId = normalizedSocketText(room["id"], fallback: fallbackRoomId)
             let roomName = normalizedSocketText(room["name"], fallback: self.joinedRoomName)
+            let joinedUser = Self.socketDictionaryValue(payload["user"])
+            let seededMessages = Self.socketMessagesValue(payload)
             self.joinedRoomId = roomId
             self.joinedRoomName = roomName
             self.connectionStatus = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
             let users = Self.socketUsersValue(payload)
             self.updateRoomUsers(Self.socketUserDictionaries(users), fallbackRoomId: roomId)
+            let fallbackJoinedUser: [String: Any]
+            if let joinedUser {
+                fallbackJoinedUser = joinedUser
+            } else if let pendingSession = self.pendingSession {
+                fallbackJoinedUser = [
+                    "id": "local:\(pendingSession.displayName.lowercased())",
+                    "userId": "local:\(pendingSession.displayName.lowercased())",
+                    "name": pendingSession.displayName,
+                    "userName": pendingSession.displayName,
+                    "displayName": pendingSession.displayName,
+                    "transmitEnabled": !self.inputMuted,
+                    "muted": self.inputMuted,
+                    "deafened": self.outputMuted,
+                    "deviceName": UIDevice.current.name,
+                    "deviceType": "ios",
+                    "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+                ]
+            } else {
+                fallbackJoinedUser = [:]
+            }
+            if !fallbackJoinedUser.isEmpty {
+                self.mergeRoomUser(fallbackJoinedUser, fallbackRoomId: roomId)
+            }
             NotificationCenter.default.post(
                 name: .iosRoomJoined,
                 object: nil,
                 userInfo: [
                     "roomId": roomId,
                     "roomName": roomName,
-                    "users": users
+                    "users": users,
+                    "user": fallbackJoinedUser,
+                    "displayName": self.pendingSession?.displayName ?? "",
+                    "messages": seededMessages
                 ]
             )
-            if users.isEmpty, let joinedUser = Self.socketDictionaryValue(payload["user"]) {
-                self.updateRoomUsers([joinedUser], fallbackRoomId: roomId)
+            if users.isEmpty, !fallbackJoinedUser.isEmpty {
+                self.updateRoomUsers([fallbackJoinedUser], fallbackRoomId: roomId)
                 NotificationCenter.default.post(
                     name: .iosRoomUsersUpdated,
                     object: nil,
-                    userInfo: ["roomId": roomId, "users": [joinedUser]]
+                    userInfo: ["roomId": roomId, "users": [fallbackJoinedUser]]
                 )
             } else if !users.isEmpty {
                 NotificationCenter.default.post(
@@ -456,12 +484,49 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             self.relayPlayer.playPacket(payload)
         }
 
-        socket.on("user-joined") { [weak self] _, _ in
-            self?.requestRoomUsers()
+        socket.on("user-joined") { [weak self] data, _ in
+            guard let self else { return }
+            if let payload = self.socketDictionary(from: data) {
+                let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
+                self.mergeRoomUser(payload, fallbackRoomId: roomId)
+                NotificationCenter.default.post(
+                    name: .iosRoomUserJoined,
+                    object: nil,
+                    userInfo: [
+                        "roomId": roomId,
+                        "user": payload
+                    ]
+                )
+            }
+            self.requestRoomUsers()
         }
 
-        socket.on("user-left") { [weak self] _, _ in
-            self?.requestRoomUsers()
+        socket.on("user-left") { [weak self] data, _ in
+            guard let self else { return }
+            if let payload = self.socketDictionary(from: data) {
+                let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
+                let userId = normalizedSocketText(
+                    payload["userId"] ?? payload["id"] ?? payload["odId"],
+                    fallback: ""
+                )
+                let userName = normalizedSocketText(
+                    payload["userName"] ?? payload["name"] ?? payload["displayName"],
+                    fallback: "User"
+                )
+                if !userId.isEmpty {
+                    self.removeRoomUser(id: userId)
+                }
+                NotificationCenter.default.post(
+                    name: .iosRoomUserLeft,
+                    object: nil,
+                    userInfo: [
+                        "roomId": roomId,
+                        "userId": userId,
+                        "userName": userName
+                    ]
+                )
+            }
+            self.requestRoomUsers()
         }
     }
 
@@ -499,6 +564,58 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
     }
 
+    private func mergeRoomUser(_ user: [String: Any], fallbackRoomId: String) {
+        let mapped = mapRoomUser(user, index: roomUsers.count, fallbackRoomId: fallbackRoomId)
+        guard let mapped else { return }
+        if let existingIndex = roomUsers.firstIndex(where: { $0.id == mapped.id }) {
+            roomUsers[existingIndex] = mapped
+        } else {
+            roomUsers.append(mapped)
+        }
+        roomUsers.sort { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func removeRoomUser(id: String) {
+        let normalizedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        roomUsers.removeAll { $0.id == normalizedId }
+        userAudioLevels.removeValue(forKey: normalizedId)
+        userPlaybackGains.removeValue(forKey: normalizedId)
+        userPlaybackMuted.removeValue(forKey: normalizedId)
+    }
+
+    private func mapRoomUser(_ user: [String: Any], index: Int, fallbackRoomId: String) -> IOSDirectMessageTarget? {
+        let id = normalizedSocketText(user["id"] ?? user["userId"], fallback: "")
+        let rawName = normalizedSocketText(
+            user["name"] ?? user["userName"] ?? user["displayName"] ?? user["username"],
+            fallback: ""
+        )
+        let resolvedId = id.isEmpty
+            ? "\(fallbackRoomId)|\(rawName.isEmpty ? "user-\(index)" : rawName.lowercased())"
+            : id
+        let fallbackName = resolvedId.count > 8 ? "User \(resolvedId.prefix(8))" : "User \(resolvedId)"
+        let name = rawName.isEmpty ? fallbackName : rawName
+        return IOSDirectMessageTarget(
+            id: resolvedId,
+            name: name,
+            isMuted: (user["muted"] as? Bool) ?? (user["isMuted"] as? Bool) ?? false,
+            isDeafened: (user["deafened"] as? Bool) ?? (user["isDeafened"] as? Bool) ?? false,
+            isSpeaking: (user["speaking"] as? Bool) ?? (user["isSpeaking"] as? Bool) ?? false,
+            transmitEnabled: (user["transmitEnabled"] as? Bool) ?? true,
+            isBot: (user["isBot"] as? Bool) ?? false,
+            hasAudioControls: (user["hasAudioControls"] as? Bool) ?? ((user["isBot"] as? Bool) != true),
+            deviceName: normalizedSocketText(user["deviceName"], fallback: ""),
+            deviceType: normalizedSocketText(user["deviceType"], fallback: ""),
+            clientVersion: normalizedSocketText(user["clientVersion"], fallback: ""),
+            botType: normalizedSocketText(user["botType"], fallback: ""),
+            statusMessage: normalizedSocketText(user["statusMessage"], fallback: ""),
+            authProvider: normalizedSocketText(user["authProvider"], fallback: ""),
+            role: normalizedSocketText(user["role"], fallback: "")
+        )
+    }
+
     private func authorizedRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
@@ -529,7 +646,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                   let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return
             }
-            let users = Self.socketArrayDictionaryValue(payload["users"])
+            let users = Self.socketUserDictionaries(Self.socketUsersValue(payload))
             guard !users.isEmpty else { return }
             self.updateRoomUsers(users, fallbackRoomId: normalizedRoomId)
             NotificationCenter.default.post(
@@ -563,7 +680,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                   let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return
             }
-            let messages = Self.socketArrayDictionaryValue(payload["messages"])
+            let messages = Self.socketMessagesValue(payload)
             guard !messages.isEmpty else { return }
             for message in messages {
                 self.postRoomMessage(message, fallbackRoomId: normalizedRoomId)
@@ -695,23 +812,49 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     }
 
     private func startMicrophoneCaptureIfNeeded() {
-        microphoneCapture.start { [weak self] packet in
-            Task { @MainActor [weak self] in
-                guard let self,
-                      !self.joinedRoomId.isEmpty,
-                      !self.inputMuted,
-                      let socket = self.socket,
-                      socket.status == .connected else {
-                    return
-                }
-                socket.emit("audio-data", [
-                    "roomId": self.joinedRoomId,
-                    "audioData": packet.audioData.base64EncodedString(),
-                    "timestamp": Date().timeIntervalSince1970,
-                    "sampleRate": packet.sampleRate,
-                    "channels": packet.channels
-                ])
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+            guard await self.ensureMicrophonePermission() else {
+                self.audioRelayStatus = "Microphone access is required for room audio."
+                return
             }
+            self.microphoneCapture.start { [weak self] packet in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          !self.joinedRoomId.isEmpty,
+                          !self.inputMuted,
+                          let socket = self.socket,
+                          socket.status == .connected else {
+                        return
+                    }
+                    socket.emit("audio-data", [
+                        "roomId": self.joinedRoomId,
+                        "audioData": packet.audioData.base64EncodedString(),
+                        "timestamp": Date().timeIntervalSince1970,
+                        "sampleRate": packet.sampleRate,
+                        "channels": packet.channels
+                    ])
+                }
+            }
+        }
+    }
+
+    private func ensureMicrophonePermission() async -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        switch session.recordPermission {
+        case .granted:
+            return true
+        case .denied:
+            return false
+        case .undetermined:
+            return await withCheckedContinuation { continuation in
+                session.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        @unknown default:
+            return false
         }
     }
 

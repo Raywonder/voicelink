@@ -97,6 +97,10 @@ struct RoomSessionView: View {
         }
     }
 
+    private var isPresentingAuxiliarySheet: Bool {
+        showDetails || showControls || showPeople || showSettings || showDirectMessages
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -159,13 +163,15 @@ struct RoomSessionView: View {
             roomAudioDuckTask = nil
             stopRoomBackgroundPlayback()
             IOSAudioSessionManager.shared.deactivate(.room)
-            socketClient.leaveRoom(roomId: destination.roomId)
+            if !isPresentingAuxiliarySheet {
+                socketClient.leaveRoom(roomId: destination.roomId)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { notification in
             let joinedRoomId = (notification.userInfo?["roomId"] as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard joinedRoomId == destination.roomId else { return }
-            startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
+            startRoomBackgroundPlaybackIfNeeded()
             socketClient.requestRoomUsers()
             socketClient.requestRoomMessages()
             Task { await socketClient.refreshRoomSnapshotViaHTTP() }
@@ -334,6 +340,15 @@ struct RoomSessionView: View {
             }
             .accessibilityLabel("App Settings")
             .accessibilityHint("Open full settings without leaving the room.")
+
+            Button {
+                showAudioControls.toggle()
+                IOSActionSoundPlayer.playToggle()
+            } label: {
+                Image(systemName: showAudioControls ? "speaker.wave.2.fill" : "speaker.slash.fill")
+            }
+            .accessibilityLabel(showAudioControls ? "Hide Room Audio Controls" : "Show Room Audio Controls")
+            .accessibilityHint("Toggle the main room audio controls section.")
 
             Menu {
                 Button(showChat ? "Hide Chat" : "Show Chat") {
@@ -554,66 +569,83 @@ struct RoomSessionView: View {
 
     private func roomUserRow(for target: IOSDirectMessageTarget, includeRoleBadges: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button {
-                openProfile(for: target)
-            } label: {
-                HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: iosUserAudioIconName(target))
-                        .foregroundStyle(target.isSpeaking ? .green : .secondary)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(target.name)
-                            .font(.body)
-                        if showPeopleAudioState {
-                            Text(roomAudioStatusLabel(for: target))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            userAudioLevelMeter(for: target)
+            HStack(alignment: .top, spacing: 12) {
+                Button {
+                    openProfile(for: target)
+                } label: {
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: iosUserAudioIconName(target))
+                            .foregroundStyle(target.isSpeaking ? .green : .secondary)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(target.name)
+                                .font(.body)
+                            if let botStatus = roomUserBotStatusLabel(for: target) {
+                                Text(botStatus)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if showPeopleAudioState {
+                                Text(roomAudioStatusLabel(for: target))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if canShowPerUserAudioControls(for: target) {
+                                    userAudioLevelMeter(for: target)
+                                }
+                            }
+                            if let statusMessage = roomUserStatusMessage(for: target) {
+                                Text(statusMessage)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let deviceSummary = iosUserDeviceSummary(target) {
+                                Text(deviceSummary)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
-                        if let deviceSummary = iosUserDeviceSummary(target) {
-                            Text(deviceSummary)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    Spacer()
-                    if includeRoleBadges {
-                        if whisperTarget?.id == target.id {
-                            Text("Whisper")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.orange)
-                                .accessibilityHidden(true)
-                        } else if monitorTarget?.id == target.id {
-                            Text("Monitor")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.blue)
-                                .accessibilityHidden(true)
+                        Spacer()
+                        if includeRoleBadges {
+                            if whisperTarget?.id == target.id {
+                                Text("Whisper")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                    .accessibilityHidden(true)
+                            } else if monitorTarget?.id == target.id {
+                                Text("Monitor")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.blue)
+                                    .accessibilityHidden(true)
+                            }
                         }
                     }
                 }
-            }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(roomUserAccessibilityLabel(for: target))
-            .accessibilityValue(roomUserAccessibilityValue(for: target))
-            .accessibilityHint("Double tap to open this user's profile. Use actions for direct messages, monitoring, whisper, and audio controls.")
-            .accessibilityAction(named: Text("Direct Message")) {
-                openDirectMessages(with: target)
-            }
-            .accessibilityAction(named: Text(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring")) {
-                toggleMonitorTarget(target)
-            }
-            .accessibilityAction(named: Text(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")) {
-                toggleWhisperTarget(target)
-            }
-            .accessibilityAction(named: Text(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls")) {
-                if canShowPerUserAudioControls(for: target) {
-                    toggleUserAudioControls(for: target)
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(roomUserAccessibilityLabel(for: target))
+                .accessibilityValue(roomUserAccessibilityValue(for: target))
+                .accessibilityHint(roomUserAccessibilityHint(for: target))
+                .accessibilityAction(named: Text("Direct Message")) {
+                    openDirectMessages(with: target)
                 }
-            }
+                .accessibilityActions {
+                    if canShowPerUserAudioControls(for: target) {
+                        Button(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring") {
+                            toggleMonitorTarget(target)
+                        }
+                        Button(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper") {
+                            toggleWhisperTarget(target)
+                        }
+                        Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
+                            toggleUserAudioControls(for: target)
+                        }
+                    }
+                }
 
-            if isShowingUserAudioControls(for: target) {
-                userAudioControlsView(for: target)
+                if isShowingUserAudioControls(for: target) {
+                    userAudioControlsView(for: target)
+                        .frame(maxWidth: 190)
+                }
             }
         }
         .contextMenu {
@@ -623,13 +655,13 @@ struct RoomSessionView: View {
             Button("Direct Message \(target.name)") {
                 openDirectMessages(with: target)
             }
-            Button(whisperTarget?.id == target.id ? "Stop Whisper Target" : "Whisper to \(target.name)") {
-                toggleWhisperTarget(target)
-            }
-            Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
-                toggleMonitorTarget(target)
-            }
             if canShowPerUserAudioControls(for: target) {
+                Button(whisperTarget?.id == target.id ? "Stop Whisper Target" : "Whisper to \(target.name)") {
+                    toggleWhisperTarget(target)
+                }
+                Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
+                    toggleMonitorTarget(target)
+                }
                 Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
                     toggleUserAudioControls(for: target)
                 }
@@ -766,7 +798,39 @@ struct RoomSessionView: View {
     }
 
     private func canShowPerUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
-        target.hasAudioControls
+        if target.isBot {
+            return target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "audio"
+                && target.hasAudioControls
+        }
+        return target.hasAudioControls
+    }
+
+    private func roomUserBotStatusLabel(for target: IOSDirectMessageTarget) -> String? {
+        guard target.isBot else { return nil }
+        switch target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "audio":
+            return "Audio bot"
+        case "system":
+            return "System bot"
+        default:
+            return "Text bot"
+        }
+    }
+
+    private func roomUserStatusMessage(for target: IOSDirectMessageTarget) -> String? {
+        let message = target.statusMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !message.isEmpty {
+            return message
+        }
+        guard target.isBot else { return nil }
+        switch target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "audio":
+            return "This bot supports audio controls."
+        case "system":
+            return "System updates only."
+        default:
+            return "Text interaction only."
+        }
     }
 
     private func isShowingUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
@@ -814,7 +878,7 @@ struct RoomSessionView: View {
                 volumeBinding.wrappedValue = nextValue
             }
         }
-        .padding(.leading, 36)
+        .padding(.leading, 8)
     }
 
     private func startRoomBackgroundPlaybackIfNeeded(forceRestart: Bool = false) {
@@ -831,7 +895,10 @@ struct RoomSessionView: View {
             return
         }
         roomBackgroundPlayer?.pause()
-        let player = AVPlayer(url: url)
+        let item = AVPlayerItem(url: url)
+        item.preferredForwardBufferDuration = 1
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = true
         roomBackgroundPlayer = player
         updateRoomBackgroundPlaybackVolume()
         if !mediaMuted {
@@ -901,6 +968,9 @@ struct RoomSessionView: View {
     }
 
     private func roomAudioStatusLabel(for target: IOSDirectMessageTarget) -> String {
+        if target.isBot && !target.hasAudioControls {
+            return "Text interaction only"
+        }
         var labels: [String] = []
         if target.isSpeaking {
             labels.append("Speaking")
@@ -915,7 +985,14 @@ struct RoomSessionView: View {
     }
 
     private func roomUserAccessibilityLabel(for target: IOSDirectMessageTarget) -> String {
-        var parts = [target.name, roomAudioStatusLabel(for: target)]
+        var parts = [target.name]
+        if let botStatus = roomUserBotStatusLabel(for: target) {
+            parts.append(botStatus)
+        }
+        parts.append(roomAudioStatusLabel(for: target))
+        if let statusMessage = roomUserStatusMessage(for: target) {
+            parts.append(statusMessage)
+        }
         if let deviceSummary = iosUserDeviceSummary(target) {
             parts.append(deviceSummary)
         }
@@ -930,6 +1007,13 @@ struct RoomSessionView: View {
             return "Monitor target"
         }
         return ""
+    }
+
+    private func roomUserAccessibilityHint(for target: IOSDirectMessageTarget) -> String {
+        if canShowPerUserAudioControls(for: target) {
+            return "Double tap to open this user's profile. Use actions for direct messages, monitoring, whisper, and audio controls."
+        }
+        return "Double tap to open this user's profile. Use actions for direct messages and other available interactions."
     }
 
     private func adjustGainValue(_ value: inout Double, direction: AccessibilityAdjustmentDirection) {
@@ -1046,6 +1130,8 @@ extension Notification.Name {
     static let iosRoomJoined = Notification.Name("iosRoomJoined")
     static let iosRoomLeft = Notification.Name("iosRoomLeft")
     static let iosRoomUsersUpdated = Notification.Name("iosRoomUsersUpdated")
+    static let iosRoomUserJoined = Notification.Name("iosRoomUserJoined")
+    static let iosRoomUserLeft = Notification.Name("iosRoomUserLeft")
     static let iosRoomMessageEvent = Notification.Name("iosRoomMessageEvent")
     static let iosDirectMessageEvent = Notification.Name("iosDirectMessageEvent")
     static let iosRoomTranscriptEvent = Notification.Name("iosRoomTranscriptEvent")
