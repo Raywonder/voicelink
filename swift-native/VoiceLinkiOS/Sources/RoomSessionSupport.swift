@@ -198,6 +198,7 @@ struct RoomSessionView: View {
         }
     }
 
+    @ViewBuilder
     private var peopleSection: some View {
         Section("People in Room") {
             if visibleHumanRoomUsers.isEmpty {
