@@ -20715,6 +20715,7 @@ class VoiceLinkLocalServer {
                     description: room.description || '',
                     welcomeMessage: room.welcomeMessage || null,
                     users: this.normalizeRoomUsers(roomId).map(u => this.serializeRoomUser(u, roomId)).filter(Boolean),
+                    messages: this.getRoomMessages(roomId, 100),
                     userCount: this.getHumanRoomUsers(roomId).length,
                     maxUsers: room.maxUsers || 50,
                     locked: room.locked || false,
@@ -20730,6 +20731,10 @@ class VoiceLinkLocalServer {
                 };
 
                 socket.emit('joined-room', { room: roomState, user });
+                socket.emit('room-messages', {
+                    roomId,
+                    messages: this.getRoomMessages(roomId, 100)
+                });
                 socket.to(roomId).emit('user-joined', user);
                 this.emitRoomSystemMessage(
                     roomId,

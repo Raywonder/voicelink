@@ -331,7 +331,7 @@ final class IOSRoomMessagingState: ObservableObject {
         let rawUsers = iosUsersArray(from: info)
         guard !rawUsers.isEmpty || !directTargets.isEmpty else { return }
         let mapped = rawUsers.enumerated().compactMap { index, entry -> IOSDirectMessageTarget? in
-            let user = (entry as? [String: Any]) ?? ((entry as? NSDictionary) as? [String: Any]) ?? [:]
+            let user = iosUserDictionary(from: entry) ?? [:]
             guard !user.isEmpty else { return nil }
             let id = normalizedIOSSocketValue(user["id"] ?? user["userId"], fallback: "")
             let rawName = normalizedIOSSocketValue(
@@ -422,8 +422,14 @@ final class IOSRoomMessagingState: ObservableObject {
         let roomId = normalizedIOSSocketValue(info["roomId"], fallback: activeRoomId)
         let roomName = normalizedIOSSocketValue(info["roomName"], fallback: activeRoomName)
         let senderId = normalizedIOSSocketValue(info["userId"], fallback: "")
-        let author = normalizedIOSSocketValue(info["author"], fallback: "User")
-        let body = normalizedIOSSocketValue(info["body"], fallback: "")
+        let author = normalizedIOSSocketValue(
+            info["author"] ?? info["userName"] ?? info["senderName"] ?? info["botName"] ?? info["name"],
+            fallback: "User"
+        )
+        let body = normalizedIOSSocketValue(
+            info["body"] ?? info["message"] ?? info["content"] ?? info["text"],
+            fallback: ""
+        )
         let incomingType = normalizedIOSSocketValue(info["type"], fallback: "")
         let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
         let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
