@@ -22,6 +22,10 @@ struct VoiceLinkApp: App {
     @StateObject private var licensing = LicensingManager.shared
     @State private var showUpdaterSheet = false
 
+    init() {
+        NSMenuItem.vl_installMainMenuImagePolicy()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

@@ -1,6 +1,7 @@
-VoiceLink – TestFlight Build 65
+VoiceLink – TestFlight Build 66
 
 What to test:
+- The app should open cleanly without crashing after the startup sound.
 - People in Room should keep showing the joined room users instead of dropping back to the empty state.
 - Room chat should now show welcome messages, system messages, and bot messages for the active room.
 - Same-name rooms should still group correctly while the chosen room copy stays tied to its own server.

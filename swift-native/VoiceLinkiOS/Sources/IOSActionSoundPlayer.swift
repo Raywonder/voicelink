@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 
+@MainActor
 enum IOSActionSoundPlayer {
     private static var activePlayers: [AVAudioPlayer] = []
     private static var didPlayStartupIntro = false
@@ -123,10 +124,11 @@ enum IOSActionSoundPlayer {
 
     private static func activateActionSoundSessionIfNeeded() throws {
         let session = AVAudioSession.sharedInstance()
-        if session.category != .playAndRecord,
-           session.category != .playback,
-           session.category != .ambient {
-            try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        let category = session.category
+        if category != .playAndRecord,
+           category != .playback,
+           category != .ambient {
+            try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers, .duckOthers])
         }
         try session.setActive(true, options: [])
     }
@@ -170,10 +172,14 @@ private final class AudioPlayerCleanupDelegate: NSObject, AVAudioPlayerDelegate 
     static let shared = AudioPlayerCleanupDelegate()
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        IOSActionSoundPlayer.cleanupPlayer(player)
+        Task { @MainActor in
+            IOSActionSoundPlayer.cleanupPlayer(player)
+        }
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        IOSActionSoundPlayer.cleanupPlayer(player)
+        Task { @MainActor in
+            IOSActionSoundPlayer.cleanupPlayer(player)
+        }
     }
 }

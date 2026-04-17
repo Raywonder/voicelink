@@ -35,7 +35,10 @@ struct ContentView: View {
             MessagesTab(serverURL: $serverURL, roomState: roomState, openServers: { selectedTab = .servers })
         }
         .onAppear {
-            IOSActionSoundPlayer.playStartupIntroIfNeeded()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                IOSActionSoundPlayer.playStartupIntroIfNeeded()
+            }
         }
     }
 }
