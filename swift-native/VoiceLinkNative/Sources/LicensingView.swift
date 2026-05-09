@@ -1,9 +1,19 @@
 import SwiftUI
+import AppKit
+
+private func licensingCountdownText(_ totalSeconds: Int) -> String {
+    let seconds = max(totalSeconds, 0)
+    let minutesPart = seconds / 60
+    let secondsPart = seconds % 60
+    return String(format: "%02d:%02d", minutesPart, secondsPart)
+}
 
 /// Licensing status view for VoiceLink
 /// Shows license status, device activations, and management options
 struct LicensingView: View {
+    @EnvironmentObject var appState: AppState
     @ObservedObject var licensing = LicensingManager.shared
+    @ObservedObject private var authManager = AuthenticationManager.shared
     @State private var showDeviceManagement = false
     @State private var selectedDeviceToDeactivate: LicensingManager.ActivatedDevice?
 
@@ -63,6 +73,18 @@ struct LicensingView: View {
         }
     }
 
+    private var clientPortalCreateURL: URL? {
+        URL(string: "https://devine-creations.com/register.php")
+    }
+
+    private var clientPortalLoginURL: URL? {
+        URL(string: "https://devine-creations.com/clientarea.php")
+    }
+
+    private var hasAuthenticatedAccount: Bool {
+        authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
     @ViewBuilder
     private var statusView: some View {
         switch licensing.licenseStatus {
@@ -74,9 +96,17 @@ struct LicensingView: View {
                 Text("Not Registered")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                Text("Register to get a license key")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if hasAuthenticatedAccount {
+                    Text("Finish the first server setup, then register this server with the main VoiceLink API to get its license key.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Set up this server, then create or link a VoiceLink or Client Portal account so VoiceLink can register the server and fetch its license key.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
 
         case .pending:
@@ -91,9 +121,9 @@ struct LicensingView: View {
                         .rotationEffect(.degrees(-90))
                         .animation(.easeInOut, value: licensing.registrationProgress)
                     VStack {
-                        Text("\(licensing.remainingMinutes)")
+                        Text(licensingCountdownText(licensing.remainingSeconds))
                             .font(.title.bold())
-                        Text("min")
+                        Text("remaining")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -105,6 +135,16 @@ struct LicensingView: View {
                 Text("License will be issued soon")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if licensing.retryAttempts > 0 {
+                    Text("Retry attempts: \(licensing.retryAttempts)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                if let ticket = licensing.supportTicketNumber ?? licensing.supportTicketId {
+                    Text("Support ticket: \(ticket)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
         case .licensed:
@@ -219,18 +259,67 @@ struct LicensingView: View {
     private var actionsView: some View {
         switch licensing.licenseStatus {
         case .notRegistered, .unknown:
-            Button(action: {
-                Task {
-                    // Auto-generate IDs if not set
-                    let serverId = "server_\(UUID().uuidString.prefix(8))"
-                    let nodeId = "node_\(UUID().uuidString.prefix(8))"
-                    await licensing.registerNode(serverId: serverId, nodeId: nodeId)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("First-time setup")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Configure this VoiceLink server from the client first.", systemImage: "server.rack")
+                    Label("Create or link the owner account you want tied to the app, server, and client portal.", systemImage: "person.badge.key")
+                    Label("VoiceLink then registers this server with the main API and requests the license key.", systemImage: "key.fill")
+                    Label("New servers can start on the free tier with limits, then unlock extended or full features through the linked payment flow.", systemImage: "creditcard")
                 }
-            }) {
-                Label("Register for License", systemImage: "key.fill")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+                HStack {
+                    Button("Configure This Server") {
+                        appState.currentScreen = .admin
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Deploy or Set Up New Server") {
+                        NotificationCenter.default.post(name: .openDeploymentManager, object: nil)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(hasAuthenticatedAccount ? "Register This Server" : "Sign In to Continue") {
+                        if hasAuthenticatedAccount {
+                            Task {
+                                let serverId = "server_\(UUID().uuidString.prefix(8))"
+                                let nodeId = "node_\(UUID().uuidString.prefix(8))"
+                                await licensing.registerNode(serverId: serverId, nodeId: nodeId)
+                            }
+                        } else {
+                            appState.currentScreen = .login
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(licensing.isChecking)
+                }
+
+                if !hasAuthenticatedAccount {
+                    HStack {
+                        Button("Create VoiceLink Account") {
+                            appState.currentScreen = .login
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Create Client Portal Account") {
+                            guard let url = clientPortalCreateURL else { return }
+                            NSWorkspace.shared.open(url)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open Client Portal") {
+                            guard let url = clientPortalLoginURL else { return }
+                            NSWorkspace.shared.open(url)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(licensing.isChecking)
 
         case .pending:
             Button(action: {
@@ -274,7 +363,7 @@ struct LicensingView: View {
 
                 Button(action: {
                     // Open purchase URL
-                    if let url = URL(string: "https://voicelink.devinecreations.net/purchase") {
+                    if let url = URL(string: "https://voicelinkapp.app/purchase") {
                         NSWorkspace.shared.open(url)
                     }
                 }) {

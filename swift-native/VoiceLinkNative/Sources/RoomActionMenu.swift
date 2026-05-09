@@ -124,6 +124,7 @@ struct RoomActionMenu: View {
     @State private var pendingBackgroundMediaStream: BackgroundStreamConfig?
     @State private var showBackgroundMediaScopeDialog = false
     @State private var showBackgroundMediaRoomPicker = false
+    @State private var showAccountSignInSheet = false
     @State private var pendingBackgroundMediaApplyLabel = "Apply to Selected Rooms"
     @State private var pendingBackgroundMediaSelectionTitle = "Choose Rooms"
     @State private var preselectedBackgroundMediaRoomIDs: Set<String> = []
@@ -166,6 +167,12 @@ struct RoomActionMenu: View {
 
     private var isAuthenticatedUser: Bool {
         authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
+    private var activeRoomServerURL: String {
+        let configured = (serverManager.baseURL ?? serverManager.connectedServer)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return configured.isEmpty ? ServerManager.mainServer : normalizedServerURL(configured)
     }
 
     private var roomJoinStatusText: String {
@@ -349,6 +356,15 @@ struct RoomActionMenu: View {
                         isPresented = false
                     }
                     .buttonStyle(.borderedProminent)
+
+                    if isInRoom && !isAuthenticatedUser {
+                        Button("Sign In") {
+                            showAccountSignInSheet = true
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Sign in to this room server")
+                        .accessibilityHint("Opens sign-in for the server that hosts the current room.")
+                    }
                 }
 
                 if isInRoom {
@@ -604,10 +620,35 @@ struct RoomActionMenu: View {
                 applyBackgroundMediaSelection(pendingBackgroundMediaStream, roomIDs: Array(selectedRoomIDs))
             }
         }
+        .sheet(isPresented: $showAccountSignInSheet) {
+            AccountPasswordAuthView(
+                isPresented: $showAccountSignInSheet,
+                serverURL: activeRoomServerURL,
+                initialProvider: .local
+            ) {
+                handleAccountSignInSuccess()
+            }
+        }
+    }
+
+    private func handleAccountSignInSuccess() {
+        refreshAdminCapabilities()
+
+        let user = authManager.currentUser
+        let username = user?.username.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = user?.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawMention = username.isEmpty ? (displayName.isEmpty ? "you" : displayName) : username
+        let mention = rawMention == "you" || rawMention.hasPrefix("@") ? rawMention : "@\(rawMention)"
+        let message = "\(mention) signed in to this server."
+
+        MessagingManager.shared.sendSystemMessage(message)
+        AccessibilityManager.shared.announceStatus("Signed in to \(room.name).")
+        isPresented = false
     }
 
     private func refreshAdminCapabilities() {
-        guard let serverURL = serverManager.baseURL, !serverURL.isEmpty else { return }
+        let configuredServerURL = (serverManager.baseURL ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let serverURL = configuredServerURL.isEmpty ? ServerManager.mainServer : configuredServerURL
         let token = authManager.currentUser?.accessToken
         Task {
             await adminManager.checkAdminStatus(serverURL: serverURL, token: token)
@@ -746,11 +787,35 @@ struct RoomActionMenu: View {
         if canManageBackgroundMedia, assignedBackgroundStream != nil {
             roomMediaActionStatus = "Stopping room background media..."
             applyBackgroundMediaSelection(nil, roomIDs: [room.id])
+        }
+
+        stopActiveRoomStreamOnServer()
+        serverManager.stopCurrentRoomMedia()
+        refreshRoomMediaStatus()
+    }
+
+    private func stopActiveRoomStreamOnServer() {
+        let trimmedServerURL = (serverManager.baseURL ?? ServerManager.mainServer)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        guard !trimmedServerURL.isEmpty,
+              let url = URL(string: "\(normalizedServerURL(trimmedServerURL))/api/jellyfin/stop-stream") else {
             return
         }
 
-        serverManager.stopCurrentRoomMedia()
-        refreshRoomMediaStatus()
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authManager.currentUser?.accessToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["roomId": room.id])
+
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.async {
+                self.serverManager.refreshRoomMedia(for: self.room.id)
+                self.refreshRoomMediaStatus()
+            }
+        }.resume()
     }
 
     private func togglePeek() {
@@ -841,7 +906,7 @@ struct RoomActionMenu: View {
             let seconds = max(0, Int(Date().timeIntervalSince(createdAt)))
             return formatDuration(seconds: seconds)
         }
-        return "Not reported yet"
+        return room.userCount > 0 ? "Active now" : "Standing by"
     }
 
     private var roomLastActivityLabel: String {

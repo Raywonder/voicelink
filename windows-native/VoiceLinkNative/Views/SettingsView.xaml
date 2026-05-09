@@ -75,24 +75,62 @@
                 </StackPanel>
             </Border>
 
-            <!-- Notifications -->
+            <!-- Accessibility -->
             <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                 <StackPanel>
-                    <TextBlock Text="Notifications" FontSize="18" FontWeight="SemiBold"
+                    <TextBlock Text="Accessibility" FontSize="18" FontWeight="SemiBold"
                                Foreground="{StaticResource TextBrush}" Margin="0,0,0,16"
                                AutomationProperties.HeadingLevel="Level2"/>
 
-                    <CheckBox Content="Notify when user joins" IsChecked="{Binding NotifyUserJoin}"
-                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
-                              AutomationProperties.Name="Show notification when user joins room"/>
+                    <TextBlock Text="Verbosity" FontSize="15" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"/>
+                    <TextBlock Text="Control what VoiceLink announces automatically for screen readers and speech-related feedback."
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,12"
+                               TextWrapping="Wrap"/>
 
-                    <CheckBox Content="Notify when user leaves" IsChecked="{Binding NotifyUserLeave}"
+                    <CheckBox Content="Enable screen reader announcements" IsChecked="{Binding ScreenReaderAnnouncements}"
                               Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
-                              AutomationProperties.Name="Show notification when user leaves room"/>
+                              AutomationProperties.Name="Enable screen reader announcements"/>
 
-                    <CheckBox Content="Play UI Sounds" IsChecked="{Binding PlaySounds}"
-                              Foreground="{StaticResource TextBrush}"
-                              AutomationProperties.Name="Play sound effects for UI events"/>
+                    <CheckBox Content="Announce when the main window is ready" IsChecked="{Binding AnnounceWindowReady}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Announce when the main VoiceLink window is ready"/>
+
+                    <CheckBox Content="Announce when users join" IsChecked="{Binding AnnounceUserJoin}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Announce when users join a room"/>
+
+                    <CheckBox Content="Announce when users leave" IsChecked="{Binding AnnounceUserLeave}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Announce when users leave a room"/>
+
+                    <CheckBox Content="Announce room changes" IsChecked="{Binding AnnounceRoomChanges}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Announce room changes"/>
+
+                    <CheckBox Content="Announce status changes" IsChecked="{Binding AnnounceStatusChanges}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"
+                              AutomationProperties.Name="Announce connection and status changes"/>
+
+                    <CheckBox Content="Play UI sounds" IsChecked="{Binding PlaySounds}"
+                              Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"
+                              AutomationProperties.Name="Play sound effects for user interface events"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="Speech Rate"
+                                   Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1">
+                            <Slider Minimum="0" Maximum="100" Value="{Binding SpeechRate}"
+                                    AutomationProperties.Name="Speech rate"/>
+                            <TextBlock Text="{Binding SpeechRate, StringFormat=Rate: {0:F0}}"
+                                       Foreground="{StaticResource SecondaryTextBrush}" Margin="0,6,0,0"/>
+                        </StackPanel>
+                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -180,7 +218,7 @@
             </Border>
 
             <!-- Version Info -->
-            <TextBlock Text="VoiceLink Native for Windows v1.0.0" FontSize="12"
+            <TextBlock Text="VoiceLink for Windows v1.0.0" FontSize="12"
                        Foreground="{StaticResource SecondaryTextBrush}" Margin="0,24,0,0"
                        HorizontalAlignment="Center"/>
             <TextBlock Text="Devine Creations" FontSize="11"

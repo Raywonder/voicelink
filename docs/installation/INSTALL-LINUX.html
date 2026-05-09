@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - Linux Installation Guide - VoiceLink Documentation</title>
+    <title>VoiceLink - Linux Installation Guide - VoiceLink Documentation</title>
     <link rel="stylesheet" href="../styles/docs.css">
     <style>
         :root {
@@ -168,12 +168,12 @@
 </head>
 <body>
     <div class="docs-header">
-        <h1>VoiceLink Local - Linux Installation Guide</h1>
-        <div class="breadcrumb"><a href="../index.html">Docs</a> / installation / VoiceLink Local - Linux Installation Guide</div>
+        <h1>VoiceLink - Linux Installation Guide</h1>
+        <div class="breadcrumb"><a href="../index.html">Docs</a> / installation / VoiceLink - Linux Installation Guide</div>
     </div>
     <div class="container">
         <div class="card">
-            <h1>VoiceLink Local - Linux Installation Guide</h1>
+            <h1>VoiceLink - Linux Installation Guide</h1>
 
 <h2>System Requirements</h2>
 
@@ -190,7 +190,7 @@
 
 <h3>AppImage (Universal - Recommended)</h3>
 <ol>
-<li><strong>AppImage</strong>: <a href="../releases/VoiceLink%20Local-1.0.0.AppImage">VoiceLink Local-1.0.0.AppImage</a> (351MB)</li>
+<li><strong>AppImage</strong>: <a href="../releases/VoiceLink%20Local-1.0.0.AppImage">VoiceLink-1.0.0.AppImage</a> (351MB)</li>
 <li>Works on any Linux distribution with glibc 2.27+</li>
 <p></ol></p>
 
@@ -230,7 +230,7 @@ sudo mv VoiceLink\ Local-1.0.0.AppImage /opt/voicelink-local.appimage
 cat &gt; ~/.local/share/applications/voicelink-local.desktop &lt;&lt; EOF
 [Desktop Entry]
 Type=Application
-Name=VoiceLink Local
+Name=VoiceLink
 Comment=P2P Voice Chat with 3D Audio
 Exec=/opt/voicelink-local.appimage
 Icon=voicelink-local
@@ -281,7 +281,7 @@ StartupNotify=true
 
 <h3>PulseAudio (Default for most distributions)</h3>
 
-<p>VoiceLink Local works with PulseAudio out of the box:</p>
+<p>VoiceLink works with PulseAudio out of the box:</p>
 
 <pre><code class="language-bash"># Check PulseAudio is running
 pulseaudio --check
@@ -317,7 +317,7 @@ pactl set-default-source alsa_input.pci-0000_00_1f.3.analog-stereo
 <p>   jackd -d alsa -r 48000 -p 128 -n 2</code></pre></p>
 
 <ul>
-<li><strong>Launch</strong> VoiceLink Local after JACK is running</li>
+<li><strong>Launch</strong> VoiceLink after JACK is running</li>
 <p></ul></p>
 
 <h3>ALSA (Low-level configuration)</h3>
@@ -352,9 +352,9 @@ pactl list short sources
 
 <h3>Firewall Configuration</h3>
 
-<p>Allow VoiceLink Local through firewall:</p>
+<p>Allow VoiceLink through firewall:</p>
 <pre><code class="language-bash"># UFW (Ubuntu)
-sudo ufw allow &#039;VoiceLink Local&#039;
+sudo ufw allow &#039;VoiceLink&#039;
 
 <h1>FirewallD (Fedora/CentOS)</h1>
 sudo firewall-cmd --permanent --add-port=3000-65535/tcp
@@ -369,7 +369,7 @@ sudo iptables -A INPUT -p tcp --dport 3000:65535 -j ACCEPT
 
 <h3>GNOME</h3>
 
-<p>VoiceLink Local integrates with GNOME's audio controls and notifications.</p>
+<p>VoiceLink integrates with GNOME's audio controls and notifications.</p>
 
 <h3>KDE Plasma</h3>
 

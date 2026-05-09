@@ -6,25 +6,4 @@
   <category>communications</category>
   <type>php</type>
   <description>VoiceLink browser UI and server bridge installer.</description>
-
-  <input>
-    <field name="admin_email" type="text" required="true" label="Admin Email" />
-    <field name="license_key" type="text" required="true" label="WHMCS License Key" />
-    <field name="whmcs_api_url" type="text" required="true" label="WHMCS API / License Endpoint" />
-    <field name="install_mode" type="select" required="true" label="Install Mode">
-      <option value="root">Root</option>
-      <option value="subdirectory">Subdirectory</option>
-      <option value="subdomain">Subdomain</option>
-    </field>
-  </input>
-
-  <files>
-    <archive>files/voicelink-web.tar.gz</archive>
-  </files>
-
-  <hooks>
-    <post_install>hooks/post_install.php</post_install>
-    <post_upgrade>hooks/post_upgrade.php</post_upgrade>
-    <post_clone>hooks/post_clone.php</post_clone>
-  </hooks>
 </application>

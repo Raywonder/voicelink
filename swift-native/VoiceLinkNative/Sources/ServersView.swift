@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Servers Tab View
 struct ServersView: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var appState: AppState
     @StateObject private var pairingManager = PairingManager.shared
     @State private var selectedTab = 0
     @State private var showPairingSheet = false
@@ -43,14 +44,17 @@ struct ServersView: View {
 
             // Tab Selector
             HStack(spacing: 0) {
-                TabButton(title: "Linked", count: pairingManager.linkedServers.count, isSelected: selectedTab == 0) {
+                TabButton(title: "Server List", isSelected: selectedTab == 0) {
                     selectedTab = 0
                 }
-                TabButton(title: "Owned", count: pairingManager.ownedServers.count, isSelected: selectedTab == 1) {
+                TabButton(title: "Linked", count: pairingManager.linkedServers.count, isSelected: selectedTab == 1) {
                     selectedTab = 1
                 }
-                TabButton(title: "Discover", isSelected: selectedTab == 2) {
+                TabButton(title: "Owned", count: pairingManager.ownedServers.count, isSelected: selectedTab == 2) {
                     selectedTab = 2
+                }
+                TabButton(title: "Discover", isSelected: selectedTab == 3) {
+                    selectedTab = 3
                 }
             }
             .padding(.horizontal)
@@ -63,18 +67,24 @@ struct ServersView: View {
             ScrollView {
                 switch selectedTab {
                 case 0:
-                    LinkedServersView(showPairingSheet: $showPairingSheet)
+                    FederationServersView()
+                        .environmentObject(appState)
                 case 1:
+                    LinkedServersView(showPairingSheet: $showPairingSheet)
+                case 2:
                     OwnedServersView(
                         showTransferSheet: $showTransferSheet,
                         selectedServer: $selectedServerForTransfer
                     )
-                case 2:
+                case 3:
                     DiscoverServersView()
                 default:
                     EmptyView()
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openFederationBrowser)) { _ in
+            selectedTab = 0
         }
         .sheet(isPresented: $showPairingSheet) {
             PairingSheetView()
@@ -84,6 +94,369 @@ struct ServersView: View {
                 TransferServerSheet(server: server)
             }
         }
+    }
+}
+
+struct FederationServersView: View {
+    @EnvironmentObject private var appState: AppState
+    @ObservedObject private var serverManager = ServerManager.shared
+    @ObservedObject private var pairingManager = PairingManager.shared
+    @ObservedObject private var settingsManager = SettingsManager.shared
+    @State private var trustedServers: [String] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    enum SourceKind: String {
+        case current = "Current"
+        case managed = "Managed"
+        case linked = "Linked"
+        case trusted = "Trusted"
+    }
+
+    struct Entry: Identifiable {
+        let id: String
+        let url: String
+        let name: String
+        let description: String
+        let source: SourceKind
+    }
+
+    private var entries: [Entry] {
+        var ordered: [Entry] = []
+        var seen = Set<String>()
+
+        func insert(url rawURL: String, name: String, description: String, source: SourceKind) {
+            let normalized = normalizeServerURL(rawURL)
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return }
+            seen.insert(normalized)
+            ordered.append(
+                Entry(
+                    id: normalized,
+                    url: normalized,
+                    name: name,
+                    description: description,
+                    source: source
+                )
+            )
+        }
+
+        if let current = serverManager.baseURL {
+            insert(
+                url: current,
+                name: "Connected Server",
+                description: "The server your desktop app is currently using for rooms and chat.",
+                source: .current
+            )
+        }
+
+        for managed in settingsManager.visibleManagedFederationServers {
+            insert(url: managed.url, name: managed.name, description: managed.description, source: .managed)
+        }
+
+        for linked in pairingManager.linkedServers {
+            insert(
+                url: linked.url,
+                name: linked.name,
+                description: linked.isOnline ? "Linked server available for room browsing." : "Linked server saved in your account.",
+                source: .linked
+            )
+        }
+
+        for trusted in trustedServers {
+            insert(
+                url: trusted,
+                name: trustedHostLabel(trusted),
+                description: "Trusted federated peer discovered from the connected server.",
+                source: .trusted
+            )
+        }
+
+        return ordered
+    }
+
+    var body: some View {
+        VStack(spacing: 15) {
+            HStack {
+                Text("Server List")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                Button(action: {
+                    Task { await refreshTrustedServers() }
+                }) {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading)
+            }
+            .padding(.horizontal)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Default Servers")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+
+                Text("Official and domain-linked servers can be shown, hidden, and reordered, but they stay available for desktop updates and fallback management.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                ForEach(Array(settingsManager.managedFederationServers.enumerated()), id: \.element.id) { index, server in
+                    ManagedServerPreferenceRow(
+                        server: server,
+                        index: index,
+                        totalCount: settingsManager.managedFederationServers.count,
+                        onMoveUp: {
+                            settingsManager.moveManagedFederationServer(server, offset: -1)
+                        },
+                        onMoveDown: {
+                            settingsManager.moveManagedFederationServer(server, offset: 1)
+                        },
+                        onToggleVisibility: { hidden in
+                            settingsManager.setManagedFederationServerHidden(server, hidden: hidden)
+                        }
+                    )
+                }
+            }
+            .padding()
+            .background(Color.white.opacity(0.04))
+            .cornerRadius(12)
+
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal)
+            }
+
+            if entries.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "network")
+                        .font(.system(size: 40))
+                        .foregroundColor(.gray)
+                    Text(isLoading ? "Loading servers..." : "No servers found")
+                        .foregroundColor(.gray)
+                    Text("Official, domain-linked, trusted, and linked VoiceLink servers should appear here.")
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.vertical, 40)
+            } else {
+                ForEach(entries) { entry in
+                    FederationServerCard(
+                        entry: entry,
+                        isConnected: normalizeServerURL(serverManager.baseURL ?? "") == normalizeServerURL(entry.url)
+                    ) { browseOnly in
+                        connect(to: entry.url, browseOnly: browseOnly)
+                    } onDisconnect: {
+                        disconnectCurrentServer()
+                    }
+                }
+            }
+        }
+        .padding()
+        .task {
+            await refreshTrustedServers()
+        }
+    }
+
+    private func connect(to url: String, browseOnly: Bool) {
+        serverManager.connectToURL(url)
+        appState.refreshRooms()
+        if browseOnly {
+            appState.currentScreen = .joinRoom
+        }
+    }
+
+    private func disconnectCurrentServer() {
+        if serverManager.activeRoomId != nil {
+            serverManager.leaveRoom()
+        }
+        serverManager.disconnect()
+        appState.refreshRooms()
+    }
+
+    private func refreshTrustedServers() async {
+        isLoading = true
+        defer { isLoading = false }
+        guard let currentBase = serverManager.baseURL ?? APIEndpointResolver.canonicalMainBase as String? else {
+            trustedServers = []
+            errorMessage = nil
+            return
+        }
+        guard let statusURL = URL(string: "\(normalizeServerURL(currentBase))/api/federation/status") else {
+            trustedServers = []
+            errorMessage = "Could not resolve the federation status endpoint."
+            return
+        }
+
+        var request = URLRequest(url: statusURL)
+        request.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                trustedServers = []
+                errorMessage = "Could not load connected federation peers."
+                return
+            }
+            let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            trustedServers = ((raw["trustedServers"] as? [String]) ?? [])
+                .map(normalizeServerURL)
+                .filter { !$0.isEmpty }
+                .filter { $0 != normalizeServerURL(currentBase) }
+            errorMessage = nil
+        } catch {
+            trustedServers = []
+            errorMessage = "Could not load connected federation peers."
+        }
+    }
+
+    private func normalizeServerURL(_ rawURL: String) -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let candidate = trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        return candidate.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+    }
+
+    private func trustedHostLabel(_ rawURL: String) -> String {
+        if let host = URL(string: rawURL)?.host, !host.isEmpty {
+            return host
+        }
+        return rawURL
+    }
+}
+
+struct ManagedServerPreferenceRow: View {
+    let server: SettingsManager.ManagedFederationServer
+    let index: Int
+    let totalCount: Int
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+    let onToggleVisibility: (Bool) -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(server.name)
+                        .foregroundColor(.white)
+                    Text(server.isHidden ? "Hidden" : "Shown")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background((server.isHidden ? Color.orange : Color.green).opacity(0.18))
+                        .foregroundColor(server.isHidden ? .orange : .green)
+                        .cornerRadius(6)
+                }
+                Text(server.description)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Text(server.url)
+                    .font(.caption2)
+                    .foregroundColor(.gray.opacity(0.85))
+                    .textSelection(.enabled)
+            }
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                Button(action: onMoveUp) {
+                    Image(systemName: "arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .disabled(index == 0)
+                .accessibilityLabel("Move \(server.name) up")
+
+                Button(action: onMoveDown) {
+                    Image(systemName: "arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .disabled(index == totalCount - 1)
+                .accessibilityLabel("Move \(server.name) down")
+
+                Button(server.isHidden ? "Show" : "Hide") {
+                    onToggleVisibility(!server.isHidden)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("\(server.isHidden ? "Show" : "Hide") \(server.name)")
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(10)
+    }
+}
+
+struct FederationServerCard: View {
+    let entry: FederationServersView.Entry
+    let isConnected: Bool
+    let onSelect: (Bool) -> Void
+    let onDisconnect: () -> Void
+
+    private var badgeColor: Color {
+        switch entry.source {
+        case .current: return .green
+        case .managed: return .blue
+        case .linked: return .yellow
+        case .trusted: return .purple
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Text(entry.url)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .textSelection(.enabled)
+                    Text(entry.description)
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.9))
+                }
+
+                Spacer()
+
+                Text(entry.source.rawValue)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(badgeColor.opacity(0.2))
+                    .foregroundColor(badgeColor)
+                    .cornerRadius(6)
+            }
+
+            HStack(spacing: 10) {
+                Button(isConnected ? "Disconnect" : "Connect") {
+                    if isConnected {
+                        onDisconnect()
+                    } else {
+                        onSelect(false)
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                Button("Browse Rooms") {
+                    onSelect(true)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(10)
     }
 }
 
@@ -147,7 +520,7 @@ struct LinkedServersView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(pairingManager.linkedServers.count >= pairingManager.maxLinkedDevices || pairingManager.trustLevel == .banned)
+                .disabled(!pairingManager.canLinkAnotherServer())
             }
             .padding(.horizontal)
 
@@ -217,7 +590,7 @@ struct MembershipBadgeView: View {
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .foregroundColor(levelColor)
-                            Text("\(pairingManager.linkedServers.count)/\(pairingManager.maxLinkedDevices) devices")
+                            Text("\(pairingManager.linkedServers.count)/\(pairingManager.managedServerLimit) managed servers")
                                 .font(.caption2)
                                 .foregroundColor(.gray)
                         }
@@ -371,6 +744,7 @@ struct MembershipDetailsSheet: View {
 
                     Image(systemName: "arrow.right")
                         .foregroundColor(.gray)
+                        .accessibilityHidden(true)
 
                     VStack(spacing: 2) {
                         Text("\(pairingManager.totalMaxDevices)")
@@ -467,6 +841,7 @@ struct StatCard: View {
             Image(systemName: icon)
                 .font(.title2)
                 .foregroundColor(color)
+                .accessibilityHidden(true)
             Text(value)
                 .font(.title3)
                 .fontWeight(.bold)
@@ -474,6 +849,8 @@ struct StatCard: View {
                 .font(.caption)
                 .foregroundColor(.gray)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) \(value)")
         .frame(maxWidth: .infinity)
         .padding()
         .background(Color.white.opacity(0.05))
@@ -1043,7 +1420,10 @@ struct LinkedServerCard: View {
         switch server.authMethod {
         case .pairingCode: return .gray
         case .mastodon: return .purple
+        case .discord: return .indigo
         case .email: return .blue
+        case .adminInvite: return .orange
+        case .whmcs: return .green
         }
     }
 }

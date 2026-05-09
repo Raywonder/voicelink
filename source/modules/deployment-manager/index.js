@@ -54,6 +54,42 @@ function extractHostname(value) {
     }
 }
 
+function normalizePublicUrl(value) {
+    if (!value || typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+        const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+        parsed.hash = '';
+        parsed.search = '';
+        return parsed.toString().replace(/\/+$/, '');
+    } catch (_) {
+        return trimmed.replace(/\/+$/, '');
+    }
+}
+
+function extractBasePath(value) {
+    if (!value || typeof value !== 'string') return '';
+    try {
+        const parsed = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+        return parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    } catch (_) {
+        return '';
+    }
+}
+
+function uniqueList(values = []) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values) {
+        const normalized = normalizePublicUrl(value);
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+
 function sanitizeFileToken(value, fallback = 'server') {
     const normalized = String(value || fallback)
         .trim()
@@ -320,10 +356,92 @@ class DeploymentManagerModule {
 
     async buildDeploymentBundle(options = {}) {
         const preset = options.preset || 'production';
+        const extraConfig = options.extraConfig || {};
+        const serverConfig = extraConfig.server || {};
+        const ownerConfig = extraConfig.owner || {};
+        const federationConfig = extraConfig.federation || {};
+        const policyConfig = extraConfig.policy || {};
+        const moduleUpdateConfig = extraConfig.moduleUpdates || {};
         const bundleId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         const targetLabel = options.targetLabel || null;
         const ownerEmail = options.ownerEmail || null;
-        const targetServerUrl = options.targetServerUrl || null;
+        const targetServerUrl = normalizePublicUrl(options.targetServerUrl) || null;
+        const masterApiUrl = normalizePublicUrl(federationConfig.masterApiUrl || serverConfig.masterApiUrl || 'https://voicelink.dev');
+        const secondaryApiUrl = normalizePublicUrl(federationConfig.secondaryApiUrl || serverConfig.secondaryApiUrl || 'https://voicelinkapp.app');
+        const masterCommunityApiUrl = normalizePublicUrl(federationConfig.masterCommunityApiUrl || serverConfig.masterCommunityApiUrl || 'https://community.voicelinkapp.app');
+        const localApiUrl = normalizePublicUrl(serverConfig.localApiUrl || targetServerUrl);
+        const fallbackApiUrls = uniqueList([
+            localApiUrl,
+            masterApiUrl,
+            secondaryApiUrl,
+            masterCommunityApiUrl,
+            ...(Array.isArray(federationConfig.fallbackApiUrls) ? federationConfig.fallbackApiUrls : []),
+            ...(Array.isArray(options.trustedServers) ? options.trustedServers : [])
+        ]);
+        const targetDomain = serverConfig.domain || extractHostname(targetServerUrl);
+        const basePath = serverConfig.basePath || extractBasePath(targetServerUrl);
+        const targetAccountOwner = ownerConfig.accountOwner || serverConfig.accountOwner || serverConfig.targetUser || null;
+        const deploymentMode = String(serverConfig.deploymentMode || options.deploymentMode || 'fresh').trim().toLowerCase();
+        const installRoot = serverConfig.installRoot || serverConfig.remotePath || null;
+        const deploymentLink = {
+            deploymentMode,
+            sourceInstallUrl: normalizePublicUrl(serverConfig.sourceInstallUrl || options.sourceInstallUrl) || null,
+            target: {
+                label: targetLabel,
+                publicUrl: targetServerUrl,
+                domain: targetDomain || null,
+                basePath,
+                installRoot,
+                siteRoot: serverConfig.siteRoot || null,
+                accountOwner: targetAccountOwner,
+                whmcsClientOwner: ownerConfig.whmcsClientOwner || null
+            },
+            ownership: {
+                owner: ownerConfig.owner || targetLabel || targetDomain || null,
+                accountOwner: targetAccountOwner,
+                linkedVoiceLinkAccount: ownerConfig.linkedVoiceLinkAccount || 'voicelink',
+                linkedServerOwner: ownerConfig.linkedServerOwner || ownerConfig.owner || targetLabel || null,
+                whmcsClientOwner: ownerConfig.whmcsClientOwner || null
+            },
+            federation: {
+                linkedToMain: options.linkedToMain !== false,
+                masterApiUrl,
+                secondaryApiUrl,
+                masterCommunityApiUrl,
+                fallbackApiUrls,
+                nearestApiStrategy: federationConfig.nearestApiStrategy || 'local-first-health-latency',
+                localAssetFallback: federationConfig.localAssetFallback !== 'false'
+            },
+            policy: {
+                listedInDirectory: policyConfig.listedInDirectory !== 'false',
+                allowDirectReveal: policyConfig.allowDirectReveal !== 'false',
+                authRequired: policyConfig.authRequired || 'optional',
+                allowGuests: policyConfig.allowGuests !== 'false',
+                guestAccess: policyConfig.guestAccess || 'allowed-limited',
+                roomDirectory: policyConfig.roomDirectory || 'limited',
+                roomAccess: policyConfig.roomAccess || 'mixed',
+                verification: {
+                    status: policyConfig.verificationStatus || 'pending',
+                    method: policyConfig.verificationMethod || 'master-api'
+                }
+            },
+            moduleUpdatePolicy: {
+                enabled: moduleUpdateConfig.enabled !== 'false',
+                localFirst: moduleUpdateConfig.localFirst !== 'false',
+                notifyClients: moduleUpdateConfig.notifyClients !== 'false',
+                preserveConfig: moduleUpdateConfig.preserveConfig !== 'false',
+                requireSignature: moduleUpdateConfig.requireSignature !== 'false',
+                requireChecksum: moduleUpdateConfig.requireChecksum !== 'false',
+                installStrategy: moduleUpdateConfig.installStrategy || 'platform-native',
+                feedUrls: uniqueList([
+                    moduleUpdateConfig.localFeedUrl,
+                    `${masterApiUrl}/api/modules/updates`,
+                    `${secondaryApiUrl}/api/modules/updates`,
+                    `${masterCommunityApiUrl}/api/modules/updates`,
+                    ...(Array.isArray(moduleUpdateConfig.feedUrls) ? moduleUpdateConfig.feedUrls : [])
+                ])
+            }
+        };
         const labelToken = sanitizeFileToken(targetLabel || extractHostname(targetServerUrl) || 'server');
         const zipName = `voicelink-deploy-${labelToken}-${bundleId}.zip`;
         const bundleRoot = ensureDir(path.join(this.packageDir, bundleId));
@@ -338,6 +456,7 @@ class DeploymentManagerModule {
             ownerEmail,
             preset,
             linkedToMain: options.linkedToMain !== false,
+            deploymentLink,
             trustedServers: Array.isArray(options.trustedServers) ? options.trustedServers : [],
             supportedTargets: this.getSupportedTargets().targets || [],
             databaseManagers: this.getDatabaseManagerCapabilities(),
@@ -353,7 +472,8 @@ class DeploymentManagerModule {
             linkedToMain: options.linkedToMain !== false,
             trustedServers: Array.isArray(options.trustedServers) ? options.trustedServers : [],
             sanitize: options.sanitize !== false,
-            extraConfig: options.extraConfig || {},
+            deploymentLink,
+            extraConfig,
             databaseManagers: this.getDatabaseManagerCapabilities(),
             releaseArtifacts: manifest.releaseArtifacts,
             generatedAt: manifest.createdAt
@@ -361,6 +481,7 @@ class DeploymentManagerModule {
 
         writeJson(path.join(payloadRoot, 'manifest.json'), manifest);
         writeJson(path.join(payloadRoot, 'deploy-config.json'), deployConfigPayload);
+        writeJson(path.join(payloadRoot, 'deployment-link.json'), deploymentLink);
         writeJson(path.join(payloadRoot, 'supported-targets.json'), this.getSupportedTargets());
         writeJson(path.join(payloadRoot, 'release-artifacts.json'), manifest.releaseArtifacts);
 

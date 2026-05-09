@@ -228,7 +228,7 @@ final class IOSDiagnosticsManager {
         let outputGain = defaults.object(forKey: "voicelink.audio.outputGain") as? Double ?? 1.0
         let mediaMuted = defaults.bool(forKey: "voicelink.audio.mediaMuted")
         let authToken = defaults.string(forKey: "voicelink.authToken") ?? ""
-        let serverURL = defaults.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"
+        let serverURL = defaults.string(forKey: "voicelink.serverURL") ?? "https://voicelinkapp.app"
         let clientId = defaults.string(forKey: "voicelink.clientId") ?? device.identifierForVendor?.uuidString ?? device.name
 
         let sections: [String: Any] = [
@@ -312,8 +312,14 @@ final class IOSDiagnosticsManager {
         let cleaned = normalized.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
 
         var candidates = [cleaned]
-        if cleaned != "https://voicelink.devinecreations.net" {
-            candidates.append("https://voicelink.devinecreations.net")
+        if cleaned != "https://voicelinkapp.app" {
+            candidates.append("https://voicelinkapp.app")
+        }
+        if cleaned != "https://community.voicelinkapp.app" {
+            candidates.append("https://community.voicelinkapp.app")
+        }
+        if cleaned != "https://voicelink.dev" {
+            candidates.append("https://voicelink.dev")
         }
         return Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
     }

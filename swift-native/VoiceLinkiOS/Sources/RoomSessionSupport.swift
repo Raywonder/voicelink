@@ -54,6 +54,8 @@ struct RoomSessionView: View {
     @State private var whisperTarget: IOSDirectMessageTarget?
     @State private var monitorTarget: IOSDirectMessageTarget?
     @State private var replyTarget: IOSRoomMessageItem?
+    @State private var keepRoomAliveDuringInterfaceChange = false
+    @State private var keepRoomAliveResetTask: Task<Void, Never>?
     @State private var joinSoundTask: Task<Void, Never>?
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
@@ -130,11 +132,11 @@ struct RoomSessionView: View {
             .toolbar {
                 roomActionsToolbarItem
             }
-            .sheet(isPresented: $showDetails) { roomDetailsSheet }
-            .sheet(isPresented: $showControls) { roomControlsSheet }
-            .sheet(isPresented: $showPeople) { peopleSheet }
-            .sheet(isPresented: $showSettings) { roomSettingsSheet }
-            .sheet(isPresented: $showDirectMessages) { directMessagesSheet }
+            .sheet(isPresented: $showDetails, onDismiss: handleAuxiliaryInterfaceDismissed) { roomDetailsSheet }
+            .sheet(isPresented: $showControls, onDismiss: handleAuxiliaryInterfaceDismissed) { roomControlsSheet }
+            .sheet(isPresented: $showPeople, onDismiss: handleAuxiliaryInterfaceDismissed) { peopleSheet }
+            .sheet(isPresented: $showSettings, onDismiss: handleAuxiliaryInterfaceDismissed) { roomSettingsSheet }
+            .sheet(isPresented: $showDirectMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { directMessagesSheet }
         }
         .onAppear {
             IOSAudioSessionManager.shared.activate(for: .room)
@@ -159,35 +161,38 @@ struct RoomSessionView: View {
             memberRefreshTask?.cancel()
             memberRefreshTask = Task { @MainActor in
                 while !Task.isCancelled {
-                    socketClient.requestRoomUsers()
+                    socketClient.requestRoomUsersIfDue(minimumInterval: 6.0)
                     if socketClient.roomUsers.isEmpty {
                         await socketClient.refreshRoomSnapshotViaHTTP()
                     }
-                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
                 }
             }
         }
         .onDisappear {
+            if keepRoomAliveDuringInterfaceChange || isPresentingAuxiliarySheet {
+                return
+            }
             joinSoundTask?.cancel()
             joinSoundTask = nil
             memberRefreshTask?.cancel()
             memberRefreshTask = nil
+            keepRoomAliveResetTask?.cancel()
+            keepRoomAliveResetTask = nil
             roomBackgroundFadeTask?.cancel()
             roomBackgroundFadeTask = nil
             roomAudioDuckTask?.cancel()
             roomAudioDuckTask = nil
             stopRoomBackgroundPlayback()
             IOSAudioSessionManager.shared.deactivate(.room)
-            if !isPresentingAuxiliarySheet {
-                socketClient.leaveRoom(roomId: destination.roomId)
-            }
+            socketClient.leaveRoom(roomId: destination.roomId)
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { notification in
             let joinedRoomId = (notification.userInfo?["roomId"] as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard joinedRoomId == destination.roomId else { return }
             startRoomBackgroundPlaybackIfNeeded()
-            socketClient.requestRoomUsers()
+            socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
             socketClient.requestRoomMessages()
             Task { await socketClient.refreshRoomSnapshotViaHTTP() }
         }
@@ -356,7 +361,7 @@ struct RoomSessionView: View {
     private var roomActionsToolbarItem: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button {
-                showSettings = true
+                presentRoomInterface { showSettings = true }
                 IOSActionSoundPlayer.playConfirm()
             } label: {
                 Image(systemName: "slider.horizontal.3")
@@ -365,7 +370,7 @@ struct RoomSessionView: View {
             .accessibilityHint("Open full settings without leaving the room.")
 
             Button {
-                showAudioControls.toggle()
+                toggleRoomAudioControls()
                 IOSActionSoundPlayer.playToggle()
             } label: {
                 Image(systemName: showAudioControls ? "speaker.wave.2.fill" : "speaker.slash.fill")
@@ -375,27 +380,29 @@ struct RoomSessionView: View {
 
             Menu {
                 Button(showChat ? "Hide Chat" : "Show Chat") {
+                    protectRoomDuringInterfaceChange()
                     showChat.toggle()
                     IOSActionSoundPlayer.playToggle()
                 }
                 Button("Audio and Room Controls") {
-                    showControls = true
+                    presentRoomInterface { showControls = true }
                     IOSActionSoundPlayer.playConfirm()
                 }
                 Button("People in Room") {
-                    socketClient.requestRoomUsers()
-                    showPeople = true
+                    socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
+                    presentRoomInterface { showPeople = true }
                     IOSActionSoundPlayer.playConfirm()
                 }
                 Button("Room Details") {
-                    showDetails = true
+                    presentRoomInterface { showDetails = true }
                     IOSActionSoundPlayer.playConfirm()
                 }
                 Button(showAudioControls ? "Hide Room Audio Controls" : "Show Room Audio Controls") {
-                    showAudioControls.toggle()
+                    toggleRoomAudioControls()
                     IOSActionSoundPlayer.playToggle()
                 }
                 Button(showPeopleAudioState ? "Hide User Audio State" : "Show User Audio State") {
+                    protectRoomDuringInterfaceChange()
                     showPeopleAudioState.toggle()
                     IOSActionSoundPlayer.playToggle()
                 }
@@ -443,14 +450,17 @@ struct RoomSessionView: View {
                 Section("Room Controls") {
                     Toggle("Show Chat", isOn: $showChat)
                         .onChange(of: showChat) { _ in
+                            protectRoomDuringInterfaceChange()
                             IOSActionSoundPlayer.playToggle()
                         }
                     Toggle("Show Audio Controls", isOn: $showAudioControls)
                         .onChange(of: showAudioControls) { _ in
+                            protectRoomDuringInterfaceChange()
                             IOSActionSoundPlayer.playToggle()
                         }
                     Toggle("Show User Audio State", isOn: $showPeopleAudioState)
                         .onChange(of: showPeopleAudioState) { _ in
+                            protectRoomDuringInterfaceChange()
                             IOSActionSoundPlayer.playToggle()
                         }
                 }
@@ -655,10 +665,16 @@ struct RoomSessionView: View {
                 .accessibilityLabel(roomUserAccessibilityLabel(for: target))
                 .accessibilityValue(roomUserAccessibilityValue(for: target))
                 .accessibilityHint(roomUserAccessibilityHint(for: target))
-                .accessibilityAction(named: Text("Direct Message")) {
-                    openDirectMessages(with: target)
+                .accessibilityAction {
+                    openProfile(for: target)
                 }
                 .accessibilityActions {
+                    Button("View Profile") {
+                        openProfile(for: target)
+                    }
+                    Button("Direct Message") {
+                        openDirectMessages(with: target)
+                    }
                     if canShowPerUserAudioControls(for: target) {
                         Button(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring") {
                             toggleMonitorTarget(target)
@@ -697,6 +713,7 @@ struct RoomSessionView: View {
                 }
             }
             Button(showPeopleAudioState ? "Hide User Audio State" : "Show User Audio State") {
+                protectRoomDuringInterfaceChange()
                 showPeopleAudioState.toggle()
                 IOSActionSoundPlayer.playToggle()
             }
@@ -789,7 +806,7 @@ struct RoomSessionView: View {
     private func openDirectMessages(with target: IOSDirectMessageTarget) {
         roomState.selectedDirectTarget = target
         roomState.selectedProfileName = target.name
-        showDirectMessages = true
+        presentRoomInterface { showDirectMessages = true }
         IOSActionSoundPlayer.playConfirm()
     }
 
@@ -869,6 +886,7 @@ struct RoomSessionView: View {
 
     private func toggleUserAudioControls(for target: IOSDirectMessageTarget) {
         guard canShowPerUserAudioControls(for: target) else { return }
+        protectRoomDuringInterfaceChange()
         if expandedUserAudioControls.contains(target.id) {
             expandedUserAudioControls.remove(target.id)
         } else {
@@ -876,6 +894,39 @@ struct RoomSessionView: View {
             UIAccessibility.post(notification: .layoutChanged, argument: nil)
         }
         IOSActionSoundPlayer.playToggle()
+    }
+
+    private func toggleRoomAudioControls() {
+        protectRoomDuringInterfaceChange()
+        showAudioControls.toggle()
+    }
+
+    private func presentRoomInterface(_ update: () -> Void) {
+        protectRoomDuringInterfaceChange(resetAfter: 3.0)
+        update()
+    }
+
+    private func protectRoomDuringInterfaceChange(resetAfter seconds: Double = 1.2) {
+        keepRoomAliveDuringInterfaceChange = true
+        keepRoomAliveResetTask?.cancel()
+        keepRoomAliveResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(max(0.2, seconds) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            if !isPresentingAuxiliarySheet {
+                keepRoomAliveDuringInterfaceChange = false
+            }
+        }
+    }
+
+    private func handleAuxiliaryInterfaceDismissed() {
+        keepRoomAliveResetTask?.cancel()
+        keepRoomAliveResetTask = nil
+        keepRoomAliveDuringInterfaceChange = false
+        IOSAudioSessionManager.shared.activate(for: .room)
+        syncRoomAudioState()
+        socketClient.setPlaybackGain(Float(outputGain))
+        updateRoomBackgroundPlaybackVolume()
+        socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
     }
 
     @ViewBuilder

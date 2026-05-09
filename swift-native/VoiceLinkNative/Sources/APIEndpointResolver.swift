@@ -1,19 +1,30 @@
 import Foundation
 
 enum APIEndpointResolver {
-    static let canonicalMainBase = "https://voicelink.devinecreations.net"
-    static let communityNode2Base = "https://node2.voicelink.devinecreations.net"
+    static let canonicalMainBase = "https://voicelinkapp.app"
+    static let communityNode2Base = "https://community.voicelinkapp.app"
+    static let devineCreationsComBase = "https://devine-creations.com/voicelink"
+    static let devineCreationsNetBase = "https://devinecreations.net"
     static let localBase = "http://127.0.0.1:3010"
+    static let localSecondaryBase = "http://127.0.0.1:3011"
+    static let localStagingBase = "http://127.0.0.1:3012"
+
+    private static let localBases = [
+        localBase,
+        localSecondaryBase,
+        localStagingBase
+    ]
 
     // Trusted federated peers should be preferred before public fallbacks.
     private static let federatedBases = [
         communityNode2Base,
+        devineCreationsComBase,
+        devineCreationsNetBase,
     ]
 
-    private static let publicFallbackBases = [
-        "https://64.20.46.178",
-        "https://64.20.46.179"
-    ]
+    // Do not use public IP HTTPS fallbacks in app/admin flows. The certificate
+    // is issued for domains, so IP-based HTTPS creates false SSL failures.
+    private static let publicFallbackBases: [String] = []
 
     static func normalize(_ base: String) -> String {
         base.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -27,25 +38,37 @@ enum APIEndpointResolver {
             switch scheme {
             case "https":
                 if isLocalOrPrivate(normalized) {
-                    return [normalized]
+                    var httpComponents = components
+                    httpComponents.scheme = "http"
+                    let httpVariant = httpComponents.url.map { normalize($0.absoluteString) }
+                    return [httpVariant, normalized].compactMap { $0 }.removingDuplicates()
                 }
-                var httpComponents = components
-                httpComponents.scheme = "http"
-                let httpVariant = httpComponents.url.map { normalize($0.absoluteString) }
-                return [normalized, httpVariant].compactMap { $0 }.removingDuplicates()
+                return [normalized]
             case "http":
+                if isLocalOrPrivate(normalized) {
+                    var httpsComponents = components
+                    httpsComponents.scheme = "https"
+                    let httpsVariant = httpsComponents.url.map { normalize($0.absoluteString) }
+                    return [normalized, httpsVariant].compactMap { $0 }.removingDuplicates()
+                }
                 var httpsComponents = components
                 httpsComponents.scheme = "https"
                 let httpsVariant = httpsComponents.url.map { normalize($0.absoluteString) }
-                return [httpsVariant, normalized].compactMap { $0 }.removingDuplicates()
+                return [httpsVariant].compactMap { $0 }.removingDuplicates()
             default:
                 return [normalized]
             }
         }
 
+        if isLocalOrPrivate(normalized) {
+            return [
+                "http://\(normalized)",
+                "https://\(normalized)"
+            ].removingDuplicates()
+        }
+
         return [
-            "https://\(normalized)",
-            "http://\(normalized)"
+            "https://\(normalized)"
         ].removingDuplicates()
     }
 
@@ -80,7 +103,7 @@ enum APIEndpointResolver {
             candidates.append(normalize(preferred))
         }
         if preferred == nil || !isLocalOrPrivate(preferred ?? "") {
-            candidates.append(localBase)
+            candidates.append(contentsOf: localBases)
         }
         candidates.append(contentsOf: federatedBases)
         candidates.append(canonicalMainBase)

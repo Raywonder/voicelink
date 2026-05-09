@@ -357,11 +357,12 @@
         <div class="auth-title">VoiceLink Room</div>
         <div class="auth-message" id="auth-message">Join the voice conversation</div>
         <div class="password-input hidden" id="password-section">
+            <label for="room-password" class="sr-only">Room password</label>
             <input type="password" id="room-password" placeholder="Room password">
             <button class="auth-btn" id="password-submit">Join</button>
         </div>
         <button class="auth-btn" id="join-btn">Join Room</button>
-        <div class="auth-error hidden" id="auth-error"></div>
+        <div class="auth-error hidden" id="auth-error" role="alert" aria-live="assertive"></div>
     </div>
 
     <!-- Main embed content -->
@@ -396,7 +397,7 @@
     </div>
 
     <div class="powered-by">
-        Powered by <a href="https://voicelink.tappedin.fm" target="_blank">VoiceLink</a>
+        Powered by <a href="https://voicelinkapp.app" target="_blank">VoiceLink</a>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

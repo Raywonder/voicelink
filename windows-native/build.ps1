@@ -3,6 +3,8 @@
 
 param(
     [string]$Configuration = "Release",
+    [string]$Version = "1.0.0",
+    [string]$Build = "48",
     [switch]$Clean,
     [switch]$Publish
 )
@@ -47,7 +49,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Build the project
 Write-Host "Building VoiceLink Native ($Configuration)..." -ForegroundColor Yellow
-dotnet build $ProjectFile -c $Configuration --no-restore
+dotnet build $ProjectFile -c $Configuration --no-restore /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Build failed." -ForegroundColor Red
     exit 1
@@ -62,21 +64,21 @@ if ($Publish) {
     $PublishDir = Join-Path $ProjectDir "publish"
 
     # Publish for Windows x64
-    dotnet publish $ProjectFile -c $Configuration -r win-x64 --self-contained true -o "$PublishDir\win-x64" /p:PublishSingleFile=true
+    dotnet publish $ProjectFile -c $Configuration -r win-x64 --self-contained true -o "$PublishDir\win-x64" /p:PublishSingleFile=true /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Publish failed for win-x64." -ForegroundColor Red
         exit 1
     }
 
     # Publish for Windows x86
-    dotnet publish $ProjectFile -c $Configuration -r win-x86 --self-contained true -o "$PublishDir\win-x86" /p:PublishSingleFile=true
+    dotnet publish $ProjectFile -c $Configuration -r win-x86 --self-contained true -o "$PublishDir\win-x86" /p:PublishSingleFile=true /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Publish failed for win-x86." -ForegroundColor Red
         exit 1
     }
 
     # Publish for Windows ARM64
-    dotnet publish $ProjectFile -c $Configuration -r win-arm64 --self-contained true -o "$PublishDir\win-arm64" /p:PublishSingleFile=true
+    dotnet publish $ProjectFile -c $Configuration -r win-arm64 --self-contained true -o "$PublishDir\win-arm64" /p:PublishSingleFile=true /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Publish failed for win-arm64." -ForegroundColor Red
         exit 1

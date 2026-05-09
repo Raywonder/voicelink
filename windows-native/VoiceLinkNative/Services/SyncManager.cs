@@ -5,7 +5,8 @@ namespace VoiceLinkNative.Services;
 
 public class SyncManager : INotifyPropertyChanged
 {
-    public static SyncManager Instance { get; private set; } = null!;
+    private static SyncManager? _instance;
+    public static SyncManager Instance => _instance ??= new SyncManager();
 
     // Events for UI updates
     public event EventHandler<MembershipUpdate>? MembershipUpdated;
@@ -23,7 +24,7 @@ public class SyncManager : INotifyPropertyChanged
 
     public SyncManager()
     {
-        Instance = this;
+        _instance = this;
 
         // Subscribe to server push events
         ServerManager.Instance.SyncPushReceived += HandleServerPush;

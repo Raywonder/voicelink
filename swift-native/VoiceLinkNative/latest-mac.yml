@@ -1,8 +1,11 @@
-version: 1.0.0
+version: 1.0.0.46
 files:
-  - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: ELhGFbFqcQ1IkibwhureJ5bK4AjQ8QsTUPl1MaVZCDe31RnTuNpaCwYNOvM3Dem4CxqWb0JSJEbkHZi14ZPfRw==
-    size: 23763627
+  - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
+    sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
+    size: 370914559
 path: VoiceLinkMacOS.zip
-sha512: ELhGFbFqcQ1IkibwhureJ5bK4AjQ8QsTUPl1MaVZCDe31RnTuNpaCwYNOvM3Dem4CxqWb0JSJEbkHZi14ZPfRw==
-releaseDate: '2026-04-11T07:35:00.000Z'
+sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
+buildNumber: 46
+releaseDate: "2026-05-08T20:42:45.000Z"
+releaseNotes: >-
+  Build 46 includes the build 45 server browser and guest room-creation gating fixes, plus direct in-room server sign-in that returns users to the room and announces the signed-in account.

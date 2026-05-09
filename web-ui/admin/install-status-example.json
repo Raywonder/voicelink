@@ -1,0 +1,10 @@
+{
+  "installId": "example-install-id",
+  "domain": "example.com",
+  "path": "/voicelink",
+  "installType": "subdirectory",
+  "licenseStatus": "active",
+  "productTier": "pro",
+  "lastSuccessfulValidation": "2026-04-03T12:00:00Z",
+  "nextRemoteCheck": "2026-04-04T12:00:00Z"
+}

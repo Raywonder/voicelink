@@ -3,358 +3,111 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local Documentation</title>
+    <title>VoiceLink Help</title>
     <link rel="stylesheet" href="styles/docs.css">
 </head>
 <body>
     <div class="docs-container">
-        <!-- Navigation Header -->
         <header class="docs-header">
             <div class="header-content">
-                <h1>🎙️ VoiceLink Local</h1>
-                <p class="subtitle">P2P Voice Chat with 3D Audio - User Documentation</p>
-                <nav class="header-nav">
-                    <a href="../client/index.html" class="nav-link">← Back to App</a>
-                    <a href="#search" class="nav-link">🔍 Search</a>
+                <h1>VoiceLink Help</h1>
+                <p class="subtitle">Task-first documentation for VoiceOver, keyboard, and desktop users.</p>
+                <nav class="header-nav" aria-label="Documentation navigation">
+                    <a href="../client/index.html" class="nav-link">Back to App</a>
+                    <a href="getting-started.html" class="nav-link">Getting Started</a>
+                    <a href="voiceover-support.html" class="nav-link">VoiceOver Support</a>
                 </nav>
             </div>
         </header>
 
-        <!-- Search Section -->
         <section id="search" class="search-section">
             <div class="search-container">
                 <h2>Find Help</h2>
-                <input type="text" id="search-input" placeholder="Search documentation..." aria-label="Search documentation">
+                <label for="search-input">Search documentation</label>
+                <input type="text" id="search-input" placeholder="Search documentation">
                 <div id="search-results" class="search-results" aria-live="polite"></div>
             </div>
         </section>
 
-        <!-- Quick Start -->
-        <section class="quick-start">
-            <h2>🚀 Quick Start</h2>
-            <div class="quick-start-grid">
-                <div class="quick-card">
-                    <h3>New User?</h3>
-                    <p>Get started with VoiceLink Local in minutes</p>
-                    <a href="getting-started.html" class="btn-primary">Getting Started Guide</a>
-                </div>
-                <div class="quick-card">
-                    <h3>Join a Room</h3>
-                    <p>Learn how to connect with others</p>
-                    <a href="joining-rooms.html" class="btn-primary">Room Joining Guide</a>
-                </div>
-                <div class="quick-card">
-                    <h3>Audio Setup</h3>
-                    <p>Configure your microphone and speakers</p>
-                    <a href="audio-setup.html" class="btn-primary">Audio Configuration</a>
-                </div>
-                <div class="quick-card">
-                    <h3>3D Audio</h3>
-                    <p>Experience spatial voice positioning</p>
-                    <a href="spatial-audio.html" class="btn-primary">3D Audio Guide</a>
-                </div>
-            </div>
-        </section>
+        <main class="content" id="main-content">
+            <div class="content-wrapper">
+                <section class="article-intro" aria-labelledby="help-overview">
+                    <h2 id="help-overview">Start with the task you need to complete</h2>
+                    <p>VoiceLink documentation is organized around the actions people actually take in the app. Start with the guide that matches what you need right now, then move to the more detailed pages only if you need them.</p>
+                </section>
 
-        <!-- Feature Documentation -->
-        <section class="features-section">
-            <h2>📚 Feature Documentation</h2>
+                <section class="article-section" aria-labelledby="top-guides">
+                    <h2 id="top-guides">Top Guides</h2>
+                    <div class="quick-start-grid">
+                        <div class="quick-card">
+                            <h3>Get connected</h3>
+                            <p>Install the app, choose a server, and join your first room.</p>
+                            <a href="getting-started.html" class="btn-primary">Open Getting Started</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Use VoiceOver</h3>
+                            <p>Read the task-first accessibility guide for room lists, messages, and controls.</p>
+                            <a href="voiceover-support.html" class="btn-primary">Open VoiceOver Guide</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Manage rooms</h3>
+                            <p>Learn how room details, room access, and room audio settings are organized.</p>
+                            <a href="room-management.html" class="btn-primary">Open Room Guide</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Fix a problem</h3>
+                            <p>Use app support from server or room details when the issue belongs to a specific server, or open the web contact page for general account help.</p>
+                            <a href="../client/docs/contact.html" class="btn-primary">Open Contact Support</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Connect the mesh</h3>
+                            <p>Use Headscale or Tailscale private access for OpenClaw, VoiceLink agents, and server tools.</p>
+                            <a href="openclaw-mesh-tailnet.html" class="btn-primary">Open Mesh Guide</a>
+                        </div>
+                    </div>
+                </section>
 
-            <!-- Core Features -->
-            <div class="feature-category">
-                <h3>Core Features</h3>
-                <div class="feature-grid">
-                    <a href="voice-chat.html" class="feature-card">
-                        <div class="feature-icon">🎙️</div>
-                        <div class="feature-content">
-                            <h4>Voice Chat</h4>
-                            <p>Basic voice communication features and controls</p>
-                        </div>
-                    </a>
-                    <a href="room-management.html" class="feature-card">
-                        <div class="feature-icon">🏠</div>
-                        <div class="feature-content">
-                            <h4>Room Management</h4>
-                            <p>Creating, joining, and managing chat rooms</p>
-                        </div>
-                    </a>
-                    <a href="user-interface.html" class="feature-card">
-                        <div class="feature-icon">🖥️</div>
-                        <div class="feature-content">
-                            <h4>User Interface</h4>
-                            <p>Navigating the app and using controls</p>
-                        </div>
-                    </a>
-                    <a href="text-chat.html" class="feature-card">
-                        <div class="feature-icon">💬</div>
-                        <div class="feature-content">
-                            <h4>Text Chat</h4>
-                            <p>Sending messages and chat features</p>
-                        </div>
-                    </a>
-                </div>
-            </div>
+                <section class="article-section" aria-labelledby="common-tasks">
+                    <h2 id="common-tasks">Common Tasks</h2>
+                    <div class="support-grid">
+                        <article class="support-card">
+                            <h3>Join Main or Community</h3>
+                            <p>Use the server list to choose the correct server, then activate a room row to open details, preview media, or join.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Check who is in a room</h3>
+                            <p>Open room details or join the room, then move to the user list and message area to confirm users, bots, and system messages.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Adjust audio safely</h3>
+                            <p>Open the room controls or user actions menu to change monitoring, mute, volume, or room background media without leaving the room.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Send diagnostics</h3>
+                            <p>Open Settings for diagnostics, or choose Contact Server Support from a server or room to create a private ticket tied to that context.</p>
+                        </article>
+                    </div>
+                </section>
 
-            <!-- Advanced Audio -->
-            <div class="feature-category">
-                <h3>Advanced Audio</h3>
-                <div class="feature-grid">
-                    <a href="spatial-audio.html" class="feature-card">
-                        <div class="feature-icon">🎯</div>
-                        <div class="feature-content">
-                            <h4>3D Spatial Audio</h4>
-                            <p>Positioning users in 3D space for immersive audio</p>
-                        </div>
-                    </a>
-                    <a href="audio-ducking.html" class="feature-card">
-                        <div class="feature-icon">🎛️</div>
-                        <div class="feature-content">
-                            <h4>Audio Ducking</h4>
-                            <p>Automatic volume reduction and feedback prevention</p>
-                        </div>
-                    </a>
-                    <a href="multi-input.html" class="feature-card">
-                        <div class="feature-icon">🎚️</div>
-                        <div class="feature-content">
-                            <h4>Multi-Input Manager</h4>
-                            <p>Managing multiple audio sources and inputs</p>
-                        </div>
-                    </a>
-                    <a href="audio-effects.html" class="feature-card">
-                        <div class="feature-icon">✨</div>
-                        <div class="feature-content">
-                            <h4>Built-in Effects</h4>
-                            <p>Voice effects and audio processing</p>
-                        </div>
-                    </a>
-                </div>
-            </div>
+                <section class="article-section" aria-labelledby="recommended-reading">
+                    <h2 id="recommended-reading">Recommended Reading Order</h2>
+                    <ol>
+                        <li>Read <a href="getting-started.html">Getting Started</a> if you are new to VoiceLink or switching devices.</li>
+                        <li>Read <a href="voiceover-support.html">Using VoiceLink with VoiceOver</a> if you rely on VoiceOver, keyboard navigation, or spoken status updates.</li>
+                        <li>Read <a href="room-management.html">Room Management</a> if you create rooms, moderate rooms, or manage room media.</li>
+                        <li>Read <a href="authentication.html">Authentication</a> if you need to sign in, reconnect, or work with more than one server.</li>
+                        <li>Read <a href="openclaw-mesh-tailnet.html">OpenClaw Mesh and Tailnet Access</a> if you connect agents, iOS clients, desktop clients, or server tools through Headscale or Tailscale.</li>
+                    </ol>
+                </section>
 
-            <!-- Media & Streaming -->
-            <div class="feature-category">
-                <h3>Media & Streaming</h3>
-                <div class="feature-grid">
-                    <a href="media-streaming.html" class="feature-card">
-                        <div class="feature-icon">🎵</div>
-                        <div class="feature-content">
-                            <h4>Media Player</h4>
-                            <p>Playing music and media in voice channels</p>
-                        </div>
-                    </a>
-                    <a href="jellyfin-integration.html" class="feature-card">
-                        <div class="feature-icon">📚</div>
-                        <div class="feature-content">
-                            <h4>Jellyfin Integration</h4>
-                            <p>Connecting to Jellyfin media servers</p>
-                        </div>
-                    </a>
-                    <a href="live-streaming.html" class="feature-card">
-                        <div class="feature-icon">📡</div>
-                        <div class="feature-content">
-                            <h4>Live Streams</h4>
-                            <p>Icecast, Shoutcast, and radio streaming</p>
-                        </div>
-                    </a>
-                    <a href="pa-system.html" class="feature-card">
-                        <div class="feature-icon">🔊</div>
-                        <div class="feature-content">
-                            <h4>PA System</h4>
-                            <p>Public announcement and broadcasting</p>
-                        </div>
-                    </a>
-                </div>
+                <section class="article-section" aria-labelledby="support-close">
+                    <h2 id="support-close">Contact and Feedback</h2>
+                    <p>If the guide for your task does not match what the app says, send diagnostics from the app and include the server name, room name, and the exact label of the control that did not behave as expected.</p>
+                </section>
             </div>
-
-            <!-- Communication -->
-            <div class="feature-category">
-                <h3>Communication</h3>
-                <div class="feature-grid">
-                    <a href="tts-announcements.html" class="feature-card">
-                        <div class="feature-icon">📢</div>
-                        <div class="feature-content">
-                            <h4>TTS Announcements</h4>
-                            <p>Text-to-speech announcements and notifications</p>
-                        </div>
-                    </a>
-                    <a href="user-management.html" class="feature-card">
-                        <div class="feature-icon">👥</div>
-                        <div class="feature-content">
-                            <h4>User Management</h4>
-                            <p>User profiles, status, and permissions</p>
-                        </div>
-                    </a>
-                    <a href="context-menus.html" class="feature-card">
-                        <div class="feature-icon">🖱️</div>
-                        <div class="feature-content">
-                            <h4>User Context Menus</h4>
-                            <p>Right-click actions and keyboard shortcuts</p>
-                        </div>
-                    </a>
-                    <a href="direct-messages.html" class="feature-card">
-                        <div class="feature-icon">✉️</div>
-                        <div class="feature-content">
-                            <h4>Direct Messages</h4>
-                            <p>Private messaging between users</p>
-                        </div>
-                    </a>
-                </div>
-            </div>
-
-            <!-- Settings & Configuration -->
-            <div class="feature-category">
-                <h3>Settings & Configuration</h3>
-                <div class="feature-grid">
-                    <a href="user-settings.html" class="feature-card">
-                        <div class="feature-icon">👤</div>
-                        <div class="feature-content">
-                            <h4>User Settings</h4>
-                            <p>Personal preferences and profile configuration</p>
-                        </div>
-                    </a>
-                    <a href="audio-settings.html" class="feature-card">
-                        <div class="feature-icon">🎧</div>
-                        <div class="feature-content">
-                            <h4>Audio Settings</h4>
-                            <p>Microphone, speakers, and audio quality</p>
-                        </div>
-                    </a>
-                    <a href="server-settings.html" class="feature-card">
-                        <div class="feature-icon">⚙️</div>
-                        <div class="feature-content">
-                            <h4>Server Settings</h4>
-                            <p>Per-server configuration and overrides</p>
-                        </div>
-                    </a>
-                    <a href="accessibility.html" class="feature-card">
-                        <div class="feature-icon">♿</div>
-                        <div class="feature-content">
-                            <h4>Accessibility</h4>
-                            <p>Screen readers, keyboard navigation, and VoiceOver</p>
-                        </div>
-                    </a>
-                </div>
-            </div>
-        </section>
-
-        <!-- Platform Support -->
-        <section class="platform-section">
-            <h2>🖥️ Platform Support</h2>
-            <div class="platform-grid">
-                <div class="platform-card">
-                    <h3>🖥️ Desktop Apps</h3>
-                    <p>Native applications for Mac, Windows, and Linux</p>
-                    <a href="desktop-installation.html" class="btn-secondary">Installation Guide</a>
-                </div>
-                <div class="platform-card">
-                    <h3>📱 iOS Browsers</h3>
-                    <p>Safari and Chrome support on iPhone and iPad</p>
-                    <a href="ios-browser.html" class="btn-secondary">iOS Guide</a>
-                </div>
-                <div class="platform-card">
-                    <h3>🐧 Linux Servers</h3>
-                    <p>Dedicated and VPS server hosting</p>
-                    <a href="server-deployment.html" class="btn-secondary">Server Setup</a>
-                </div>
-                <div class="platform-card">
-                    <h3>🌐 Web Browsers</h3>
-                    <p>Modern browser compatibility and requirements</p>
-                    <a href="browser-support.html" class="btn-secondary">Browser Guide</a>
-                </div>
-            </div>
-        </section>
-
-        <!-- Troubleshooting -->
-        <section class="troubleshooting-section">
-            <h2>🔧 Troubleshooting</h2>
-            <div class="troubleshooting-grid">
-                <a href="audio-troubleshooting.html" class="trouble-card">
-                    <h3>🎙️ Audio Issues</h3>
-                    <p>Microphone not working, echo, or poor quality</p>
-                </a>
-                <a href="connection-troubleshooting.html" class="trouble-card">
-                    <h3>🌐 Connection Problems</h3>
-                    <p>Can't connect to rooms or frequent disconnections</p>
-                </a>
-                <a href="performance-troubleshooting.html" class="trouble-card">
-                    <h3>⚡ Performance Issues</h3>
-                    <p>Lag, high CPU usage, or memory problems</p>
-                </a>
-                <a href="ios-troubleshooting.html" class="trouble-card">
-                    <h3>📱 iOS Specific Issues</h3>
-                    <p>Safari and Chrome browser problems on iOS</p>
-                </a>
-            </div>
-        </section>
-
-        <!-- FAQ -->
-        <section class="faq-section">
-            <h2>❓ Frequently Asked Questions</h2>
-            <div class="faq-preview">
-                <div class="faq-item">
-                    <h3>How do I enable 3D audio?</h3>
-                    <p>Go to Audio Settings and check "Enable 3D Spatial Audio". Position users by dragging them in the 3D Audio Space panel.</p>
-                </div>
-                <div class="faq-item">
-                    <h3>Can I use VoiceLink on my phone?</h3>
-                    <p>Yes! iOS users can use Safari or Chrome browsers. Full mobile apps are planned for the future.</p>
-                </div>
-                <div class="faq-item">
-                    <h3>How do I connect my Jellyfin server?</h3>
-                    <p>Open Media Player, go to Jellyfin tab, click "Add Server" and enter your server details.</p>
-                </div>
-            </div>
-            <a href="faq.html" class="btn-secondary">View All FAQs</a>
-        </section>
-
-        <!-- Footer -->
-        <footer class="docs-footer">
-            <div class="footer-content">
-                <div class="footer-section">
-                    <h4>Documentation</h4>
-                    <ul>
-                        <li><a href="getting-started.html">Getting Started</a></li>
-                        <li><a href="user-guide.html">User Guide</a></li>
-                        <li><a href="troubleshooting.html">Troubleshooting</a></li>
-                        <li><a href="faq.html">FAQ</a></li>
-                    </ul>
-                </div>
-                <div class="footer-section">
-                    <h4>Features</h4>
-                    <ul>
-                        <li><a href="voice-chat.html">Voice Chat</a></li>
-                        <li><a href="spatial-audio.html">3D Audio</a></li>
-                        <li><a href="media-streaming.html">Media Streaming</a></li>
-                        <li><a href="accessibility.html">Accessibility</a></li>
-                    </ul>
-                </div>
-                <div class="footer-section">
-                    <h4>Support</h4>
-                    <ul>
-                        <li><a href="contact.html">Contact Support</a></li>
-                        <li><a href="bug-reports.html">Report Bugs</a></li>
-                        <li><a href="feature-requests.html">Feature Requests</a></li>
-                        <li><a href="community.html">Community</a></li>
-                    </ul>
-                </div>
-                <div class="footer-section">
-                    <h4>About</h4>
-                    <p>VoiceLink Local v1.0.0<br>
-                    Built by DevineCreations<br>
-                    Open source P2P voice chat</p>
-                </div>
-            </div>
-            <div class="footer-bottom">
-                <p>&copy; 2024 DevineCreations. All rights reserved.</p>
-                <p>
-                    <a href="../client/index.html">Return to App</a> |
-                    <a href="privacy.html">Privacy Policy</a> |
-                    <a href="terms.html">Terms of Service</a>
-                </p>
-            </div>
-        </footer>
+        </main>
     </div>
 
-    <!-- Search Script -->
     <script src="scripts/search.js"></script>
     <script src="scripts/docs.js"></script>
 </body>

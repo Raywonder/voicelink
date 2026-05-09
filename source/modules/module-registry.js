@@ -99,6 +99,19 @@ const AVAILABLE_MODULES = {
                 emailOnNewTicket: true,
                 emailOnReply: true,
                 emailOnClose: true
+            },
+            externalSync: {
+                provider: 'auto',
+                mode: 'builtin-first',
+                syncDevineCreationsDomains: true,
+                syncDomains: [
+                    'devine-creations.com',
+                    'devinecreations.net',
+                    'voicelinkapp.app',
+                    'community.voicelinkapp.app'
+                ],
+                whmcsDepartmentId: '',
+                supportedProviders: ['builtin', 'whmcs']
             }
         }
     },
@@ -200,7 +213,26 @@ const AVAILABLE_MODULES = {
         ],
         defaultConfig: {
             enabled: false,
-            webhooks: []
+            hostedBasePath: '/api/webhooks/incoming',
+            outboundWebhooks: [],
+            hostedEndpoints: [
+                {
+                    id: 'general-chat',
+                    name: 'General Chat Hosted Webhook',
+                    slug: 'general-chat',
+                    enabled: true,
+                    allowAnonymous: false,
+                    eventType: 'general_chat_message',
+                    deliveryMode: 'room-message',
+                    roomName: 'General Chat',
+                    secret: ''
+                }
+            ],
+            delivery: {
+                timeoutMs: 8000,
+                retries: 2,
+                maxLogEntries: 200
+            }
         }
     },
 
@@ -255,6 +287,53 @@ const AVAILABLE_MODULES = {
             retention: 7,
             includeMedia: false,
             remoteStorage: null
+        }
+    },
+
+    'openlink-bridge': {
+        id: 'openlink-bridge',
+        name: 'OpenLink Bridge',
+        description: 'Install, connect, and govern OpenLink from VoiceLink while keeping OpenLink itself as a separate linked module',
+        version: '1.1.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'OpenLink install and link settings from the Modules Center',
+            'Voice fallback room bridge policy',
+            'Admin approval and override workflow for linked OpenLink sessions',
+            'Auto-detect local OpenLink installs and service endpoints',
+            'Linked domain, admin UI, API, and signaling endpoint controls',
+            'Supports external OpenLink installs without bundling OpenLink into VoiceLink'
+        ],
+        defaultConfig: {
+            enabled: false,
+            moduleMode: 'external-linked',
+            autoDetectInstalled: true,
+            installState: 'not-installed',
+            installSource: 'repo',
+            installPath: '',
+            installerPath: '',
+            repoPath: '',
+            appBundlePath: '',
+            adminUIUrl: 'https://openlink.tappedin.fm',
+            apiBaseUrl: 'https://openlink.tappedin.fm/api',
+            signalingUrl: 'wss://openlink.tappedin.fm',
+            defaultDomain: 'openlink.tappedin.fm',
+            sharedSecret: '',
+            linkedVoiceLinkServerId: '',
+            allowAdminControl: true,
+            allowRemoteInstall: true,
+            voiceFallbackRoomsEnabled: true,
+            requireAdminApprovalForEntry: true,
+            allowAdminOverride: true,
+            notifyBeforeAdminOverride: true,
+            showActiveRoomsInAdminOverview: true,
+            roomDurationMinutes: 1440,
+            overrideWindowSeconds: 180
         }
     },
 
@@ -473,6 +552,7 @@ class ModuleRegistry {
         this.configDir = configDir || path.join(__dirname, '../../data');
         this.modulesConfigFile = path.join(this.configDir, 'modules.json');
         this.installedModules = this.loadInstalledModules();
+        this.ensureDefaultInstalledModules();
     }
 
     loadInstalledModules() {
@@ -494,6 +574,35 @@ class ModuleRegistry {
             console.error('[ModuleRegistry] Error loading modules config:', e.message);
         }
         return { installed: {}, installOrder: [] };
+    }
+
+    ensureDefaultInstalledModules() {
+        const skipped = new Set(
+            String(process.env.VOICELINK_SKIP_DEFAULT_MODULES || '')
+                .split(',')
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+        );
+        const defaultModuleIds = ['support-system'];
+        let changed = false;
+
+        for (const moduleId of defaultModuleIds) {
+            if (skipped.has(moduleId)) continue;
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module || this.installedModules.installed[moduleId]) continue;
+            this.installedModules.installed[moduleId] = {
+                installedAt: Date.now(),
+                config: { ...module.defaultConfig, enabled: true }
+            };
+            this.installedModules.installOrder.push(moduleId);
+            changed = true;
+            console.log(`[ModuleRegistry] Auto-installed default module: ${module.name}`);
+        }
+
+        if (changed) {
+            this.installedModules.installOrder = Array.from(new Set(this.installedModules.installOrder));
+            this.saveInstalledModules();
+        }
     }
 
     saveInstalledModules() {

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Getting Started with VoiceLink</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>Getting Started with VoiceLink</h1>
+                <p class="subtitle">Use this guide to install VoiceLink, connect to a server, and join your first room.</p>
+                <nav class="header-nav" aria-label="Documentation navigation">
+                    <a href="index.html" class="nav-link">Documentation Home</a>
+                    <a href="../client/index.html" class="nav-link">Back to App</a>
+                    <a href="voiceover-support.html" class="nav-link">VoiceOver Support</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="content" id="main-content">
+            <div class="content-wrapper">
+                <section class="article-intro" aria-labelledby="intro-heading">
+                    <h2 id="intro-heading">Basics</h2>
+                    <p>VoiceLink opens into a server-focused layout. You choose a server first, then review its rooms, room details, and available actions. Main and Community can both appear in the app, and federation can show matching rooms across more than one server.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="install-heading">
+                    <h2 id="install-heading">Getting Started</h2>
+                    <ol>
+                        <li>Install the current VoiceLink build for your device.</li>
+                        <li>Open the app and allow microphone access if the system asks.</li>
+                        <li>Choose a server such as Main or Community from the server list.</li>
+                        <li>Move to the room list and open room details or join a room directly.</li>
+                        <li>Confirm success by checking for room audio, the room title, users, bots, and system messages.</li>
+                    </ol>
+                </section>
+
+                <section class="article-section" aria-labelledby="install-options-heading">
+                    <h2 id="install-options-heading">Choose the Right Install Path</h2>
+                    <div class="support-grid">
+                        <article class="support-card">
+                            <h3>macOS desktop</h3>
+                            <p>Use the signed macOS build if you want the full desktop feature set, background audio, direct room controls, and server management tools.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>iPhone or iPad</h3>
+                            <p>Use the current TestFlight build if you are testing room join, chat, audio monitoring, or server switching on iOS.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Web access</h3>
+                            <p>Use the browser client when you need quick access from a device without a local install or when testing a server deployment.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Server deployment</h3>
+                            <p>Use the server installer path only when you are setting up or managing a VoiceLink server and its related admin services. Docker is supported for VPS and container hosts that already manage reverse proxy and storage volumes.</p>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="article-section" aria-labelledby="docker-server-heading">
+                    <h2 id="docker-server-heading">Docker Server Install</h2>
+                    <p>For container hosts, create a persistent data directory and run VoiceLink behind your existing HTTPS reverse proxy. Replace <code>https://your-server.example</code> with the public URL you will register in VoiceLink.</p>
+                    <pre><code class="language-bash">mkdir -p ~/voicelink-data
+docker run -d \
+  --name voicelink-server \
+  --restart unless-stopped \
+  -p 3010:3010 \
+  -v "$HOME/voicelink-data:/app/data" \
+  -e VOICELINK_PUBLIC_URL="https://your-server.example" \
+  -e VOICELINK_HUB_URL="https://voicelink.dev" \
+  voicelink/server:1.0.0</code></pre>
+                    <p>If a published image is not available on your host yet, use the server tarball or ZIP package first, then build a local image from the extracted server directory.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="navigation-heading">
+                    <h2 id="navigation-heading">Main Navigation</h2>
+                    <ul>
+                        <li>The server list shows each configured server by display name.</li>
+                        <li>The rooms view shows rooms for the selected server or a combined federation view when enabled.</li>
+                        <li>Room details tell you the server name, room name, access level, and current media state.</li>
+                        <li>Settings stays available while you are in a room so you can change diagnostics, audio, or announcement preferences without leaving.</li>
+                    </ul>
+                </section>
+
+                <section class="article-section" aria-labelledby="room-tasks-heading">
+                    <h2 id="room-tasks-heading">Working with Rooms</h2>
+                    <h3>Preview a room</h3>
+                    <p>Use Preview when you want to hear a short sample of room media before joining. The preview ends on its own after the short preview window.</p>
+
+                    <h3>Open room details</h3>
+                    <p>Open room details when you need the room description, server source, visibility, access level, or the list of available actions before joining.</p>
+
+                    <h3>Join a room</h3>
+                    <p>Join the room from the room row or details view. After joining, the room header and user list should update to reflect the active room.</p>
+
+                    <h3>Review people and messages</h3>
+                    <p>After joining, move to the user list and message area to confirm users, bots, room chat, and system messages. If the room is configured to show chat, messages should appear above the message box.</p>
+
+                    <h3>Adjust audio controls</h3>
+                    <p>Use the room menu or user actions to show audio controls only when needed. Volume, mute, monitoring, and media choices should remain available without forcing you out of the room.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="voiceover-heading">
+                    <h2 id="voiceover-heading">VoiceOver and Keyboard Notes</h2>
+                    <ul>
+                        <li><code>VO-Space</code> activates the selected control.</li>
+                        <li>VoiceOver actions on a room row can expose actions such as Preview, Join, Share, or Details.</li>
+                        <li>Sliders should announce percentage values and adjust in consistent steps.</li>
+                        <li>Use the room menu instead of leaving and rejoining when you only need settings or audio changes.</li>
+                    </ul>
+                </section>
+
+                <section class="article-section" aria-labelledby="troubleshooting-heading">
+                    <h2 id="troubleshooting-heading">Troubleshooting</h2>
+                    <div class="note-card">
+                        <ul>
+                            <li>If no room users are shown, refresh the room once, then send diagnostics with the server and room names.</li>
+                            <li>If room media buffers or does not stop, note the selected media source before sending diagnostics.</li>
+                            <li>If a secure server connection fails, the app may retry the fallback transport if the server allows it.</li>
+                        </ul>
+                    </div>
+                </section>
+
+                <section class="article-section" aria-labelledby="feedback-heading">
+                    <h2 id="feedback-heading">Contact and Feedback</h2>
+                    <p>If your first room join does not match this guide, send a bug report from Settings and include the build number, server name, room name, and the last action you took before the problem started.</p>
+                </section>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 /**
- * VoiceLink Local Documentation JavaScript
+ * VoiceLink Documentation JavaScript
  * Main documentation functionality and utilities
  */
 

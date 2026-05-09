@@ -242,11 +242,22 @@ final class LocalMonitorManager: ObservableObject {
     func refreshForSharedCaptureChange(reason: String = "sharedCaptureChanged") {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            guard self.monitoringActive, !self.isTransitioning else { return }
-            self.isTransitioning = true
-            defer { self.isTransitioning = false }
-            self.restartMonitoring(reason: reason)
+            self.refreshForSharedCaptureChangeLocked(reason: reason, delay: 0)
         }
+    }
+
+    func refreshForSharedCaptureChange(reason: String = "sharedCaptureChanged", after delay: TimeInterval) {
+        audioQueue.asyncAfter(deadline: .now() + max(delay, 0)) { [weak self] in
+            guard let self else { return }
+            self.refreshForSharedCaptureChangeLocked(reason: reason, delay: delay)
+        }
+    }
+
+    private func refreshForSharedCaptureChangeLocked(reason: String, delay: TimeInterval) {
+        guard monitoringActive, !isTransitioning else { return }
+        isTransitioning = true
+        defer { isTransitioning = false }
+        restartMonitoring(reason: delay > 0 ? "\(reason)-delayed" : reason)
     }
 
     private func configureIfNeeded() {
@@ -362,6 +373,7 @@ final class LocalMonitorManager: ObservableObject {
             updateMonitoringState(true)
             print("[LocalMonitor] Monitoring started")
             logger.notice("monitoring started")
+            scheduleActiveMonitorWatchdog(monitorFormat: monitorFormat)
         } catch {
             engine.stop()
             engine.reset()
@@ -806,6 +818,24 @@ final class LocalMonitorManager: ObservableObject {
             }
 
             self.scheduleSharedFeedFallbackIfNeeded(monitorFormat: monitorFormat)
+        }
+    }
+
+    private func scheduleActiveMonitorWatchdog(monitorFormat: AVAudioFormat) {
+        audioQueue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self else { return }
+            guard self.monitoringActive else { return }
+            guard self.targetMonitorFormat?.sampleRate == monitorFormat.sampleRate else { return }
+            guard self.totalSampleCallbacks == 0 || self.totalFramesRendered == 0 else { return }
+
+            self.logger.notice("monitor watchdog restarting inactive graph source=\(self.currentSourceDescription, privacy: .public)")
+            guard !self.isTransitioning else {
+                self.refreshForSharedCaptureChange(reason: "monitorWatchdogTransitionBusy", after: 0.75)
+                return
+            }
+            self.isTransitioning = true
+            defer { self.isTransitioning = false }
+            self.restartMonitoring(reason: "monitorWatchdogNoRenderedFrames")
         }
     }
 

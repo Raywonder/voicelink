@@ -46,6 +46,7 @@ class ServerManager: ObservableObject {
     private let roomStreamDefaultVolume: Float = 0.12
     private var registeredSocketSession = false
     private var pendingSessionRegistrationWorkItem: DispatchWorkItem?
+    private var awaitingDeviceApproval = false
     @Published var currentRoomMediaVolume: Float = 0.12
     @Published private(set) var currentRoomMediaMuted: Bool = false
 
@@ -441,6 +442,7 @@ class ServerManager: ObservableObject {
                 NotificationCenter.default.post(name: .serverConnectionChanged, object: nil)
             }
             self.registeredSocketSession = false
+            self.awaitingDeviceApproval = false
             self.registerAuthenticatedSessionIfNeeded()
             self.scheduleSessionRegistrationRetry()
             self.scheduleDomainRecoveryIfNeeded()
@@ -453,6 +455,7 @@ class ServerManager: ObservableObject {
             self?.stopDomainRecoveryTimer()
             self?.cancelPendingSessionRegistrationRetry()
             self?.registeredSocketSession = false
+            self?.awaitingDeviceApproval = false
             DispatchQueue.main.async {
                 self?.isConnected = false
                 self?.serverStatus = "Disconnected"
@@ -473,6 +476,7 @@ class ServerManager: ObservableObject {
             print("Socket session registered: \(data)")
             self?.cancelPendingSessionRegistrationRetry()
             self?.registeredSocketSession = true
+            self?.awaitingDeviceApproval = false
             DispatchQueue.main.async {
                 DeviceRevocationManager.shared.markCurrentDeviceOnline()
                 if let serverURL = self?.baseURL ?? self?.currentServerURL, !serverURL.isEmpty {
@@ -486,13 +490,19 @@ class ServerManager: ObservableObject {
         socket.on("auth_failed") { [weak self] data, ack in
             print("Socket session registration failed: \(data)")
             self?.registeredSocketSession = false
+            self?.awaitingDeviceApproval = false
             let message = (data.first as? [String: Any])?["message"] as? String
                 ?? (data.first as? String)
                 ?? "Authentication required"
+            let normalizedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             DispatchQueue.main.async {
                 if AuthenticationManager.shared.currentUser == nil {
                     self?.errorMessage = message
-                } else if !message.lowercased().contains("invalid or expired whmcs session") {
+                } else if normalizedMessage.contains("invalid or expired whmcs session") {
+                    AuthenticationManager.shared.authError = "Your client portal session expired. Sign in again."
+                    AuthenticationManager.shared.logout()
+                    self?.errorMessage = "Your client portal session expired. Sign in again."
+                } else {
                     self?.errorMessage = message
                 }
             }
@@ -505,6 +515,61 @@ class ServerManager: ObservableObject {
             }
             DispatchQueue.main.async {
                 AuthenticationManager.shared.updateCurrentUserAccessToken(token)
+            }
+        }
+
+        socket.on("device-approval-request") { data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            NotificationCenter.default.post(name: .deviceApprovalRequested, object: nil, userInfo: payload)
+            DispatchQueue.main.async {
+                DeviceRevocationManager.shared.fetchPendingApprovals()
+            }
+        }
+
+        socket.on("device-approval-pending") { [weak self] data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            self?.cancelPendingSessionRegistrationRetry()
+            self?.awaitingDeviceApproval = true
+            NotificationCenter.default.post(name: .deviceApprovalPending, object: nil, userInfo: payload)
+            DispatchQueue.main.async {
+                self?.errorMessage = "This sign-in is waiting for approval from another trusted device."
+            }
+        }
+
+        socket.on("device-approval-approved") { [weak self] data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            self?.awaitingDeviceApproval = false
+            NotificationCenter.default.post(name: .deviceApprovalApproved, object: nil, userInfo: payload)
+            NotificationCenter.default.post(name: .deviceApprovalResolved, object: nil, userInfo: payload)
+        }
+
+        socket.on("device-approval-denied") { [weak self] data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            self?.cancelPendingSessionRegistrationRetry()
+            self?.awaitingDeviceApproval = false
+            NotificationCenter.default.post(name: .deviceApprovalDenied, object: nil, userInfo: payload)
+            NotificationCenter.default.post(name: .deviceApprovalResolved, object: nil, userInfo: payload)
+            DispatchQueue.main.async {
+                self?.errorMessage = payload["reason"] as? String ?? "Sign-in was denied by another trusted device."
+            }
+        }
+
+        socket.on("device-approval-expired") { [weak self] data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            self?.cancelPendingSessionRegistrationRetry()
+            self?.awaitingDeviceApproval = false
+            NotificationCenter.default.post(name: .deviceApprovalExpired, object: nil, userInfo: payload)
+            NotificationCenter.default.post(name: .deviceApprovalResolved, object: nil, userInfo: payload)
+            DispatchQueue.main.async {
+                self?.errorMessage = payload["reason"] as? String ?? "Sign-in approval request expired."
+            }
+        }
+
+        socket.on("device-approval-resolved") { data, ack in
+            guard let payload = data.first as? [String: Any] else { return }
+            NotificationCenter.default.post(name: .deviceApprovalResolved, object: nil, userInfo: payload)
+            DispatchQueue.main.async {
+                DeviceRevocationManager.shared.fetchPendingApprovals()
             }
         }
 
@@ -808,6 +873,13 @@ class ServerManager: ObservableObject {
                 let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
                 let messageType = msgData["type"] as? String ?? "text"
                 let roomId = msgData["roomId"] as? String ?? self.activeRoomId
+                self.announceLiveRoomMessage(
+                    senderId: senderId,
+                    senderName: senderName,
+                    content: content,
+                    messageType: messageType,
+                    roomId: roomId
+                )
 
                 NotificationCenter.default.post(
                     name: .incomingChatMessage,
@@ -900,6 +972,11 @@ class ServerManager: ObservableObject {
                 let senderId = msgData["senderId"] as? String ?? ""
                 let senderName = msgData["senderName"] as? String ?? "Unknown"
                 let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
+                self.announceLiveDirectMessage(
+                    senderId: senderId,
+                    senderName: senderName,
+                    content: content
+                )
 
                 NotificationCenter.default.post(
                     name: .incomingDirectMessage,
@@ -1059,6 +1136,58 @@ class ServerManager: ObservableObject {
         }
     }
 
+    private func announceLiveRoomMessage(senderId: String, senderName: String, content: String, messageType: String, roomId: String?) {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else { return }
+        if let roomId = roomId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let activeRoomId = activeRoomId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !roomId.isEmpty,
+           !activeRoomId.isEmpty,
+           roomId != activeRoomId {
+            return
+        }
+        if isLikelyLocalMessage(senderId: senderId, senderName: senderName) {
+            return
+        }
+
+        let normalizedType = messageType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let resolvedSender = senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix: String
+        if normalizedType == "system" {
+            prefix = resolvedSender.isEmpty || resolvedSender == "Unknown" ? "System" : resolvedSender
+        } else if normalizedType == "bot" {
+            prefix = resolvedSender.isEmpty || resolvedSender == "Unknown" ? "VoiceLink bot" : resolvedSender
+        } else {
+            prefix = resolvedSender.isEmpty || resolvedSender == "Unknown" ? "Message" : "\(resolvedSender) says"
+        }
+        AccessibilityManager.shared.announce("\(prefix). \(trimmedContent)", priority: .polite, category: .roomEvents)
+    }
+
+    private func announceLiveDirectMessage(senderId: String, senderName: String, content: String) {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty, !isLikelyLocalMessage(senderId: senderId, senderName: senderName) else { return }
+        let resolvedSender = senderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = resolvedSender.isEmpty || resolvedSender == "Unknown" ? "Direct message" : "Direct message from \(resolvedSender)"
+        AccessibilityManager.shared.announce("\(prefix). \(trimmedContent)", priority: .polite, category: .roomEvents)
+    }
+
+    private func isLikelyLocalMessage(senderId: String, senderName: String) -> Bool {
+        let normalizedSenderId = senderId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedSenderName = senderName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedCurrentUserId = (currentUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !normalizedSenderId.isEmpty, !normalizedCurrentUserId.isEmpty, normalizedSenderId == normalizedCurrentUserId {
+            return true
+        }
+        let localNames = [
+            UserDefaults.standard.string(forKey: "voicelink.displayName"),
+            UserDefaults.standard.string(forKey: "voicelink.accountDisplayName"),
+            UserDefaults.standard.string(forKey: "voicelink.userName")
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty }
+        return !normalizedSenderName.isEmpty && localNames.contains(normalizedSenderName)
+    }
+
     func syncAuthenticatedSession() {
         guard isConnected else { return }
         registeredSocketSession = false
@@ -1086,9 +1215,13 @@ class ServerManager: ObservableObject {
 
         payload["user"] = [
             "id": currentUser.id,
+            "accountId": currentUser.accountId as Any,
+            "canonicalAccountId": currentUser.canonicalAccountId as Any,
+            "linkedLocalUserId": currentUser.linkedLocalUserId as Any,
             "username": currentUser.username,
             "displayName": currentUser.displayName,
             "email": currentUser.email as Any,
+            "canonicalEmail": currentUser.canonicalEmail as Any,
             "role": currentUser.role as Any,
             "permissions": currentUser.permissions,
             "authProvider": currentUser.authProvider ?? provider,
@@ -1105,11 +1238,11 @@ class ServerManager: ObservableObject {
     private func scheduleSessionRegistrationRetry(attempt: Int = 1) {
         cancelPendingSessionRegistrationRetry()
         guard attempt <= 5 else { return }
-        guard isConnected, !registeredSocketSession else { return }
+        guard isConnected, !registeredSocketSession, !awaitingDeviceApproval else { return }
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            guard self.isConnected, !self.registeredSocketSession else { return }
+            guard self.isConnected, !self.registeredSocketSession, !self.awaitingDeviceApproval else { return }
             self.registerAuthenticatedSessionIfNeeded()
             self.scheduleSessionRegistrationRetry(attempt: attempt + 1)
         }
@@ -1425,6 +1558,7 @@ class ServerManager: ObservableObject {
             name: primary.name.isEmpty ? incoming.name : primary.name,
             description: mergedDescription,
             welcomeMessage: mergedWelcomeMessage,
+            liveBroadcast: primary.liveBroadcast ?? incoming.liveBroadcast,
             userCount: max(primary.userCount, incoming.userCount),
             isPrivate: primary.isPrivate || incoming.isPrivate,
             isLocked: primary.isLocked || incoming.isLocked,
@@ -1737,16 +1871,28 @@ class ServerManager: ObservableObject {
 
     private var audioTransmitEngine: AVAudioEngine?
     private var isTransmitting = false
+    private let audioTransmissionTapBufferSize: AVAudioFrameCount = 1024
 
     private func scheduleAudioTransmissionStart(for roomId: String) {
         pendingAudioStartWorkItem?.cancel()
+        DispatchQueue.main.async {
+            if self.activeRoomId == roomId, !self.inputMuted, !self.isAudioTransmitting {
+                self.audioTransmissionStatus = "Starting audio..."
+            }
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            guard self.activeRoomId == roomId, self.isConnected else { return }
-            self.startAudioTransmission()
+            DispatchQueue.main.async {
+                guard self.activeRoomId == roomId else { return }
+                guard self.isConnected else {
+                    self.audioTransmissionStatus = "Waiting for server connection"
+                    return
+                }
+                self.startAudioTransmission()
+            }
         }
         pendingAudioStartWorkItem = work
-        audioStartQueue.asyncAfter(deadline: .now() + 0.12, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func scheduleJoinTimeout(for roomId: String) {
@@ -1803,6 +1949,11 @@ class ServerManager: ObservableObject {
 
     func setLocalMonitoringEnabled(_ enabled: Bool) {
         LocalMonitorManager.shared.setMonitoringEnabled(enabled)
+        if enabled, isAudioTransmitting || isTransmitting {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "monitorEnabledDuringTransmission")
+            }
+        }
     }
 
     private func startAudioTransmissionNow() {
@@ -1813,7 +1964,28 @@ class ServerManager: ObservableObject {
             }
             return
         }
-        guard !isTransmitting else { return }
+        guard isConnected, socket != nil else {
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = false
+                self.audioTransmissionStatus = "Waiting for server connection"
+            }
+            return
+        }
+        guard activeRoomId != nil else {
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = false
+                self.audioTransmissionStatus = "Join a room to transmit"
+            }
+            return
+        }
+        guard !isTransmitting else {
+            DispatchQueue.main.async {
+                self.isAudioTransmitting = true
+                self.audioTransmissionStatus = LocalMonitorManager.shared.isMonitoring ? "Transmitting + monitoring" : "Transmitting"
+                LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionAlreadyRunning")
+            }
+            return
+        }
 
         // Ensure selected devices are applied before opening capture path.
         SettingsManager.shared.applySelectedAudioDevices()
@@ -1834,7 +2006,7 @@ class ServerManager: ObservableObject {
             "channels": 1
         ])
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+        inputNode.installTap(onBus: 0, bufferSize: audioTransmissionTapBufferSize, format: format) { [weak self] buffer, time in
             guard let self = self, self.isTransmitting else { return }
             LocalMonitorManager.shared.ingestSharedTransmissionBuffer(buffer)
             let localUsername = AuthenticationManager.shared.currentUser?.displayName
@@ -1860,6 +2032,7 @@ class ServerManager: ObservableObject {
             let base64Audio = data.base64EncodedString()
 
             // Send audio data to server for relay
+            guard self.isConnected, self.activeRoomId != nil else { return }
             self.socket?.emit("audio-data", [
                 "audioData": base64Audio,
                 "timestamp": Date().timeIntervalSince1970,
@@ -1876,6 +2049,8 @@ class ServerManager: ObservableObject {
             DispatchQueue.main.async {
                 self.isAudioTransmitting = true
                 self.audioTransmissionStatus = LocalMonitorManager.shared.isMonitoring ? "Transmitting + monitoring" : "Transmitting"
+                LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStarted")
+                LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStartedStabilized", after: 0.75)
             }
             print("[Audio] Microphone capture started, transmitting to server")
         } catch {
@@ -1903,6 +2078,8 @@ class ServerManager: ObservableObject {
         DispatchQueue.main.async {
             self.isAudioTransmitting = false
             self.audioTransmissionStatus = self.inputMuted ? "Input muted" : "Stopped"
+            LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStopped")
+            LocalMonitorManager.shared.refreshForSharedCaptureChange(reason: "audioTransmissionStoppedStabilized", after: 0.75)
         }
         print("[Audio] Microphone capture stopped")
     }
@@ -1962,6 +2139,7 @@ struct ServerRoom: Identifiable {
     let name: String
     let description: String
     let welcomeMessage: String?
+    let liveBroadcast: RoomLiveBroadcast?
     let userCount: Int
     let isPrivate: Bool
     let isLocked: Bool
@@ -1983,6 +2161,7 @@ struct ServerRoom: Identifiable {
         name: String,
         description: String,
         welcomeMessage: String?,
+        liveBroadcast: RoomLiveBroadcast?,
         userCount: Int,
         isPrivate: Bool,
         isLocked: Bool,
@@ -2003,6 +2182,7 @@ struct ServerRoom: Identifiable {
         self.name = name
         self.description = description
         self.welcomeMessage = welcomeMessage
+        self.liveBroadcast = liveBroadcast
         self.userCount = userCount
         self.isPrivate = isPrivate
         self.isLocked = isLocked
@@ -2054,11 +2234,16 @@ struct ServerRoom: Identifiable {
             return nil
         }
         func parseDate(_ value: Any?) -> Date? {
+            func dateFromTimestamp(_ raw: TimeInterval) -> Date {
+                let seconds = raw > 1_000_000_000_000 ? raw / 1000 : raw
+                return Date(timeIntervalSince1970: seconds)
+            }
+
             if let timestamp = value as? TimeInterval {
-                return Date(timeIntervalSince1970: timestamp)
+                return dateFromTimestamp(timestamp)
             }
             if let timestampInt = value as? Int {
-                return Date(timeIntervalSince1970: TimeInterval(timestampInt))
+                return dateFromTimestamp(TimeInterval(timestampInt))
             }
             guard let stringValue = value as? String, !stringValue.isEmpty else {
                 return nil
@@ -2066,6 +2251,9 @@ struct ServerRoom: Identifiable {
             let isoFormatter = ISO8601DateFormatter()
             if let parsed = isoFormatter.date(from: stringValue) {
                 return parsed
+            }
+            if let timestamp = TimeInterval(stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return dateFromTimestamp(timestamp)
             }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -2078,6 +2266,17 @@ struct ServerRoom: Identifiable {
             stringValue(dict["description"])
             ?? stringValue(dict["roomDescription"])
             ?? stringValue(dict["room_description"])
+            ?? {
+                guard let metadata = dict["metadata"] as? [String: Any] else { return nil }
+                return stringValue(metadata["description"])
+                    ?? stringValue(metadata["roomDescription"])
+                    ?? stringValue(metadata["room_description"])
+                    ?? stringValue(metadata["details"])
+                    ?? stringValue(metadata["topic"])
+                    ?? stringValue(metadata["about"])
+                    ?? stringValue(metadata["summary"])
+                    ?? stringValue(metadata["subtitle"])
+            }()
             ?? stringValue(dict["details"])
             ?? stringValue(dict["topic"])
             ?? stringValue(dict["about"])
@@ -2087,6 +2286,20 @@ struct ServerRoom: Identifiable {
         self.welcomeMessage = stringValue(dict["welcomeMessage"])
             ?? stringValue(dict["roomWelcomeMessage"])
             ?? stringValue(dict["welcome"])
+        if let liveBroadcastDict = dict["liveBroadcast"] as? [String: Any] {
+            let shareURL = stringValue(liveBroadcastDict["shareUrl"])
+                ?? stringValue(liveBroadcastDict["publicUrl"])
+            self.liveBroadcast = RoomLiveBroadcast(
+                enabled: liveBroadcastDict["enabled"] as? Bool ?? false,
+                isLive: liveBroadcastDict["isLive"] as? Bool ?? false,
+                status: stringValue(liveBroadcastDict["status"]) ?? "idle",
+                provider: stringValue(liveBroadcastDict["provider"]) ?? "aaastreamer",
+                providerName: stringValue(liveBroadcastDict["providerName"]) ?? "AAAStreamer",
+                shareURL: shareURL
+            )
+        } else {
+            self.liveBroadcast = nil
+        }
         self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
         self.isLocked = dict["isLocked"] as? Bool ?? dict["locked"] as? Bool ?? false
@@ -2095,7 +2308,7 @@ struct ServerRoom: Identifiable {
             ?? dict["recordingEnabled"] as? Bool
             ?? false
         self.maxUsers = intValue(dict["maxUsers"]) ?? 50
-        self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"])
+        self.createdBy = stringValue(dict["createdBy"]) ?? stringValue(dict["ownerUsername"]) ?? stringValue(dict["owner"])
         self.createdByRole = stringValue(dict["createdByRole"]) ?? stringValue(dict["ownerRole"])
         self.roomType = stringValue(dict["roomType"])
             ?? stringValue(dict["type"])

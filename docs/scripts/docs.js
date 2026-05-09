@@ -1,5 +1,5 @@
 /**
- * VoiceLink Local Documentation JavaScript
+ * VoiceLink Documentation JavaScript
  * Main documentation functionality and utilities
  */
 
@@ -43,34 +43,24 @@ class DocumentationManager {
     }
 
     setupAccessibility() {
-        // Add keyboard navigation for card elements
+        // Make full cards clickable only when a real link already exists inside them.
         const cards = document.querySelectorAll('.feature-card, .quick-card, .platform-card, .trouble-card');
         cards.forEach(card => {
-            if (!card.hasAttribute('tabindex')) {
-                card.setAttribute('tabindex', '0');
+            const link = card.querySelector('a[href]');
+            if (!link || card.contains(document.activeElement)) {
+                return;
             }
 
-            card.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    const link = card.querySelector('a') || card;
-                    if (link.href) {
-                        window.location.href = link.href;
-                    }
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('a, button, input, select, textarea')) {
+                    return;
                 }
+                link.click();
             });
         });
 
         // Add skip navigation link
         this.addSkipNavigation();
-
-        // Improve table accessibility
-        const tables = document.querySelectorAll('table');
-        tables.forEach(table => {
-            if (!table.hasAttribute('role')) {
-                table.setAttribute('role', 'table');
-            }
-        });
     }
 
     addSkipNavigation() {
@@ -146,7 +136,7 @@ class DocumentationManager {
         textNodes.forEach(textNode => {
             const parent = textNode.parentElement;
             const newHTML = textNode.nodeValue.replace(regex,
-                `<span class="help-term" data-tooltip="${description}" tabindex="0">${term}</span>`
+                `<button type="button" class="help-term" data-tooltip="${description}" aria-label="${term}: ${description}">${term}</button>`
             );
 
             const wrapper = document.createElement('span');
@@ -165,6 +155,13 @@ class DocumentationManager {
                 border-bottom: 1px dotted #667eea;
                 cursor: help;
                 position: relative;
+                background: transparent;
+                border-top: 0;
+                border-left: 0;
+                border-right: 0;
+                color: inherit;
+                font: inherit;
+                padding: 0;
             }
 
             .help-term:hover, .help-term:focus {
@@ -220,20 +217,23 @@ class DocumentationManager {
         const headers = table.querySelectorAll('th');
         headers.forEach((header, index) => {
             if (!header.classList.contains('no-sort')) {
-                header.style.cursor = 'pointer';
-                header.setAttribute('role', 'button');
-                header.setAttribute('tabindex', '0');
+                header.style.cursor = 'default';
+                if (header.querySelector('.table-sort-button')) {
+                    return;
+                }
 
-                header.addEventListener('click', () => {
+                const label = header.textContent.trim();
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'table-sort-button';
+                button.textContent = label;
+                button.setAttribute('aria-label', `Sort by ${label}`);
+                button.addEventListener('click', () => {
                     this.sortTable(table, index);
                 });
 
-                header.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        this.sortTable(table, index);
-                    }
-                });
+                header.textContent = '';
+                header.appendChild(button);
             }
         });
     }
@@ -329,6 +329,17 @@ class DocumentationManager {
 
             .copy-btn:hover, .copy-btn:focus {
                 opacity: 1;
+            }
+
+            .table-sort-button {
+                background: transparent;
+                border: 0;
+                color: inherit;
+                cursor: pointer;
+                font: inherit;
+                font-weight: inherit;
+                padding: 0;
+                text-align: inherit;
             }
 
             pre:hover .copy-btn {

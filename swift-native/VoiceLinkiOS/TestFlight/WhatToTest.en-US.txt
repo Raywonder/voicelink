@@ -1,8 +1,71 @@
-VoiceLink – TestFlight Build 66
+VoiceLink TestFlight - What to Test
+Build 78 / 1.0.0
+Date: 2026-05-08
 
-What to test:
-- The app should open cleanly without crashing after the startup sound.
-- People in Room should keep showing the joined room users instead of dropping back to the empty state.
-- Room chat should now show welcome messages, system messages, and bot messages for the active room.
-- Same-name rooms should still group correctly while the chosen room copy stays tied to its own server.
-- Room audio controls should stay above chat, and Test Sound should still duck room audio and restore it cleanly.
+Before testing, open TestFlight and check for updates so you are running the latest VoiceLink build.
+
+Focus: emergency launch-crash validation, safer Servers tab behavior, VoiceLink account sign-in state, Mastodon instance sign-in, server-scoped support tickets, room profile actions, room join stability, room system messages, audio controls, scrolling/audio performance, and accessibility.
+
+1. Launch and Servers tab
+- App launches to native UI without a crash.
+- Startup intro audio is intentionally disabled in this build while launch crashes are investigated.
+- Open the Servers tab. It should default to the safer Federated Rooms view.
+- Refresh the Federated Rooms list and confirm the app stays open.
+- Main server resolves to voicelinkapp.app.
+- Community server resolves to community.voicelinkapp.app.
+- The server directory should show four uniquely named rows:
+  VoiceLink Main from VoiceLink on voicelinkapp.app;
+  VoiceLink Community from VoiceLink on community.voicelinkapp.app;
+  DevineCreations VoiceLink from DevineCreations on devine-creations.com;
+  DevineCreations VoiceLink from DevineCreations on devinecreations.net.
+- If a fifth row appears, note its URL; it should not be another generic Community row.
+
+2. VoiceLink account sign-in
+- Open Settings and sign in with a VoiceLink account.
+- Confirm the sign-in fields disappear after sign-in is confirmed.
+- Confirm the signed-in account summary and Sign Out action are shown.
+- Test username or email login if you have both available.
+
+3. Mastodon sign-in
+- Open Settings and choose Mastodon sign-in.
+- Confirm it opens the VoiceLink web client sign-in flow, not the downloads page.
+- Test a suggested instance and a custom instance.
+- For Layer8, try layer8.space or layer8; both should route to the correct instance.
+- If sign-in cannot complete, report the exact Mastodon instance, screen, and error.
+
+4. Room join and messaging
+- Join rooms from Main and Community.
+- Confirm room presence, messages, and system join messages update.
+- Confirm join, leave, user joined, and user left system messages remain visible in the room.
+- Confirm no stuck loading, no constant buffering, and no "Tried emitting when not connected" loop.
+- Test guest and signed-in room entry.
+- On first join for a server with rules or a message of the day, confirm the server terms sheet appears and Agree enters the room while Disagree stays out.
+- If the server has configured privacy policy, support, iMessage/SMS, or other useful links, confirm those links appear in the server terms/details views.
+
+5. Server support tickets
+- From a server details screen, choose Contact Server Support and create a short test ticket.
+- From a federated room or room details screen, choose Contact Server Support and confirm the ticket shows the server and room context.
+- Confirm ticket details stay in the private support sheet and are not posted into room messages.
+- Sign in, reopen the same support sheet, and confirm existing tickets for that server or room can be listed.
+- If ticket creation fails, include the server name, room name, account state, and exact error.
+
+6. In-room VoiceOver actions
+- With VoiceOver enabled, focus a person in the room.
+- Confirm double tap opens that user's profile.
+- Swipe down through actions and confirm View Profile and Direct Message are available.
+- Confirm monitor, whisper, and audio-control actions remain available where expected.
+
+7. Audio
+- Confirm microphone audio is heard by other room clients.
+- Confirm incoming room audio is heard on iOS.
+- Open and close room audio controls. Confirm the room stays joined and audio continues.
+- While room audio is active, scroll room lists and message lists. Report any buffering, heat, or stutter.
+- Background and foreground the app, then rejoin a room.
+
+8. Accessibility and room metadata
+- Server rows, room rows, users, actions, and reveal controls have useful labels.
+- Missing room descriptions are spoken as "No room description available."
+- Trusted, unverified, locked, hidden, and guest/login-required states are spoken as text, not only color or icon state.
+- Join, Details, Preview, Share, View Profile, and Direct Message actions remain reachable.
+
+Report issues with device model, iOS version, build number, server used, exact steps, expected result, actual result, and a screenshot or recording when possible.

@@ -1,4 +1,4 @@
-/* VoiceLink Local Documentation Styles */
+/* VoiceLink Documentation Styles */
 
 /* Reset and Base Styles */
 * {
@@ -277,6 +277,82 @@ body {
     font-size: 0.95rem;
 }
 
+/* Article Layout */
+.content {
+    padding: 3rem 2rem;
+    background: white;
+}
+
+.content-wrapper {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.article-intro {
+    background: #f8f9fa;
+    border-left: 4px solid #667eea;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+}
+
+.article-section {
+    margin-bottom: 2rem;
+}
+
+.article-section h2 {
+    color: #495057;
+    font-size: 2rem;
+    margin-bottom: 1rem;
+}
+
+.article-section h3 {
+    color: #495057;
+    font-size: 1.35rem;
+    margin-bottom: 0.75rem;
+    margin-top: 1.25rem;
+}
+
+.article-section p,
+.article-section li {
+    color: #495057;
+}
+
+.article-section ul,
+.article-section ol {
+    margin-left: 1.5rem;
+}
+
+.article-section li + li {
+    margin-top: 0.5rem;
+}
+
+.note-card {
+    background: #eef3ff;
+    border: 1px solid #cdd9ff;
+    border-radius: 12px;
+    margin: 1rem 0;
+    padding: 1rem 1.25rem;
+}
+
+.support-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-top: 1rem;
+}
+
+.support-card {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 12px;
+    padding: 1.25rem;
+}
+
+.support-card h3 {
+    margin-top: 0;
+}
+
 /* Platform Section */
 .platform-section {
     padding: 3rem 2rem;
@@ -517,7 +593,8 @@ body {
     .features-section,
     .platform-section,
     .troubleshooting-section,
-    .faq-section {
+    .faq-section,
+    .content {
         padding: 2rem 1rem;
     }
 

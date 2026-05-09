@@ -13,6 +13,7 @@ class SpatialAudioEngine: ObservableObject {
     private var environmentNode: AVAudioEnvironmentNode?
     private var playerNodes: [String: AVAudioPlayerNode] = [:]
     private var spatialMixers: [String: AVAudioMixerNode] = [:]
+    private var observers: [NSObjectProtocol] = []
 
     // User positions in 3D space
     @Published var userPositions: [String: SIMD3<Float>] = [:]
@@ -108,6 +109,11 @@ class SpatialAudioEngine: ObservableObject {
     init() {
         setupAudioEngine()
         loadHRTFDatabase()
+        setupObservers()
+    }
+
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: - Setup
@@ -141,6 +147,7 @@ class SpatialAudioEngine: ObservableObject {
         // Attach to engine
         engine.attach(envNode)
         engine.connect(envNode, to: engine.mainMixerNode, format: nil)
+        engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
 
         print("[SpatialAudio] Engine configured with HRTF")
     }
@@ -151,6 +158,7 @@ class SpatialAudioEngine: ObservableObject {
         }
 
         if !engine.isRunning {
+            refreshOutputMix()
             try engine.start()
             print("[SpatialAudio] Engine started")
         }
@@ -189,6 +197,7 @@ class SpatialAudioEngine: ObservableObject {
 
             playerNodes[userId] = playerNode
             spatialMixers[userId] = mixerNode
+            applyVolume(for: userId)
 
             // Set default position
             if userPositions[userId] == nil {
@@ -228,7 +237,7 @@ class SpatialAudioEngine: ObservableObject {
     // MARK: - Audio Data Reception
 
     /// Receive and play audio data from a remote user via server relay
-    func receiveAudioData(from userId: String, data: Data, timestamp: Double, sampleRate: Double) {
+    func receiveAudioData(from userId: String, username: String, data: Data, timestamp: Double, sampleRate: Double) {
         guard let engine = audioEngine, isEnabled else { return }
 
         // Ensure player node exists for this user
@@ -274,8 +283,46 @@ class SpatialAudioEngine: ObservableObject {
 
         // Schedule buffer for playback
         if let playerNode = playerNodes[userId] {
+            applyVolume(for: userId)
+            RecordingManager.shared.addUserAudio(userId: userId, username: username, buffer: buffer)
             playerNode.scheduleBuffer(buffer, completionHandler: nil)
         }
+    }
+
+    func refreshOutputMix() {
+        let outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
+        audioEngine?.mainMixerNode.outputVolume = outputVolume
+        for userId in spatialMixers.keys {
+            applyVolume(for: userId)
+        }
+    }
+
+    private func setupObservers() {
+        let center = Foundation.NotificationCenter.default
+        observers.append(center.addObserver(forName: Notification.Name.userVolumeChanged, object: nil, queue: nil) { [weak self] note in
+            guard let userId = note.userInfo?["userId"] as? String else { return }
+            DispatchQueue.main.async {
+                self?.applyVolume(for: userId)
+            }
+        })
+        observers.append(center.addObserver(forName: Notification.Name.userMuteChanged, object: nil, queue: nil) { [weak self] note in
+            guard let userId = note.userInfo?["userId"] as? String else { return }
+            DispatchQueue.main.async {
+                self?.applyVolume(for: userId)
+            }
+        })
+        observers.append(center.addObserver(forName: Notification.Name.masterVolumeChanged, object: nil, queue: nil) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.refreshOutputMix()
+            }
+        })
+    }
+
+    private func applyVolume(for userId: String) {
+        guard let mixerNode = spatialMixers[userId] else { return }
+        let userVolume = UserAudioControlManager.shared.effectiveVolume(for: userId)
+        let outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
+        mixerNode.outputVolume = max(0, min(2, userVolume * outputVolume))
     }
 
     // MARK: - Position Management

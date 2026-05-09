@@ -29,8 +29,8 @@ class DefaultRoomsManager {
             '/assets/audio/room-ambience/',
             '/downloads/voicelink/sounds/',
             '/downloads/voicelink/sounds/room-ambience/',
-            'https://voicelink.devinecreations.net/downloads/voicelink/sounds/',
-            'https://voicelink.devinecreations.net/downloads/voicelink/sounds/room-ambience/'
+            'https://voicelinkapp.app/downloads/voicelink/sounds/',
+            'https://voicelinkapp.app/downloads/voicelink/sounds/room-ambience/'
         ];
 
         this.init();

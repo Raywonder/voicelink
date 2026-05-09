@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Using VoiceLink with VoiceOver</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>Using VoiceLink with VoiceOver</h1>
+                <p class="subtitle">This guide covers the main VoiceOver tasks for servers, rooms, messages, and audio controls.</p>
+                <nav class="header-nav" aria-label="Documentation navigation">
+                    <a href="index.html" class="nav-link">Documentation Home</a>
+                    <a href="getting-started.html" class="nav-link">Getting Started</a>
+                    <a href="../client/index.html" class="nav-link">Back to App</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="content" id="main-content">
+            <div class="content-wrapper">
+                <section class="article-intro" aria-labelledby="voiceover-intro">
+                    <h2 id="voiceover-intro">Intro</h2>
+                    <p>VoiceLink is intended to work well with VoiceOver. This guide covers the main tasks, navigation patterns, and spoken cues you need to move between servers, review room details, join rooms, manage audio, and send diagnostics.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="basics-heading">
+                    <h2 id="basics-heading">Basics</h2>
+                    <ul>
+                        <li>The server list is the first major area to check when the app opens.</li>
+                        <li>The rooms view updates to match the selected server or the current federation view.</li>
+                        <li>Room details tell you which server a room belongs to, which matters when rooms with the same name exist on more than one server.</li>
+                        <li>Settings should remain available while you are in a room so you can change audio or diagnostics without leaving.</li>
+                    </ul>
+                </section>
+
+                <section class="article-section" aria-labelledby="start-heading">
+                    <h2 id="start-heading">Getting Started</h2>
+                    <ol>
+                        <li>Open VoiceLink and wait for the startup sound to finish.</li>
+                        <li>Move to the server list and choose the server you want.</li>
+                        <li>Move to the rooms list and review the focused room name and server source.</li>
+                        <li>Use the default action or VoiceOver actions to preview, open details, or join.</li>
+                        <li>After joining, confirm the room title, users, bots, and system messages are present.</li>
+                    </ol>
+                </section>
+
+                <section class="article-section" aria-labelledby="navigation-heading">
+                    <h2 id="navigation-heading">Main Navigation</h2>
+                    <h3>Servers</h3>
+                    <p>Each server should be announced by its display name. If descriptions are configured, read them before joining rooms so you know whether you are on Main, Community, or another linked server.</p>
+
+                    <h3>Rooms</h3>
+                    <p>Rooms should announce the room name and enough detail to distinguish rooms with the same name on different servers. In federation views, the server source is part of the room context.</p>
+
+                    <h3>Settings</h3>
+                    <p>Settings should stay reachable while you are in a room so you can change announcement preferences, diagnostics, or audio behavior without navigating away from the active room.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="room-work-heading">
+                    <h2 id="room-work-heading">Working with Rooms</h2>
+                    <h3>Previewing a room</h3>
+                    <p>Use Preview when you want a short background listen before joining. The preview should end automatically after the preview interval.</p>
+
+                    <h3>Opening room details</h3>
+                    <p>Use room details to confirm the room name, server, access level, visibility, and any current background media before you join.</p>
+
+                    <h3>Joining a room</h3>
+                    <p>Join the room from the room row or details screen. The room header should then identify the active room and server.</p>
+
+                    <h3>Reviewing people in the room</h3>
+                    <p>Move to the user list after joining. Users, bots, and supported system entries should appear there instead of a generic empty-state message when the room is active.</p>
+
+                    <h3>Reading room and system messages</h3>
+                    <p>If chat is enabled for the room, messages should appear above the message field. System messages should also be readable when the room configuration allows them.</p>
+
+                    <h3>Adjusting room audio controls</h3>
+                    <p>Show audio controls only when needed. Room media, user volume, mute, and monitoring should be available through the room menu or user actions without forcing a room disconnect.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="keyboard-heading">
+                    <h2 id="keyboard-heading">VoiceOver and Keyboard Notes</h2>
+                    <ul>
+                        <li><code>VO-Space</code> activates the selected item.</li>
+                        <li>VoiceOver actions on a room row can expose Preview, Join, Share, or Details.</li>
+                        <li>VoiceOver actions on a user row can expose actions such as profile, direct message, or audio controls when supported for that user type.</li>
+                        <li>Sliders should announce percentage values and adjust in consistent steps.</li>
+                        <li><code>Escape</code> closes dialogs or sheets where the platform supports it.</li>
+                    </ul>
+                </section>
+
+                <section class="article-section" aria-labelledby="troubleshooting-heading">
+                    <h2 id="troubleshooting-heading">Troubleshooting</h2>
+                    <div class="note-card">
+                        <ul>
+                            <li>If no room users are shown, refresh the room once and then send diagnostics.</li>
+                            <li>If no audio is heard, check mute state, output selection, and whether room media is enabled.</li>
+                            <li>If a secure connection fails, the app may retry the fallback transport when the server allows it.</li>
+                        </ul>
+                    </div>
+                </section>
+
+                <section class="article-section" aria-labelledby="contact-heading">
+                    <h2 id="contact-heading">Contact and Feedback</h2>
+                    <p>When reporting a VoiceOver issue, include the platform, build number, server name, room name, and the exact control label or spoken phrase that did not match the guide.</p>
+                </section>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

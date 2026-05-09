@@ -35,6 +35,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private let relayPlayer = IOSRoomAudioRelayPlayer()
     private let microphoneCapture = IOSRoomMicrophoneCapture()
+    private var lastRoomUsersRequestAt = Date.distantPast
+    private var lastAudioLevelUpdateAt: [String: Date] = [:]
 
     private init() {
         let center = NotificationCenter.default
@@ -53,7 +55,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 let userId = (note.userInfo?["userId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !body.isEmpty, !userId.isEmpty else { return }
                 Task { @MainActor [weak self] in
-                    self?.socket?.emit("direct-message", ["targetUserId": userId, "message": body])
+                    guard let self, self.canEmitSocketEvent else {
+                        self?.connectionStatus = "Waiting for server connection."
+                        return
+                    }
+                    self.socket?.emit("direct-message", ["targetUserId": userId, "message": body])
                 }
             }
         )
@@ -99,7 +105,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     func leaveRoom(roomId: String) {
         let trimmedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRoomId.isEmpty else { return }
-        socket?.emit("leave-room", ["roomId": trimmedRoomId])
+        if canEmitSocketEvent {
+            socket?.emit("leave-room", ["roomId": trimmedRoomId])
+        }
         NotificationCenter.default.post(
             name: .iosRoomLeft,
             object: nil,
@@ -123,20 +131,36 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     func sendRoomMessage(_ text: String) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty, !joinedRoomId.isEmpty else { return }
+        guard canEmitSocketEvent else {
+            connectionStatus = "Waiting for server connection."
+            return
+        }
         socket?.emit("chat-message", [
             "roomId": joinedRoomId,
             "message": body,
-            "type": "text"
+            "type": "text",
+            "userName": pendingSession?.displayName ?? "iOS User",
+            "deviceName": UIDevice.current.name,
+            "deviceType": "ios",
+            "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
         ])
     }
 
     func requestRoomUsers() {
         guard !joinedRoomId.isEmpty else { return }
+        guard canEmitSocketEvent else { return }
         socket?.emit("get-room-users", ["roomId": joinedRoomId])
+        lastRoomUsersRequestAt = Date()
+    }
+
+    func requestRoomUsersIfDue(minimumInterval: TimeInterval = 1.5) {
+        guard Date().timeIntervalSince(lastRoomUsersRequestAt) >= minimumInterval else { return }
+        requestRoomUsers()
     }
 
     func requestRoomMessages() {
         guard !joinedRoomId.isEmpty else { return }
+        guard canEmitSocketEvent else { return }
         socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 100])
     }
 
@@ -316,23 +340,27 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             self.requestRoomUsers()
             self.requestRoomMessages()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.requestRoomUsers()
+                self?.requestRoomUsersIfDue(minimumInterval: 0.3)
                 self?.requestRoomMessages()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.requestRoomUsers()
+                self?.requestRoomUsersIfDue(minimumInterval: 0.6)
                 self?.requestRoomMessages()
             }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 await self?.refreshRoomSnapshotViaHTTP()
             }
-            self.socket?.emit("enable-audio-relay", [
-                "enabled": true,
-                "sampleRate": 48000,
-                "channels": 1
-            ])
-            self.startMicrophoneCaptureIfNeeded()
+            if self.canEmitSocketEvent {
+                self.socket?.emit("enable-audio-relay", [
+                    "enabled": true,
+                    "sampleRate": 48000,
+                    "channels": 1
+                ])
+                self.startMicrophoneCaptureIfNeeded()
+            } else {
+                self.audioRelayStatus = "Waiting for server connection"
+            }
         }
 
         socket.on("join-room-error") { [weak self] data, _ in
@@ -393,7 +421,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
             let users = Self.socketUsersValue(payload)
             guard !users.isEmpty else {
-                self.requestRoomUsers()
+                self.requestRoomUsersIfDue(minimumInterval: 1.5)
                 Task { [weak self] in
                     await self?.refreshRoomUsersViaHTTP(
                         baseURL: self?.activeBaseURL ?? "",
@@ -411,7 +439,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
 
         socket.on("user-audio-state-changed") { [weak self] _, _ in
-            self?.requestRoomUsers()
+            self?.requestRoomUsersIfDue(minimumInterval: 2.0)
         }
 
         socket.on("room-messages") { [weak self] data, _ in
@@ -498,7 +526,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     ]
                 )
             }
-            self.requestRoomUsers()
+            self.requestRoomUsersIfDue(minimumInterval: 1.0)
         }
 
         socket.on("user-left") { [weak self] data, _ in
@@ -526,7 +554,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     ]
                 )
             }
-            self.requestRoomUsers()
+            self.requestRoomUsersIfDue(minimumInterval: 1.0)
         }
     }
 
@@ -705,9 +733,18 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     private func joinPendingSessionIfNeeded() {
         guard let pendingSession else { return }
+        guard canEmitSocketEvent else {
+            connectionStatus = "Waiting for server connection."
+            return
+        }
         socket?.emit("join-room", [
             "roomId": pendingSession.roomId,
-            "userName": pendingSession.displayName
+            "userName": pendingSession.displayName,
+            "username": pendingSession.displayName,
+            "deviceName": UIDevice.current.name,
+            "deviceType": "ios",
+            "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
+            "appVersion": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         ])
         connectionStatus = "Joining \(pendingSession.roomName)…"
     }
@@ -836,6 +873,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     private func publishAudioState() {
         guard !joinedRoomId.isEmpty else { return }
+        guard canEmitSocketEvent else {
+            audioRelayStatus = "Waiting for server connection"
+            return
+        }
         socket?.emit("audio-state", [
             "roomId": joinedRoomId,
             "muted": inputMuted,
@@ -844,6 +885,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "localMuted": inputMuted,
             "outputMuted": outputMuted
         ])
+    }
+
+    private var canEmitSocketEvent: Bool {
+        socket?.status == .connected
     }
 
     private func startMicrophoneCaptureIfNeeded() {
@@ -855,6 +900,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 return
             }
             self.microphoneCapture.start { [weak self] packet in
+                let encodedAudio = packet.audioData.base64EncodedString()
+                let packetTimestamp = Date().timeIntervalSince1970
                 Task { @MainActor [weak self] in
                     guard let self,
                           !self.joinedRoomId.isEmpty,
@@ -865,8 +912,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     }
                     socket.emit("audio-data", [
                         "roomId": self.joinedRoomId,
-                        "audioData": packet.audioData.base64EncodedString(),
-                        "timestamp": Date().timeIntervalSince1970,
+                        "audioData": encodedAudio,
+                        "timestamp": packetTimestamp,
                         "sampleRate": packet.sampleRate,
                         "channels": packet.channels
                     ])
@@ -900,6 +947,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         let user = pendingSession.authUser
         if token.isEmpty || provider.isEmpty || String(describing: user["id"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             joinPendingSessionIfNeeded()
+            return
+        }
+        guard canEmitSocketEvent else {
+            connectionStatus = "Waiting for server connection."
             return
         }
         connectionStatus = "Verifying account session…"
@@ -950,6 +1001,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private func updateIncomingAudioLevel(from payload: [String: Any]) {
         let userId = normalizedSocketText(payload["userId"], fallback: "")
         guard !userId.isEmpty else { return }
+        let now = Date()
+        if let previous = lastAudioLevelUpdateAt[userId],
+           now.timeIntervalSince(previous) < 0.2 {
+            return
+        }
+        lastAudioLevelUpdateAt[userId] = now
         let encoded = (payload["audioData"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let level = IOSRoomAudioRelayPlayer.packetLevel(fromBase64Audio: encoded)
         userAudioLevels[userId] = level
@@ -1084,7 +1141,7 @@ private final class IOSRoomAudioRelayPlayer {
 
     func playPacket(_ payload: [String: Any]) {
         guard let encoded = payload["audioData"] as? String,
-              let data = Data(base64Encoded: encoded) else {
+              !encoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
         let sampleRate = (payload["sampleRate"] as? Double) ?? 48_000
@@ -1093,6 +1150,7 @@ private final class IOSRoomAudioRelayPlayer {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         renderQueue.async { [weak self] in
             guard let self else { return }
+            guard let data = Data(base64Encoded: encoded) else { return }
             if let monitorUserId = self.monitorUserId,
                !monitorUserId.isEmpty,
                senderId != monitorUserId {
@@ -1254,10 +1312,15 @@ private final class IOSRoomMicrophoneCapture {
 private func normalizedSocketBaseURL(_ rawURL: String) -> String {
     let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-        return "https://voicelink.devinecreations.net"
+        return "https://voicelinkapp.app"
     }
     if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
         return trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+    }
+    if trimmed.contains(":"),
+       let host = trimmed.split(separator: ":").first,
+       !host.isEmpty {
+        return "http://\(trimmed)"
     }
     return "https://\(trimmed)"
 }

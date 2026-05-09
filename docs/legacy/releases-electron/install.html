@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink - Web Installer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 2rem;
+        }
+        .header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .header p { opacity: 0.9; }
+        .installer-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .steps {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .step {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            font-size: 0.9rem;
+            color: #666;
+            border-right: 1px solid #e0e0e0;
+            position: relative;
+        }
+        .step:last-child { border-right: none; }
+        .step.active { background: white; color: #667eea; font-weight: 600; }
+        .step.completed { color: #28a745; }
+        .step .number {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            line-height: 24px;
+            border-radius: 50%;
+            background: #e0e0e0;
+            color: white;
+            font-size: 0.8rem;
+            margin-right: 0.5rem;
+        }
+        .step.active .number { background: #667eea; }
+        .step.completed .number { background: #28a745; }
+        .step-content { padding: 2rem; display: none; }
+        .step-content.active { display: block; }
+        h2 { margin-bottom: 1rem; color: #333; }
+        p { margin-bottom: 1rem; color: #666; }
+        .form-group { margin-bottom: 1.5rem; }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .hint { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #5a6fd6; }
+        .btn-secondary { background: #e0e0e0; color: #333; }
+        .btn-secondary:hover:not(:disabled) { background: #d0d0d0; }
+        .btn-group { display: flex; gap: 1rem; justify-content: flex-end; margin-top: 2rem; }
+        .requirements {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .requirements h3 { margin-bottom: 1rem; font-size: 1rem; }
+        .requirements ul { list-style: none; }
+        .requirements li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+        .requirements li::before {
+            content: "?";
+            position: absolute;
+            left: 0;
+            color: #28a745;
+        }
+        .requirements li.warning::before { content: "!"; color: #ffc107; }
+        .requirements li.error::before { content: "x"; color: #dc3545; }
+        .check-status { margin: 1.5rem 0; }
+        .check-item {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+        .check-item .icon { margin-right: 0.75rem; font-size: 1.2rem; }
+        .check-item.checking .icon { animation: spin 1s linear infinite; }
+        .check-item.success { background: #d4edda; }
+        .check-item.error { background: #f8d7da; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .progress-container { margin: 2rem 0; }
+        .progress-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .progress-text { text-align: center; margin-top: 0.5rem; color: #666; }
+        .success-message { text-align: center; padding: 2rem; }
+        .success-message .icon { font-size: 4rem; margin-bottom: 1rem; }
+        .success-message h2 { color: #28a745; }
+        .success-message .links { margin-top: 1.5rem; }
+        .success-message a {
+            display: inline-block;
+            margin: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+        }
+        .toggle-group { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .toggle-option {
+            flex: 1;
+            padding: 1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .toggle-option:hover { border-color: #667eea; }
+        .toggle-option.selected {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+        .toggle-option h4 { margin-bottom: 0.25rem; color: #333; }
+        .toggle-option p { font-size: 0.85rem; color: #666; margin: 0; }
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+        .already-installed {
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+        .already-installed .icon { font-size: 3rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>VoiceLink Installer</h1>
+            <p>Web-based setup wizard for your VoiceLink server</p>
+        </div>
+
+        <div class="installer-card">
+            <!-- Already Installed Message (hidden by default) -->
+            <div class="already-installed" id="already-installed" style="display: none;">
+                <div class="icon">&#9989;</div>
+                <h2>VoiceLink is Already Installed</h2>
+                <p>Your server "<span id="installed-name">VoiceLink Server</span>" is already configured and running.</p>
+                <div style="margin-top: 1.5rem;">
+                    <a href="../client/index.html" class="btn btn-primary">Open VoiceLink</a>
+                    <button class="btn btn-secondary" onclick="forceReinstall()">Reconfigure</button>
+                </div>
+            </div>
+
+            <!-- Installer Steps (shown when not installed) -->
+            <div id="installer-steps">
+                <!-- Step Indicators -->
+                <div class="steps">
+                    <div class="step active" data-step="1">
+                        <span class="number">1</span>
+                        <span>Welcome</span>
+                    </div>
+                    <div class="step" data-step="2">
+                        <span class="number">2</span>
+                        <span>Requirements</span>
+                    </div>
+                    <div class="step" data-step="3">
+                        <span class="number">3</span>
+                        <span>Configuration</span>
+                    </div>
+                    <div class="step" data-step="4">
+                        <span class="number">4</span>
+                        <span>Complete</span>
+                    </div>
+                </div>
+
+                <div id="error-message" class="error-message"></div>
+
+                <!-- Step 1: Welcome -->
+                <div class="step-content active" id="step1">
+                    <h2>Welcome to VoiceLink</h2>
+                    <p>This wizard will configure your VoiceLink server. The setup takes about 2 minutes.</p>
+
+                    <div class="requirements">
+                        <h3>What this installer will do:</h3>
+                        <ul>
+                            <li>Verify system requirements</li>
+                            <li>Configure your server settings</li>
+                            <li>Set up federation (optional)</li>
+                            <li>Create admin credentials</li>
+                        </ul>
+                    </div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="nextStep()">Get Started</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Requirements Check -->
+                <div class="step-content" id="step2">
+                    <h2>Checking Requirements</h2>
+                    <p>Verifying your server meets the requirements...</p>
+
+                    <div class="check-status" id="requirements-check">
+                        <div class="check-item checking" id="check-node">
+                            <span class="icon">&#8635;</span>
+                            <span>Checking Node.js version...</span>
+                        </div>
+                        <div class="check-item checking" id="check-npm">
+                            <span class="icon">&#8635;</span>
+                            <span>Checking npm availability...</span>
+                        </div>
+                        <div class="check-item checking" id="check-write">
+                            <span class="icon">&#8635;</span>
+                            <span>Checking write permissions...</span>
+                        </div>
+                        <div class="check-item checking" id="check-port">
+                            <span class="icon">&#8635;</span>
+                            <span>Checking port availability...</span>
+                        </div>
+                    </div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                        <button class="btn btn-primary" id="req-next-btn" disabled onclick="nextStep()">Continue</button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Configuration -->
+                <div class="step-content" id="step3">
+                    <h2>Server Configuration</h2>
+                    <p>Configure your VoiceLink server settings.</p>
+
+                    <div class="form-group">
+                        <label for="server-name">Server Name *</label>
+                        <input type="text" id="server-name" placeholder="My VoiceLink Server" value="VoiceLink Server" required>
+                        <p class="hint">Displayed to users when they connect</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="server-port">Server Port</label>
+                        <input type="number" id="server-port" value="3010" min="1024" max="65535">
+                        <p class="hint">Port to run the server on (default: 3010)</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="public-url">Public URL</label>
+                        <input type="text" id="public-url" placeholder="https://voicelink.example.com">
+                        <p class="hint">The URL users will use to access your server (optional)</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="admin-password">Admin Password</label>
+                        <input type="password" id="admin-password" placeholder="Create a strong password">
+                        <p class="hint">Used to access the admin panel (optional)</p>
+                    </div>
+
+                    <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Features</h3>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="enable-federation"> Enable Federation
+                        </label>
+                        <p class="hint">Allow rooms to be shared with the main VoiceLink hub</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="enable-media"> Enable Media Streaming
+                        </label>
+                        <p class="hint">Allow users to stream music from Jellyfin or internet radio</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="require-auth"> Require Authentication
+                        </label>
+                        <p class="hint">Users must log in to join rooms</p>
+                    </div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                        <button class="btn btn-primary" onclick="saveConfiguration()">Save Configuration</button>
+                    </div>
+                </div>
+
+                <!-- Step 4: Complete -->
+                <div class="step-content" id="step4">
+                    <div class="success-message">
+                        <div class="icon">&#10003;</div>
+                        <h2>Installation Complete!</h2>
+                        <p>Your VoiceLink server is now configured and ready to use.</p>
+
+                        <div class="requirements" style="text-align: left; margin-top: 1.5rem;">
+                            <h3>What's Next?</h3>
+                            <ul>
+                                <li>Access your server at the URL you configured</li>
+                                <li>Create your first room and invite users</li>
+                                <li>Customize settings in the admin panel</li>
+                                <li style="color: #dc3545;"><strong>Delete or rename this install.html file for security</strong></li>
+                            </ul>
+                        </div>
+
+                        <div class="links">
+                            <a href="../client/index.html">Open VoiceLink</a>
+                            <a href="../docs/index.html" style="background: #6c757d;">Documentation</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const API_BASE = window.location.origin;
+
+        // Check installation status on load
+        async function checkInstallStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/install/status`);
+                const data = await response.json();
+
+                if (data.installed && data.configured) {
+                    document.getElementById('installed-name').textContent = data.serverName;
+                    document.getElementById('already-installed').style.display = 'block';
+                    document.getElementById('installer-steps').style.display = 'none';
+                }
+            } catch (error) {
+                console.log('Fresh installation detected');
+            }
+        }
+
+        function forceReinstall() {
+            document.getElementById('already-installed').style.display = 'none';
+            document.getElementById('installer-steps').style.display = 'block';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => errorDiv.style.display = 'none', 5000);
+        }
+
+        function updateStepIndicators() {
+            document.querySelectorAll('.step').forEach((step, index) => {
+                step.classList.remove('active', 'completed');
+                if (index + 1 < currentStep) {
+                    step.classList.add('completed');
+                } else if (index + 1 === currentStep) {
+                    step.classList.add('active');
+                }
+            });
+
+            document.querySelectorAll('.step-content').forEach((content, index) => {
+                content.classList.remove('active');
+                if (index + 1 === currentStep) {
+                    content.classList.add('active');
+                }
+            });
+        }
+
+        function nextStep() {
+            if (currentStep < 4) {
+                currentStep++;
+                updateStepIndicators();
+
+                if (currentStep === 2) {
+                    runRequirementsCheck();
+                }
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 1) {
+                currentStep--;
+                updateStepIndicators();
+            }
+        }
+
+        async function runRequirementsCheck() {
+            const checkItems = {
+                'check-node': { name: 'Node.js', key: 'node' },
+                'check-npm': { name: 'npm', key: 'npm' },
+                'check-write': { name: 'Write permissions', key: 'writable' },
+                'check-port': { name: 'Port availability', key: 'port' }
+            };
+
+            try {
+                const response = await fetch(`${API_BASE}/api/install/requirements`);
+                const data = await response.json();
+
+                for (const [elementId, info] of Object.entries(checkItems)) {
+                    const el = document.getElementById(elementId);
+                    const req = data.requirements[info.key];
+
+                    el.classList.remove('checking');
+
+                    if (req.ok) {
+                        el.classList.add('success');
+                        el.querySelector('.icon').textContent = '✓';
+                        let text = `${info.name} OK`;
+                        if (req.current && typeof req.current === 'string') {
+                            text += ` (${req.current})`;
+                        }
+                        el.querySelector('span:last-child').textContent = text;
+                    } else {
+                        el.classList.add('error');
+                        el.querySelector('.icon').textContent = '✗';
+                        el.querySelector('span:last-child').textContent = `${info.name} - Failed`;
+                    }
+                }
+
+                document.getElementById('req-next-btn').disabled = !data.success;
+
+                if (!data.success) {
+                    showError('Some requirements are not met. Please resolve issues before continuing.');
+                }
+
+            } catch (error) {
+                showError('Could not check requirements. Make sure the server is running.');
+                console.error('Requirements check failed:', error);
+            }
+        }
+
+        async function saveConfiguration() {
+            const serverName = document.getElementById('server-name').value;
+            const serverPort = document.getElementById('server-port').value;
+            const publicUrl = document.getElementById('public-url').value;
+            const adminPassword = document.getElementById('admin-password').value;
+            const enableFederation = document.getElementById('enable-federation').checked;
+            const enableMedia = document.getElementById('enable-media').checked;
+            const requireAuth = document.getElementById('require-auth').checked;
+
+            if (!serverName.trim()) {
+                showError('Server name is required');
+                return;
+            }
+
+            try {
+                // Save configuration
+                const configResponse = await fetch(`${API_BASE}/api/install/configure`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        serverName,
+                        serverPort,
+                        publicUrl,
+                        adminPassword,
+                        enableFederation,
+                        enableMedia,
+                        requireAuth
+                    })
+                });
+
+                const configResult = await configResponse.json();
+
+                if (!configResult.success) {
+                    showError(configResult.error || 'Failed to save configuration');
+                    return;
+                }
+
+                // Complete installation
+                const completeResponse = await fetch(`${API_BASE}/api/install/complete`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const completeResult = await completeResponse.json();
+
+                if (completeResult.success) {
+                    nextStep(); // Go to success screen
+                } else {
+                    showError(completeResult.error || 'Failed to complete installation');
+                }
+
+            } catch (error) {
+                showError('Installation failed. Please check the server logs.');
+                console.error('Installation error:', error);
+            }
+        }
+
+        // Check status on page load
+        checkInstallStatus();
+    </script>
+</body>
+</html>

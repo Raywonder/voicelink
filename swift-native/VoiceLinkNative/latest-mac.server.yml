@@ -1,17 +1,11 @@
-url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-version: 1.0.0
-build: 33
+version: 1.0.0.46
 files:
-  - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: Ec/5SYk+VaZugPOAHIyZAKklUO0tmLUWvJaqDsP/PZdbJ0ohNRr0eNHpHp6mwo8DX7KUNoBlAJ90IilbHigbhA==
-    size: 23763627
-path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: Ec/5SYk+VaZugPOAHIyZAKklUO0tmLUWvJaqDsP/PZdbJ0ohNRr0eNHpHp6mwo8DX7KUNoBlAJ90IilbHigbhA==
-releaseDate: '2026-04-11T07:35:00.000Z'
-releaseNotes: |
-  VoiceLink macOS Update (Build 33)
-  - Adds native local-monitor effect controls and low-latency monitor modes.
-  - Detects installed system Audio Unit effects for monitor routing.
-  - Keeps the current room media, pairing, and admin SSL-manager fixes.
-mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
+  - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
+    sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
+    size: 370914559
+path: VoiceLinkMacOS.zip
+sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
+buildNumber: 46
+releaseDate: "2026-05-08T20:42:45.000Z"
+releaseNotes: >-
+  Build 46 includes the build 45 server browser and guest room-creation gating fixes, plus direct in-room server sign-in that returns users to the room and announces the signed-in account.

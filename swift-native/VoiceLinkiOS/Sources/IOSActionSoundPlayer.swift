@@ -27,6 +27,14 @@ enum IOSActionSoundPlayer {
         )
     }
 
+    static func playMessageReceived() {
+        guard soundsEnabled else { return }
+        playFirstAvailableBundledSound(
+            names: ["notification", "user-join", "success"],
+            extensions: ["wav", "m4a", "mp3", "flac"]
+        )
+    }
+
     static func playClose() {
         guard soundsEnabled else { return }
         playFirstAvailableBundledSound(

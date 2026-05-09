@@ -41,7 +41,7 @@
                 <p>Sign in for your full account experience, or continue as a guest for quick browser access.</p>
                 <div class="button-group">
                     <button id="startup-mastodon-login-btn" class="primary-btn" aria-label="Sign in with Mastodon">Login with Mastodon</button>
-                    <button id="startup-whmcs-login-btn" class="secondary-btn" aria-label="Sign in with Client Portal">Login with Client Portal</button>
+                    <button id="startup-whmcs-login-btn" class="secondary-btn" aria-label="Sign in with Client Account">Login with Client Account</button>
                 </div>
                 <div class="button-group">
                     <button id="startup-guest-btn" class="secondary-btn" aria-describedby="startup-guest-help">Continue as Guest</button>
@@ -81,14 +81,14 @@
                     <h2 id="login-modal-title">Login to VoiceLink</h2>
                     <div class="auth-tabs" role="tablist" aria-label="Login methods">
                         <button class="auth-tab active" data-tab="local-login" type="button" role="tab" aria-selected="true" aria-controls="local-login-tab" id="local-login-tab-button">VoiceLink</button>
-                        <button class="auth-tab" data-tab="whmcs-login" type="button" role="tab" aria-selected="false" aria-controls="whmcs-login-tab" id="whmcs-login-tab-button">Client Portal</button>
+                        <button class="auth-tab" data-tab="whmcs-login" type="button" role="tab" aria-selected="false" aria-controls="whmcs-login-tab" id="whmcs-login-tab-button">Client Account</button>
                         <button class="auth-tab" data-tab="mastodon-login" type="button" role="tab" aria-selected="false" aria-controls="mastodon-login-tab" id="mastodon-login-tab-button">Mastodon</button>
                     </div>
 
                     <div id="local-login-tab" class="auth-tab-content active" role="tabpanel" aria-labelledby="local-login-tab-button">
                         <form id="local-login-form" class="auth-form">
                             <div class="input-group">
-                                <label for="local-login-identity">Email or Username</label>
+                                <label for="local-login-identity">Username or Email</label>
                                 <input type="text" id="local-login-identity" autocomplete="username" required>
                             </div>
                             <div class="input-group">
@@ -112,8 +112,8 @@
                     <div id="whmcs-login-tab" class="auth-tab-content" role="tabpanel" aria-labelledby="whmcs-login-tab-button" hidden>
                         <form id="whmcs-login-form" class="auth-form">
                             <div class="input-group">
-                                <label for="whmcs-login-email">Email</label>
-                                <input type="email" id="whmcs-login-email" autocomplete="username" required>
+                                <label for="whmcs-login-email">Username or Email</label>
+                                <input type="text" id="whmcs-login-email" autocomplete="username" required>
                             </div>
                             <div class="input-group">
                                 <label for="whmcs-login-password">Password</label>
@@ -135,7 +135,7 @@
                             <button type="submit" class="primary-btn auth-submit">Login</button>
                         </form>
                         <div class="auth-actions-row">
-                            <button id="whmcs-sso-btn" class="secondary-btn" type="button">Open Client Portal</button>
+                            <button id="whmcs-sso-btn" class="secondary-btn" type="button">Open Client Account Portal</button>
                         </div>
                     </div>
 
@@ -344,7 +344,7 @@
                     <h3>Text Chat</h3>
                     <div id="chat-messages" class="chat-messages"></div>
                     <div class="chat-input-container">
-                        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                        <textarea id="chat-input" placeholder="Type a message..." maxlength="500" rows="1" aria-label="Message"></textarea>
                         <button id="send-message-btn">Send</button>
                     </div>
                 </div>

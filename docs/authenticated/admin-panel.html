@@ -17,6 +17,8 @@
         <li>Desktop app refreshes admin role on login and server reconnect.</li>
         <li>Server Administration menu appears only when admin role is active.</li>
       </ul>
+      <p><strong>Why you would use this:</strong> this is the fastest way to change room policy, fix server settings, or verify what members are seeing without logging into the server directly.</p>
+      <p><strong>Example:</strong> if a room is locked by mistake, open Server Administration from the desktop app, review who locked it, and unlock it without leaving the room browser.</p>
     </section>
 
     <section>
@@ -25,6 +27,7 @@
         <li>User moderation: kick, ban, mute policy, room access enforcement.</li>
         <li>Room moderation: lock, privacy behavior, and preview restrictions.</li>
       </ul>
+      <p><strong>Example:</strong> lock a room when a staff discussion starts, leave current members inside, and reopen it later when you are ready for new joins again.</p>
     </section>
 
     <section>
@@ -42,6 +45,7 @@
         <li>Refresh checksum on every new build, even when version remains <code>1.0</code>.</li>
         <li>Fallback to IP endpoints if domain fails, then auto-return to domain when healthy.</li>
       </ul>
+      <p><strong>Example:</strong> if you publish a hotfix build the same day, update the package, checksum, and metadata together so desktop auto-update does not offer stale downloads.</p>
     </section>
 
     <section>
@@ -50,6 +54,7 @@
         <li>Enable Send Logs in Advanced settings for support diagnostics.</li>
         <li>Collect app version, endpoint used, and room join/audio errors.</li>
       </ul>
+      <p><strong>Example:</strong> use this after a bug report that says audio dropped, a room vanished, or a server switch failed. The logs make it easier to see whether the problem was auth, media, federation, or room state.</p>
     </section>
 
     <section>

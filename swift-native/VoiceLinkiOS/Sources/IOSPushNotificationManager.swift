@@ -11,15 +11,13 @@ final class IOSPushNotificationManager: NSObject, ObservableObject, UIApplicatio
     private let tokenKey = "voicelink.iosPushAPNsToken"
     private let tokenRegistrationHashKey = "voicelink.iosPushTokenRegistrationHash"
     private let registrationEnabledKey = "systemActionNotifications"
+    @MainActor private var syncInFlight = false
 
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        Task { @MainActor in
-            await syncRegistrationIfNeeded()
-        }
         return true
     }
 
@@ -46,6 +44,10 @@ final class IOSPushNotificationManager: NSObject, ObservableObject, UIApplicatio
 
     @MainActor
     func syncRegistrationIfNeeded() async {
+        guard !syncInFlight else { return }
+        syncInFlight = true
+        defer { syncInFlight = false }
+
         guard isPushEnabled else {
             await unregisterCurrentDeviceIfPossible()
             UIApplication.shared.unregisterForRemoteNotifications()
@@ -103,7 +105,7 @@ final class IOSPushNotificationManager: NSObject, ObservableObject, UIApplicatio
     }
 
     private var currentServerBaseURL: String {
-        normalizePushBaseURL(defaults.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net")
+        normalizePushBaseURL(defaults.string(forKey: "voicelink.serverURL") ?? "https://voicelinkapp.app")
     }
 
     @MainActor
@@ -208,7 +210,7 @@ final class IOSPushNotificationManager: NSObject, ObservableObject, UIApplicatio
 private func normalizePushBaseURL(_ raw: String) -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-        return "https://voicelink.devinecreations.net"
+        return "https://voicelinkapp.app"
     }
     if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
         return trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)

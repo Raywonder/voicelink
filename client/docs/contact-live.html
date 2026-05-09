@@ -41,7 +41,8 @@
       <h2 id="live-chat">Live Chat Support</h2>
       <p>The preferred support path is the live support queue. This page starts a private support session first. Support staff can attach or create a ticket from the session if you do not already have one open.</p>
       <div class="actions">
-        <a class="button secondary" href="https://devinecreations.net/index.php?page=tickets">Open External Ticket Page (Fallback)</a>
+        <a class="button" href="mailto:support@voicelinkapp.app?subject=VoiceLink%20support%20request">Email VoiceLink Support</a>
+        <a class="button secondary" href="https://devine-creations.com/submitticket.php">Open Client Portal Ticket Page</a>
       </div>
       <form id="live-support-form" class="support-form">
         <label>
@@ -71,7 +72,7 @@
           </select>
         </label>
         <p class="hint">If you already have an open issue, support can attach this chat to it instead of creating a duplicate ticket.</p>
-        <p id="support-status" class="status"></p>
+        <p id="support-status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
         <div class="actions" style="margin-top:0;">
           <button class="button" type="submit">Start Support</button>
         </div>
@@ -79,9 +80,9 @@
 
       <h2>Support Channels</h2>
       <ul>
-        <li>Main contact form: <a href="https://devinecreations.com/contact">https://devinecreations.com/contact</a></li>
-        <li>External fallback ticket page: <a href="https://devinecreations.net/index.php?page=tickets">https://devinecreations.net/index.php?page=tickets</a></li>
-        <li>WHMCS client area: <a href="https://devine-creations.com/clientarea.php">https://devine-creations.com/clientarea.php</a></li>
+        <li>Email support: <a href="mailto:support@voicelinkapp.app">support@voicelinkapp.app</a></li>
+        <li>Client portal ticket page: <a href="https://devine-creations.com/submitticket.php">https://devine-creations.com/submitticket.php</a></li>
+        <li>Client portal: <a href="https://devine-creations.com/clientarea.php">https://devine-creations.com/clientarea.php</a></li>
       </ul>
 
       <h2>Include in Your Request</h2>
@@ -93,10 +94,10 @@
       </ul>
 
       <h2>Direct URLs</h2>
-      <p>Privacy Policy: <a href="https://voicelink.devinecreations.net/docs/privacy-policy.html">https://voicelink.devinecreations.net/docs/privacy-policy.html</a></p>
-      <p>User Privacy Choices: <a href="https://voicelink.devinecreations.net/docs/user-privacy-choices.html">https://voicelink.devinecreations.net/docs/user-privacy-choices.html</a></p>
-      <p>Terms: <a href="https://voicelink.devinecreations.net/docs/terms.html">https://voicelink.devinecreations.net/docs/terms.html</a></p>
-      <p>Live support anchor: <code>https://voicelink.devinecreations.net/docs/contact-live.html#live-chat</code></p>
+      <p>Privacy Policy: <a href="https://voicelinkapp.app/docs/privacy-policy.html">https://voicelinkapp.app/docs/privacy-policy.html</a></p>
+      <p>User Privacy Choices: <a href="https://voicelinkapp.app/docs/user-privacy-choices.html">https://voicelinkapp.app/docs/user-privacy-choices.html</a></p>
+      <p>Terms: <a href="https://voicelinkapp.app/docs/terms.html">https://voicelinkapp.app/docs/terms.html</a></p>
+      <p>Live support anchor: <code>https://voicelinkapp.app/docs/contact-live.html#live-chat</code></p>
     </div>
   </main>
   <script>
@@ -129,8 +130,11 @@
         status.style.color = '#334155';
 
         try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 12000);
           const response = await fetch('/api/support/sessions', {
             method: 'POST',
+            signal: controller.signal,
             headers: {
               'Content-Type': 'application/json'
             },
@@ -144,6 +148,7 @@
               attachSupportTicket: false
             })
           });
+          clearTimeout(timeout);
           const result = await response.json();
           if (!response.ok || !result.success) {
             throw new Error(result.error || 'Unable to start support');
@@ -164,7 +169,9 @@
           if (result.session?.id) params.set('session', result.session.id);
           window.location.href = `/?${params.toString()}`;
         } catch (error) {
-          status.textContent = error.message || 'Unable to start support.';
+          status.textContent = error.name === 'AbortError'
+            ? 'Support is taking too long to respond. Email support@voicelinkapp.app or use the fallback ticket page.'
+            : (error.message || 'Unable to start support.');
           status.style.color = '#b91c1c';
         }
       });

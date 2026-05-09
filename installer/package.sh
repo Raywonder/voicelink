@@ -9,7 +9,8 @@ set -e
 VERSION="1.0.0"
 PACKAGE_NAME="voicelink-server-${VERSION}"
 BUILD_DIR="/tmp/voicelink-build"
-SOURCE_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 OUTPUT_DIR="${SOURCE_DIR}/releases"
 
 echo "Building VoiceLink package v${VERSION}..."
@@ -78,7 +79,7 @@ Docs sync automatically from the main server.
 ## Support
 
 - GitHub: https://github.com/devinecreations/voicelink
-- Main Server: https://voicelink.devinecreations.net
+- Main Server: https://voicelinkapp.app
 README
 
 # Create tarball
@@ -106,5 +107,5 @@ echo "  Tarball: $OUTPUT_DIR/${PACKAGE_NAME}.tar.gz"
 [ -f "$OUTPUT_DIR/${PACKAGE_NAME}.zip" ] && echo "  Zip:     $OUTPUT_DIR/${PACKAGE_NAME}.zip"
 echo ""
 echo "To install on a new server:"
-echo "  curl -sL https://voicelink.devinecreations.net/releases/latest.tar.gz | tar xz"
+echo "  curl -sL https://voicelinkapp.app/downloads/voicelink/latest.tar.gz | tar xz"
 echo "  cd $PACKAGE_NAME && ./install.sh"

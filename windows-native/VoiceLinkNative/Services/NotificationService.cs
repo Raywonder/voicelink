@@ -11,17 +11,17 @@ namespace VoiceLinkNative.Services
         public void ShowNotification(string title, string message)
         {
             // Simple notification without toolkit dependencies
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         public void ShowError(string title, string message)
         {
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
         }
 
         public void ShowSuccess(string title, string message)
         {
-            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 }

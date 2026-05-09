@@ -20,7 +20,7 @@ class UpdaterModule {
         this.server = options.server;
 
         // Main hub URL for updates
-        this.hubUrl = this.config.hubUrl || 'https://voicelink.devinecreations.net';
+        this.hubUrl = this.config.hubUrl || 'https://voicelink.dev';
 
         // Current version
         this.currentVersion = this.config.version || '1.0.1';

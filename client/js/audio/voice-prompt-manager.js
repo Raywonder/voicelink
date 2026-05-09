@@ -42,7 +42,7 @@ class VoicePromptManager {
             'assets/audio/voice-prompts/',
             '/assets/audio/voice-prompts/',
             '/downloads/voicelink/prompt-packs/default/',
-            'https://voicelink.devinecreations.net/downloads/voicelink/prompt-packs/default/'
+            'https://voicelinkapp.app/downloads/voicelink/prompt-packs/default/'
         ];
 
         // Voice prompt categories and files

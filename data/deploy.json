@@ -559,6 +559,16 @@
         "hidden": true,
         "autoPlay": true,
         "roomPatterns": ["*Lounge*", "*lounge*"]
+      },
+      {
+        "id": "soulfood-radio",
+        "name": "Soul Food Radio",
+        "url": "https://s23.myradiostream.com:9372/listen.pls",
+        "streamUrl": "http://s23.myradiostream.com:9372/;",
+        "volume": 60,
+        "hidden": false,
+        "autoPlay": false,
+        "roomPatterns": []
       }
     ],
     "defaultVolume": 12,

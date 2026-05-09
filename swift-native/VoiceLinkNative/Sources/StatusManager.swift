@@ -24,6 +24,7 @@ class StatusManager: ObservableObject {
     private var contactSyncTimer: Timer?
     private var focusAppliedDND = false
     private var statusBeforeFocusDND: UserStatus = .online
+    private var messageBeforeFocusDND: String = ""
 
     // MARK: - Types
 
@@ -256,8 +257,11 @@ class StatusManager: ObservableObject {
 
     /// Create attributed string with clickable links
     func attributedMessage(_ message: String) -> AttributedString {
-        var attributed = AttributedString(message)
+        if let markdownAttributed = attributedMarkdownMessage(message) {
+            return markdownAttributed
+        }
 
+        var attributed = AttributedString(message)
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let matches = detector?.matches(in: message, range: NSRange(message.startIndex..., in: message)) ?? []
 
@@ -266,6 +270,64 @@ class StatusManager: ObservableObject {
                   let url = match.url,
                   let attrRange = Range(range, in: attributed) else { continue }
 
+            attributed[attrRange].link = url
+            attributed[attrRange].foregroundColor = .blue
+            attributed[attrRange].underlineStyle = .single
+        }
+
+        return attributed
+    }
+
+    private func attributedMarkdownMessage(_ message: String) -> AttributedString? {
+        let pattern = #"\[([^\]]+)\]\((https?://[^\s)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+
+        let nsRange = NSRange(message.startIndex..., in: message)
+        let matches = regex.matches(in: message, range: nsRange)
+        guard !matches.isEmpty else { return nil }
+
+        var plainMessage = ""
+        var cursor = message.startIndex
+        var linkRanges: [(range: Range<String.Index>, url: URL)] = []
+
+        for match in matches {
+            guard
+                let fullRange = Range(match.range(at: 0), in: message),
+                let titleRange = Range(match.range(at: 1), in: message),
+                let urlRange = Range(match.range(at: 2), in: message),
+                let url = URL(string: String(message[urlRange]))
+            else {
+                continue
+            }
+
+            plainMessage.append(contentsOf: message[cursor..<fullRange.lowerBound])
+            let linkStart = plainMessage.endIndex
+            plainMessage.append(contentsOf: message[titleRange])
+            let linkEnd = plainMessage.endIndex
+            linkRanges.append((linkStart..<linkEnd, url))
+            cursor = fullRange.upperBound
+        }
+
+        plainMessage.append(contentsOf: message[cursor...])
+        var attributed = AttributedString(plainMessage)
+
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let autoLinkMatches = detector?.matches(in: plainMessage, range: NSRange(plainMessage.startIndex..., in: plainMessage)) ?? []
+        for match in autoLinkMatches.reversed() {
+            guard
+                let range = Range(match.range, in: plainMessage),
+                let url = match.url,
+                let attrRange = Range(range, in: attributed)
+            else {
+                continue
+            }
+            attributed[attrRange].link = url
+            attributed[attrRange].foregroundColor = .blue
+            attributed[attrRange].underlineStyle = .single
+        }
+
+        for (range, url) in linkRanges {
+            guard let attrRange = Range(range, in: attributed) else { continue }
             attributed[attrRange].link = url
             attributed[attrRange].foregroundColor = .blue
             attributed[attrRange].underlineStyle = .single
@@ -301,7 +363,21 @@ class StatusManager: ObservableObject {
 
     func setSyncWithSystemFocus(_ enabled: Bool) {
         syncWithSystemFocus = enabled
+        if !enabled, focusAppliedDND {
+            focusAppliedDND = false
+            setStatus(statusBeforeFocusDND, message: messageBeforeFocusDND)
+        }
         saveSettings()
+    }
+
+    private func applyFocusSyncedStatus(sourceLabel: String) {
+        let syncedMessage = "Synced with \(sourceLabel) Do Not Disturb"
+        if !focusAppliedDND && currentStatus != .doNotDisturb {
+            statusBeforeFocusDND = currentStatus
+            messageBeforeFocusDND = statusMessage
+        }
+        focusAppliedDND = true
+        setDoNotDisturb(message: syncedMessage)
     }
 
     private func evaluateSystemFocusAndApplyStatus() {
@@ -315,17 +391,12 @@ class StatusManager: ObservableObject {
                 guard self.syncWithSystemFocus else { return }
 
                 if alertsSuppressed {
-                    if !self.focusAppliedDND && self.currentStatus != .doNotDisturb {
-                        self.statusBeforeFocusDND = self.currentStatus
-                        self.focusAppliedDND = true
-                        self.setDoNotDisturb(message: "Synced with macOS Focus")
-                    } else if self.currentStatus != .doNotDisturb {
-                        self.focusAppliedDND = true
-                        self.setDoNotDisturb(message: "Synced with macOS Focus")
+                    if !self.focusAppliedDND || self.currentStatus != .doNotDisturb || self.statusMessage != "Synced with macOS Focus Do Not Disturb" {
+                        self.applyFocusSyncedStatus(sourceLabel: "macOS Focus")
                     }
                 } else if self.focusAppliedDND {
                     self.focusAppliedDND = false
-                    self.setStatus(self.statusBeforeFocusDND, message: self.statusMessage)
+                    self.setStatus(self.statusBeforeFocusDND, message: self.messageBeforeFocusDND)
                 }
             }
         }
@@ -335,8 +406,12 @@ class StatusManager: ObservableObject {
         contactSyncTimer?.invalidate()
         guard syncWithContactCard else { return }
 
-        syncFromContactCard()
-        contactSyncTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+        contactSyncTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            self?.syncFromContactCard()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard self?.syncWithContactCard == true else { return }
             self?.syncFromContactCard()
         }
     }
@@ -417,17 +492,30 @@ class StatusManager: ObservableObject {
             let family = contact.familyName.trimmingCharacters(in: .whitespacesAndNewlines)
             let full = "\(given) \(family)".trimmingCharacters(in: .whitespacesAndNewlines)
             let resolved = !nickname.isEmpty ? nickname : (!full.isEmpty ? full : given)
+            let primaryEmail = contact.emailAddresses.first?.value as String?
+            let primaryPhone = contact.phoneNumbers.first?.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let company = contact.organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let jobTitle = contact.jobTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let postal = contact.postalAddresses.first?.value
+            let address = [postal?.street, postal?.city, postal?.state, postal?.postalCode, postal?.country]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
 
             var links: [String] = []
-            for item in contact.urlAddresses {
-                let value = String(item.value)
-                if let normalized = normalizedProfileURL(value) {
-                    links.append(normalized)
+            if contact.isKeyAvailable(CNContactUrlAddressesKey) {
+                for item in contact.urlAddresses {
+                    let value = String(item.value)
+                    if let normalized = normalizedProfileURL(value) {
+                        links.append(normalized)
+                    }
                 }
             }
-            for item in contact.socialProfiles {
-                if let normalized = socialProfileURL(item.value) {
-                    links.append(normalized)
+            if contact.isKeyAvailable(CNContactSocialProfilesKey) {
+                for item in contact.socialProfiles {
+                    if let normalized = socialProfileURL(item.value) {
+                        links.append(normalized)
+                    }
                 }
             }
 
@@ -447,6 +535,30 @@ class StatusManager: ObservableObject {
                 }
                 SettingsManager.shared.mergeProfileLinks(deduped)
                 SettingsManager.shared.saveSettings()
+
+                 let contactCard = AuthenticatedUser.ContactCard(
+                    fullName: full.isEmpty ? nil : full,
+                    firstName: given.isEmpty ? nil : given,
+                    lastName: family.isEmpty ? nil : family,
+                    nickname: nickname.isEmpty ? nil : nickname,
+                    company: company.isEmpty ? nil : company,
+                    email: primaryEmail?.isEmpty == false ? primaryEmail : nil,
+                    phone: primaryPhone?.isEmpty == false ? primaryPhone : nil,
+                    address: address.isEmpty ? nil : address,
+                    city: postal?.city.isEmpty == false ? postal?.city : nil,
+                    state: postal?.state.isEmpty == false ? postal?.state : nil,
+                    postalCode: postal?.postalCode.isEmpty == false ? postal?.postalCode : nil,
+                    country: postal?.country.isEmpty == false ? postal?.country : nil,
+                    website: deduped.first,
+                    // Accessing the Me card note has caused Contacts to fault during startup on macOS 15.
+                    // Keep launch safe and leave notes unset for contact-card auto-sync.
+                    notes: nil,
+                    organisationRole: jobTitle.isEmpty ? nil : jobTitle,
+                    source: "macos-contact-card",
+                    importFormats: ["auto", "contact-card", "vcard"],
+                    autoSyncedAt: Date()
+                )
+                AuthenticationManager.shared.syncCurrentUserContactCard(contactCard) { _, _ in }
             }
         }
 
@@ -456,6 +568,11 @@ class StatusManager: ObservableObject {
                     CNContactNicknameKey as NSString,
                     CNContactGivenNameKey as NSString,
                     CNContactFamilyNameKey as NSString,
+                    CNContactOrganizationNameKey as NSString,
+                    CNContactJobTitleKey as NSString,
+                    CNContactEmailAddressesKey as NSString,
+                    CNContactPhoneNumbersKey as NSString,
+                    CNContactPostalAddressesKey as NSString,
                     CNContactUrlAddressesKey as NSString,
                     CNContactSocialProfilesKey as NSString
                 ]

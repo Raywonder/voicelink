@@ -1,8 +1,53 @@
 param(
-    [string]$Version = "1.0.0"
+    [string]$Version = "1.0.0",
+    [string]$Build = "48"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-SignTool {
+    $preferredPaths = @(
+        "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe",
+        "C:\Program Files\Windows Kits\10\bin\x64\signtool.exe"
+    )
+    foreach ($path in $preferredPaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    $resolved = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($resolved) {
+        return $resolved.Source
+    }
+    return $null
+}
+
+function Sign-Artifact {
+    param(
+        [string]$FilePath
+    )
+
+    $signTool = Resolve-SignTool
+    if (-not $signTool) {
+        Write-Warning "signtool.exe not found; skipping Windows code signing."
+        return
+    }
+
+    $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+
+    if ($env:WINDOWS_CODESIGN_PFX -and $env:WINDOWS_CODESIGN_PASSWORD) {
+        & $signTool sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $env:WINDOWS_CODESIGN_PFX /p $env:WINDOWS_CODESIGN_PASSWORD $FilePath
+    } elseif ($env:WINDOWS_CODESIGN_THUMBPRINT) {
+        & $signTool sign /fd SHA256 /tr $timestampUrl /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $FilePath
+    } else {
+        Write-Host "No Windows code-signing identity configured; skipping signing for $FilePath"
+        return
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool.exe failed while signing $FilePath"
+    }
+}
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Project = Join-Path $Root "VoiceLinkNative/VoiceLinkNative.csproj"
@@ -45,7 +90,13 @@ if (-not $Iscc) {
 }
 
 & $Dotnet.Source restore $Project
-& $Dotnet.Source publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet restore failed."
+}
+& $Dotnet.Source publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet publish failed."
+}
 
 $PortableOut = Join-Path $DistDir "VoiceLink-$Version-windows-portable.exe"
 $SetupOut = Join-Path $DistDir "VoiceLink-$Version-windows-setup.exe"
@@ -56,6 +107,9 @@ Copy-Item (Join-Path $PublishDir "VoiceLinkNative.exe") $PortableOut -Force
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup build failed."
 }
+
+Sign-Artifact -FilePath $PortableOut
+Sign-Artifact -FilePath $SetupOut
 
 $PortableHash = (Get-FileHash $PortableOut -Algorithm SHA256).Hash.ToLowerInvariant()
 $SetupHash = (Get-FileHash $SetupOut -Algorithm SHA256).Hash.ToLowerInvariant()

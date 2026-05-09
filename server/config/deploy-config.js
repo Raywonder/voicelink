@@ -10,10 +10,30 @@ const path = require('path');
 const crypto = require('crypto');
 
 // Configuration paths
-const CONFIG_DIR = process.env.VOICELINK_CONFIG_DIR || path.join(__dirname, '../../data');
+function resolveConfigDir() {
+    if (process.env.VOICELINK_CONFIG_DIR) {
+        return process.env.VOICELINK_CONFIG_DIR;
+    }
+
+    const defaultDir = path.join(__dirname, '../../data');
+    const portScopedDirs = {
+        3010: path.join(__dirname, '../../data-main'),
+        3110: path.join(__dirname, '../../data-community')
+    };
+    const scopedDir = portScopedDirs[Number(process.env.PORT || 0)];
+    if (scopedDir && fs.existsSync(scopedDir)) {
+        return scopedDir;
+    }
+
+    return defaultDir;
+}
+
+const CONFIG_DIR = resolveConfigDir();
 const DEPLOY_CONFIG_FILE = path.join(CONFIG_DIR, 'deploy.json');
 const BACKUP_DIR = path.join(CONFIG_DIR, 'backups');
 const PRESETS_DIR = path.join(__dirname, '../presets');
+const DEFAULT_OWNER_ACCOUNT = process.env.VOICELINK_OWNER_ACCOUNT || process.env.USER || 'voicelink';
+const DEFAULT_OWNER_HOME = process.env.VOICELINK_OWNER_HOME || process.env.HOME || path.join('/home', DEFAULT_OWNER_ACCOUNT);
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -24,6 +44,33 @@ const DEFAULT_CONFIG = {
         port: 3010,
         host: '0.0.0.0',
         publicUrl: null, // Auto-detected or set manually
+        motd: '',
+        motdSettings: {
+            enabled: true,
+            showBeforeJoin: true,
+            showInRoom: true,
+            appendToWelcomeMessage: false
+        },
+        serverRules: {
+            enabled: true,
+            title: 'Server Rules',
+            body: [
+                'Be respectful to other people on this server.',
+                'Do not share content you do not have the right to share.',
+                'Each server owner or authorized admin may update this server rules, message of the day, privacy links, and useful links at any time.',
+                'Content, media, rooms, files, and streams remain owned by their rightful owners or the people and organizations that are authorized to provide them.',
+                'Guests and account users must follow this server policy and any room-specific policy before joining or participating.',
+                'If this server provides its own privacy policy, support page, media policy, community guidelines, iMessage/SMS contact, or other useful support links, those links also apply to this server.'
+            ].join('\n'),
+            requireAgreement: true,
+            version: 'default-2026-05-08',
+            appliesTo: {
+                account: true,
+                guest: true
+            },
+            privacyPolicyUrl: '',
+            usefulLinks: []
+        },
         maxConnections: 500,
         rateLimit: {
             windowMs: 60000,
@@ -58,7 +105,74 @@ const DEFAULT_CONFIG = {
         corsOrigins: ['*'],
         enableHttps: false,
         sslCertPath: null,
-        sslKeyPath: null
+        sslKeyPath: null,
+        cloudflareLinks: {
+            enabled: false,
+            mode: 'fallback', // fallback, primary, hybrid
+            baseUrl: '',
+            roomPathPrefix: '/rooms',
+            filePathPrefix: '/files',
+            invitePathPrefix: '/invite',
+            generateRoomLinks: true,
+            generateFileLinks: true,
+            generateInviteLinks: true,
+            useForPrimaryLinks: false,
+            useWhenPrimaryFails: true,
+            signLinks: false,
+            tokenParam: 'token',
+            defaultExpirySeconds: 3600,
+            zoneId: '',
+            accountId: '',
+            turnstileSiteKey: '',
+            humanCheckMode: 'checkbox'
+        },
+        downloadDelivery: {
+            enableDirectDownloads: true,
+            enableDownloadLinkEmail: true,
+            enableTestFlightEmail: true,
+            enableAuthenticatedDownloads: true,
+            enableWhmcsClientDownloads: true,
+            enableVoiceLinkAccountDownloads: true,
+            mail: {
+                useBuiltInLocalSmtp: true,
+                host: '',
+                port: 25,
+                secure: false,
+                requireTLS: false,
+                from: '',
+                fromName: ''
+            },
+            referralInvites: {
+                enabled: true,
+                tokenMode: 'single-use',
+                expiryHours: 72,
+                maxUses: 1,
+                rotateAfterUse: true,
+                licenseDelayHours: 72
+            },
+            requireHumanVerification: true,
+            logSourceContext: true,
+            notifyAdminOnEmailRequests: true
+        }
+    },
+    auth: {
+        registrationEnabled: true,
+        internalProviderEnabled: true,
+        whmcsProviderEnabled: true,
+        wordpressProviderEnabled: true,
+        composrProviderEnabled: true,
+        sharedMemberAuthEnabled: false,
+        sharedMemberAuthMode: 'group',
+        sharedMemberAuthProviders: ['voicelink', 'composr'],
+        allowWhmcsFallback: true,
+        allowMastodonApprovalDelivery: true,
+        requireSecondDeviceApproval: false,
+        allowedTwoFactorMethods: ['totp', 'email', 'sms', 'voice', 'passkey', 'backup'],
+        notifyAdminsOnLoginAttempts: true,
+        notifyAdminsOnLoginSuccess: true,
+        notifyAdminsOnLoginFailure: true,
+        notifyAdminsOnGeneratedLoginLogs: true,
+        mirrorLoginAlertsToMainChat: false
     },
     federation: {
         enabled: false,
@@ -363,8 +477,8 @@ const DEFAULT_CONFIG = {
             {
                 id: 'soulfood-radio',
                 name: 'Soul Food Radio',
-                url: 'https://soulfoodradio.media/',
-                streamUrl: 'https://soulfoodradio.media/',
+                url: 'https://s23.myradiostream.com:9372/listen.pls',
+                streamUrl: 'http://s23.myradiostream.com:9372/;',
                 volume: 60,
                 hidden: false,
                 autoPlay: false,
@@ -376,6 +490,15 @@ const DEFAULT_CONFIG = {
     },
     whmcs: {
         portalUrl: 'https://devine-creations.com/clientarea.php',
+        tempPaths: {
+            ownerAccount: DEFAULT_OWNER_ACCOUNT,
+            ownerHome: DEFAULT_OWNER_HOME,
+            tempDir: path.join(DEFAULT_OWNER_HOME, 'tmp', 'whmcs'),
+            cacheDir: path.join(DEFAULT_OWNER_HOME, 'tmp', 'whmcs', 'cache'),
+            compiledTemplatesDir: path.join(DEFAULT_OWNER_HOME, 'tmp', 'whmcs', 'templates_c'),
+            attachmentsDir: path.join(DEFAULT_OWNER_HOME, 'attachments', 'voicelink'),
+            downloadsDir: path.join(DEFAULT_OWNER_HOME, 'downloads', 'voicelink')
+        },
         roles: {
             adminGroups: [],
             staffGroups: [],

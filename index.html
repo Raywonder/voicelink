@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search || '');
+            const openTarget = String(params.get('open') || '').trim();
+            if (openTarget) {
+                window.location.replace(`/client/?open=${encodeURIComponent(openTarget)}`);
+            }
+        }());
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - Download</title>
+    <title>VoiceLink Downloads - Desktop Apps and VoiceLink Web Access</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -86,12 +95,77 @@
             border-radius: 20px;
             font-size: 0.9rem;
         }
+        .testflight-request {
+            margin-top: 18px;
+            display: grid;
+            gap: 12px;
+            text-align: left;
+        }
+        .testflight-request label {
+            color: #f8fafc;
+            font-weight: 600;
+        }
+        .testflight-request-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: stretch;
+        }
+        .testflight-request input,
+        .testflight-request select {
+            flex: 1 1 220px;
+            min-height: 50px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid #4b5563;
+            background: rgba(15, 23, 42, 0.88);
+            color: #fff;
+        }
+        .testflight-request select {
+            appearance: none;
+        }
+        .testflight-request button.download-btn {
+            border: 0;
+            cursor: pointer;
+            min-width: 240px;
+        }
+        .testflight-request input:focus-visible,
+        .testflight-request button:focus-visible {
+            outline: 3px solid #ffffff;
+            outline-offset: 2px;
+        }
+        .testflight-request-help,
+        .testflight-request-status {
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+        .testflight-request-help {
+            color: #cbd5e1;
+        }
+        .testflight-request-status {
+            min-height: 1.5em;
+            color: #d1fae5;
+        }
+        .testflight-human {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #e2e8f0;
+        }
+        .testflight-human input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+        }
+        .testflight-honeypot {
+            position: absolute;
+            left: -9999px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>VoiceLink Local</h1>
-        <p class="tagline">P2P Voice Chat with 3D Spatial Audio</p>
+        <h1>VoiceLink</h1>
+        <p class="tagline">Desktop apps and VoiceLink Web Access</p>
         <p class="version">Version 1.0.0</p>
 
         <div class="platform-section">
@@ -100,23 +174,23 @@
                 <span class="platform-name">macOS</span>
             </div>
             <div class="downloads">
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn">
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip" class="download-btn">
                     <div class="format">VoiceLink Native ZIP</div>
-                    <div class="arch">Current Build (Universal)</div>
+                    <div class="arch">Signed ZIP</div>
                 </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-apple-silicon.pkg" class="download-btn">
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos.pkg" class="download-btn">
                     <div class="format">PKG Installer</div>
-                    <div class="arch">Apple Silicon</div>
+                    <div class="arch">macOS</div>
                 </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg" class="download-btn">
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg" class="download-btn">
                     <div class="format">PKG Installer</div>
                     <div class="arch">Intel</div>
                 </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip.sha256" class="download-btn">
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip.sha256" class="download-btn">
                     <div class="format">SHA256 Checksum</div>
                     <div class="arch">VoiceLinkMacOS.zip</div>
                 </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip.sha256" class="download-btn">
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-macOS.zip.sha256" class="download-btn">
                     <div class="format">SHA256 Checksum</div>
                     <div class="arch">VoiceLink-macOS.zip</div>
                 </a>
@@ -129,14 +203,36 @@
                 <span class="platform-name">Windows</span>
             </div>
             <div class="downloads">
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe" class="download-btn">
-                    <div class="format">VoiceLink Windows Installer</div>
-                    <div class="arch">Current Build (64-bit)</div>
-                </a>
-                <a href="https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-1.0.0-windows-setup.exe.sha256" class="download-btn">
-                    <div class="format">SHA256 Checksum</div>
-                    <div class="arch">VoiceLink-1.0.0-windows-setup.exe</div>
-                </a>
+                <p role="status" aria-live="polite">Windows downloads are paused until the signed installer passes release testing. Use VoiceLink Web Access for now.</p>
+            </div>
+        </div>
+
+        <div class="platform-section">
+            <div class="platform-header">
+                <span class="platform-icon">📱</span>
+                <span class="platform-name">iPhone and iPad</span>
+            </div>
+            <div class="downloads">
+                <form class="testflight-request" data-testflight-form data-source-page="index">
+                    <label for="index-testflight-email">Email for the iOS TestFlight invite</label>
+                    <div class="testflight-request-row">
+                        <input id="index-testflight-email" name="email" type="email" autocomplete="email" required aria-describedby="index-testflight-help">
+                        <button class="download-btn" type="submit">
+                            <div class="format">Email TestFlight Link</div>
+                            <div class="arch">Current iOS Preview Build</div>
+                        </button>
+                    </div>
+                    <div class="testflight-human">
+                        <input id="index-testflight-human" name="humanConfirmed" type="checkbox" required>
+                        <label for="index-testflight-human">I am requesting this invite for myself.</label>
+                    </div>
+                    <div class="testflight-honeypot" aria-hidden="true">
+                        <label for="index-testflight-company">Leave this field empty</label>
+                        <input id="index-testflight-company" name="company" type="text" tabindex="-1" autocomplete="off">
+                    </div>
+                    <p id="index-testflight-help" class="testflight-request-help">Enter your email and VoiceLink will send the current TestFlight link instead of exposing it directly on the page.</p>
+                    <p class="testflight-request-status" aria-live="polite" aria-atomic="true"></p>
+                </form>
             </div>
         </div>
 
@@ -151,16 +247,53 @@
             </div>
         </div>
 
+        <div class="platform-section" style="margin-top: 30px;">
+            <div class="platform-header">
+                <span class="platform-icon">✉️</span>
+                <span class="platform-name">Email a Download Link</span>
+            </div>
+            <div class="downloads" style="display: block;">
+                <form class="testflight-request" data-download-link-form data-source-page="index">
+                    <label for="index-link-email">Email address</label>
+                    <div class="testflight-request-row">
+                        <input id="index-link-email" name="email" type="email" autocomplete="email" required aria-describedby="index-link-help">
+                        <select id="index-link-target" name="downloadId" aria-label="Choose a VoiceLink download" required>
+                            <option value="macos_zip">VoiceLink macOS ZIP</option>
+                            <option value="macos_pkg">VoiceLink macOS PKG Installer</option>
+                            <option value="macos_intel_pkg">VoiceLink macOS Intel PKG Installer</option>
+                            <option value="server_targz">VoiceLink Server Tarball</option>
+                            <option value="server_zip">VoiceLink Server ZIP</option>
+                            <option value="web_access">VoiceLink Web Access</option>
+                        </select>
+                        <button class="download-btn" type="submit">
+                            <div class="format">Email Download Link</div>
+                            <div class="arch">Optional Delivery</div>
+                        </button>
+                    </div>
+                    <div class="testflight-human">
+                        <input id="index-link-human" name="humanConfirmed" type="checkbox" required>
+                        <label for="index-link-human">I am requesting this download link for myself.</label>
+                    </div>
+                    <div class="testflight-honeypot" aria-hidden="true">
+                        <label for="index-link-company">Leave this field empty</label>
+                        <input id="index-link-company" name="company" type="text" tabindex="-1" autocomplete="off">
+                    </div>
+                    <p id="index-link-help" class="testflight-request-help">Use this if you want a standard VoiceLink download link emailed to you from the existing VoiceLink email sender.</p>
+                    <p class="testflight-request-status" aria-live="polite" aria-atomic="true"></p>
+                </form>
+            </div>
+        </div>
+
         <!-- Browser Version Link -->
         <div class="platform-section" style="text-align: center; margin-top: 30px;">
             <div class="platform-header" style="justify-content: center;">
                 <span class="platform-icon">🌐</span>
-                <span class="platform-name">Use in Browser</span>
+                <span class="platform-name">VoiceLink Web Access</span>
             </div>
-            <p style="color: #aaa; margin-bottom: 15px;">No download needed - use VoiceLink directly in your web browser</p>
-            <a href="https://voicelink.devinecreations.net" class="download-btn" style="display: inline-block; max-width: 300px;">
-                <div class="format">Launch Web App</div>
-                <div class="arch">voicelink.devinecreations.net</div>
+            <p style="color: #aaa; margin-bottom: 15px;">Use the browser client for quick access, then install the native desktop app for the best local audio and accessibility experience.</p>
+            <a href="https://voicelinkapp.app" class="download-btn" style="display: inline-block; max-width: 300px;">
+                <div class="format">Launch VoiceLink Web Access</div>
+                <div class="arch">voicelinkapp.app</div>
             </a>
         </div>
 
@@ -171,26 +304,128 @@
         <!-- Donation Section -->
         <div class="platform-section" style="text-align: center; margin-top: 30px; background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(123,44,191,0.1));">
             <h3 style="color: #00d4ff; margin-bottom: 15px;">Support VoiceLink</h3>
-            <p style="color: #aaa; margin-bottom: 20px;">Help keep VoiceLink free and the servers running. Your donations are appreciated!</p>
-            <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px;">
-                <div style="background: #fff; border-radius: 12px; padding: 20px; min-width: 280px;">
-                    <p style="color: #333; font-weight: 600; margin-bottom: 10px;">Server Fund</p>
-                    <iframe src="https://cash.app/f/VIEW_MONEY_POOL%3Fpool_token=POOL_B170540F-F26D-4BBA-934F-7967C8BBF66C"
-                            style="border: none; width: 100%; height: 400px; border-radius: 8px;"
-                            title="CashApp Server Fund"></iframe>
-                </div>
-                <div style="background: #fff; border-radius: 12px; padding: 20px; min-width: 280px;">
-                    <p style="color: #333; font-weight: 600; margin-bottom: 10px;">Development Fund</p>
-                    <iframe src="https://cash.app/f/VIEW_MONEY_POOL%3Fpool_token=POOL_AD78845E-E729-47A4-B8D4-08BBCFA65A5A"
-                            style="border: none; width: 100%; height: 400px; border-radius: 8px;"
-                            title="CashApp Development Fund"></iframe>
-                </div>
+            <p style="color: #aaa; margin-bottom: 20px;">Help keep VoiceLink free and the servers running. Your donations are appreciated.</p>
+            <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-bottom: 16px;">
+                <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=10"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   style="display: inline-block; min-width: 180px; padding: 14px 18px; border-radius: 12px; text-decoration: none; color: #fff; font-weight: 700; background: linear-gradient(135deg, #0070ba 0%, #003087 100%);">
+                    Donate $10
+                </a>
+                <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=25"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   style="display: inline-block; min-width: 180px; padding: 14px 18px; border-radius: 12px; text-decoration: none; color: #fff; font-weight: 700; background: linear-gradient(135deg, #0070ba 0%, #003087 100%);">
+                    Donate $25
+                </a>
+                <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=50"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   style="display: inline-block; min-width: 180px; padding: 14px 18px; border-radius: 12px; text-decoration: none; color: #fff; font-weight: 700; background: linear-gradient(135deg, #0070ba 0%, #003087 100%);">
+                    Donate $50
+                </a>
+                <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   style="display: inline-block; min-width: 180px; padding: 14px 18px; border-radius: 12px; text-decoration: none; color: #fff; font-weight: 700; background: linear-gradient(135deg, #0f766e 0%, #115e59 100%);">
+                    Custom Amount
+                </a>
             </div>
+            <p style="color: #d1d5db; line-height: 1.6;">
+                You can also send any amount directly via PayPal to <strong>PayPal@raywonderis.me</strong>.
+            </p>
         </div>
 
         <footer style="text-align: center; margin-top: 40px; padding: 20px; color: #666; font-size: 0.85rem;">
             <p>&copy; 2024-2025 Divine Creations. All rights reserved.</p>
         </footer>
     </div>
+    <script>
+        (() => {
+            const endpoint = 'https://voicelink.dev/api/downloads/testflight-request';
+            const downloadLinkEndpoint = 'https://voicelink.dev/api/downloads/email-link';
+            const forms = document.querySelectorAll('[data-testflight-form]');
+            const downloadForms = document.querySelectorAll('[data-download-link-form]');
+            forms.forEach((form) => {
+                const emailInput = form.querySelector('input[name="email"]');
+                const submitButton = form.querySelector('button[type="submit"]');
+                const status = form.querySelector('.testflight-request-status');
+                const humanCheckbox = form.querySelector('input[name="humanConfirmed"]');
+                const honeypot = form.querySelector('input[name="company"]');
+                form.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    if (!emailInput || !submitButton || !status || !humanCheckbox) return;
+                    status.textContent = 'Sending request...';
+                    status.style.color = '#dbeafe';
+                    submitButton.disabled = true;
+                    try {
+                        const response = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: emailInput.value,
+                                humanConfirmed: humanCheckbox.checked,
+                                company: honeypot ? honeypot.value : '',
+                                sourcePage: form.dataset.sourcePage || 'index'
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || data.success === false) {
+                            throw new Error(data.error || 'Unable to submit your request right now.');
+                        }
+                        status.textContent = data.message || 'The current TestFlight link was emailed to you.';
+                        status.style.color = data.delivered ? '#d1fae5' : '#fde68a';
+                        form.reset();
+                    } catch (error) {
+                        status.textContent = `${error.message} You can also email support@devine-creations.com for manual access.`;
+                        status.style.color = '#fecaca';
+                    } finally {
+                        submitButton.disabled = false;
+                    }
+                });
+            });
+            downloadForms.forEach((form) => {
+                const emailInput = form.querySelector('input[name="email"]');
+                const downloadSelect = form.querySelector('select[name="downloadId"]');
+                const submitButton = form.querySelector('button[type="submit"]');
+                const status = form.querySelector('.testflight-request-status');
+                const humanCheckbox = form.querySelector('input[name="humanConfirmed"]');
+                const honeypot = form.querySelector('input[name="company"]');
+                form.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    if (!emailInput || !downloadSelect || !submitButton || !status || !humanCheckbox) return;
+                    status.textContent = 'Sending download link request...';
+                    status.style.color = '#dbeafe';
+                    submitButton.disabled = true;
+                    try {
+                        const response = await fetch(downloadLinkEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: emailInput.value,
+                                downloadId: downloadSelect.value,
+                                humanConfirmed: humanCheckbox.checked,
+                                company: honeypot ? honeypot.value : '',
+                                sourcePage: form.dataset.sourcePage || 'index',
+                                sourceChannel: 'public'
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || data.success === false) {
+                            throw new Error(data.error || 'Unable to submit your download request right now.');
+                        }
+                        status.textContent = data.message || 'The selected download link was emailed to you.';
+                        status.style.color = data.delivered ? '#d1fae5' : '#fde68a';
+                        form.reset();
+                    } catch (error) {
+                        status.textContent = `${error.message} You can also use the direct links on this page.`;
+                        status.style.color = '#fecaca';
+                    } finally {
+                        submitButton.disabled = false;
+                    }
+                });
+            });
+        })();
+    </script>
 </body>
 </html>

@@ -30,7 +30,7 @@ class PairingManager: ObservableObject {
     }
 
     var managedServerLimit: Int {
-        max(2, maxLinkedDevices)
+        10_000
     }
 
     var canUpgradeLevel: Bool {
@@ -104,7 +104,7 @@ class PairingManager: ObservableObject {
 
         var description: String {
             switch self {
-            case .newbie: return "New community member - 2 managed servers, 2 rooms"
+            case .newbie: return "New community member - starter access, 2 rooms"
             case .regular: return "Active member - 2 devices, 5 rooms"
             case .outstanding: return "Outstanding member - 3 devices, 10 rooms"
             }
@@ -444,7 +444,7 @@ class PairingManager: ObservableObject {
         var discovered: [DiscoveredServer] = []
 
         // Check common ports for VoiceLink servers
-        let ports = [4004, 3010, 8080]
+        let ports = [3010, 3011, 3012, 4004, 8080]
         let group = DispatchGroup()
 
         for port in ports {

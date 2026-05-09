@@ -409,18 +409,38 @@ class EncryptionStatusDisplay {
         const modal = this.createEncryptionSettingsModal();
         document.body.appendChild(modal);
         modal.showModal();
+        // Move focus into the dialog and add a basic focus trap
+        const firstFocusable = modal.querySelector('.close-btn, button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (firstFocusable && typeof firstFocusable.focus === 'function') {
+            firstFocusable.focus();
+        }
+        const trap = (e) => {
+            if (e.key !== 'Tab') return;
+            const focusable = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+                .filter(el => !el.hasAttribute('disabled'));
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        };
+        modal.addEventListener('keydown', trap);
+        modal.addEventListener('close', () => {
+            modal.removeEventListener('keydown', trap);
+        }, { once: true });
     }
 
     createEncryptionSettingsModal() {
         const modal = document.createElement('dialog');
         modal.className = 'encryption-settings-modal';
+        modal.setAttribute('aria-modal','true');
 
         const currentSettings = this.serverEncryptionManager.getServerEncryptionStatus();
 
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>Server Encryption Settings</h2>
+                    <h2 id="encryption-settings-title">Server Encryption Settings</h2>
                     <button class="close-btn" onclick="this.closest('dialog').close()">&times;</button>
                 </div>
                 <div class="modal-body">
@@ -482,6 +502,9 @@ class EncryptionStatusDisplay {
                 </div>
             </div>
         `;
+
+        // Reference dialog title for AT
+        modal.setAttribute('aria-labelledby','encryption-settings-title');
 
         // Add event listener to toggle dependent settings
         const enabledCheckbox = modal.querySelector('#encryption-enabled');

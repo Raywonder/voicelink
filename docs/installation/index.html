@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Installation Guide - VoiceLink Local</title>
+    <title>Installation Guide - VoiceLink</title>
     <link rel="stylesheet" href="../styles/docs.css">
     <style>
         /* Installation page specific styles */
@@ -157,7 +157,7 @@
         <header class="docs-header">
             <div class="header-content">
                 <h1>Installation Guide</h1>
-                <p class="subtitle">Download and install VoiceLink Local on your platform</p>
+                <p class="subtitle">Download and install VoiceLink on your platform</p>
                 <nav class="header-nav">
                     <a href="../index.html" class="nav-link">Documentation Home</a>
                     <a href="../../releases/index.html" class="nav-link">Downloads</a>
@@ -166,6 +166,27 @@
         </header>
 
         <main class="content">
+            <section class="platform-section">
+                <h2>Choose the Right Installer</h2>
+                <div class="download-options">
+                    <article class="download-card">
+                        <h3>Desktop app</h3>
+                        <p>Best when you want the full VoiceLink experience with room audio, server switching, admin tools, offline docs, and built-in updates.</p>
+                        <p><strong>Example:</strong> choose this if you moderate rooms, run media, or switch between Main, Community, and your own server during the day.</p>
+                    </article>
+                    <article class="download-card">
+                        <h3>Server installer</h3>
+                        <p>Best when you want to host your own VoiceLink server and connect it to the main API for licensing, updates, and module sync.</p>
+                        <p><strong>Example:</strong> choose this for a VPS, home server, or hosted Linux box where you want your own rooms and policies.</p>
+                    </article>
+                    <article class="download-card">
+                        <h3>Portable or archive builds</h3>
+                        <p>Best when you need a test copy without a full install, or when you want to compare versions safely.</p>
+                        <p><strong>Example:</strong> use a ZIP build on a shared support machine or for regression testing before replacing the main installed app.</p>
+                    </article>
+                </div>
+            </section>
+
             <!-- Quick Navigation -->
             <nav class="install-nav">
                 <h2>Jump to Platform</h2>
@@ -217,6 +238,9 @@
                         </tr>
                     </tbody>
                 </table>
+                <div class="note-box">
+                    <strong>Why these requirements matter:</strong> VoiceLink does more than plain voice chat. Desktop builds can run room audio preview, background media, transcription, admin tools, and federated server browsing at the same time. If you host a server, extra CPU and RAM help when many rooms, bots, or media features are active.
+                </div>
             </section>
 
             <!-- macOS Section -->
@@ -241,25 +265,25 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0-arm64.dmg">DMG (Apple Silicon)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0-arm64.dmg">DMG (Apple Silicon)</a></td>
                             <td>arm64</td>
                             <td>421 MB</td>
                             <td>For M1/M2/M3 Macs - Recommended</td>
                         </tr>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0.dmg">DMG (Intel)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0.dmg">DMG (Intel)</a></td>
                             <td>x86_64</td>
                             <td>426 MB</td>
                             <td>For Intel-based Macs</td>
                         </tr>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0-arm64-mac.zip">ZIP (Apple Silicon)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0-arm64-mac.zip">ZIP (Apple Silicon)</a></td>
                             <td>arm64</td>
                             <td>416 MB</td>
                             <td>Portable - no installation required</td>
                         </tr>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0-mac.zip">ZIP (Intel)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0-mac.zip">ZIP (Intel)</a></td>
                             <td>x86_64</td>
                             <td>421 MB</td>
                             <td>Portable - no installation required</td>
@@ -271,7 +295,7 @@
                 <ol class="steps-list">
                     <li><strong>Download</strong> the appropriate version for your Mac (Apple Silicon or Intel)</li>
                     <li><strong>Open</strong> the downloaded DMG file by double-clicking</li>
-                    <li><strong>Drag</strong> VoiceLink Local to your Applications folder</li>
+                    <li><strong>Drag</strong> VoiceLink to your Applications folder</li>
                     <li><strong>Launch</strong> from Applications or Spotlight search</li>
                     <li><strong>Allow</strong> microphone access when prompted</li>
                 </ol>
@@ -303,13 +327,13 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0-win.zip">ZIP (64-bit)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0-win.zip">ZIP (64-bit)</a></td>
                             <td>x64</td>
                             <td>440 MB</td>
                             <td>Portable - Recommended for most users</td>
                         </tr>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0-ia32-win.zip">ZIP (32-bit)</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0-ia32-win.zip">ZIP (32-bit)</a></td>
                             <td>x86</td>
                             <td>422 MB</td>
                             <td>For older 32-bit systems</td>
@@ -322,12 +346,12 @@
                     <li><strong>Download</strong> the 64-bit ZIP (or 32-bit for older systems)</li>
                     <li><strong>Extract</strong> the ZIP file to your preferred location (e.g., Desktop or Program Files)</li>
                     <li><strong>Open</strong> the extracted folder</li>
-                    <li><strong>Run</strong> "VoiceLink Local.exe"</li>
+                    <li><strong>Run</strong> "VoiceLink.exe"</li>
                     <li><strong>Allow</strong> microphone and network access when prompted by Windows</li>
                 </ol>
 
                 <div class="note-box">
-                    <strong>Tip:</strong> Right-click "VoiceLink Local.exe" and select "Pin to Start" or "Pin to taskbar" for quick access.
+                    <strong>Tip:</strong> Right-click "VoiceLink.exe" and select "Pin to Start" or "Pin to taskbar" for quick access.
                 </div>
             </section>
 
@@ -353,7 +377,7 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td><a href="../../releases/VoiceLink Local-1.0.0.AppImage">AppImage</a></td>
+                            <td><a href="../../releases/VoiceLink-1.0.0.AppImage">AppImage</a></td>
                             <td>Universal</td>
                             <td>423 MB</td>
                             <td>Any distribution - Recommended</td>
@@ -477,7 +501,7 @@ sudo apt-get install -f  # Fix dependencies if needed
                 <h3>Quick Server Install</h3>
                 <div class="code-block">
 # Download and extract
-wget https://voicelink.devinecreations.net/releases/latest.tar.gz
+wget https://voicelinkapp.app/downloads/voicelink/latest.tar.gz
 tar -xzf latest.tar.gz
 cd voicelink-local
 
@@ -495,6 +519,44 @@ npm start
                 <div class="note-box">
                     <strong>Web Installer Available:</strong> For servers without SSH access, use the <a href="#web-install">Web Installer</a> for guided setup through your browser.
                 </div>
+
+                <div class="note-box">
+                    <strong>Recommended owner setup order:</strong> Configure the server first, then create or link the owner's VoiceLink and client portal accounts. This lets the installer connect back to the main API, register the server, and attach the correct shared license to both the owned server and the owner's desktop client.
+                </div>
+
+                <h3>Recommended First-Time Server Owner Flow</h3>
+                <ol class="steps-list">
+                    <li>Use <strong>Deploy or Set Up New Server</strong> from the desktop client or server admin flow.</li>
+                    <li>Choose whether the install should live on a subdomain, in a side-by-side app directory, or at site root only if you explicitly want full replacement.</li>
+                    <li>Create or link the client portal account so billing, licensing, owned domains, and support details all stay tied to the same owner identity.</li>
+                    <li>Let VoiceLink link supported identity sources such as VoiceLink sign-in, WHMCS account, cPanel user, owned domain, or <code>/home/&lt;user&gt;</code> install path.</li>
+                    <li>For WHMCS installs such as <code>/home/devinecr/public_html</code>, keep the billing portal in place and let VoiceLink integrate through addon, template, and client/admin bridge paths instead of replacing the site root.</li>
+                    <li>For cPanel-backed installs, let VoiceLink use side-by-side app paths and file-manager friendly shared folders so server file sharing, backups, and uploads can still be managed from the hosting account.</li>
+                    <li>Confirm that Main, Community, and the new owned server all appear in the desktop app once licensing finishes syncing.</li>
+                </ol>
+
+                <div class="warning-box">
+                    <strong>License retention:</strong> owned installs can stay linked even when they are not online every day, but long-term inactive installs may eventually be purged from the central API after warning notices. This does <em>not</em> delete the installed server data. It means the owner may need to reconnect and re-register the install later. Main platform servers are exempt, and paid non-purge or extended-retention options can keep an owned install active longer.
+                </div>
+
+                <h3>Using VoiceLink with an Existing Website</h3>
+                <div class="download-options">
+                    <article class="download-card">
+                        <h4>Keep the existing site</h4>
+                        <p>Recommended default. Deploy VoiceLink beside the current site and keep your home page, WordPress content, or custom pages untouched.</p>
+                        <p><strong>Example:</strong> keep <code>walterharper.com</code> as the main site and run VoiceLink at <code>voice.walterharper.com</code> or from an app directory under the same account.</p>
+                    </article>
+                    <article class="download-card">
+                        <h4>Integrate with WordPress</h4>
+                        <p>When WordPress is detected, use the bundled VoiceLink plugin to create pages, add shortcodes, and expose owner/site context without replacing the whole site.</p>
+                        <p><strong>Example:</strong> add a VoiceLink downloads page, help page, and server setup page to an existing membership or community site.</p>
+                    </article>
+                    <article class="download-card">
+                        <h4>Replace site root</h4>
+                        <p>Only choose this when the owner explicitly wants the full internal VoiceLink web UI to become the primary site.</p>
+                        <p><strong>Example:</strong> a fresh domain dedicated only to VoiceLink where no existing CMS or public website needs to be preserved.</p>
+                    </article>
+                </div>
             </section>
 
             <!-- Web Installer Section -->
@@ -507,7 +569,7 @@ npm start
                     </div>
                 </div>
 
-                <p>The Web Installer allows you to set up VoiceLink Local on web hosting without SSH access.</p>
+                <p>The Web Installer allows you to set up VoiceLink on web hosting without SSH access.</p>
 
                 <h3>Requirements</h3>
                 <table class="requirements-table">
@@ -621,7 +683,7 @@ npm start
                 </div>
             </div>
             <div class="footer-bottom">
-                <p>&copy; 2024 DevineCreations. VoiceLink Local v1.0.0</p>
+                <p>&copy; 2024 DevineCreations. VoiceLink v1.0.0</p>
             </div>
         </footer>
     </div>

@@ -417,8 +417,9 @@ class VoiceLinkApp {
             const startMinimized = this.settings.get('startMinimized', false);
             const autoMinimizeSetting = this.settings.get('autoMinimize', false);
             const autoOpenWebUI = this.settings.get('autoOpenWebUIAndMinimize', false);
+            const startupBehaviorConfigured = this.settings.get('startupBehaviorConfigured', false);
 
-            if (autoMinimizeOnStart || startMinimized || autoMinimizeSetting || autoOpenWebUI) {
+            if (startupBehaviorConfigured && (autoMinimizeOnStart || startMinimized || autoMinimizeSetting || autoOpenWebUI)) {
                 // Start minimized to tray
                 if (!this.hasShownTrayNotification && !autoOpenWebUI) {
                     this.showNotification('VoiceLink started in menubar. Server is ready for connections.');
@@ -713,6 +714,9 @@ class VoiceLinkApp {
             const { value } = req.body;
 
             this.settings.set(key, value);
+            if (key === 'autoMinimizeOnStart' || key === 'startMinimized' || key === 'autoMinimize' || key === 'autoOpenWebUIAndMinimize') {
+                this.settings.set('startupBehaviorConfigured', true);
+            }
             this.updateTrayMenu(); // Update tray menu when settings change
 
             res.json({ success: true, key, value });
@@ -724,6 +728,14 @@ class VoiceLinkApp {
             Object.entries(settings).forEach(([key, value]) => {
                 this.settings.set(key, value);
             });
+            if (
+                'autoMinimizeOnStart' in settings ||
+                'startMinimized' in settings ||
+                'autoMinimize' in settings ||
+                'autoOpenWebUIAndMinimize' in settings
+            ) {
+                this.settings.set('startupBehaviorConfigured', true);
+            }
 
             this.updateTrayMenu(); // Update tray menu when settings change
 

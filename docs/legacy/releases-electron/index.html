@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink - Downloads</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+        .header { text-align: center; margin-bottom: 2rem; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .header p { opacity: 0.8; }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 { font-size: 1.25rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+        .downloads { display: flex; flex-direction: column; gap: 0.75rem; }
+        .dl-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            text-decoration: none;
+            color: #fff;
+            transition: all 0.2s;
+        }
+        .dl-item:hover { background: rgba(99,102,241,0.2); border-color: #6366f1; transform: translateX(4px); }
+        .dl-item.featured { background: linear-gradient(135deg, rgba(34,197,94,0.2), rgba(22,163,74,0.1)); border-color: #22c55e; }
+        .dl-item.featured:hover { background: linear-gradient(135deg, rgba(34,197,94,0.3), rgba(22,163,74,0.2)); }
+        .dl-icon { font-size: 2rem; width: 50px; text-align: center; }
+        .dl-info { flex: 1; }
+        .dl-info strong { display: block; font-size: 1rem; margin-bottom: 0.25rem; }
+        .dl-info span { font-size: 0.85rem; opacity: 0.7; }
+        .dl-size { font-size: 0.8rem; opacity: 0.6; background: rgba(0,0,0,0.2); padding: 0.25rem 0.5rem; border-radius: 4px; }
+        .section-note { font-size: 0.85rem; opacity: 0.6; margin-top: 1rem; text-align: center; }
+        .back-link { display: inline-block; margin-bottom: 1rem; color: #6366f1; text-decoration: none; }
+        .back-link:hover { text-decoration: underline; }
+        .badge { display: inline-block; font-size: 0.7rem; background: #22c55e; color: #fff; padding: 0.15rem 0.4rem; border-radius: 4px; margin-left: 0.5rem; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../client/" class="back-link">&larr; Back to VoiceLink</a>
+
+        <div class="header">
+            <h1>VoiceLink Downloads</h1>
+            <p>Native apps for the best experience</p>
+        </div>
+
+        <div class="card">
+            <h2>&#127822; macOS Native Apps <span class="badge">New</span></h2>
+            <div class="downloads">
+                <a href="mac-native/VoiceLink-macOS.zip" class="dl-item featured">
+                    <span class="dl-icon">&#127911;</span>
+                    <div class="dl-info">
+                        <strong>VoiceLink Native</strong>
+                        <span>Lightweight Swift app - P2P Voice Chat</span>
+                    </div>
+                    <span class="dl-size">1.1 MB</span>
+                </a>
+                <a href="mac-native/OpenLink-macOS.zip" class="dl-item">
+                    <span class="dl-icon">&#128279;</span>
+                    <div class="dl-info">
+                        <strong>OpenLink</strong>
+                        <span>Remote connectivity & control</span>
+                    </div>
+                    <span class="dl-size">166 KB</span>
+                </a>
+                <a href="mac-native/OpenLinkInstaller-macOS.zip" class="dl-item">
+                    <span class="dl-icon">&#128230;</span>
+                    <div class="dl-info">
+                        <strong>OpenLink Installer</strong>
+                        <span>Easy wizard-style setup</span>
+                    </div>
+                    <span class="dl-size">205 KB</span>
+                </a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>&#128187; Windows & &#128039; Linux</h2>
+            <div class="downloads">
+                <div class="dl-item" style="opacity: 0.5; cursor: default;">
+                    <span class="dl-icon">&#9203;</span>
+                    <div class="dl-info">
+                        <strong>Coming Soon</strong>
+                        <span>Native apps for Windows and Linux in development</span>
+                    </div>
+                </div>
+            </div>
+            <p class="section-note">Use the <a href="../client/" style="color: #6366f1;">web app</a> in the meantime - works on all platforms!</p>
+        </div>
+
+        <div class="card">
+            <h2>&#128214; Resources</h2>
+            <div class="downloads">
+                <a href="../client/" class="dl-item">
+                    <span class="dl-icon">&#127760;</span>
+                    <div class="dl-info">
+                        <strong>Web App</strong>
+                        <span>Use VoiceLink directly in your browser</span>
+                    </div>
+                </a>
+                <a href="https://github.com/raywonder/voicelink" class="dl-item">
+                    <span class="dl-icon">&#128736;</span>
+                    <div class="dl-info">
+                        <strong>Source Code</strong>
+                        <span>View on GitHub</span>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -14,7 +14,8 @@ class MastodonOAuthManager {
         // Suggested instances
         this.suggestedInstances = [
             { url: 'https://md.tappedin.fm', name: 'TappedIn' },
-            { url: 'https://mastodon.devinecreations.net', name: 'DevineCreations' }
+            { url: 'https://mastodon.devinecreations.net', name: 'DevineCreations' },
+            { url: 'https://layer8.space', name: 'Layer8 in Space' }
         ];
 
         // OAuth scopes needed
@@ -79,14 +80,45 @@ class MastodonOAuthManager {
     }
 
     /**
+     * Normalize user-entered Mastodon-compatible instance names.
+     */
+    normalizeInstanceUrl(instanceUrl) {
+        let value = String(instanceUrl || '').trim();
+        if (!value) {
+            throw new Error('Enter a Mastodon instance, for example layer8.space');
+        }
+
+        value = value.replace(/^@+/, '');
+        if (value.includes('@')) {
+            value = value.split('@').filter(Boolean).pop() || value;
+        }
+        value = value.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+
+        const aliases = {
+            layor8: 'layer8.space',
+            layer8: 'layer8.space',
+            tappedin: 'md.tappedin.fm',
+            devinecreations: 'mastodon.devinecreations.net'
+        };
+        value = aliases[value] || value;
+
+        if (!value.includes('.') || /\s/.test(value)) {
+            throw new Error('Enter the full Mastodon instance domain, for example layer8.space');
+        }
+
+        const normalized = `https://${value}`;
+        try {
+            return new URL(normalized).origin;
+        } catch (err) {
+            throw new Error('Enter a valid Mastodon instance domain.');
+        }
+    }
+
+    /**
      * Register VoiceLink as an OAuth app on the instance
      */
     async registerApp(instanceUrl) {
-        // Normalize instance URL
-        instanceUrl = instanceUrl.replace(/\/$/, '');
-        if (!instanceUrl.startsWith('http')) {
-            instanceUrl = 'https://' + instanceUrl;
-        }
+        instanceUrl = this.normalizeInstanceUrl(instanceUrl);
 
         // Check if we already have credentials for this instance
         const savedApps = JSON.parse(localStorage.getItem('voicelink_mastodon_apps') || '{}');
@@ -110,10 +142,10 @@ class MastodonOAuthManager {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    client_name: 'VoiceLink Local',
+                    client_name: 'VoiceLink',
                     redirect_uris: redirectUri,
                     scopes: this.scopes,
-                    website: 'https://voicelink.devinecreations.net'
+                    website: 'https://voicelinkapp.app'
                 })
             });
 

@@ -34,12 +34,6 @@ struct ContentView: View {
         .sheet(isPresented: $showProfile) {
             MessagesTab(serverURL: $serverURL, roomState: roomState, openServers: { selectedTab = .servers })
         }
-        .onAppear {
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                IOSActionSoundPlayer.playStartupIntroIfNeeded()
-            }
-        }
     }
 }
 
@@ -279,6 +273,11 @@ final class IOSRoomMessagingState: ObservableObject {
             activeRoomName = roomName
         }
         statusText = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
+        appendSystemRoomMessage(
+            roomId: roomId.isEmpty ? activeRoomId : roomId,
+            roomName: roomName.isEmpty ? activeRoomName : roomName,
+            body: roomName.isEmpty ? "You joined the room." : "You joined \(roomName)."
+        )
         let seededUsers = iosUsersArray(from: info)
         if !seededUsers.isEmpty {
             handleRoomUsers([
@@ -314,14 +313,20 @@ final class IOSRoomMessagingState: ObservableObject {
     private func handleRoomLeft(_ info: [AnyHashable: Any]?) {
         let roomId = (info?["roomId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if roomId.isEmpty || roomId == activeRoomId {
+            let previousRoomId = activeRoomId
+            let previousRoomName = activeRoomName
             isInRoom = false
             activeRoomId = ""
             activeRoomName = ""
             selectedDirectTarget = nil
             statusText = "Left room."
+            appendSystemRoomMessage(
+                roomId: previousRoomId,
+                roomName: previousRoomName,
+                body: previousRoomName.isEmpty ? "You left the room." : "You left \(previousRoomName)."
+            )
             roomTranscripts.removeAll()
             directTargets.removeAll()
-            roomMessages.removeAll()
         }
     }
 
@@ -430,6 +435,11 @@ final class IOSRoomMessagingState: ObservableObject {
             let mapped = mapIOSRoomUser(user, roomId: roomId, index: directTargets.count)
             upsertDirectTarget(mapped)
             statusText = "\(mapped.name) joined \(activeRoomName.isEmpty ? "the room" : activeRoomName)."
+            appendSystemRoomMessage(
+                roomId: roomId.isEmpty ? activeRoomId : roomId,
+                roomName: roomName.isEmpty ? activeRoomName : roomName,
+                body: "\(mapped.name) joined the room."
+            )
             if !mapped.isBot {
                 announcementManager.announce("\(mapped.name) joined the room.")
             }
@@ -452,6 +462,11 @@ final class IOSRoomMessagingState: ObservableObject {
             directTargets.removeAll { $0.name.caseInsensitiveCompare(userName) == .orderedSame }
         }
         statusText = "\(userName) left \(activeRoomName.isEmpty ? "the room" : activeRoomName)."
+        appendSystemRoomMessage(
+            roomId: roomId.isEmpty ? activeRoomId : roomId,
+            roomName: roomName.isEmpty ? activeRoomName : roomName,
+            body: "\(userName) left the room."
+        )
         announcementManager.announce("\(userName) left the room.")
     }
 
@@ -522,9 +537,33 @@ final class IOSRoomMessagingState: ObservableObject {
         if roomMessages.count > 400 {
             roomMessages = Array(roomMessages.suffix(400))
         }
-        if normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId), type == "system" || type == "bot" {
-            announcementManager.announceSystemMessage(body, author: author)
+        if type.caseInsensitiveCompare("text") == .orderedSame,
+           !isLikelyLocalMessage(author: author, senderId: senderId) {
+            IOSActionSoundPlayer.playMessageReceived()
         }
+        let isActiveRoomMessage = normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
+        let isLocalMessage = isLikelyLocalMessage(author: author, senderId: senderId)
+        if isActiveRoomMessage, !isLocalMessage {
+            if type.caseInsensitiveCompare("system") == .orderedSame || type.caseInsensitiveCompare("bot") == .orderedSame {
+                announcementManager.announceSystemMessage(body, author: author)
+            } else {
+                announcementManager.announceRoomMessage(body, author: author)
+            }
+        }
+    }
+
+    private func appendSystemRoomMessage(roomId: String, roomName: String, body: String) {
+        let resolvedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedRoomId.isEmpty, !resolvedBody.isEmpty else { return }
+        handleRoomMessage([
+            "roomId": resolvedRoomId,
+            "roomName": roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Room" : roomName,
+            "author": "System",
+            "body": resolvedBody,
+            "type": "system",
+            "timestamp": Date().timeIntervalSince1970
+        ])
     }
 
     private func handleDirectMessage(_ info: [AnyHashable: Any]?) {
@@ -534,6 +573,9 @@ final class IOSRoomMessagingState: ObservableObject {
         guard !userId.isEmpty else { return }
         let target = IOSDirectMessageTarget(id: userId, name: userName.isEmpty ? "User" : userName)
         upsertDirectTarget(target)
+        if !isLikelyLocalMessage(author: userName, senderId: userId) {
+            IOSActionSoundPlayer.playMessageReceived()
+        }
         if selectedDirectTarget == nil {
             selectedDirectTarget = target
         }
@@ -576,6 +618,31 @@ final class IOSRoomMessagingState: ObservableObject {
             directTargets.append(target)
         }
         directTargets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func isLikelyLocalMessage(author: String, senderId: String) -> Bool {
+        let normalizedAuthor = author
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedSenderId = senderId
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let defaults = UserDefaults.standard
+        let localNames = [
+            defaults.string(forKey: "voicelink.displayName"),
+            defaults.string(forKey: "voicelink.accountDisplayName"),
+            defaults.string(forKey: "voicelink.userName")
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty }
+        let localUserId = (defaults.string(forKey: "voicelink.userId") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if !normalizedSenderId.isEmpty, normalizedSenderId == localUserId {
+            return true
+        }
+        return !normalizedAuthor.isEmpty && localNames.contains(normalizedAuthor)
     }
 
     private func mapIOSRoomUser(_ user: [String: Any], roomId: String, index: Int) -> IOSDirectMessageTarget {
@@ -813,13 +880,13 @@ private func iosUserDictionary(from value: Any?) -> [String: Any]? {
 private final class IOSRoomAnnouncementManager {
     static let shared = IOSRoomAnnouncementManager()
 
-    private let synthesizer = AVSpeechSynthesizer()
+    private lazy var synthesizer = AVSpeechSynthesizer()
 
     func announce(_ message: String, interrupt: Bool = false) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         UIAccessibility.post(notification: .announcement, argument: text)
-        guard announcementsEnabled else { return }
+        guard shouldUseSpeechSynthesizer else { return }
         if interrupt, synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
@@ -840,11 +907,24 @@ private final class IOSRoomAnnouncementManager {
         announce("\(prefix). \(body)", interrupt: false)
     }
 
+    func announceRoomMessage(_ body: String, author: String) {
+        let prefix = author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Message" : "\(author) says"
+        announce("\(prefix). \(body)", interrupt: false)
+    }
+
     private var announcementsEnabled: Bool {
         if UserDefaults.standard.object(forKey: "voicelink.ios.ttsAnnouncementsEnabled") == nil {
             return true
         }
         return UserDefaults.standard.bool(forKey: "voicelink.ios.ttsAnnouncementsEnabled")
+    }
+
+    private var shouldUseSpeechSynthesizer: Bool {
+        guard announcementsEnabled else { return false }
+        if UIAccessibility.isVoiceOverRunning {
+            return false
+        }
+        return true
     }
 
     private var shouldSpeakSystemMessages: Bool {
@@ -872,6 +952,58 @@ private enum RoomSortMode: String, CaseIterable, Identifiable {
 }
 
 struct RoomSummary: Identifiable, Decodable, Hashable {
+    struct LiveBroadcastSummary: Decodable, Hashable {
+        let enabled: Bool
+        let isLive: Bool
+        let status: String
+        let provider: String
+        let providerName: String
+        let shareURL: String
+
+        private enum CodingKeys: String, CodingKey {
+            case enabled, isLive, status, provider, providerName, shareUrl
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = (try? container.decode(Bool.self, forKey: .enabled)) ?? false
+            isLive = (try? container.decode(Bool.self, forKey: .isLive)) ?? false
+            status = (try? container.decode(String.self, forKey: .status)) ?? "idle"
+            provider = (try? container.decode(String.self, forKey: .provider)) ?? "aaastreamer"
+            providerName = (try? container.decode(String.self, forKey: .providerName)) ?? "AAAStreamer"
+            shareURL = (try? container.decode(String.self, forKey: .shareUrl)) ?? ""
+        }
+    }
+
+    struct MotdSettings: Decodable, Hashable {
+        let enabled: Bool
+        let showBeforeJoin: Bool
+        let showInRoom: Bool
+    }
+
+    struct ServerRulesAppliesTo: Decodable, Hashable {
+        let account: Bool
+        let guest: Bool
+    }
+
+    struct ServerUsefulLink: Decodable, Hashable, Identifiable {
+        let label: String
+        let url: String
+
+        var id: String { "\(label)|\(url)" }
+    }
+
+    struct ServerRulesSummary: Decodable, Hashable {
+        let enabled: Bool
+        let title: String
+        let body: String
+        let requireAgreement: Bool
+        let version: String
+        let appliesTo: ServerRulesAppliesTo
+        let privacyPolicyUrl: String
+        let usefulLinks: [ServerUsefulLink]
+    }
+
     let id: String
     let name: String
     let description: String
@@ -888,12 +1020,66 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let federationTier: String
     let backgroundStream: String
     let streamVolume: Double
+    let liveBroadcast: LiveBroadcastSummary?
     let showChatInIOS: Bool
     let iosChatMessageOrder: String
     let iosChatMessageLimit: Int
+    let motd: String
+    let motdSettings: MotdSettings
+    let serverRules: ServerRulesSummary
+
+    init(
+        id: String,
+        name: String,
+        description: String,
+        userCount: Int,
+        visibility: String,
+        accessType: String,
+        locked: Bool,
+        serverSource: String,
+        serverTitle: String,
+        serverApiBase: String,
+        serverDomain: String,
+        serverDescription: String,
+        federated: Bool,
+        federationTier: String,
+        backgroundStream: String,
+        streamVolume: Double,
+        liveBroadcast: LiveBroadcastSummary?,
+        showChatInIOS: Bool,
+        iosChatMessageOrder: String,
+        iosChatMessageLimit: Int,
+        motd: String,
+        motdSettings: MotdSettings,
+        serverRules: ServerRulesSummary
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.userCount = userCount
+        self.visibility = visibility
+        self.accessType = accessType
+        self.locked = locked
+        self.serverSource = serverSource
+        self.serverTitle = serverTitle
+        self.serverApiBase = serverApiBase
+        self.serverDomain = serverDomain
+        self.serverDescription = serverDescription
+        self.federated = federated
+        self.federationTier = federationTier
+        self.backgroundStream = backgroundStream
+        self.streamVolume = streamVolume
+        self.liveBroadcast = liveBroadcast
+        self.showChatInIOS = showChatInIOS
+        self.iosChatMessageOrder = iosChatMessageOrder
+        self.iosChatMessageLimit = iosChatMessageLimit
+        self.motd = motd
+        self.motdSettings = motdSettings
+        self.serverRules = serverRules
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, memberCount, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit
+        case id, name, description, users, userCount, memberCount, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, liveBroadcast, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit, motd, motdSettings, serverRules
     }
 
     init(from decoder: Decoder) throws {
@@ -918,11 +1104,24 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         backgroundStream = (try? container.decode(String.self, forKey: .backgroundStream)) ?? ""
         streamVolume = (try? container.decode(Double.self, forKey: .streamVolume))
             ?? Double((try? container.decode(Int.self, forKey: .streamVolume)) ?? 30)
+        liveBroadcast = try? container.decode(LiveBroadcastSummary.self, forKey: .liveBroadcast)
         showChatInIOS = (try? container.decode(Bool.self, forKey: .showChatInIOS)) ?? true
         let decodedOrder = (try? container.decode(String.self, forKey: .iosChatMessageOrder))?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "newest-first"
         iosChatMessageOrder = ["oldest-first", "newest-first"].contains(decodedOrder) ? decodedOrder : "newest-first"
         let decodedLimit = (try? container.decode(Int.self, forKey: .iosChatMessageLimit)) ?? 50
         iosChatMessageLimit = [20, 50].contains(decodedLimit) ? decodedLimit : 50
+        motd = (try? container.decode(String.self, forKey: .motd)) ?? ""
+        motdSettings = (try? container.decode(MotdSettings.self, forKey: .motdSettings)) ?? MotdSettings(enabled: true, showBeforeJoin: true, showInRoom: true)
+        serverRules = (try? container.decode(ServerRulesSummary.self, forKey: .serverRules)) ?? ServerRulesSummary(
+            enabled: true,
+            title: "Server Rules",
+            body: "",
+            requireAgreement: true,
+            version: "",
+            appliesTo: ServerRulesAppliesTo(account: true, guest: true),
+            privacyPolicyUrl: "",
+            usefulLinks: []
+        )
     }
 
     private static func decodeString(_ container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> String? {
@@ -962,6 +1161,44 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     }
 }
 
+private extension RoomSummary {
+    func normalizedForFetchedBase(_ baseURL: String) -> RoomSummary {
+        let normalizedBase = normalizeBaseURL(serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? baseURL : serverApiBase)
+        let configured = configuredServerPresentation(baseURL: normalizedBase)
+        let resolvedTitle = configured?.name ?? serverTitle
+        let resolvedDescription = configured?.description
+            ?? (configured != nil && serverDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "\(resolvedTitle) server."
+                : serverDescription)
+
+        return RoomSummary(
+            id: id,
+            name: name,
+            description: description,
+            userCount: userCount,
+            visibility: visibility,
+            accessType: accessType,
+            locked: locked,
+            serverSource: serverSource,
+            serverTitle: resolvedTitle,
+            serverApiBase: normalizedBase,
+            serverDomain: configured?.domain ?? serverDomain,
+            serverDescription: resolvedDescription,
+            federated: federated,
+            federationTier: federationTier,
+            backgroundStream: backgroundStream,
+            streamVolume: streamVolume,
+            liveBroadcast: liveBroadcast,
+            showChatInIOS: showChatInIOS,
+            iosChatMessageOrder: iosChatMessageOrder,
+            iosChatMessageLimit: iosChatMessageLimit,
+            motd: motd,
+            motdSettings: motdSettings,
+            serverRules: serverRules
+        )
+    }
+}
+
 private struct AnyRoomUserValue: Decodable, Hashable {
     let rawValue: String
 
@@ -995,6 +1232,48 @@ private struct RoomDetailsDestination: Identifiable, Hashable {
     let baseURL: String
 }
 
+private struct IOSSupportContext: Identifiable, Hashable {
+    let id: String
+    let serverURL: String
+    let serverName: String
+    let roomId: String
+    let roomName: String
+    let sourceContext: String
+
+    static func server(baseURL: String, serverName: String) -> IOSSupportContext {
+        IOSSupportContext(
+            id: "\(normalizeBaseURL(baseURL))|server-support",
+            serverURL: normalizeBaseURL(baseURL),
+            serverName: serverName,
+            roomId: "",
+            roomName: "",
+            sourceContext: "ios-server-support"
+        )
+    }
+
+    static func room(baseURL: String, serverName: String, room: RoomSummary) -> IOSSupportContext {
+        IOSSupportContext(
+            id: "\(normalizeBaseURL(baseURL))|\(room.id)|room-support",
+            serverURL: normalizeBaseURL(baseURL),
+            serverName: serverName,
+            roomId: room.id,
+            roomName: room.name,
+            sourceContext: "ios-room-support"
+        )
+    }
+}
+
+private struct IOSSupportTicketSummary: Identifiable, Decodable {
+    let id: String
+    let subject: String
+    let status: String
+    let category: String
+    let priority: String
+    let serverName: String?
+    let roomName: String?
+    let updatedAt: Double?
+}
+
 private struct FederatedRoomGroup: Identifiable, Hashable {
     let id: String
     let displayName: String
@@ -1008,6 +1287,16 @@ private func normalizedFederatedRoomGroupKey(_ rawName: String) -> String {
     return collapsedWhitespace
         .replacingOccurrences(of: "[^\\p{L}\\p{N} ]+", with: "", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func stablePolicyDigest(_ rawValue: String) -> String {
+    let bytes = Array(rawValue.utf8)
+    var hash: UInt64 = 1469598103934665603
+    for byte in bytes {
+        hash ^= UInt64(byte)
+        hash &*= 1099511628211
+    }
+    return String(hash, radix: 16)
 }
 
 private struct ClientVisibilitySettings: Equatable {
@@ -1025,14 +1314,17 @@ private struct ClientVisibilitySettings: Equatable {
 }
 
 private struct ServersTab: View {
-    @AppStorage("voicelink.ios.serverScreenTab") private var storedTab = ServerScreenTab.servers.rawValue
+    @AppStorage("voicelink.ios.serverScreenTab") private var storedTab = ServerScreenTab.federation.rawValue
     @Binding var serverURL: String
     @ObservedObject var roomState: IOSRoomMessagingState
     let openProfile: () -> Void
 
     private var selectedTabBinding: Binding<ServerScreenTab> {
         Binding(
-            get: { ServerScreenTab(rawValue: storedTab) ?? .servers },
+            get: {
+                let resolved = ServerScreenTab(rawValue: storedTab) ?? .federation
+                return resolved == .servers ? .federation : resolved
+            },
             set: { storedTab = $0.rawValue }
         )
     }
@@ -1048,7 +1340,7 @@ private struct ServersTab: View {
             .padding([.horizontal, .top])
             .accessibilityLabel("Server screen")
 
-            switch ServerScreenTab(rawValue: storedTab) ?? .servers {
+            switch selectedTabBinding.wrappedValue {
             case .servers:
                 HomeTab(
                     serverURL: $serverURL,
@@ -1080,8 +1372,12 @@ private struct HomeTab: View {
     @State private var activeSession: RoomSessionDestination?
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
+    @State private var activeServer: HomeServerSummary?
+    @State private var activeSupportContext: IOSSupportContext?
     @State private var pendingGuestJoinRoom: RoomSummary?
+    @State private var pendingServerPolicyJoinRoom: RoomSummary?
     @State private var showGuestJoinPrompt = false
+    @State private var showServerPolicyPrompt = false
     @State private var isAdmin = false
     @State private var showAdmin = false
     @State private var roomSortMode: RoomSortMode = .activity
@@ -1211,12 +1507,17 @@ private struct HomeTab: View {
                         .buttonStyle(.borderedProminent)
                     }
 
-                    Picker("Sort Rooms", selection: $roomSortMode) {
+                    Menu {
                         ForEach(RoomSortMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
+                            Button(mode.label) {
+                                roomSortMode = mode
+                            }
                         }
+                    } label: {
+                        Label("Sort Rooms: \(roomSortMode.label)", systemImage: "arrow.up.arrow.down")
                     }
-                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Sort rooms")
+                    .accessibilityValue(roomSortMode.label)
 
                     if !clientVisibility.ios {
                         Text("Rooms are hidden on iOS by server settings.")
@@ -1232,22 +1533,26 @@ private struct HomeTab: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaries) { server in
-                            NavigationLink(value: server) {
+                            Button {
+                                activeServer = server
+                            } label: {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(server.name)
                                         .font(.headline)
-                                    if !server.description.isEmpty {
-                                        Text(server.description)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
+                                    Text(server.baseURL)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(displayOptionalDescription(server.description))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
                                     Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(server.totalUsers) users")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 .padding(.vertical, 4)
                             }
-                            .accessibilityLabel("\(server.name), \(server.roomCount) rooms, \(server.totalUsers) users")
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(server.name), \(server.baseURL), \(server.roomCount) rooms, \(server.totalUsers) users")
                             .accessibilityHint("Double tap to browse rooms on this server.")
                         }
                     }
@@ -1285,9 +1590,6 @@ private struct HomeTab: View {
             .onReceive(NotificationCenter.default.publisher(for: .iosRoomLeft)) { _ in
                 Task { await refreshRooms() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .iosRoomUsersUpdated)) { _ in
-                Task { await refreshRooms() }
-            }
             .sheet(item: $activeSession) { session in
                 RoomSessionView(destination: session, roomState: roomState)
             }
@@ -1296,6 +1598,24 @@ private struct HomeTab: View {
             }
             .sheet(item: $activeDetails) { details in
                 RoomDetailsView(destination: details)
+            }
+            .sheet(item: $activeServer) { server in
+                HomeServerRoomsView(
+                    server: server,
+                    clientVisibleOnIOS: clientVisibility.ios,
+                    onOpenRoom: { room, action in
+                        activeServer = nil
+                        openRoom(room, action: action)
+                    },
+                    onShareRoom: { room in shareRoom(room) },
+                    onContactSupport: { context in
+                        activeServer = nil
+                        activeSupportContext = context
+                    }
+                )
+            }
+            .sheet(item: $activeSupportContext) { context in
+                IOSSupportTicketSheet(context: context)
             }
             .sheet(isPresented: $showGuestJoinPrompt) {
                 GuestJoinPromptView(
@@ -1309,21 +1629,33 @@ private struct HomeTab: View {
                     }
                 )
             }
+            .sheet(isPresented: $showServerPolicyPrompt) {
+                ServerJoinPolicyPromptView(
+                    room: pendingServerPolicyJoinRoom,
+                    serverName: pendingServerPolicyJoinRoom.map {
+                        displayServerName(room: $0, fallbackBase: $0.serverApiBase.isEmpty ? normalizedBaseURL : normalizeBaseURL($0.serverApiBase))
+                    } ?? "VoiceLink Server",
+                    isSignedIn: !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    agree: {
+                        guard let room = pendingServerPolicyJoinRoom else { return }
+                        markServerPolicyAccepted(for: room, fallbackBase: normalizedBaseURL, signedIn: !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        pendingServerPolicyJoinRoom = nil
+                        showServerPolicyPrompt = false
+                        openRoom(room, action: "join", bypassServerPolicyPrompt: true)
+                    },
+                    disagree: {
+                        pendingServerPolicyJoinRoom = nil
+                        showServerPolicyPrompt = false
+                    }
+                )
+            }
             .sheet(isPresented: $showAdmin) {
                 AdminTabView(serverURL: $serverURL)
-            }
-            .navigationDestination(for: HomeServerSummary.self) { server in
-                HomeServerRoomsView(
-                    server: server,
-                    clientVisibleOnIOS: clientVisibility.ios,
-                    onOpenRoom: { room, action in openRoom(room, action: action) },
-                    onShareRoom: { room in shareRoom(room) }
-                )
             }
         }
     }
 
-    private func openRoom(_ room: RoomSummary, action: String, bypassGuestPrompt: Bool = false) {
+    private func openRoom(_ room: RoomSummary, action: String, bypassGuestPrompt: Bool = false, bypassServerPolicyPrompt: Bool = false) {
         guard clientVisibility.ios else { return }
         guard activeSession == nil, activePreview == nil, activeDetails == nil else { return }
         let resolvedRoomBase = room.serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1341,6 +1673,12 @@ private struct HomeTab: View {
             return
         }
         if action == "join" {
+            let signedIn = !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !bypassServerPolicyPrompt && shouldPromptForServerPolicy(room: room, fallbackBase: resolvedRoomBase, signedIn: signedIn) {
+                pendingServerPolicyJoinRoom = room
+                showServerPolicyPrompt = true
+                return
+            }
             if !bypassGuestPrompt && authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 !iosHasValidGuestDisplayName(displayName) {
                 pendingGuestJoinRoom = room
@@ -1458,6 +1796,30 @@ private struct HomeTab: View {
         return score
     }
 
+    private func shouldPromptForServerPolicy(room: RoomSummary, fallbackBase: String, signedIn: Bool) -> Bool {
+        let rulesBody = room.serverRules.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let motdBody = room.motd.trimmingCharacters(in: .whitespacesAndNewlines)
+        let applies = signedIn ? room.serverRules.appliesTo.account : room.serverRules.appliesTo.guest
+        let needsRules = room.serverRules.enabled && room.serverRules.requireAgreement && applies && !rulesBody.isEmpty
+        let showsMotd = room.motdSettings.enabled && room.motdSettings.showBeforeJoin && !motdBody.isEmpty
+        guard needsRules || showsMotd else { return false }
+        return !UserDefaults.standard.bool(forKey: serverPolicyAcceptanceKey(for: room, fallbackBase: fallbackBase, signedIn: signedIn))
+    }
+
+    private func markServerPolicyAccepted(for room: RoomSummary, fallbackBase: String, signedIn: Bool) {
+        UserDefaults.standard.set(true, forKey: serverPolicyAcceptanceKey(for: room, fallbackBase: fallbackBase, signedIn: signedIn))
+    }
+
+    private func serverPolicyAcceptanceKey(for room: RoomSummary, fallbackBase: String, signedIn: Bool) -> String {
+        let resolvedBase = room.serverApiBase.isEmpty ? fallbackBase : normalizeBaseURL(room.serverApiBase)
+        let identity = canonicalServerIdentity(baseURL: resolvedBase, room: room)
+        let rulesVersion = room.serverRules.version.trimmingCharacters(in: .whitespacesAndNewlines)
+        let policyVersion = rulesVersion.isEmpty
+            ? stablePolicyDigest("\(room.serverRules.title)\n\(room.serverRules.body)\n\(room.motd)")
+            : rulesVersion
+        return "voicelink.ios.serverPolicyAccepted.\(signedIn ? "account" : "guest").\(stablePolicyDigest(identity)).\(stablePolicyDigest(policyVersion))"
+    }
+
     @MainActor
     private func refreshAdminAccess() async {
         guard let url = URL(string: "\(normalizedBaseURL)/api/admin/status") else {
@@ -1489,22 +1851,30 @@ private struct HomeTab: View {
 private struct RoomRow: View {
     let room: RoomSummary
 
+    private var liveBroadcastLabel: String? {
+        guard let live = room.liveBroadcast, live.isLive else { return nil }
+        return "Live on \(live.providerName)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(room.name)
                 .font(.headline)
-            if !room.description.isEmpty {
-                Text(room.description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
+            Text(displayOptionalDescription(room.description))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Text("\(room.userCount) users • \(displayRoomLockLabel(room.locked)) • \(displayVisibilityLabel(room.visibility)) • \(displayAccessTypeLabel(room.accessType))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let liveBroadcastLabel {
+                Text(liveBroadcastLabel)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(room.name), \(room.userCount) users, \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))")
+        .accessibilityLabel("\(room.name), \(room.userCount) users, \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))\(liveBroadcastLabel.map { ", \($0)" } ?? "")")
         .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
     }
 }
@@ -1520,57 +1890,88 @@ private struct HomeServerSummary: Identifiable, Hashable {
 }
 
 private struct HomeServerRoomsView: View {
+    @Environment(\.dismiss) private var dismiss
     let server: HomeServerSummary
     let clientVisibleOnIOS: Bool
     let onOpenRoom: (RoomSummary, String) -> Void
     let onShareRoom: (RoomSummary) -> Void
+    let onContactSupport: (IOSSupportContext) -> Void
 
     var body: some View {
-        List {
-            Section("Server") {
-                LabeledContent("Name", value: server.name)
-                LabeledContent("Rooms", value: "\(server.roomCount)")
-                LabeledContent("Users", value: "\(server.totalUsers)")
-            }
+        NavigationStack {
+            List {
+                Section("Server") {
+                    LabeledContent("Name", value: server.name)
+                    LabeledContent("Address", value: server.baseURL)
+                    LabeledContent("Rooms", value: "\(server.roomCount)")
+                    LabeledContent("Users", value: "\(server.totalUsers)")
+                    Text(displayOptionalDescription(server.description))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Contact Server Support") {
+                        onContactSupport(.server(baseURL: server.baseURL, serverName: server.name))
+                    }
+                    .accessibilityHint("Opens a private support ticket for this server.")
+                }
 
-            Section("Rooms") {
-                if !clientVisibleOnIOS {
-                    Text("Rooms are hidden on iOS by this server’s policy.")
-                        .foregroundStyle(.secondary)
-                } else if server.rooms.isEmpty {
-                    Text("No rooms are visible on this server right now.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(server.rooms) { room in
-                        Button {
-                            onOpenRoom(room, "details")
-                        } label: {
-                            RoomRow(room: room)
+                Section("Rooms") {
+                    if !clientVisibleOnIOS {
+                        Text("Rooms are hidden on iOS by this server's policy.")
+                            .foregroundStyle(.secondary)
+                    } else if server.rooms.isEmpty {
+                        Text("No rooms are visible on this server right now.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(server.rooms) { room in
+                            Button {
+                                onOpenRoom(room, "details")
+                            } label: {
+                                RoomRow(room: room)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Room Details") { onOpenRoom(room, "details") }
+                                Button("Join Room") { onOpenRoom(room, "join") }
+                                Button("Preview Room") { onOpenRoom(room, "preview") }
+                                Button("Share Room") { onShareRoom(room) }
+                                Button("Contact Server Support") {
+                                    onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
+                                }
+                            }
+                            .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
+                            .accessibilityAction(named: Text("Room Details")) { onOpenRoom(room, "details") }
+                            .accessibilityAction(named: Text("Join Room")) { onOpenRoom(room, "join") }
+                            .accessibilityAction(named: Text("Preview Room")) { onOpenRoom(room, "preview") }
+                            .accessibilityAction(named: Text("Share Room")) { onShareRoom(room) }
+                            .accessibilityAction(named: Text("Contact Server Support")) {
+                                onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Room Details") { onOpenRoom(room, "details") }
-                            Button("Join Room") { onOpenRoom(room, "join") }
-                            Button("Preview Room") { onOpenRoom(room, "preview") }
-                            Button("Share Room") { onShareRoom(room) }
-                        }
-                        .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
-                        .accessibilityAction(named: Text("Room Details")) { onOpenRoom(room, "details") }
-                        .accessibilityAction(named: Text("Join Room")) { onOpenRoom(room, "join") }
-                        .accessibilityAction(named: Text("Preview Room")) { onOpenRoom(room, "preview") }
-                        .accessibilityAction(named: Text("Share Room")) { onShareRoom(room) }
+                    }
+                }
+            }
+            .navigationTitle(server.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
                     }
                 }
             }
         }
-        .navigationTitle(server.name)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 private struct RoomDetailsView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var activeSupportContext: IOSSupportContext?
     let destination: RoomDetailsDestination
+
+    private var liveBroadcastStatus: String? {
+        guard let live = destination.room.liveBroadcast, live.isLive else { return nil }
+        return "Live on \(live.providerName)"
+    }
 
     var body: some View {
         NavigationStack {
@@ -1582,9 +1983,25 @@ private struct RoomDetailsView: View {
                     LabeledContent("Lock Status", value: displayRoomLockLabel(destination.room.locked))
                     LabeledContent("Visibility", value: displayVisibilityLabel(destination.room.visibility))
                     LabeledContent("Access Type", value: displayAccessTypeLabel(destination.room.accessType))
-                    if !destination.room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(destination.room.description)
-                            .font(.body)
+                    if let liveBroadcastStatus {
+                        LabeledContent("Broadcast", value: liveBroadcastStatus)
+                    }
+                    Text(displayOptionalDescription(destination.room.description))
+                        .font(.body)
+                }
+
+                if let live = destination.room.liveBroadcast, live.isLive {
+                    Section("Live Broadcast") {
+                        LabeledContent("Provider", value: live.providerName)
+                        LabeledContent("Status", value: live.status.capitalized)
+                        if !live.shareURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                           let url = URL(string: live.shareURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                            Link(destination: url) {
+                                Text(live.shareURL)
+                                    .font(.footnote)
+                            }
+                            .accessibilityLabel("Open live broadcast link")
+                        }
                     }
                 }
 
@@ -1596,6 +2013,35 @@ private struct RoomDetailsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                if destination.room.serverRules.enabled,
+                   !destination.room.serverRules.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section(destination.room.serverRules.title.isEmpty ? "Server Rules" : destination.room.serverRules.title) {
+                        Text(destination.room.serverRules.body)
+                            .font(.body)
+                    }
+                }
+
+                if destination.room.motdSettings.enabled,
+                   !destination.room.motd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section("Message of the Day") {
+                        Text(destination.room.motd)
+                            .font(.body)
+                    }
+                }
+
+                ServerPolicyLinksSection(rules: destination.room.serverRules)
+
+                Section("Support") {
+                    Button("Contact Server Support") {
+                        activeSupportContext = .room(
+                            baseURL: destination.baseURL,
+                            serverName: destination.serverLabel,
+                            room: destination.room
+                        )
+                    }
+                    .accessibilityHint("Opens a private support ticket for this server and room.")
+                }
             }
             .navigationTitle("Room Details")
             .navigationBarTitleDisplayMode(.inline)
@@ -1606,6 +2052,235 @@ private struct RoomDetailsView: View {
                     }
                 }
             }
+            .sheet(item: $activeSupportContext) { context in
+                IOSSupportTicketSheet(context: context)
+            }
+        }
+    }
+}
+
+private struct IOSSupportTicketSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("voicelink.authToken") private var authToken = ""
+    @AppStorage("voicelink.displayName") private var displayName = ""
+    @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
+    let context: IOSSupportContext
+
+    @State private var userEmail = ""
+    @State private var subject = ""
+    @State private var description = ""
+    @State private var category = "technical"
+    @State private var tickets: [IOSSupportTicketSummary] = []
+    @State private var statusMessage = ""
+    @State private var isLoadingTickets = false
+    @State private var isSubmitting = false
+
+    private var signedInUserId: String {
+        iosAuthUserValue(authUserJSON, keys: ["id", "userId", "clientId", "email"])
+    }
+
+    private var signedInEmail: String {
+        iosAuthUserValue(authUserJSON, keys: ["email", "userEmail"])
+    }
+
+    private var isSignedIn: Bool {
+        !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canSubmit: Bool {
+        let hasDescription = !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasGuestEmail = isSignedIn || !userEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasDescription && hasGuestEmail && !isSubmitting
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Support Context") {
+                    LabeledContent("Server", value: context.serverName.isEmpty ? displayServerName(baseURL: context.serverURL) : context.serverName)
+                    LabeledContent("Address", value: context.serverURL)
+                    if !context.roomName.isEmpty {
+                        LabeledContent("Room", value: context.roomName)
+                    }
+                }
+
+                Section("Request") {
+                    TextField("Subject", text: $subject)
+                        .textInputAutocapitalization(.sentences)
+                        .accessibilityLabel("Subject")
+                    TextField("Email", text: $userEmail)
+                        .textContentType(.emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .accessibilityLabel("Email")
+                    Picker("Category", selection: $category) {
+                        Text("Technical Support").tag("technical")
+                        Text("Account Issues").tag("account")
+                        Text("Bug Report").tag("bug-report")
+                        Text("General Inquiry").tag("general")
+                    }
+                    TextEditor(text: $description)
+                        .frame(minHeight: 140)
+                        .accessibilityLabel("Issue description")
+                    Text("Ticket details stay private between you and support staff.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Existing Tickets") {
+                    if !isSignedIn {
+                        Text("Sign in to view your existing tickets for this server.")
+                            .foregroundStyle(.secondary)
+                    } else if isLoadingTickets {
+                        ProgressView("Loading tickets...")
+                    } else if tickets.isEmpty {
+                        Text("No tickets found for this server or room.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(tickets) { ticket in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(ticket.subject)
+                                    .font(.headline)
+                                Text("\(displaySupportStatus(ticket.status)) • \(displaySupportCategory(ticket.category))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let roomName = ticket.roomName, !roomName.isEmpty {
+                                    Text(roomName)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
+
+                if !statusMessage.isEmpty {
+                    Section("Status") {
+                        Text(statusMessage)
+                            .foregroundStyle(statusMessage.hasPrefix("Ticket created") ? .green : .secondary)
+                            .accessibilityAddTraits(.updatesFrequently)
+                    }
+                }
+            }
+            .navigationTitle("Server Support")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(isSubmitting ? "Sending" : "Send") {
+                        Task { await submitTicket() }
+                    }
+                    .disabled(!canSubmit)
+                }
+            }
+            .onAppear {
+                if userEmail.isEmpty {
+                    userEmail = signedInEmail
+                }
+                if subject.isEmpty {
+                    subject = context.roomName.isEmpty
+                        ? "Support request for \(context.serverName)"
+                        : "Support request for \(context.roomName)"
+                }
+                Task { await loadTickets() }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadTickets() async {
+        guard isSignedIn, !signedInUserId.isEmpty else { return }
+        guard var components = URLComponents(string: "\(context.serverURL)/api/support/tickets/user/\(signedInUserId)") else { return }
+        components.queryItems = [
+            URLQueryItem(name: "serverUrl", value: context.serverURL),
+            URLQueryItem(name: "roomId", value: context.roomId)
+        ].filter { !($0.value ?? "").isEmpty }
+        guard let url = components.url else { return }
+
+        isLoadingTickets = true
+        defer { isLoadingTickets = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 12
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+            request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                return
+            }
+            tickets = (try? JSONDecoder().decode([IOSSupportTicketSummary].self, from: data)) ?? []
+        } catch {
+            tickets = []
+        }
+    }
+
+    @MainActor
+    private func submitTicket() async {
+        guard canSubmit, let url = URL(string: "\(context.serverURL)/api/support/tickets") else { return }
+        isSubmitting = true
+        statusMessage = "Creating ticket..."
+        defer { isSubmitting = false }
+
+        let resolvedUserId = signedInUserId.isEmpty ? "ios-guest-\(UUID().uuidString)" : signedInUserId
+        let resolvedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "iOS User" : displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedEmail = userEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "VoiceLink support request" : subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let issue = description.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let payload: [String: Any] = [
+            "userId": resolvedUserId,
+            "userName": resolvedName,
+            "userEmail": resolvedEmail,
+            "subject": resolvedSubject,
+            "description": issue,
+            "category": category,
+            "priority": "medium",
+            "channel": "ios",
+            "serverUrl": context.serverURL,
+            "serverName": context.serverName,
+            "roomId": context.roomId,
+            "roomName": context.roomName,
+            "sourceContext": context.sourceContext,
+            "platform": "ios",
+            "metadata": [
+                "serverUrl": context.serverURL,
+                "serverName": context.serverName,
+                "roomId": context.roomId,
+                "roomName": context.roomName,
+                "sourceContext": context.sourceContext,
+                "platform": "ios",
+                "appBuild": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+            ]
+        ]
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 15
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if isSignedIn {
+                request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+                request.setValue(authToken, forHTTPHeaderField: "x-session-token")
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  (json["success"] as? Bool) != false else {
+                statusMessage = (json["error"] as? String) ?? "Unable to create ticket."
+                return
+            }
+            let ticketId = (json["ticketId"] as? String) ?? (json["ticket"] as? [String: Any])?["id"] as? String ?? "support"
+            statusMessage = "Ticket created: \(ticketId)"
+            description = ""
+            await loadTickets()
+        } catch {
+            statusMessage = "Unable to create ticket."
         }
     }
 }
@@ -1622,6 +2297,7 @@ private struct FederationTab: View {
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
     @State private var activeGroup: FederatedRoomGroup?
+    @State private var activeSupportContext: IOSSupportContext?
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
 
@@ -1695,6 +2371,13 @@ private struct FederationTab: View {
                                         Button("Preview Room") { openGroupedRoom(group, action: "preview") }
                                         Button("Join Room") { openGroupedRoom(group, action: "join") }
                                         Button("Share Room") { shareChoice(firstChoice) }
+                                        Button("Contact Server Support") {
+                                            activeSupportContext = .room(
+                                                baseURL: firstChoice.baseURL,
+                                                serverName: firstChoice.serverLabel,
+                                                room: firstChoice.room
+                                            )
+                                        }
                                     }
                                 }
                                 .accessibilityElement(children: .combine)
@@ -1703,6 +2386,14 @@ private struct FederationTab: View {
                                 .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
                                 .accessibilityAction(named: Text("Preview Room")) { openGroupedRoom(group, action: "preview") }
                                 .accessibilityAction(named: Text("Join Room")) { openGroupedRoom(group, action: "join") }
+                                .accessibilityAction(named: Text("Contact Server Support")) {
+                                    guard let firstChoice = group.choices.first else { return }
+                                    activeSupportContext = .room(
+                                        baseURL: firstChoice.baseURL,
+                                        serverName: firstChoice.serverLabel,
+                                        room: firstChoice.room
+                                    )
+                                }
                             }
                         }
                     }
@@ -1722,7 +2413,13 @@ private struct FederationTab: View {
                 RoomDetailsView(destination: details)
             }
             .sheet(item: $activeGroup) { group in
-                FederationRoomChoicesView(group: group, onOpen: openRoom)
+                FederationRoomChoicesView(group: group, onOpen: openRoom, onContactSupport: { context in
+                    activeGroup = nil
+                    activeSupportContext = context
+                })
+            }
+            .sheet(item: $activeSupportContext) { context in
+                IOSSupportTicketSheet(context: context)
             }
         }
     }
@@ -1806,8 +2503,8 @@ private struct FederationTab: View {
         return VStack(alignment: .leading, spacing: 6) {
             Text(group.displayName)
                 .font(.headline)
-            if let firstChoice, !firstChoice.room.description.isEmpty {
-                Text(firstChoice.room.description)
+            if let firstChoice {
+                Text(displayOptionalDescription(firstChoice.room.description))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -1869,6 +2566,7 @@ private struct FederationTab: View {
 private struct FederationRoomChoicesView: View {
     let group: FederatedRoomGroup
     let onOpen: (FederatedRoomChoice, String) -> Void
+    let onContactSupport: (IOSSupportContext) -> Void
 
     var body: some View {
         List {
@@ -1894,11 +2592,17 @@ private struct FederationRoomChoicesView: View {
                             Button("Preview") { onOpen(choice, "preview") }
                                 .buttonStyle(.bordered)
                         }
+                        Button("Contact Server Support") {
+                            onContactSupport(.room(baseURL: choice.baseURL, serverName: choice.serverLabel, room: choice.room))
+                        }
                     }
                     .contextMenu {
                         Button("Room Details") { onOpen(choice, "details") }
                         Button("Join Room") { onOpen(choice, "join") }
                         Button("Preview Room") { onOpen(choice, "preview") }
+                        Button("Contact Server Support") {
+                            onContactSupport(.room(baseURL: choice.baseURL, serverName: choice.serverLabel, room: choice.room))
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(choice.room.userCount) users")
@@ -1906,6 +2610,9 @@ private struct FederationRoomChoicesView: View {
                     .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
                     .accessibilityAction(named: Text("Preview Room")) { onOpen(choice, "preview") }
+                    .accessibilityAction(named: Text("Contact Server Support")) {
+                        onContactSupport(.room(baseURL: choice.baseURL, serverName: choice.serverLabel, room: choice.room))
+                    }
                 }
             }
         }
@@ -2072,7 +2779,7 @@ private struct MessagesTab: View {
 
     private func openAuthAction(_ action: String) {
         guard let encoded = action.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://voicelink.devinecreations.net/?open=\(encoded)") else {
+              let url = URL(string: "https://voicelinkapp.app/client/?open=\(encoded)") else {
             return
         }
         openURL(url)
@@ -2108,7 +2815,7 @@ private struct GuestJoinPromptView: View {
                         openServers()
                     }
 
-                    Link("Sign In", destination: URL(string: "https://voicelink.devinecreations.net/?open=login")!)
+                    Link("Sign In", destination: URL(string: "https://voicelinkapp.app/client/?open=login")!)
                 }
             }
             .navigationTitle("Guest Join")
@@ -2116,6 +2823,102 @@ private struct GuestJoinPromptView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct ServerJoinPolicyPromptView: View {
+    @Environment(\.dismiss) private var dismiss
+    let room: RoomSummary?
+    let serverName: String
+    let isSignedIn: Bool
+    let agree: () -> Void
+    let disagree: () -> Void
+
+    private var rulesBody: String {
+        room?.serverRules.body.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var motdBody: String {
+        room?.motd.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Server") {
+                    LabeledContent("Name", value: serverName)
+                    if let room {
+                        LabeledContent("Room", value: room.name)
+                    }
+                    Text(isSignedIn ? "These server terms apply to account users." : "These server terms apply to guest users.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !rulesBody.isEmpty {
+                    Section(room?.serverRules.title.isEmpty == false ? room!.serverRules.title : "Server Rules") {
+                        Text(rulesBody)
+                    }
+                }
+
+                if !motdBody.isEmpty {
+                    Section("Message of the Day") {
+                        Text(motdBody)
+                    }
+                }
+
+                if let rules = room?.serverRules {
+                    ServerPolicyLinksSection(rules: rules)
+                }
+
+                Section("Agreement") {
+                    Button("Agree and Join") {
+                        agree()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Disagree") {
+                        dismiss()
+                        disagree()
+                    }
+                }
+            }
+            .navigationTitle("Server Terms")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                        disagree()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ServerPolicyLinksSection: View {
+    let rules: RoomSummary.ServerRulesSummary
+
+    var body: some View {
+        let privacyURL = rules.privacyPolicyUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let validLinks = rules.usefulLinks.filter {
+            !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            URL(string: $0.url.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        }
+
+        if !privacyURL.isEmpty || !validLinks.isEmpty {
+            Section("Server Links") {
+                if !privacyURL.isEmpty, let url = URL(string: privacyURL) {
+                    Link("Privacy Policy", destination: url)
+                }
+                ForEach(validLinks) { link in
+                    if let url = URL(string: link.url.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        Link(link.label, destination: url)
+                    }
                 }
             }
         }
@@ -2692,10 +3495,10 @@ struct SettingsTab: View {
                     }
                 }
 
-                Section("Account") {
+                Section("Client Account") {
                     if isSignedIn {
-                        LabeledContent("Signed In As", value: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "VoiceLink Account" : displayName)
-                        Button("Manage Account Sign In") {
+                        LabeledContent("Signed In As", value: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Client Account" : displayName)
+                        Button("Manage Client Account Sign In") {
                             showNativeAccountSignIn = true
                         }
                         Button("Sign Out", role: .destructive) {
@@ -2705,7 +3508,7 @@ struct SettingsTab: View {
                             authUserJSON = ""
                         }
                     } else {
-                        Button("Account Sign In") {
+                        Button("Client Account Sign In") {
                             showNativeAccountSignIn = true
                         }
                         .buttonStyle(.borderedProminent)
@@ -2714,21 +3517,23 @@ struct SettingsTab: View {
                     Button(isSignedIn ? "Other Sign-In Methods" : "Quick Pair or Sign In") {
                         showAuthOptions = true
                     }
-                    Text("Native account sign-in now uses the server login API directly. VoiceLink account sign-in stays local to the app, while Quick Pair and web sign-in are still available for other server flows.")
+                    Text("Native Client Account sign-in now uses the server login API directly. Client Account sign-in stays local to the app, while Quick Pair and web sign-in are still available for other server flows.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("Help and Policies") {
-                    if let webURL = URL(string: "https://voicelink.devinecreations.net") {
+                    if let webURL = URL(string: "https://voicelinkapp.app") {
                         Link("Open Web Frontend", destination: webURL)
                     }
-                    Link("Privacy Policy", destination: URL(string: "https://voicelink.devinecreations.net/docs/privacy-policy.html")!)
-                    Link("User Privacy Choices", destination: URL(string: "https://voicelink.devinecreations.net/docs/user-privacy-choices.html")!)
-                    Link("Support and Contact", destination: URL(string: "https://voicelink.devinecreations.net/docs/contact.html#live-chat")!)
-                    Link("Downloads and Getting Started", destination: URL(string: "https://voicelink.devinecreations.net/downloads/")!)
+                    Link("VoiceLink Platform Docs", destination: URL(string: "https://voicelink.dev/docs/")!)
+                    Link("Getting Started", destination: URL(string: "https://voicelink.dev/docs/getting-started.html")!)
+                    Link("Privacy Policy", destination: URL(string: "https://voicelinkapp.app/docs/privacy-policy.html")!)
+                    Link("User Privacy Choices", destination: URL(string: "https://voicelinkapp.app/docs/user-privacy-choices.html")!)
+                    Link("Support and Contact", destination: URL(string: "https://voicelinkapp.app/docs/contact.html#live-chat")!)
+                    Link("Download Access", destination: URL(string: "https://voicelinkapp.app/downloads/")!)
                     Button("Open Main Website") {
-                        guard let url = URL(string: "https://voicelink.devinecreations.net") else { return }
+                        guard let url = URL(string: "https://voicelinkapp.app") else { return }
                         openURL(url)
                     }
                 }
@@ -2753,7 +3558,7 @@ struct SettingsTab: View {
                 Text("Quick Pair lets you link this device to another signed-in device or enter a server pairing or invite code from a server admin.")
             }
             .sheet(isPresented: $showNativeAccountSignIn) {
-                IOSAccountSignInView(serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"))
+                IOSAccountSignInView(serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelinkapp.app"))
             }
         }
     }
@@ -2766,7 +3571,7 @@ struct SettingsTab: View {
 
     private func openAuthAction(_ action: String) {
         guard let encoded = action.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://voicelink.devinecreations.net/?open=\(encoded)") else {
+              let url = URL(string: "https://voicelinkapp.app/client/?open=\(encoded)") else {
             return
         }
         openURL(url)
@@ -2776,7 +3581,7 @@ struct SettingsTab: View {
         submittingDiagnostics = true
         diagnosticsStatus = ""
         IOSDiagnosticsManager.shared.submitBugReport(
-            serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelink.devinecreations.net"),
+            serverURL: normalizeBaseURL(UserDefaults.standard.string(forKey: "voicelink.serverURL") ?? "https://voicelinkapp.app"),
             title: "iOS diagnostics report",
             description: "Manual diagnostics report submitted from iOS settings.",
             category: "diagnostics",
@@ -2856,37 +3661,48 @@ private struct IOSAccountSignInView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("VoiceLink Account") {
-                    TextField("Email, username, or portal account", text: $identity)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .accessibilityLabel("Identity")
-                    SecureField("Password", text: $password)
-                        .accessibilityLabel("Password")
-                }
+                if isAuthenticated {
+                    Section("Signed In") {
+                        LabeledContent("Client Account", value: signedInAccountName)
+                        if !authProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            LabeledContent("Provider", value: authProviderDisplayName)
+                        }
+                        Text("Client Account sign-in is confirmed on this device.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section("Client Account") {
+                        TextField("Username or email", text: $identity)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                            .accessibilityLabel("Username or email")
+                        SecureField("Password", text: $password)
+                            .accessibilityLabel("Password")
+                    }
 
-                if needsTwoFactor {
-                    Section("Verification") {
-                        if !availableMethods.isEmpty {
-                            Picker("Delivery Method", selection: $selectedMethod) {
-                                ForEach(availableMethods) { method in
-                                    Text(method.name).tag(method.type)
+                    if needsTwoFactor {
+                        Section("Verification") {
+                            if !availableMethods.isEmpty {
+                                Picker("Delivery Method", selection: $selectedMethod) {
+                                    ForEach(availableMethods) { method in
+                                        Text(method.name).tag(method.type)
+                                    }
                                 }
+                                .accessibilityLabel("Verification delivery method")
                             }
-                            .accessibilityLabel("Verification delivery method")
-                        }
 
-                        if availableMethods.contains(where: { $0.supportsDelivery }) {
-                            Button(sendButtonTitle) {
-                                requestTwoFactorCode()
+                            if availableMethods.contains(where: { $0.supportsDelivery }) {
+                                Button(sendButtonTitle) {
+                                    requestTwoFactorCode()
+                                }
+                                .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isSendingCode)
                             }
-                            .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isSendingCode)
-                        }
 
-                        TextField("Verification code", text: $twoFactorCode)
-                            .keyboardType(.numberPad)
-                            .textContentType(.oneTimeCode)
-                            .accessibilityLabel("Verification code")
+                            TextField("Verification code", text: $twoFactorCode)
+                                .keyboardType(.numberPad)
+                                .textContentType(.oneTimeCode)
+                                .accessibilityLabel("Verification code")
+                        }
                     }
                 }
 
@@ -2894,30 +3710,25 @@ private struct IOSAccountSignInView: View {
                     Section("Status") {
                         Text(statusMessage)
                             .foregroundStyle(.secondary)
+                            .accessibilityLabel("Sign-in status")
                     }
                 }
 
                 Section("Actions") {
-                    Button(needsTwoFactor ? "Verify and Sign In" : "Sign In") {
-                        signIn()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isLoading)
-
-                    if !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if isAuthenticated {
                         Button("Sign Out", role: .destructive) {
-                            authToken = ""
-                            displayName = ""
-                            authProvider = ""
-                            authUserJSON = ""
-                            statusMessage = "Signed out."
-                            needsTwoFactor = false
-                            twoFactorCode = ""
+                            signOut()
                         }
+                    } else {
+                        Button(needsTwoFactor ? "Verify and Sign In" : "Sign In") {
+                            signIn()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || isLoading)
                     }
                 }
             }
-            .navigationTitle("Account Sign In")
+            .navigationTitle("Client Account Sign In")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -2925,6 +3736,23 @@ private struct IOSAccountSignInView: View {
                 }
             }
         }
+    }
+
+    private var isAuthenticated: Bool {
+        !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var signedInAccountName: String {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "Client Account" : trimmedName
+    }
+
+    private var authProviderDisplayName: String {
+        let normalizedProvider = authProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["whmcs", "local", "voicelink"].contains(normalizedProvider) {
+            return "Client Account"
+        }
+        return normalizedProvider.replacingOccurrences(of: "-", with: " ").capitalized
     }
 
     private var sendButtonTitle: String {
@@ -3007,9 +3835,12 @@ private struct IOSAccountSignInView: View {
                     authProvider = resolvedProvider.isEmpty ? provider : resolvedProvider
                     authUserJSON = encodeAuthUserPayload(user)
                     statusMessage = "Signed in as \(resolvedName)."
+                    identity = ""
+                    password = ""
                     needsTwoFactor = false
                     twoFactorCode = ""
                     availableMethods = []
+                    UIAccessibility.post(notification: .announcement, argument: statusMessage)
                     Task { @MainActor in
                         await IOSPushNotificationManager.shared.syncRegistrationIfNeeded()
                     }
@@ -3034,6 +3865,20 @@ private struct IOSAccountSignInView: View {
                 statusMessage = message
             }
         }.resume()
+    }
+
+    private func signOut() {
+        authToken = ""
+        displayName = ""
+        authProvider = ""
+        authUserJSON = ""
+        identity = ""
+        password = ""
+        twoFactorCode = ""
+        availableMethods = []
+        needsTwoFactor = false
+        statusMessage = "Signed out."
+        UIAccessibility.post(notification: .announcement, argument: statusMessage)
     }
 
     private func requestTwoFactorCode() {
@@ -3086,21 +3931,41 @@ private struct IOSAccountSignInView: View {
 private func normalizeBaseURL(_ rawURL: String) -> String {
     let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-        return "https://voicelink.devinecreations.net"
+        return "https://voicelinkapp.app"
     }
     if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
         let normalized = trimmed.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
         if let url = URL(string: normalized),
            let host = url.host?.lowercased(),
+           let scheme = url.scheme?.lowercased(),
+           let port = url.port,
+           [3010, 3011, 3012].contains(port) {
+            return "\(scheme)://\(host):\(port)"
+        }
+        if let url = URL(string: normalized),
+           let host = url.host?.lowercased(),
+           ["node2.voicelink.devinecreations.net", "voicelink.dev"].contains(host) {
+            return "https://community.voicelinkapp.app"
+        }
+        if let url = URL(string: normalized),
+           let host = url.host?.lowercased(),
+           host == "voicelink.devinecreations.net" {
+            return "https://voicelinkapp.app"
+        }
+        if let url = URL(string: normalized),
+           let host = url.host?.lowercased(),
            [
-               "voicelink.devinecreations.net",
-               "node2.voicelink.devinecreations.net",
-               "voicelink.tappedin.fm",
+               "voicelinkapp.app",
+               "community.voicelinkapp.app",
                "tappedin.fm"
            ].contains(host) {
             return "https://\(host)"
         }
         return normalized
+    }
+    if let port = Int(trimmed.split(separator: ":").last ?? ""),
+       [3010, 3011, 3012].contains(port) {
+        return "http://\(trimmed)"
     }
     return "https://\(trimmed)"
 }
@@ -3111,8 +3976,8 @@ private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
     if !preferred.isEmpty {
         candidates.append(preferred)
     }
-    candidates.append("https://node2.voicelink.devinecreations.net")
-    candidates.append("https://voicelink.devinecreations.net")
+    candidates.append("https://voicelinkapp.app")
+    candidates.append("https://community.voicelinkapp.app")
 
     var seen = Set<String>()
     return candidates.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }
@@ -3131,6 +3996,7 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
                 continue
             }
             let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+                .map { $0.normalizedForFetchedBase(base) }
             return (decodedRooms, normalizeBaseURL(base))
         } catch {
             lastError = error
@@ -3160,11 +4026,45 @@ private func fetchVisibleFederationBases(preferredBase: String) async -> [String
                 continue
             }
             let raw = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            if let directory = raw["serverDirectory"] as? [[String: Any]] {
+                for entry in directory {
+                    let apiURL = (entry["apiUrl"] as? String) ?? (entry["url"] as? String) ?? ""
+                    let normalized = normalizeBaseURL(apiURL)
+                    if !normalized.isEmpty, !discovered.contains(normalized) {
+                        discovered.append(normalized)
+                    }
+                    if let name = entry["name"] as? String, !name.isEmpty {
+                        cacheServerDisplayName(name, forBaseURL: normalized)
+                    }
+                }
+            }
             let trusted = (raw["trustedServers"] as? [String]) ?? []
             for entry in trusted {
                 let normalizedTrusted = normalizeBaseURL(entry)
                 if !discovered.contains(normalizedTrusted) {
                     discovered.append(normalizedTrusted)
+                }
+            }
+            if let discoveryURL = URL(string: "\(base)/api/discovery/servers") {
+                var discoveryRequest = URLRequest(url: discoveryURL)
+                discoveryRequest.timeoutInterval = 8
+                let (discoveryData, discoveryResponse) = try await URLSession.shared.data(for: discoveryRequest)
+                if let discoveryHTTP = discoveryResponse as? HTTPURLResponse, (200...299).contains(discoveryHTTP.statusCode),
+                   let discoveryRaw = (try JSONSerialization.jsonObject(with: discoveryData) as? [String: Any]),
+                   let servers = discoveryRaw["servers"] as? [[String: Any]] {
+                    for server in servers {
+                        if (server["listedInDirectory"] as? Bool) == false && (server["revealRequired"] as? Bool) == true {
+                            continue
+                        }
+                        let apiURL = (server["apiUrl"] as? String) ?? (server["url"] as? String) ?? ""
+                        let normalized = normalizeBaseURL(apiURL)
+                        if !normalized.isEmpty, !discovered.contains(normalized) {
+                            discovered.append(normalized)
+                        }
+                        if let name = server["name"] as? String, !name.isEmpty {
+                            cacheServerDisplayName(name, forBaseURL: normalized, publicURL: server["siteUrl"] as? String)
+                        }
+                    }
                 }
             }
         } catch {
@@ -3205,6 +4105,7 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
                     return []
                 }
                 return try JSONDecoder().decode([RoomSummary].self, from: data)
+                    .map { $0.normalizedForFetchedBase(base) }
             }
         }
 
@@ -3222,6 +4123,52 @@ private func canonicalRoomName(_ name: String) -> String {
 }
 
 private let serverDisplayNameDefaultsKey = "voicelink.serverDisplayNameMap"
+
+private struct ConfiguredServerPresentation {
+    let name: String
+    let domain: String
+    let description: String
+}
+
+private func configuredServerPresentation(baseURL: String) -> ConfiguredServerPresentation? {
+    guard let url = URL(string: normalizeBaseURL(baseURL)),
+          let host = url.host?.lowercased(),
+          !host.isEmpty else {
+        return nil
+    }
+
+    let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+    switch host {
+    case "voicelinkapp.app", "www.voicelinkapp.app", "64.20.46.178":
+        return ConfiguredServerPresentation(
+            name: "VoiceLink Main from VoiceLink on voicelinkapp.app",
+            domain: "voicelinkapp.app",
+            description: "Official VoiceLink main server."
+        )
+    case "community.voicelinkapp.app", "www.community.voicelinkapp.app", "64.20.46.179":
+        return ConfiguredServerPresentation(
+            name: "VoiceLink Community from VoiceLink on community.voicelinkapp.app",
+            domain: "community.voicelinkapp.app",
+            description: "Official VoiceLink community server."
+        )
+    case "devine-creations.com", "www.devine-creations.com":
+        guard path == "voicelink" || path.isEmpty else { return nil }
+        return ConfiguredServerPresentation(
+            name: "DevineCreations VoiceLink from DevineCreations on devine-creations.com",
+            domain: "devine-creations.com",
+            description: "DevineCreations VoiceLink server for devine-creations.com."
+        )
+    case "devinecreations.net", "www.devinecreations.net":
+        guard path == "voicelink" || path.isEmpty else { return nil }
+        return ConfiguredServerPresentation(
+            name: "DevineCreations VoiceLink from DevineCreations on devinecreations.net",
+            domain: "devinecreations.net",
+            description: "DevineCreations VoiceLink community server for devinecreations.net."
+        )
+    default:
+        return nil
+    }
+}
 
 private func cachedServerDisplayName(forBaseURL baseURL: String) -> String? {
     let identity = canonicalServerIdentity(baseURL: baseURL, room: nil)
@@ -3258,12 +4205,16 @@ private func fallbackServerLabel(baseURL: String) -> String {
 }
 
 private func displayServerName(room: RoomSummary, fallbackBase: String) -> String {
+    let roomBase = room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase
+    if let configured = configuredServerPresentation(baseURL: roomBase) {
+        return configured.name
+    }
     let trimmedTitle = room.serverTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmedTitle.isEmpty {
-        cacheServerDisplayName(trimmedTitle, forBaseURL: room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase)
+        cacheServerDisplayName(trimmedTitle, forBaseURL: roomBase)
         return trimmedTitle
     }
-    if let cached = cachedServerDisplayName(forBaseURL: room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase) {
+    if let cached = cachedServerDisplayName(forBaseURL: roomBase) {
         return cached
     }
     let trimmedDomain = room.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3277,36 +4228,56 @@ private func displayServerName(room: RoomSummary, fallbackBase: String) -> Strin
 }
 
 private func displayServerName(baseURL: String) -> String {
+    if let configured = configuredServerPresentation(baseURL: baseURL) {
+        return configured.name
+    }
     if let cached = cachedServerDisplayName(forBaseURL: baseURL) {
         return cached
     }
     return fallbackServerLabel(baseURL: baseURL)
 }
 
+private func displayOptionalDescription(_ rawDescription: String) -> String {
+    let trimmed = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "No room description available." : trimmed
+}
+
 private func canonicalServerIdentity(baseURL: String, room: RoomSummary?) -> String {
-    let baseHost = URL(string: normalizeBaseURL(baseURL))?.host?.lowercased() ?? ""
+    let normalizedBase = normalizeBaseURL(baseURL)
+    let baseURLValue = URL(string: normalizedBase)
+    let baseHost = baseURLValue?.host?.lowercased() ?? ""
+    let basePath = baseURLValue?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased() ?? ""
+    let baseIdentity = [baseHost, basePath]
+        .filter { !$0.isEmpty }
+        .joined(separator: "/")
     let roomDomain = room?.serverDomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     let roomTitle = room?.serverTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     let roomSource = room?.serverSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
 
-    let candidates = [baseHost, roomDomain, roomTitle, roomSource].filter { !$0.isEmpty }
-    if candidates.contains(where: { ["64.20.46.178", "voicelink.devinecreations.net", "devinecreations.net"].contains($0) || $0.contains("voicelink main") }) {
-        return "voicelink.devinecreations.net"
+    if ["64.20.46.178", "voicelinkapp.app", "www.voicelinkapp.app"].contains(baseHost) {
+        return "voicelinkapp.app"
     }
-    if candidates.contains(where: { ["64.20.46.179", "node2.voicelink.devinecreations.net"].contains($0) || $0.contains("community") || $0.contains("node2") }) {
-        return "node2.voicelink.devinecreations.net"
-    }
-
-    if !roomDomain.isEmpty, !isIPAddressValue(roomDomain) {
-        return roomDomain
+    if ["64.20.46.179", "community.voicelinkapp.app", "www.community.voicelinkapp.app"].contains(baseHost) {
+        return "community.voicelinkapp.app"
     }
     if !baseHost.isEmpty, !isIPAddressValue(baseHost) {
-        return baseHost
+        return baseIdentity.isEmpty ? baseHost : baseIdentity
+    }
+
+    let candidates = [roomDomain, roomTitle, roomSource].filter { !$0.isEmpty }
+    if candidates.contains(where: { $0.contains("voicelink main") }) {
+        return "voicelinkapp.app"
+    }
+    if candidates.contains(where: { $0.contains("voicelink community") }) {
+        return "community.voicelinkapp.app"
+    }
+    if !roomDomain.isEmpty, !isIPAddressValue(roomDomain) {
+        return roomDomain
     }
     if !roomSource.isEmpty {
         return roomSource
     }
-    return normalizeBaseURL(baseURL)
+    return normalizedBase
 }
 
 private func isIPAddressValue(_ value: String) -> Bool {
@@ -3344,6 +4315,61 @@ private func displayAccessTypeLabel(_ raw: String) -> String {
     default:
         return raw.isEmpty ? "Desktop, iOS, Web" : raw.capitalized
     }
+}
+
+private func displaySupportStatus(_ raw: String) -> String {
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "open":
+        return "Open"
+    case "in_progress":
+        return "In Progress"
+    case "waiting_user":
+        return "Waiting on You"
+    case "waiting_support":
+        return "Waiting on Support"
+    case "resolved":
+        return "Resolved"
+    case "closed":
+        return "Closed"
+    default:
+        return raw.isEmpty ? "Open" : raw.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+private func displaySupportCategory(_ raw: String) -> String {
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "technical":
+        return "Technical Support"
+    case "account":
+        return "Account Issues"
+    case "bug-report":
+        return "Bug Report"
+    case "feature-request":
+        return "Feature Request"
+    case "billing":
+        return "Billing"
+    case "general":
+        return "General Inquiry"
+    default:
+        return raw.isEmpty ? "General Inquiry" : raw.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+}
+
+private func iosAuthUserValue(_ rawJSON: String, keys: [String]) -> String {
+    guard let data = rawJSON.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return ""
+    }
+    for key in keys {
+        if let value = payload[key] as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if let value = payload[key] as? Int {
+            return String(value)
+        }
+    }
+    return ""
 }
 
 private func fetchClientVisibility(baseURL: String) async -> ClientVisibilitySettings {

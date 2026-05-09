@@ -19,7 +19,7 @@ const http = require('http');
 const { execFileSync } = require('child_process');
 
 // Configuration
-const MAIN_SERVER = process.env.VOICELINK_MAIN_SERVER || 'https://voicelink.devinecreations.net';
+const MAIN_SERVER = process.env.VOICELINK_MAIN_SERVER || 'https://voicelink.dev';
 const DOCS_DIR = path.join(__dirname, '../../docs');
 const PUBLIC_DOCS_DIR = path.join(DOCS_DIR, 'public');
 const AUTH_DOCS_DIR = path.join(DOCS_DIR, 'authenticated');

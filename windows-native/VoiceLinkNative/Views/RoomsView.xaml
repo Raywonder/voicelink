@@ -185,10 +185,10 @@
                         </StackPanel>
 
                         <!-- Users in Room -->
-                        <TextBlock Text="Users in Room" FontSize="14" FontWeight="SemiBold"
+                        <TextBlock Text="Members List" FontSize="14" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextBrush}" Margin="0,0,0,8"/>
                         <ItemsControl ItemsSource="{Binding CurrentRoomUsers}"
-                                      AutomationProperties.Name="Users in current room">
+                                      AutomationProperties.Name="Members list">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" Margin="0,4">

@@ -383,6 +383,7 @@ class TwoFactorAuthModule {
         this.config = options.config || {};
         this.dataDir = options.dataDir || path.join(__dirname, '../../../data/2fa');
         this.emailTransport = options.emailTransport;
+        this.voiceProvider = options.voiceProvider || null;
 
         // Initialize providers
         this.totp = new TOTPGenerator({
@@ -433,6 +434,7 @@ class TwoFactorAuthModule {
                 totp: { enabled: false, secret: null, verified: false },
                 passkey: { enabled: false, credentials: [] },
                 sms: { enabled: false, phoneNumber: null, verified: false },
+                voice: { enabled: false, phoneNumber: null, verified: false },
                 email: { enabled: false, email: null, verified: false }
             },
             backupCodes: [],
@@ -494,6 +496,11 @@ class TwoFactorAuthModule {
         if (settings.methods.sms?.enabled && settings.methods.sms.verified) {
             const phone = settings.methods.sms.phoneNumber;
             methods.push({ type: 'sms', name: 'SMS', hint: phone ? `***${phone.slice(-4)}` : null });
+        }
+
+        if (settings.methods.voice?.enabled && settings.methods.voice.verified) {
+            const phone = settings.methods.voice.phoneNumber;
+            methods.push({ type: 'voice', name: 'Voice Call', hint: phone ? `***${phone.slice(-4)}` : null });
         }
 
         if (settings.methods.email?.enabled && settings.methods.email.verified) {
@@ -716,6 +723,151 @@ class TwoFactorAuthModule {
 
         if (pending.code === code) {
             this.pendingCodes.delete(`sms-login:${userId}`);
+
+            const settings = this.getUserSettings(userId);
+            settings.lastUsed = Date.now();
+            this.saveUserSettings(userId, settings);
+
+            return { success: true };
+        }
+
+        return { success: false, error: 'Invalid code' };
+    }
+
+    // ==========================================
+    // Voice Call Methods
+    // ==========================================
+
+    async setupVoice(userId, phoneNumber, options = {}) {
+        if (!this.voiceProvider) {
+            return { success: false, error: 'Voice call verification is not available on this server' };
+        }
+
+        const code = this.generateNumericCode(this.config.codeSettings?.smsCodeLength || 6);
+        const expiryMinutes = this.config.codeSettings?.codeExpiryMinutes || 10;
+
+        this.pendingCodes.set(`voice:${userId}`, {
+            code,
+            phoneNumber,
+            expiresAt: Date.now() + (expiryMinutes * 60 * 1000),
+            attempts: 0
+        });
+
+        try {
+            const result = await this.voiceProvider.sendVoiceOTP({ phoneNumber, code, userId, expiryMinutes, ...options });
+            if (result.success) {
+                return {
+                    success: true,
+                    expiresIn: expiryMinutes * 60,
+                    hint: `***${String(phoneNumber).replace(/\D/g, '').slice(-4)}`,
+                    verificationSessionId: result.verificationSessionId || null,
+                    promptPlan: result.promptPlan || null,
+                    call: result.call || null
+                };
+            }
+            return { success: false, error: result.error || 'Voice call failed' };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
+    verifyVoiceSetup(userId, code) {
+        const pending = this.pendingCodes.get(`voice:${userId}`);
+
+        if (!pending) {
+            return { success: false, error: 'No pending voice verification' };
+        }
+
+        if (Date.now() > pending.expiresAt) {
+            this.pendingCodes.delete(`voice:${userId}`);
+            return { success: false, error: 'Code expired' };
+        }
+
+        pending.attempts++;
+        if (pending.attempts > (this.config.codeSettings?.maxAttempts || 5)) {
+            this.pendingCodes.delete(`voice:${userId}`);
+            return { success: false, error: 'Too many attempts' };
+        }
+
+        if (pending.code === code) {
+            this.pendingCodes.delete(`voice:${userId}`);
+
+            const settings = this.getUserSettings(userId);
+            settings.methods.voice = {
+                enabled: true,
+                phoneNumber: pending.phoneNumber,
+                verified: true,
+                activatedAt: Date.now()
+            };
+            settings.enabled = true;
+            settings.createdAt = settings.createdAt || Date.now();
+            this.saveUserSettings(userId, settings);
+
+            return { success: true };
+        }
+
+        return { success: false, error: 'Invalid code' };
+    }
+
+    async sendVoiceCode(userId, options = {}) {
+        if (!this.voiceProvider) {
+            return { success: false, error: 'Voice call verification is not available on this server' };
+        }
+
+        const settings = this.getUserSettings(userId);
+        const { phoneNumber, verified } = settings.methods.voice || {};
+
+        if (!phoneNumber || !verified) {
+            return { success: false, error: 'Voice call verification is not configured' };
+        }
+
+        const code = this.generateNumericCode(this.config.codeSettings?.smsCodeLength || 6);
+        const expiryMinutes = this.config.codeSettings?.codeExpiryMinutes || 10;
+
+        this.pendingCodes.set(`voice-login:${userId}`, {
+            code,
+            expiresAt: Date.now() + (expiryMinutes * 60 * 1000),
+            attempts: 0
+        });
+
+        try {
+            const result = await this.voiceProvider.sendVoiceOTP({ phoneNumber, code, userId, expiryMinutes, ...options });
+            if (result.success) {
+                return {
+                    success: true,
+                    expiresIn: expiryMinutes * 60,
+                    hint: `***${String(phoneNumber).replace(/\D/g, '').slice(-4)}`,
+                    verificationSessionId: result.verificationSessionId || null,
+                    promptPlan: result.promptPlan || null,
+                    call: result.call || null
+                };
+            }
+            return { success: false, error: result.error || 'Voice call failed' };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
+    verifyVoiceLogin(userId, code) {
+        const pending = this.pendingCodes.get(`voice-login:${userId}`);
+
+        if (!pending) {
+            return { success: false, error: 'No pending code' };
+        }
+
+        if (Date.now() > pending.expiresAt) {
+            this.pendingCodes.delete(`voice-login:${userId}`);
+            return { success: false, error: 'Code expired' };
+        }
+
+        pending.attempts++;
+        if (pending.attempts > (this.config.codeSettings?.maxAttempts || 5)) {
+            this.pendingCodes.delete(`voice-login:${userId}`);
+            return { success: false, error: 'Too many attempts' };
+        }
+
+        if (pending.code === code) {
+            this.pendingCodes.delete(`voice-login:${userId}`);
 
             const settings = this.getUserSettings(userId);
             settings.lastUsed = Date.now();
@@ -1087,6 +1239,7 @@ class TwoFactorAuthModule {
             totp: { enabled: false, secret: null, verified: false },
             passkey: { enabled: false, credentials: [] },
             sms: { enabled: false, phoneNumber: null, verified: false },
+            voice: { enabled: false, phoneNumber: null, verified: false },
             email: { enabled: false, email: null, verified: false }
         };
         settings.backupCodes = [];
@@ -1103,7 +1256,7 @@ class TwoFactorAuthModule {
         const stats = {
             totalUsers: files.length,
             enabled: 0,
-            methods: { totp: 0, passkey: 0, sms: 0, email: 0 }
+            methods: { totp: 0, passkey: 0, sms: 0, voice: 0, email: 0 }
         };
 
         for (const file of files) {
@@ -1114,6 +1267,7 @@ class TwoFactorAuthModule {
                     if (settings.methods.totp?.verified) stats.methods.totp++;
                     if (settings.methods.passkey?.credentials?.length > 0) stats.methods.passkey++;
                     if (settings.methods.sms?.verified) stats.methods.sms++;
+                    if (settings.methods.voice?.verified) stats.methods.voice++;
                     if (settings.methods.email?.verified) stats.methods.email++;
                 }
             } catch (e) { /* skip invalid files */ }

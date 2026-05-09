@@ -43,7 +43,7 @@ class CopyPartyManager: ObservableObject {
         var requireProtectedExternalLinks: Bool = true
         var allowRawExternalLinksFallback: Bool = false
         var defaultExternalLinkExpiryHours: Int = 72
-        var externalShareBaseURL: String = "https://voicelink.devinecreations.net"
+        var externalShareBaseURL: String = "https://voicelinkapp.app"
         var smbHostnames: [String] = [
             "smb.raywonderis.me",
             "files.raywonderis.me"

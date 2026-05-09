@@ -178,6 +178,47 @@ class WHMCSIntegrationModule {
         }
     }
 
+    /**
+     * Open a WHMCS support ticket for configured client-portal sync.
+     */
+    async openSupportTicket(ticket = {}) {
+        const clientId = String(ticket.clientId || '').trim();
+        const email = String(ticket.email || '').trim();
+        const name = String(ticket.name || '').trim();
+        const subject = String(ticket.subject || 'VoiceLink support request').trim();
+        const message = String(ticket.message || '').trim();
+        const departmentId = String(ticket.departmentId || this.config.supportDepartmentId || '').trim();
+        const priority = String(ticket.priority || 'Medium').trim();
+
+        if (!departmentId) {
+            throw new Error('WHMCS support department is not configured');
+        }
+        if (!clientId && (!email || !name)) {
+            throw new Error('WHMCS support ticket requires a client ID or guest name and email');
+        }
+
+        const params = {
+            deptid: departmentId,
+            subject,
+            message: message || 'VoiceLink support request',
+            priority
+        };
+
+        if (clientId) {
+            params.clientid = clientId;
+        } else {
+            params.name = name;
+            params.email = email;
+        }
+
+        const result = await this.apiRequest('OpenTicket', params);
+        return {
+            ticketId: result.id || result.ticketid || null,
+            ticketNumber: result.tid || result.ticketnum || result.ticketNumber || null,
+            raw: result
+        };
+    }
+
     // ==========================================
     // Service/Product Management
     // ==========================================

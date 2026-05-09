@@ -13,7 +13,7 @@ class LocalServerDiscovery: ObservableObject {
     private var scanTimer: Timer?
 
     // Common ports where VoiceLink server might run
-    private let scanPorts = [4004, 3010, 8080, 3000]
+    private let scanPorts = [3010, 3011, 3012, 4004, 8080, 3000]
 
     init() {
         // Start scanning on init

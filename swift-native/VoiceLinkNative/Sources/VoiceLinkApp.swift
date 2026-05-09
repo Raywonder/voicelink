@@ -83,6 +83,7 @@ struct VoiceLinkApp: App {
                     appState.currentScreen = .createRoom
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(AuthenticationManager.shared.authState != .authenticated || !appState.isConnected)
 
                 Button("Search for Servers or Join a Room...") {
                     appState.openJoinRoomPanel()
@@ -292,17 +293,17 @@ struct VoiceLinkApp: App {
                     }
                     .keyboardShortcut("l", modifiers: .command)
                     Button("Sign In with Google") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/google") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     Button("Sign In with Apple") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/apple") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     Button("Sign In with GitHub") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/github") {
                             NSWorkspace.shared.open(url)
                         }
                     }
@@ -334,6 +335,7 @@ struct VoiceLinkApp: App {
                             statusManager.setSyncWithContactCard(newValue)
                         }
                     ))
+                    .disabled(true)
                 }
 
                 Button("Set Nickname...") {
@@ -1472,6 +1474,7 @@ class AppState: ObservableObject {
                         name: room.name,
                         description: room.description,
                         welcomeMessage: room.welcomeMessage,
+                        liveBroadcast: room.liveBroadcast,
                         userCount: room.userCount,
                         isPrivate: room.isPrivate,
                         isLocked: room.isLocked,
@@ -1494,7 +1497,13 @@ class AppState: ObservableObject {
             }
         }
 
-        let candidates = APIEndpointResolver.mainBaseCandidates(preferred: serverManager.baseURL)
+        var candidates = APIEndpointResolver.mainBaseCandidates(preferred: serverManager.baseURL)
+        candidates.append(contentsOf: SettingsManager.shared.visibleManagedFederationServers.map(\.url))
+        candidates.append(contentsOf: PairingManager.shared.linkedServers.map(\.url))
+        candidates = candidates.map { APIEndpointResolver.normalize($0) }.filter { !$0.isEmpty }
+        var seenCandidates = Set<String>()
+        candidates = candidates.filter { seenCandidates.insert($0).inserted }
+
         for base in candidates {
             aggregated.append(contentsOf: await fetchRooms(from: base))
         }
@@ -1558,7 +1567,7 @@ class AppState: ObservableObject {
 
     func displayDescription(for room: Room) -> String {
         let trimmed = room.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = trimmed.isEmpty ? "No description provided." : trimmed
+        let base = trimmed.isEmpty ? "No room description available." : trimmed
         if roomHasActiveMusic[room.id] == true {
             if base.localizedCaseInsensitiveContains("music playing") || base.localizedCaseInsensitiveContains("live music") {
                 return base
@@ -1906,11 +1915,21 @@ class AppState: ObservableObject {
 }
 
 // MARK: - Models
+struct RoomLiveBroadcast: Equatable {
+    let enabled: Bool
+    let isLive: Bool
+    let status: String
+    let provider: String
+    let providerName: String
+    let shareURL: String?
+}
+
 struct Room: Identifiable, Equatable {
     let id: String
     let name: String
     let description: String
     let welcomeMessage: String?
+    let liveBroadcast: RoomLiveBroadcast?
     var userCount: Int
     let isPrivate: Bool
     let isLocked: Bool
@@ -1932,6 +1951,7 @@ struct Room: Identifiable, Equatable {
         name: String,
         description: String,
         welcomeMessage: String? = nil,
+        liveBroadcast: RoomLiveBroadcast? = nil,
         userCount: Int,
         isPrivate: Bool,
         isLocked: Bool = false,
@@ -1952,6 +1972,7 @@ struct Room: Identifiable, Equatable {
         self.name = name
         self.description = description
         self.welcomeMessage = welcomeMessage
+        self.liveBroadcast = liveBroadcast
         self.userCount = userCount
         self.isPrivate = isPrivate
         self.isLocked = isLocked
@@ -1974,6 +1995,7 @@ struct Room: Identifiable, Equatable {
         self.name = serverRoom.name
         self.description = serverRoom.description
         self.welcomeMessage = serverRoom.welcomeMessage
+        self.liveBroadcast = serverRoom.liveBroadcast
         self.userCount = serverRoom.userCount
         self.isPrivate = serverRoom.isPrivate
         self.isLocked = serverRoom.isLocked
@@ -2177,10 +2199,16 @@ struct MainMenuView: View {
         case mediaActive = "Media Active"
         var id: String { rawValue }
     }
+    enum MainBrowserTab: String, CaseIterable, Identifiable {
+        case servers = "Servers"
+        case federatedRooms = "Federated Rooms"
+        var id: String { rawValue }
+    }
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject private var settingsManager = SettingsManager.shared
     @ObservedObject private var pairingManager = PairingManager.shared
+    @State private var selectedBrowserTab: MainBrowserTab = .federatedRooms
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -2242,6 +2270,12 @@ struct MainMenuView: View {
             || AdminServerManager.shared.adminRole == .owner
             || currentRole == "admin"
             || currentRole == "owner"
+    }
+
+    var canCreateRooms: Bool {
+        AuthenticationManager.shared.authState == .authenticated
+            && AuthenticationManager.shared.currentUser != nil
+            && appState.isConnected
     }
 
     var sortedRooms: [Room] {
@@ -2484,15 +2518,8 @@ struct MainMenuView: View {
     private func connectMainWindowServer(_ entry: MainWindowServerEntry, browseRooms: Bool) {
         let currentBase = normalizedServerURL(appState.serverManager.baseURL ?? "")
         if entry.isCurrent || currentBase == normalizedServerURL(entry.url) {
-            if browseRooms {
-                appState.currentScreen = .mainMenu
-                appState.refreshRooms()
-            } else {
-                appState.serverManager.disconnect()
-                appState.currentRoom = nil
-                appState.minimizedRoom = nil
-                appState.errorMessage = "Disconnected from \(entry.name)."
-            }
+            appState.currentScreen = .mainMenu
+            appState.refreshRooms()
             return
         }
 
@@ -2505,6 +2532,23 @@ struct MainMenuView: View {
         appState.errorMessage = browseRooms ? "Connected to \(entry.name). Browsing rooms..." : "Connected to \(entry.name)."
     }
 
+    private func browseMainWindowServerRooms(_ entry: MainWindowServerEntry) {
+        appState.currentScreen = .mainMenu
+        appState.refreshRooms()
+        selectedServerFilter = preferredServerFilterLabel(for: entry)
+        selectedBrowserTab = .federatedRooms
+        appState.errorMessage = "Browsing rooms from \(entry.name). Your current server connection was not changed."
+    }
+
+    private func disconnectMainWindowServer(_ entry: MainWindowServerEntry) {
+        let currentBase = normalizedServerURL(appState.serverManager.baseURL ?? "")
+        guard entry.isCurrent || currentBase == normalizedServerURL(entry.url) else { return }
+        appState.serverManager.disconnect()
+        appState.currentRoom = nil
+        appState.minimizedRoom = nil
+        appState.errorMessage = "Disconnected from \(entry.name)."
+    }
+
     private func preferredServerFilterLabel(for entry: MainWindowServerEntry) -> String {
         if availableServerFilters.contains(entry.name) {
             return entry.name
@@ -2513,10 +2557,30 @@ struct MainMenuView: View {
             return host
         }
         let normalizedName = entry.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let match = availableServerFilters.first(where: { $0.lowercased() == normalizedName }) {
+            if let match = availableServerFilters.first(where: { $0.lowercased() == normalizedName }) {
             return match
         }
         return "All Servers"
+    }
+
+    private func serverListView() -> some View {
+        LazyVStack(spacing: 12) {
+            ForEach(federationServerEntries) { entry in
+                MainWindowServerCard(
+                    entry: entry,
+                    isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
+                    onUseServer: {
+                        connectMainWindowServer(entry, browseRooms: false)
+                    },
+                    onBrowseRooms: {
+                        browseMainWindowServerRooms(entry)
+                    },
+                    onDisconnect: {
+                        disconnectMainWindowServer(entry)
+                    }
+                )
+            }
+        }
     }
 
     var body: some View {
@@ -2543,39 +2607,25 @@ struct MainMenuView: View {
                 // Room List
             VStack(alignment: .leading, spacing: 15) {
                 HStack(alignment: .center, spacing: 12) {
-                    Text("Available Rooms (\(roomsForDisplay.count))")
+                    Text(selectedBrowserTab == .servers ? "Servers (\(federationServerEntries.count))" : "Federated Rooms (\(roomsForDisplay.count))")
                         .font(.headline)
                         .foregroundColor(.white)
 
                     Spacer()
 
+                    Picker("Browse", selection: $selectedBrowserTab) {
+                        ForEach(MainBrowserTab.allCases) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 280)
+                    .accessibilityLabel("Browse servers or federated rooms")
+
                     Button("Search or Join") {
                         appState.currentScreen = .joinRoom
                     }
                     .buttonStyle(.bordered)
-
-                    Menu {
-                        Button("All Servers") {
-                            selectedServerFilter = "All Servers"
-                        }
-                        Divider()
-                        ForEach(federationServerEntries) { entry in
-                            Button {
-                                connectMainWindowServer(entry, browseRooms: true)
-                                selectedServerFilter = preferredServerFilterLabel(for: entry)
-                            } label: {
-                                if entry.isCurrent {
-                                    Label(entry.name, systemImage: "checkmark")
-                                } else {
-                                    Text(entry.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(selectedServerFilter == "All Servers" ? "Servers" : selectedServerFilter, systemImage: "server.rack")
-                    }
-                    .accessibilityLabel("Server selector")
-                    .accessibilityHint("Choose a server to connect and filter the room list shown here.")
                 }
 
                 HStack {
@@ -2594,7 +2644,7 @@ struct MainMenuView: View {
                                         case "local", "voicelink", "email":
                                             return "VoiceLink Account"
                                         case "whmcs":
-                                            return "WHMCS Account"
+                                            return "Client Portal Account"
                                         case "mastodon":
                                             return "Mastodon Account"
                                         case "google":
@@ -2692,7 +2742,9 @@ struct MainMenuView: View {
                 }
 
                 ScrollView {
-                    if roomLayoutOption == .list {
+                    if selectedBrowserTab == .servers {
+                        serverListView()
+                    } else if roomLayoutOption == .list {
                         LazyVStack(spacing: 12) {
                             ForEach(roomsForDisplay) { room in
                                 let canAdminRoom = appState.canManageRoom(room)
@@ -2715,7 +2767,7 @@ struct MainMenuView: View {
                                         )
                                     )
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
+                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -2756,7 +2808,7 @@ struct MainMenuView: View {
                                         )
                                     )
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
+                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -2807,7 +2859,7 @@ struct MainMenuView: View {
                                         )
                                     )
                                 } onShare: {
-                                    let roomURL = "https://voicelink.devinecreations.net/?room=\(room.id)"
+                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(roomURL, forType: .string)
                                     AppSoundManager.shared.playSound(.success)
@@ -2827,11 +2879,15 @@ struct MainMenuView: View {
                         }
                     }
 
-                        if appState.rooms.isEmpty && appState.isConnected {
+                        if selectedBrowserTab == .servers, federationServerEntries.isEmpty {
+                            Text("No servers available.")
+                                .foregroundColor(.gray)
+                                .padding()
+                        } else if selectedBrowserTab == .federatedRooms, appState.rooms.isEmpty && appState.isConnected {
                             Text("No rooms available. Create one!")
                                 .foregroundColor(.gray)
                                 .padding()
-                        } else if appState.rooms.isEmpty && !appState.isConnected {
+                        } else if selectedBrowserTab == .federatedRooms, appState.rooms.isEmpty && !appState.isConnected {
                             Text("Connect to server to see rooms")
                                 .foregroundColor(.gray)
                                 .padding()
@@ -2894,8 +2950,10 @@ struct MainMenuView: View {
 
             // Action Buttons
             HStack(spacing: 20) {
-                ActionButton(title: "Create Room", icon: "plus.circle.fill", color: .blue) {
-                    appState.currentScreen = .createRoom
+                if canCreateRooms {
+                    ActionButton(title: "Create Room", icon: "plus.circle.fill", color: .blue) {
+                        appState.currentScreen = .createRoom
+                    }
                 }
 
                 ActionButton(title: "Search or Join", icon: "link.circle.fill", color: .green) {
@@ -2981,7 +3039,7 @@ struct RoomCard: View {
             return descriptionText
         }
         let trimmed = room.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "No description provided." : trimmed
+        return trimmed.isEmpty ? "No room description available." : trimmed
     }
 
     var primaryActionLabel: String {
@@ -3018,12 +3076,17 @@ struct RoomCard: View {
         roomHasActiveMedia ? "Media is playing." : "No media is playing."
     }
 
+    var liveBroadcastText: String {
+        guard let live = room.liveBroadcast, live.isLive else { return "" }
+        return "Live on \(live.providerName)."
+    }
+
     var lockStatusText: String {
         room.isLocked ? "Locked." : ""
     }
 
     var roomAccessibilitySummary: String {
-        [room.name, displayDescription, "Users \(room.userCount) of \(room.maxUsers).", lockStatusText, mediaStatusText]
+        [room.name, displayDescription, "Users \(room.userCount) of \(room.maxUsers).", lockStatusText, mediaStatusText, liveBroadcastText]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: " ")
     }
@@ -3077,6 +3140,12 @@ struct RoomCard: View {
                     Text(hostedFrom)
                         .font(.caption2)
                         .foregroundColor(.gray.opacity(0.85))
+                        .lineLimit(1)
+                }
+                if let live = room.liveBroadcast, live.isLive {
+                    Text("Live on \(live.providerName)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.red)
                         .lineLimit(1)
                 }
             }
@@ -3304,11 +3373,16 @@ struct RoomColumnRow: View {
     }
 
     var displayDescription: String {
-        descriptionText ?? (room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
+        descriptionText ?? (room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No room description available." : room.description)
     }
 
     var mediaStatusText: String {
         roomHasActiveMedia ? "Media is playing." : "No media is playing."
+    }
+
+    var liveBroadcastText: String {
+        guard let live = room.liveBroadcast, live.isLive else { return "" }
+        return "Live on \(live.providerName)."
     }
 
     var previewAvailable: Bool {
@@ -3316,7 +3390,7 @@ struct RoomColumnRow: View {
     }
 
     var roomAccessibilitySummary: String {
-        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText)"
+        "\(room.name). \(displayDescription). Users \(room.userCount) of \(room.maxUsers). \(mediaStatusText) \(liveBroadcastText)"
     }
 
     var showJoinActionSeparately: Bool {
@@ -3355,6 +3429,12 @@ struct RoomColumnRow: View {
                     Text(hostedFrom)
                         .font(.caption2)
                         .foregroundColor(.gray.opacity(0.85))
+                        .lineLimit(1)
+                }
+                if let live = room.liveBroadcast, live.isLive {
+                    Text("Live on \(live.providerName)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.red)
                         .lineLimit(1)
                 }
             }
@@ -3450,8 +3530,9 @@ struct RoomColumnRow: View {
 struct MainWindowServerCard: View {
     let entry: MainMenuView.MainWindowServerEntry
     let isConnected: Bool
-    let onConnectOrDisconnect: () -> Void
+    let onUseServer: () -> Void
     let onBrowseRooms: () -> Void
+    let onDisconnect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3481,17 +3562,33 @@ struct MainWindowServerCard: View {
             }
 
             HStack(spacing: 8) {
-                Button(isConnected ? "Disconnect" : "Connect") {
-                    onConnectOrDisconnect()
+                Button(isConnected ? "Current Server" : "Use Server") {
+                    onUseServer()
                 }
                 .buttonStyle(.bordered)
-                .accessibilityLabel(isConnected ? "Disconnect from \(entry.name)" : "Connect to \(entry.name)")
+                .disabled(isConnected)
+                .accessibilityLabel(isConnected ? "\(entry.name) is the current server" : "Use \(entry.name) as the active server")
 
                 Button("Browse Rooms") {
                     onBrowseRooms()
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Browse rooms on \(entry.name)")
+
+                Menu {
+                    Button("Refresh Rooms") {
+                        onBrowseRooms()
+                    }
+                    if isConnected {
+                        Button("Disconnect from Server", role: .destructive) {
+                            onDisconnect()
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("More actions for \(entry.name)")
             }
         }
         .padding()
@@ -3523,29 +3620,54 @@ struct RoomDetailsSheet: View {
         return value.isEmpty ? nil : value
     }
 
+    private var liveBroadcastLabel: String? {
+        guard let live = room.liveBroadcast, live.isLive else { return nil }
+        return "Live on \(live.providerName)"
+    }
+
     private var roomCreatedLabel: String {
-        guard let createdAt = room.createdAt else { return "Not reported yet" }
+        guard let createdAt = room.createdAt else {
+            if let lastActivityAt = room.lastActivityAt {
+                return "Before \(lastActivityAt.formatted(date: .abbreviated, time: .shortened))"
+            }
+            return "Server has not reported a creation time"
+        }
         return createdAt.formatted(date: .abbreviated, time: .shortened)
     }
 
     private var roomAgeLabel: String {
-        guard let createdAt = room.createdAt else { return "Not reported yet" }
+        guard let createdAt = room.createdAt else {
+            return room.userCount > 0 ? "Active now" : "Waiting for first activity"
+        }
         return RelativeDateTimeFormatter().localizedString(for: createdAt, relativeTo: Date())
     }
 
     private var roomUptimeLabel: String {
-        guard let uptimeSeconds = room.uptimeSeconds, uptimeSeconds > 0 else { return "Not reported yet" }
-        let hours = uptimeSeconds / 3600
-        let minutes = (uptimeSeconds % 3600) / 60
-        let seconds = uptimeSeconds % 60
+        guard let uptimeSeconds = room.uptimeSeconds, uptimeSeconds > 0 else {
+            if let createdAt = room.createdAt {
+                return formatDuration(seconds: max(0, Int(Date().timeIntervalSince(createdAt))))
+            }
+            return room.userCount > 0 ? "Active now" : "Standing by"
+        }
+        return formatDuration(seconds: uptimeSeconds)
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let remainingSeconds = seconds % 60
         if hours > 0 { return "\(hours)h \(minutes)m" }
-        if minutes > 0 { return "\(minutes)m \(seconds)s" }
-        return "\(seconds)s"
+        if minutes > 0 { return "\(minutes)m \(remainingSeconds)s" }
+        return "\(remainingSeconds)s"
     }
 
     private var roomOwnerLabel: String {
         let owner = room.createdBy?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return owner.isEmpty ? "Not reported yet" : owner
+        if !owner.isEmpty { return owner }
+        let hostOwner = room.hostServerOwner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !hostOwner.isEmpty { return hostOwner }
+        let host = room.hostServerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return host.isEmpty ? "Server managed" : host
     }
 
     private var lastUserLabel: String {
@@ -3562,7 +3684,7 @@ struct RoomDetailsSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(room.name).font(.title2.weight(.bold))
             if SettingsManager.shared.showRoomDescriptions {
-                Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No description provided." : room.description)
+                Text(room.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No room description available." : room.description)
                     .foregroundColor(.secondary)
             }
 
@@ -3575,9 +3697,30 @@ struct RoomDetailsSheet: View {
                 }
             }
 
+            if let live = room.liveBroadcast, live.isLive {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Live Broadcast")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    Text("Provider: \(live.providerName)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let shareURL = live.shareURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !shareURL.isEmpty {
+                        Text(shareURL)
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Room Status: \(isActiveRoom ? "Joined" : "Available")")
                 Text("Lock Status: \(room.isLocked ? "Locked" : "Unlocked")")
+                if let liveBroadcastLabel {
+                    Text("Broadcast: \(liveBroadcastLabel)")
+                }
                 if let lockedBy = room.lockedBy, !lockedBy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Locked By: \(lockedBy)")
                 }
@@ -3691,32 +3834,53 @@ struct CreateRoomView: View {
                 .font(.largeTitle)
                 .foregroundColor(.white)
 
-            VStack(alignment: .leading, spacing: 15) {
-                TextField("Room name shown in the room list", text: $roomName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 350)
-                    .accessibilityLabel("Room name")
-                    .accessibilityHint("Enter the name users will see for this room.")
-
-                TextField("Short room description or topic, optional", text: $roomDescription)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 350)
-                    .accessibilityLabel("Room description")
-                    .accessibilityHint("Add an optional summary or topic for this room.")
-
-                Toggle("Private Room", isOn: $isPrivate)
-                    .foregroundColor(.white)
-                    .frame(width: 350)
-
-                if isPrivate {
-                    SecureField("Room password for invited users", text: $password)
+            if !isLoggedIn {
+                VStack(spacing: 12) {
+                    Text("Sign in to create rooms on this server.")
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                    Text("Guest room creation is hidden unless a server explicitly enables guest-created rooms with server-owned limits.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 420)
+                    Button("Sign In") {
+                        appState.currentScreen = .login
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Back") {
+                        appState.pendingCreateRoomName = ""
+                        appState.currentScreen = .mainMenu
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .accessibilityElement(children: .contain)
+            } else {
+                VStack(alignment: .leading, spacing: 15) {
+                    TextField("Room name shown in the room list", text: $roomName)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 350)
-                        .accessibilityLabel("Room password")
-                        .accessibilityHint("Enter the password users must provide to join this private room.")
-                }
+                        .accessibilityLabel("Room name")
+                        .accessibilityHint("Enter the name users will see for this room.")
 
-                if isLoggedIn {
+                    TextField("Short room description or topic, optional", text: $roomDescription)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 350)
+                        .accessibilityLabel("Room description")
+                        .accessibilityHint("Add an optional summary or topic for this room.")
+
+                    Toggle("Private Room", isOn: $isPrivate)
+                        .foregroundColor(.white)
+                        .frame(width: 350)
+
+                    if isPrivate {
+                        SecureField("Room password for invited users", text: $password)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 350)
+                            .accessibilityLabel("Room password")
+                            .accessibilityHint("Enter the password users must provide to join this private room.")
+                    }
+
                     Picker("Room Type", selection: $roomType) {
                         Text("Standard").tag("standard")
                         Text("Private").tag("private")
@@ -3753,50 +3917,50 @@ struct CreateRoomView: View {
                             .accessibilityHint("Enter optional staff-only notes about moderation for this room.")
                     }
                 }
-            }
 
-            HStack(spacing: 15) {
-                Button("Create") {
-                    var metadata: [String: Any] = [
-                        "maxUsers": maxUsers,
-                        "roomType": roomType,
-                        "inviteOnly": inviteOnly,
-                        "mediaAutoPlay": enableMediaAutoPlay
-                    ]
-                    if isLoggedIn, let currentUser = authManager.currentUser {
-                        metadata["createdBy"] = currentUser.username
-                        metadata["createdByRole"] = adminManager.adminRole.rawValue
+                HStack(spacing: 15) {
+                    Button("Create") {
+                        var metadata: [String: Any] = [
+                            "maxUsers": maxUsers,
+                            "roomType": roomType,
+                            "inviteOnly": inviteOnly,
+                            "mediaAutoPlay": enableMediaAutoPlay
+                        ]
+                        if let currentUser = authManager.currentUser {
+                            metadata["createdBy"] = currentUser.username
+                            metadata["createdByRole"] = adminManager.adminRole.rawValue
+                        }
+                        if !moderationNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            metadata["moderationNotes"] = moderationNotes
+                        }
+
+                        // Create room via server
+                        appState.serverManager.createRoom(
+                            name: roomName,
+                            description: roomDescription,
+                            isPrivate: isPrivate,
+                            password: isPrivate ? password : nil,
+                            metadata: metadata
+                        )
+                        // Go back to main menu - room will appear in list
+                        appState.pendingCreateRoomName = ""
+                        appState.currentScreen = .mainMenu
                     }
-                    if !moderationNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        metadata["moderationNotes"] = moderationNotes
+                    .buttonStyle(.borderedProminent)
+                    .disabled(roomName.isEmpty || !appState.isConnected)
+
+                    Button("Cancel") {
+                        appState.pendingCreateRoomName = ""
+                        appState.currentScreen = .mainMenu
                     }
-
-                    // Create room via server
-                    appState.serverManager.createRoom(
-                        name: roomName,
-                        description: roomDescription,
-                        isPrivate: isPrivate,
-                        password: isPrivate ? password : nil,
-                        metadata: metadata
-                    )
-                    // Go back to main menu - room will appear in list
-                    appState.pendingCreateRoomName = ""
-                    appState.currentScreen = .mainMenu
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(roomName.isEmpty || !appState.isConnected)
 
-                Button("Cancel") {
-                    appState.pendingCreateRoomName = ""
-                    appState.currentScreen = .mainMenu
+                if !appState.isConnected {
+                    Text("Connect to server to create rooms")
+                        .foregroundColor(.orange)
+                        .font(.caption)
                 }
-                .buttonStyle(.bordered)
-            }
-
-            if !appState.isConnected {
-                Text("Connect to server to create rooms")
-                    .foregroundColor(.orange)
-                    .font(.caption)
             }
         }
         .onAppear {
@@ -3885,12 +4049,14 @@ struct JoinRoomView: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("Create Room with This Name") {
-                    let name = query.isEmpty ? "New Room" : query
-                    appState.pendingCreateRoomName = name
-                    appState.currentScreen = .createRoom
+                if isAuthenticated {
+                    Button("Create Room with This Name") {
+                        let name = query.isEmpty ? "New Room" : query
+                        appState.pendingCreateRoomName = name
+                        appState.currentScreen = .createRoom
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
 
                 Button("Back") {
                     appState.currentScreen = .mainMenu
@@ -3963,6 +4129,7 @@ struct VoiceChatView: View {
     @ObservedObject var roomLockManager = RoomLockManager.shared
     @ObservedObject private var authManager = AuthenticationManager.shared
     @ObservedObject private var audioControl = UserAudioControlManager.shared
+    @ObservedObject private var localMonitor = LocalMonitorManager.shared
     @State private var isMuted = false
     @State private var isDeafened = false
     @State private var messageText = ""
@@ -4161,6 +4328,9 @@ struct VoiceChatView: View {
             guard success else { return }
             await MainActor.run {
                 appState.serverManager.setRoomMediaFadeDuration(configuredBackgroundMediaFadeDuration)
+                if selectedStream == nil {
+                    stopActiveRoomStreamOnServer(roomIDs: normalizedRoomIDs)
+                }
                 appState.serverManager.stopCurrentRoomMedia()
                 if selectedStream != nil {
                     appState.serverManager.refreshRoomMedia(for: room.id)
@@ -4324,8 +4494,11 @@ struct VoiceChatView: View {
                     Spacer()
 
                     Menu {
-                        if isAuthenticatedUser {
-                            Button("Room Actions...") {
+                        Button("Room Actions...") {
+                            showRoomActionsSheet = true
+                        }
+                        if !isAuthenticatedUser {
+                            Button("Sign In to This Server...") {
                                 showRoomActionsSheet = true
                             }
                         }
@@ -4480,6 +4653,15 @@ struct VoiceChatView: View {
                                       isActive: showTranscripts) {
                         showTranscripts.toggle()
                     }
+
+                    VoiceControlButton(icon: localMonitor.isMonitoring ? "ear.fill" : "ear",
+                                      label: localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring",
+                                      isActive: localMonitor.isMonitoring) {
+                        localMonitor.toggleMonitoring()
+                        AccessibilityManager.shared.announceAudioStatus(localMonitor.isMonitoring ? "local monitoring off" : "local monitoring on")
+                    }
+                    .accessibilityLabel(localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring")
+                    .accessibilityHint("Toggle hearing your own microphone while you are in this room. Latency and effects are configured in Audio Settings.")
                 }
                 .padding(.bottom, 20)
 
@@ -4507,7 +4689,8 @@ struct VoiceChatView: View {
                 HStack(spacing: 15) {
                     Text("⌘M Mute Microphone")
                     Text("⌘D Mute Output")
-                    Text("⌘Enter Send")
+                    Text("Enter Send")
+                    Text("Shift+Enter New Line")
                 }
                 .font(.caption)
                 .foregroundColor(.gray)
@@ -4686,10 +4869,34 @@ struct VoiceChatView: View {
     }
 
     private func refreshRoomAdminCapabilities() {
-        guard let serverURL = appState.serverManager.baseURL, !serverURL.isEmpty else { return }
+        let configuredServerURL = (appState.serverManager.baseURL ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let serverURL = configuredServerURL.isEmpty ? ServerManager.mainServer : configuredServerURL
         let token = authManager.currentUser?.accessToken
         Task {
             await adminManager.checkAdminStatus(serverURL: serverURL, token: token)
+            await adminManager.fetchServerConfig()
+        }
+    }
+
+    private func stopActiveRoomStreamOnServer(roomIDs: [String]) {
+        let trimmedServerURL = (appState.serverManager.baseURL ?? ServerManager.mainServer)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        guard !trimmedServerURL.isEmpty else { return }
+
+        for roomId in roomIDs {
+            guard let url = URL(string: "\(trimmedServerURL)/api/jellyfin/stop-stream") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authManager.currentUser?.accessToken, !token.isEmpty {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["roomId": roomId])
+            URLSession.shared.dataTask(with: request) { _, _, _ in
+                DispatchQueue.main.async {
+                    self.appState.serverManager.refreshRoomMedia(for: roomId)
+                }
+            }.resume()
         }
     }
 
@@ -5004,7 +5211,6 @@ struct UserRow: View {
     @State private var userVolume: Double = 1.0
     @ObservedObject private var settings = SettingsManager.shared
     @ObservedObject private var audioControl = UserAudioControlManager.shared
-    @ObservedObject private var monitor = LocalMonitorManager.shared
     @ObservedObject private var serverManager = ServerManager.shared
     @ObservedObject private var adminManager = AdminServerManager.shared
     @ObservedObject private var whisperManager = WhisperModeManager.shared
@@ -5026,7 +5232,7 @@ struct UserRow: View {
     }
 
     private var isSoloed: Bool {
-        if isCurrentUser { return monitor.isMonitoring }
+        if isCurrentUser { return false }
         return audioControl.isSolo(userId)
     }
 
@@ -5223,15 +5429,21 @@ struct UserRow: View {
                     }
 
                     Button(action: {
+                        sendJustBeamItLinkToUser()
+                    }) {
+                        Label("Send via JustBeamIt", systemImage: "bolt.horizontal.circle")
+                    }
+
+                    Button(action: {
                         shareProtectedLinkToUser(keepForever: false)
                     }) {
-                        Label("Share Protected Link", systemImage: "link.badge.plus")
+                        Label("Share Protected Link (Expires)", systemImage: "link.badge.plus")
                     }
 
                     Button(action: {
                         shareProtectedLinkToUser(keepForever: true)
                     }) {
-                        Label("Share Permanent Link", systemImage: "link.circle")
+                        Label("Share Persistent VoiceLink Link", systemImage: "link.circle")
                     }
                     .disabled(shareInProgress)
 
@@ -5266,6 +5478,12 @@ struct UserRow: View {
                     }
 
                     Button(action: {
+                        sendJustBeamItLinkToUser()
+                    }) {
+                        Label("Send via JustBeamIt", systemImage: "bolt.horizontal.circle")
+                    }
+
+                    Button(action: {
                         shareProtectedLinkToUser(keepForever: false)
                     }) {
                         Label("Share Protected Link (Expires)", systemImage: "link.badge.plus")
@@ -5274,7 +5492,7 @@ struct UserRow: View {
                     Button(action: {
                         shareProtectedLinkToUser(keepForever: true)
                     }) {
-                        Label("Share Protected Link (Keep Forever)", systemImage: "link.circle")
+                        Label("Share Persistent VoiceLink Link", systemImage: "link.circle")
                     }
                     .disabled(shareInProgress)
 
@@ -5446,48 +5664,42 @@ struct UserRow: View {
                                 .foregroundColor(.gray)
                         }
 
-                        // Mute and Solo buttons
-                        HStack(spacing: 12) {
-                            Button(action: {
-                                if !isCurrentUser {
+                        if !isCurrentUser {
+                            HStack(spacing: 12) {
+                                Button(action: {
                                     audioControl.toggleMute(for: userId)
+                                }) {
+                                    HStack {
+                                        Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
+                                        Text(isUserMuted ? "Unmute" : "Mute")
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
+                                    .cornerRadius(6)
                                 }
-                            }) {
-                                HStack {
-                                    Image(systemName: isUserMuted ? "speaker.slash.fill" : "speaker.fill")
-                                    Text(isUserMuted ? "Unmute" : "Mute")
-                                }
-                                .font(.caption)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(isUserMuted ? Color.red.opacity(0.3) : Color.gray.opacity(0.2))
-                                .cornerRadius(6)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isCurrentUser)
+                                .buttonStyle(.plain)
 
-                            Button(action: {
-                                if isCurrentUser {
-                                    monitor.toggleMonitoring()
-                                } else {
+                                Button(action: {
                                     audioControl.toggleSolo(for: userId)
+                                }) {
+                                    HStack {
+                                        Image(systemName: isSoloed ? "ear.fill" : "ear")
+                                        Text(isSoloed ? "Unsolo" : "Solo")
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(isSoloed ? Color.yellow.opacity(0.3) : Color.gray.opacity(0.2))
+                                    .cornerRadius(6)
                                 }
-                            }) {
-                                HStack {
-                                    Image(systemName: isSoloed ? "ear.fill" : "ear")
-                                    Text(isCurrentUser ? (isSoloed ? "Stop Monitor" : "Monitor") : (isSoloed ? "Unsolo" : "Solo"))
-                                }
-                                .font(.caption)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(isSoloed ? Color.yellow.opacity(0.3) : Color.gray.opacity(0.2))
-                                .cornerRadius(6)
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
 
                         if isCurrentUser {
-                            Text("You cannot mute yourself in this list. Use main room mute controls.")
+                            Text("Use the main room controls for mute, output, chat, transcripts, and local monitoring.")
                                 .font(.caption2)
                                 .foregroundColor(.orange)
                         }
@@ -5512,6 +5724,33 @@ struct UserRow: View {
         }
     }
 
+    private func sendJustBeamItLinkToUser() {
+        FileTransferManager.shared.shareJustBeamItToDirect(
+            recipientId: userId,
+            recipientName: displayUsername
+        )
+    }
+
+    private func safeFileSharingSegment(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = value
+            .lowercased()
+            .unicodeScalars
+            .map { allowed.contains($0) ? Character($0) : "-" }
+        let collapsed = String(scalars)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return collapsed.isEmpty ? "account" : collapsed
+    }
+
+    private func uploadDirectoryForProtectedShare(keepForever: Bool) -> String {
+        let accountFolder = safeFileSharingSegment(username)
+        if keepForever {
+            return "/uploads/voicelink-file-sharing/\(accountFolder)"
+        }
+        return "/uploads/\(accountFolder)"
+    }
+
     private func shareProtectedLinkToUser(keepForever: Bool) {
         FileTransferManager.shared.showFilePicker { url in
             guard let url else { return }
@@ -5521,9 +5760,10 @@ struct UserRow: View {
                     DispatchQueue.main.async { shareInProgress = false }
                 }
                 do {
+                    let uploadDirectory = uploadDirectoryForProtectedShare(keepForever: keepForever)
                     let link = try await CopyPartyManager.shared.uploadFileAndCreateProtectedLink(
                         from: url,
-                        to: "/uploads/\(username)",
+                        to: uploadDirectory,
                         keepForever: keepForever,
                         expiryHours: keepForever ? nil : CopyPartyManager.shared.config.defaultExternalLinkExpiryHours
                     )
@@ -5532,8 +5772,13 @@ struct UserRow: View {
                         NSPasteboard.general.setString(link.url, forType: .string)
                         let expiryText = link.expiresAt.map { " Expires \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""
                         let smbSummary = link.smb?.uris.first.map { _ in " SMB path available." } ?? ""
-                        let body = "Protected link copied to clipboard for \(self.username).\(expiryText)\(smbSummary)"
-                        var outgoingLines = ["Secure file link: \(link.url)"]
+                        let persistentText = keepForever ? " Persistent copy saved in the VoiceLink file-sharing folder." : ""
+                        let body = "Protected link copied to clipboard for \(self.username).\(expiryText)\(persistentText)\(smbSummary)"
+                        let linkLabel = keepForever ? "Persistent VoiceLink file link" : "Secure file link"
+                        var outgoingLines = ["\(linkLabel): \(link.url)"]
+                        if keepForever {
+                            outgoingLines.append("Stored in VoiceLink file sharing: \(uploadDirectory)")
+                        }
                         if let webURL = link.webURL, !webURL.isEmpty, webURL != link.url {
                             outgoingLines.append("Web link: \(webURL)")
                         }
@@ -5687,13 +5932,23 @@ class SettingsManager: ObservableObject {
     static let defaultManagedFederationServers: [ManagedFederationServer] = [
         ManagedFederationServer(
             url: APIEndpointResolver.canonicalMainBase,
-            name: "Main VoiceLink",
+            name: "VoiceLink Main from VoiceLink on voicelinkapp.app",
             description: "Primary managed VoiceLink federation authority and default production peer."
         ),
         ManagedFederationServer(
             url: APIEndpointResolver.communityNode2Base,
-            name: "Community VPS",
+            name: "VoiceLink Community from VoiceLink on community.voicelinkapp.app",
             description: "Secondary managed federation peer used for continuity, fallback, and maintenance handoff."
+        ),
+        ManagedFederationServer(
+            url: APIEndpointResolver.devineCreationsComBase,
+            name: "DevineCreations VoiceLink from DevineCreations on devine-creations.com",
+            description: "Domain-owned VoiceLink server linked to Devine Creations client account login."
+        ),
+        ManagedFederationServer(
+            url: APIEndpointResolver.devineCreationsNetBase,
+            name: "DevineCreations VoiceLink from DevineCreations on devinecreations.net",
+            description: "Domain-owned VoiceLink server linked to Devine Creations client account login."
         )
     ]
 
@@ -6065,11 +6320,16 @@ class SettingsManager: ObservableObject {
             }
         }
 
+        var didMigrateManagedServers = false
         for fallback in defaults where !seen.contains(fallback.url) {
             merged.append(fallback)
+            didMigrateManagedServers = true
         }
 
         managedFederationServers = merged
+        if didMigrateManagedServers || merged.count != saved.count {
+            saveManagedFederationServers()
+        }
     }
 
     private func saveManagedFederationServers() {
@@ -6441,8 +6701,9 @@ extension Notification.Name {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var settings = SettingsManager.shared
+    @StateObject private var accountSecurity = AccountSecurityManager.shared
     @State private var selectedTab: SettingsTab = .audio
-    @State private var isSoundTestPlaying = false
+    @State private var selectedTabAnnouncement: String = "Audio settings"
     @State private var isSubmittingDiagnostics = false
     @State private var diagnosticsSubmissionStatus: String?
     @AppStorage("voicelink.advanced.debugLoggingEnabled") private var debugLoggingEnabled = false
@@ -6452,6 +6713,7 @@ struct SettingsView: View {
     enum SettingsTab: String, CaseIterable {
         case general = "General"
         case profile = "Profile & Authentication"
+        case security = "Security"
         case audio = "Audio"
         case sync = "Sync & Filters"
         case fileSharing = "File Sharing"
@@ -6499,7 +6761,10 @@ struct SettingsView: View {
                 // Sidebar
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(SettingsTab.allCases, id: \.self) { tab in
-                        Button(action: { selectedTab = tab }) {
+                        Button(action: {
+                            selectedTab = tab
+                            selectedTabAnnouncement = "\(tab.rawValue) settings"
+                        }) {
                             HStack {
                                 Image(systemName: iconForTab(tab))
                                     .frame(width: 20)
@@ -6513,6 +6778,10 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundColor(selectedTab == tab ? .white : .white.opacity(0.7))
+                        .accessibilityLabel("\(tab.rawValue) settings")
+                        .accessibilityValue(selectedTab == tab ? "Selected" : "")
+                        .accessibilityAddTraits(selectedTab == tab ? [.isSelected] : [])
+                        .accessibilityHint("Opens the \(tab.rawValue.lowercased()) settings section.")
                     }
                     Spacer()
                 }
@@ -6520,15 +6789,24 @@ struct SettingsView: View {
                 .padding(.vertical, 12)
                 .padding(.horizontal, 8)
                 .background(Color.black.opacity(0.2))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Settings sections")
 
                 // Detail panel
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
+                        Text(selectedTabAnnouncement)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .accessibilityAddTraits(.isHeader)
+
                         switch selectedTab {
                         case .general:
                             generalSettings
                         case .profile:
                             profileSettings
+                        case .security:
+                            securitySettings
                         case .audio:
                             audioSettings
                         case .sync:
@@ -6550,9 +6828,11 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProfileSettings)) { _ in
             selectedTab = .profile
+            selectedTabAnnouncement = "Profile and authentication settings"
         }
         .onReceive(NotificationCenter.default.publisher(for: .openAudioSettings)) { _ in
             selectedTab = .audio
+            selectedTabAnnouncement = "Audio settings"
         }
     }
 
@@ -6560,6 +6840,7 @@ struct SettingsView: View {
         switch tab {
         case .general: return "gearshape"
         case .profile: return "person.circle"
+        case .security: return "lock.shield"
         case .audio: return "speaker.wave.2"
         case .sync: return "arrow.triangle.2.circlepath"
         case .fileSharing: return "folder.badge.person.crop"
@@ -6650,15 +6931,21 @@ struct SettingsView: View {
                     statusManager.setSyncWithContactCard(newValue)
                 }
             ))
+            .disabled(true)
 
             HStack {
                 Button("Sync Now") {
                     statusManager.syncContactCardNow()
                 }
                 .buttonStyle(.bordered)
+                .disabled(true)
 
                 Spacer()
             }
+
+            Text("Contact Card sync is temporarily disabled on macOS to prevent a startup crash in the Contacts framework.")
+                .font(.caption)
+                .foregroundColor(.gray)
 
             if settings.userProfileLinks.isEmpty {
                 Text("No profile links found yet. Add links to your macOS Me card, then choose Sync Now.")
@@ -6702,9 +6989,9 @@ struct SettingsView: View {
                         let provider = (user.authProvider ?? user.authMethod.rawValue).lowercased()
                         switch provider {
                         case "local", "voicelink", "email":
-                            return "VoiceLink Account"
+                            return "User Account"
                         case "whmcs":
-                            return "WHMCS Account"
+                            return "Client Portal Account"
                         case "mastodon":
                             return "Mastodon Account"
                         case "google":
@@ -6732,19 +7019,19 @@ struct SettingsView: View {
                     Button("Mastodon") { appState.currentScreen = .login }
                         .buttonStyle(.borderedProminent)
                     Button("Google") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/google") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/google") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .buttonStyle(.bordered)
                     Button("Apple") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/apple") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/apple") {
                             NSWorkspace.shared.open(url)
                         }
                     }
                     .buttonStyle(.bordered)
                     Button("GitHub") {
-                        if let url = URL(string: "https://voicelink.devinecreations.net/auth/github") {
+                        if let url = URL(string: "https://voicelinkapp.app/auth/github") {
                             NSWorkspace.shared.open(url)
                         }
                     }
@@ -6757,6 +7044,295 @@ struct SettingsView: View {
         }
 
         mastodonSettings
+    }
+
+    private var normalizedSecurityServerURL: String {
+        let configured = (ServerManager.shared.baseURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty {
+            return configured.hasPrefix("http://") || configured.hasPrefix("https://")
+                ? configured.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                : "https://\(configured.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+        }
+        return ServerManager.mainServer
+    }
+
+    @ViewBuilder
+    var securitySettings: some View {
+        let authManager = AuthenticationManager.shared
+
+        SettingsSection(title: "Account Security") {
+            if let user = authManager.currentUser {
+                Text("Signed in as \(user.displayName) (\(user.email ?? user.username)).")
+                    .foregroundColor(.gray)
+                Text(accountSecurity.statusSummary(for: user))
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                HStack(spacing: 12) {
+                    Button(accountSecurity.isLoading ? "Refreshing..." : "Refresh Security Status") {
+                        accountSecurity.refreshStatus(serverURL: normalizedSecurityServerURL, user: user)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(accountSecurity.isLoading)
+
+                    Button("Open Client Portal") {
+                        guard let rawURL = accountSecurity.providerPortalURL,
+                              let url = URL(string: rawURL) else { return }
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(accountSecurity.providerPortalURL == nil)
+                }
+
+                if !accountSecurity.authProfileSummary.isEmpty {
+                    Text(accountSecurity.authProfileSummary)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                if let message = accountSecurity.statusMessage, !message.isEmpty {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let error = accountSecurity.errorMessage, !error.isEmpty {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            } else {
+                Text("Sign in to manage two-factor authentication, backup codes, passkeys, and connected account security.")
+                    .foregroundColor(.gray)
+                Button("Sign In") {
+                    appState.currentScreen = .login
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+
+        if let user = authManager.currentUser {
+            SettingsSection(title: "Authentication Profile") {
+                if accountSecurity.securityProviders.isEmpty {
+                    Text("This server has not reported any linked authentication providers yet.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    ForEach(accountSecurity.securityProviders) { provider in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(provider.active ? "\(provider.label) is active for this account." : provider.label)
+                                .foregroundColor(.gray)
+                            Text("Managed by \(provider.management.replacingOccurrences(of: "+", with: " and ")).")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                if !accountSecurity.externalHooks.isEmpty {
+                    ForEach(accountSecurity.externalHooks) { hook in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(hook.label)
+                                .foregroundColor(.gray)
+                            Text(hook.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            if let rawURL = hook.url, let url = URL(string: rawURL) {
+                                Link(rawURL, destination: url)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+
+                if let rawURL = accountSecurity.providerAdminURL, let url = URL(string: rawURL) {
+                    Link("Open upstream admin login", destination: url)
+                        .font(.caption)
+                }
+
+                if accountSecurity.tokenRefreshFallbackAvailable {
+                    Text("If the upstream session is reissued, VoiceLink will attempt token refresh fallback before asking you to sign in again.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if accountSecurity.supportsOneTimeCodeAutofill {
+                    Text("One-time code AutoFill is enabled for verification fields when macOS can supply a code from Keychain, Mail, Messages, or another trusted source.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            SettingsSection(title: "Two-Factor Status") {
+                Text(accountSecurity.twoFactorEnabled ? "Two-factor authentication is enabled." : "Two-factor authentication is not enabled yet.")
+                    .foregroundColor(.gray)
+                Text(accountSecurity.twoFactorRequired || accountSecurity.providerRequiresTwoFactor ? "This server or an upstream provider currently requires extra verification for your account role." : "Extra verification is optional for your current role unless a provider requires it.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
+                if accountSecurity.availableMethods.isEmpty {
+                    Text("No active verification methods are configured yet.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                } else {
+                    ForEach(accountSecurity.availableMethods, id: \.self) { method in
+                        Text(method)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                }
+
+                if user.passkey.supported || accountSecurity.supportsPasskeys {
+                    Text(user.passkey.registered
+                        ? "Passkeys are already available for this account."
+                        : "Passkeys are supported for this account. Server-managed passkey enrollment will appear here once the desktop registration flow is enabled.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                HStack(spacing: 12) {
+                    if accountSecurity.supportsBackupCodes {
+                        Button("Generate Backup Codes") {
+                            accountSecurity.generateBackupCodes(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button("Disable 2FA") {
+                        accountSecurity.disableTwoFactor(serverURL: normalizedSecurityServerURL, user: user)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!accountSecurity.twoFactorEnabled)
+                }
+
+                if !accountSecurity.generatedBackupCodes.isEmpty {
+                    Text("Backup codes")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text(accountSecurity.generatedBackupCodes.joined(separator: "\n"))
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Generated backup codes")
+                }
+            }
+
+            if accountSecurity.supportsSetupMethod("totp") {
+                SettingsSection(title: "Authenticator App") {
+                HStack(spacing: 12) {
+                    Button("Start Setup") {
+                        accountSecurity.startTOTPSetup(serverURL: normalizedSecurityServerURL, user: user)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Refresh") {
+                        accountSecurity.refreshStatus(serverURL: normalizedSecurityServerURL, user: user)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let secret = accountSecurity.pendingTOTPSecret, !secret.isEmpty {
+                    Text("Secret")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text(secret)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+
+                if let otpURI = accountSecurity.pendingTOTPUri, !otpURI.isEmpty {
+                    Text("Setup link")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text(otpURI)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+
+                TextField("Authenticator app code", text: $accountSecurity.totpVerificationCode)
+                    .textFieldStyle(.roundedBorder)
+                    .textContentType(.oneTimeCode)
+                    .accessibilityLabel("Authenticator app code")
+
+                Button("Verify Authenticator App") {
+                    accountSecurity.verifyTOTPSetup(serverURL: normalizedSecurityServerURL, user: user)
+                }
+                .buttonStyle(.bordered)
+                .disabled(accountSecurity.totpVerificationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            }
+
+            if accountSecurity.supportsSetupMethod("email") || accountSecurity.supportsSetupMethod("sms") || accountSecurity.supportsSetupMethod("voice") {
+                SettingsSection(title: "Email, Text, and Voice Codes") {
+                if accountSecurity.supportsSetupMethod("email") {
+                    TextField("Email address", text: $accountSecurity.emailAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Email address for verification")
+
+                    HStack(spacing: 12) {
+                        Button("Set Up Email Code") {
+                            accountSecurity.startEmailSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+
+                        TextField("Email verification code", text: $accountSecurity.emailVerificationCode)
+                            .textFieldStyle(.roundedBorder)
+                            .textContentType(.oneTimeCode)
+
+                        Button("Verify Email") {
+                            accountSecurity.verifyEmailSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if accountSecurity.supportsSetupMethod("sms") || accountSecurity.supportsSetupMethod("voice") {
+                    TextField("Phone number", text: $accountSecurity.phoneNumber)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Phone number for text or voice verification")
+                }
+
+                if accountSecurity.supportsSetupMethod("sms") {
+                    HStack(spacing: 12) {
+                        Button("Set Up Text Code") {
+                            accountSecurity.startSMSSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+
+                        TextField("Text verification code", text: $accountSecurity.smsVerificationCode)
+                            .textFieldStyle(.roundedBorder)
+                            .textContentType(.oneTimeCode)
+
+                        Button("Verify Text Code") {
+                            accountSecurity.verifySMSSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if accountSecurity.supportsSetupMethod("voice") {
+                    HStack(spacing: 12) {
+                        Button("Set Up Voice Call Code") {
+                            accountSecurity.startVoiceSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+
+                        TextField("Voice verification code", text: $accountSecurity.voiceVerificationCode)
+                            .textFieldStyle(.roundedBorder)
+                            .textContentType(.oneTimeCode)
+
+                        Button("Verify Voice Code") {
+                            accountSecurity.verifyVoiceSetup(serverURL: normalizedSecurityServerURL, user: user)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                Text("This tab manages the same account verification stack used by VoiceLink sign-in, Client Portal-linked accounts, and connected server policies. WordPress or other upstream identity providers still control their own password or passkey enrollment outside VoiceLink.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+            }
+        }
     }
 
     // MARK: - Audio Settings
@@ -6813,18 +7389,12 @@ struct SettingsView: View {
                 }
             ))
 
-            Button(action: {
-                isSoundTestPlaying = true
-                AppSoundManager.shared.playSound(.soundTest, force: true)
-                let resetAfter = max(0.6, AppSoundManager.shared.soundDuration(.soundTest) + 0.1)
-                DispatchQueue.main.asyncAfter(deadline: .now() + resetAfter) {
-                    isSoundTestPlaying = false
-                }
-            }) {
-                Text(isSoundTestPlaying ? "Testing..." : "Test My Sound")
+            Button("Play Test Sound") {
+                settings.applySelectedAudioDevices(notifyChange: false)
+                _ = AppSoundManager.shared.playSound(.soundTest, force: true)
             }
             .buttonStyle(.bordered)
-            .disabled(isSoundTestPlaying)
+            .accessibilityHint("Plays the current VoiceLink test sound without moving keyboard or VoiceOver focus.")
 
             HStack(spacing: 12) {
                 Button("Refresh Device List") {
@@ -6904,12 +7474,9 @@ struct SettingsView: View {
         }
 
         SettingsSection(title: "Local Monitoring") {
-            Toggle("Enable Local Monitoring", isOn: Binding(
-                get: { LocalMonitorManager.shared.isMonitoring },
-                set: { newValue in
-                    LocalMonitorManager.shared.setMonitoringEnabled(newValue)
-                }
-            ))
+            Text("Turn local monitoring on or off from inside a room. Use these settings to adjust latency, effects, and the optional system audio plugin.")
+                .font(.caption)
+                .foregroundColor(.secondary)
 
             Picker("Monitor Effect", selection: $settings.localMonitorEffect) {
                 ForEach(LocalMonitorEffect.allCases) { effect in
@@ -7022,14 +7589,14 @@ struct SettingsView: View {
         if settings.inputDevice == "Default" {
             return detectedDefaultInputName == "Not detected" ? "Using system default (not enumerated)" : "Using system default"
         }
-        return settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Unavailable"
+        return settings.availableInputDevices.contains(settings.inputDevice) ? "Connected" : "Not in current device list"
     }
 
     private var outputStatusText: String {
         if settings.outputDevice == "Default" {
             return detectedDefaultOutputName == "Not detected" ? "Using system default (not enumerated)" : "Using system default"
         }
-        return settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Unavailable"
+        return settings.availableOutputDevices.contains(settings.outputDevice) ? "Connected" : "Not in current device list"
     }
 
     private func defaultDeviceName(isInput: Bool) -> String {
@@ -7062,10 +7629,10 @@ struct SettingsView: View {
     private func channelSummary(for deviceName: String, isInput: Bool) -> String {
         guard deviceName != "Not detected",
               let deviceID = getDeviceID(named: deviceName, isInput: isInput) else {
-            return "Unavailable"
+            return "No channel information reported"
         }
         let channels = getChannelCount(deviceID: deviceID, isInput: isInput)
-        if channels <= 0 { return "Unavailable" }
+        if channels <= 0 { return "No channel information reported" }
         if channels == 1 { return "Mono (1 channel)" }
         if channels == 2 { return "Stereo (2 channels)" }
         return "Multi-channel (\(channels) channels)"
@@ -7590,6 +8157,392 @@ struct SettingsSection<Content: View>: View {
     }
 }
 
+@MainActor
+struct AccountSecurityProviderStatus: Identifiable, Hashable {
+    let id: String
+    let label: String
+    let enabled: Bool
+    let active: Bool
+    let source: String
+    let management: String
+    let portalURL: String?
+    let adminURL: String?
+    let requiresRoleTwoFactor: Bool
+}
+
+struct AccountSecurityHook: Identifiable, Hashable {
+    let id: String
+    let label: String
+    let description: String
+    let management: String
+    let url: String?
+}
+
+@MainActor
+final class AccountSecurityManager: ObservableObject {
+    static let shared = AccountSecurityManager()
+
+    @Published var isLoading = false
+    @Published var statusMessage: String?
+    @Published var errorMessage: String?
+    @Published var twoFactorEnabled = false
+    @Published var twoFactorRequired = false
+    @Published var availableMethods: [String] = []
+    @Published var generatedBackupCodes: [String] = []
+    @Published var pendingTOTPSecret: String?
+    @Published var pendingTOTPUri: String?
+    @Published var totpVerificationCode = ""
+    @Published var emailAddress = ""
+    @Published var emailVerificationCode = ""
+    @Published var phoneNumber = ""
+    @Published var smsVerificationCode = ""
+    @Published var voiceVerificationCode = ""
+    @Published var authProfileSummary = ""
+    @Published var securityProviders: [AccountSecurityProviderStatus] = []
+    @Published var externalHooks: [AccountSecurityHook] = []
+    @Published var supportedSetupMethods: [String] = []
+    @Published var supportsBackupCodes = false
+    @Published var supportsPasskeys = false
+    @Published var supportsOneTimeCodeAutofill = false
+    @Published var tokenRefreshFallbackAvailable = false
+    @Published var providerPortalURL: String?
+    @Published var providerAdminURL: String?
+    @Published var providerRequiresTwoFactor = false
+
+    private init() {}
+
+    func statusSummary(for user: AuthenticatedUser) -> String {
+        let provider = (user.authProvider ?? user.authMethod.rawValue).lowercased()
+        let providerLabel: String
+        switch provider {
+        case "whmcs":
+            providerLabel = "Client Portal"
+        case "local", "voicelink", "email":
+            providerLabel = "User Account"
+        default:
+            providerLabel = user.authMethod.displayName
+        }
+        return "\(providerLabel) security settings for role \(user.role ?? "member")."
+    }
+
+    func refreshStatus(serverURL: String, user: AuthenticatedUser) {
+        guard let url = URL(string: "\(normalizedServerURL(serverURL))/api/2fa/status/\(user.id)") else {
+            errorMessage = "Invalid server URL."
+            return
+        }
+        isLoading = true
+        statusMessage = "Refreshing security status..."
+        errorMessage = nil
+
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(user.accessToken)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            Task { @MainActor in
+                self.isLoading = false
+                if let error {
+                    self.errorMessage = error.localizedDescription
+                    self.statusMessage = nil
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.errorMessage = "Unable to load security status."
+                    self.statusMessage = nil
+                    return
+                }
+                self.twoFactorEnabled = json["enabled"] as? Bool ?? false
+                self.twoFactorRequired = json["required"] as? Bool ?? false
+                let methods = (json["methods"] as? [[String: Any]] ?? []).map { method -> String in
+                    let name = method["name"] as? String ?? method["type"] as? String ?? "Method"
+                    let hint = (method["hint"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let remaining = method["remaining"] as? Int
+                    if let remaining {
+                        return "\(name) (\(remaining) remaining)"
+                    }
+                    return hint.isEmpty ? name : "\(name) (\(hint))"
+                }
+                self.availableMethods = methods
+                if let authProfile = json["authProfile"] as? [String: Any] {
+                    self.authProfileSummary = authProfile["summary"] as? String ?? ""
+                    self.providerPortalURL = authProfile["portalUrl"] as? String
+                    self.providerAdminURL = authProfile["adminUrl"] as? String
+                    self.securityProviders = (authProfile["providers"] as? [[String: Any]] ?? []).map { provider in
+                        AccountSecurityProviderStatus(
+                            id: provider["id"] as? String ?? UUID().uuidString,
+                            label: provider["label"] as? String ?? "Provider",
+                            enabled: provider["enabled"] as? Bool ?? false,
+                            active: provider["active"] as? Bool ?? false,
+                            source: provider["source"] as? String ?? "builtin",
+                            management: provider["management"] as? String ?? "client",
+                            portalURL: provider["portalUrl"] as? String,
+                            adminURL: provider["adminUrl"] as? String,
+                            requiresRoleTwoFactor: provider["requiresRoleTwoFactor"] as? Bool ?? false
+                        )
+                    }
+                    self.externalHooks = (authProfile["externalHooks"] as? [[String: Any]] ?? []).map { hook in
+                        AccountSecurityHook(
+                            id: hook["id"] as? String ?? UUID().uuidString,
+                            label: hook["label"] as? String ?? "Hook",
+                            description: hook["description"] as? String ?? "",
+                            management: hook["management"] as? String ?? "site",
+                            url: hook["url"] as? String
+                        )
+                    }
+                } else {
+                    self.authProfileSummary = ""
+                    self.providerPortalURL = nil
+                    self.providerAdminURL = nil
+                    self.securityProviders = []
+                    self.externalHooks = []
+                }
+                if let capabilities = json["capabilities"] as? [String: Any] {
+                    self.supportedSetupMethods = [
+                        (capabilities["totp"] as? Bool ?? false) ? "totp" : nil,
+                        (capabilities["email"] as? Bool ?? false) ? "email" : nil,
+                        (capabilities["sms"] as? Bool ?? false) ? "sms" : nil,
+                        (capabilities["voice"] as? Bool ?? false) ? "voice" : nil,
+                        (capabilities["passkey"] as? Bool ?? false) ? "passkey" : nil
+                    ].compactMap { $0 }
+                    self.supportsBackupCodes = capabilities["backupCodes"] as? Bool ?? false
+                    self.supportsPasskeys = capabilities["passkey"] as? Bool ?? false
+                    self.supportsOneTimeCodeAutofill = capabilities["oneTimeCodeAutofill"] as? Bool ?? false
+                    self.tokenRefreshFallbackAvailable = capabilities["tokenRefreshFallback"] as? Bool ?? false
+                } else {
+                    self.supportedSetupMethods = []
+                    self.supportsBackupCodes = false
+                    self.supportsPasskeys = false
+                    self.supportsOneTimeCodeAutofill = false
+                    self.tokenRefreshFallbackAvailable = false
+                }
+                self.providerRequiresTwoFactor = self.securityProviders.contains(where: { $0.requiresRoleTwoFactor })
+                self.statusMessage = "Security status updated."
+                self.emailAddress = user.email ?? self.emailAddress
+            }
+        }.resume()
+    }
+
+    func supportsSetupMethod(_ method: String) -> Bool {
+        supportedSetupMethods.contains(method)
+    }
+
+    func startTOTPSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/totp/setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "accountName": user.email ?? user.username]
+        ) { json in
+            self.pendingTOTPSecret = json["secret"] as? String
+            self.pendingTOTPUri = json["uri"] as? String
+            self.statusMessage = "Authenticator app setup started."
+            self.errorMessage = nil
+        }
+    }
+
+    func verifyTOTPSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/totp/verify",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "code": totpVerificationCode]
+        ) { json in
+            let success = json["success"] as? Bool ?? false
+            if success {
+                self.generatedBackupCodes = json["backupCodes"] as? [String] ?? []
+                self.pendingTOTPSecret = nil
+                self.pendingTOTPUri = nil
+                self.totpVerificationCode = ""
+                self.statusMessage = "Authenticator app verified."
+                self.refreshStatus(serverURL: serverURL, user: user)
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Authenticator app verification failed."
+            }
+        }
+    }
+
+    func startEmailSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/email/setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "email": emailAddress]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.statusMessage = "Email verification code sent."
+                self.errorMessage = nil
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to start email verification."
+            }
+        }
+    }
+
+    func verifyEmailSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/email/verify-setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "code": emailVerificationCode]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.emailVerificationCode = ""
+                self.statusMessage = "Email verification enabled."
+                self.refreshStatus(serverURL: serverURL, user: user)
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to verify email code."
+            }
+        }
+    }
+
+    func startSMSSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/sms/setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "phoneNumber": phoneNumber]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.statusMessage = "Text verification code sent."
+                self.errorMessage = nil
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to start text verification."
+            }
+        }
+    }
+
+    func verifySMSSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/sms/verify-setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "code": smsVerificationCode]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.smsVerificationCode = ""
+                self.statusMessage = "Text verification enabled."
+                self.refreshStatus(serverURL: serverURL, user: user)
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to verify text code."
+            }
+        }
+    }
+
+    func startVoiceSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/voice/setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "phoneNumber": phoneNumber]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.statusMessage = "Voice verification call started."
+                self.errorMessage = nil
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to start voice verification."
+            }
+        }
+    }
+
+    func verifyVoiceSetup(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/voice/verify-setup",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id, "code": voiceVerificationCode]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.voiceVerificationCode = ""
+                self.statusMessage = "Voice verification enabled."
+                self.refreshStatus(serverURL: serverURL, user: user)
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to verify voice code."
+            }
+        }
+    }
+
+    func generateBackupCodes(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/backup/generate",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id]
+        ) { json in
+            self.generatedBackupCodes = json["codes"] as? [String] ?? []
+            self.statusMessage = self.generatedBackupCodes.isEmpty ? "No backup codes were returned." : "New backup codes generated."
+            self.errorMessage = nil
+            self.refreshStatus(serverURL: serverURL, user: user)
+        }
+    }
+
+    func disableTwoFactor(serverURL: String, user: AuthenticatedUser) {
+        submit(
+            path: "/api/2fa/disable",
+            serverURL: serverURL,
+            user: user,
+            body: ["userId": user.id]
+        ) { json in
+            if json["success"] as? Bool == true {
+                self.generatedBackupCodes.removeAll()
+                self.pendingTOTPSecret = nil
+                self.pendingTOTPUri = nil
+                self.statusMessage = "Two-factor authentication disabled."
+                self.errorMessage = nil
+                self.refreshStatus(serverURL: serverURL, user: user)
+            } else {
+                self.errorMessage = json["error"] as? String ?? "Unable to disable two-factor authentication."
+            }
+        }
+    }
+
+    private func normalizedServerURL(_ serverURL: String) -> String {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return "https://\(trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+    }
+
+    private func submit(
+        path: String,
+        serverURL: String,
+        user: AuthenticatedUser,
+        body: [String: Any],
+        completion: @escaping @MainActor ([String: Any]) -> Void
+    ) {
+        guard let url = URL(string: "\(normalizedServerURL(serverURL))\(path)") else {
+            errorMessage = "Invalid server URL."
+            return
+        }
+        isLoading = true
+        errorMessage = nil
+        statusMessage = "Saving security settings..."
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(user.accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            Task { @MainActor in
+                self.isLoading = false
+                if let error {
+                    self.errorMessage = error.localizedDescription
+                    self.statusMessage = nil
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self.errorMessage = "Unexpected security response."
+                    self.statusMessage = nil
+                    return
+                }
+                completion(json)
+            }
+        }.resume()
+    }
+}
+
 struct LicensingScreenView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var licensing = LicensingManager.shared
@@ -7651,14 +8604,14 @@ struct LicensingScreenView: View {
             // Footer with links
             HStack(spacing: 20) {
                 Button("Purchase More Devices") {
-                    if let url = URL(string: "https://voicelink.devinecreations.net/purchase") {
+                    if let url = URL(string: "https://voicelinkapp.app/purchase") {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 .buttonStyle(.bordered)
 
                 Button("Support") {
-                    if let url = URL(string: "https://voicelink.devinecreations.net/support") {
+                    if let url = URL(string: "https://voicelinkapp.app/support") {
                         NSWorkspace.shared.open(url)
                     }
                 }

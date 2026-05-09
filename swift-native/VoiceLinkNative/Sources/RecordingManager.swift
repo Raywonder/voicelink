@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import AppKit
 
 // MARK: - Recording Format
 enum RecordingFormat: String, CaseIterable, Identifiable {
@@ -162,6 +163,30 @@ struct RecordingSession: Identifiable, Codable, Hashable {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: fileSize)
     }
+
+    var masterFileURLs: [String] {
+        fileURLs.filter { URL(fileURLWithPath: $0).lastPathComponent.lowercased().hasPrefix("recording.") }
+    }
+
+    var stemFileURLs: [String] {
+        fileURLs.filter { !URL(fileURLWithPath: $0).lastPathComponent.lowercased().hasPrefix("recording.") }
+    }
+}
+
+enum RecordingExportScope: String, CaseIterable, Identifiable {
+    case masterMix = "masterMix"
+    case perUserStems = "perUserStems"
+    case everything = "everything"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .masterMix: return "Master Mix"
+        case .perUserStems: return "Per-User Stems"
+        case .everything: return "Master + Stems"
+        }
+    }
 }
 
 // MARK: - Recording Manager
@@ -190,6 +215,7 @@ class RecordingManager: ObservableObject {
     private var mixerNode: AVAudioMixerNode?
     private var recorderNodes: [String: AVAudioMixerNode] = [:]
     private var audioFiles: [String: AVAudioFile] = [:]
+    private let writeQueue = DispatchQueue(label: "voicelink.recording-write", qos: .userInitiated)
 
     // Timing
     private var recordingStartTime: Date?
@@ -199,6 +225,8 @@ class RecordingManager: ObservableObject {
     // File management
     private let recordingsDirectory: URL
     private var currentSessionId: String?
+    private var currentRoomId: String?
+    private var currentRoomName: String?
 
     init() {
         // Setup recordings directory
@@ -223,6 +251,8 @@ class RecordingManager: ObservableObject {
         state = .preparing
         currentSessionId = UUID().uuidString
         recordingStartTime = Date()
+        currentRoomId = roomId
+        currentRoomName = roomName
         currentDuration = 0
         pausedDuration = 0
         tracks = []
@@ -258,6 +288,10 @@ class RecordingManager: ObservableObject {
 
         // Stop audio engine
         audioEngine?.stop()
+        mixerNode?.removeTap(onBus: 0)
+        audioEngine = nil
+        mixerNode = nil
+        recorderNodes.removeAll()
 
         // Close all audio files
         for (_, file) in audioFiles {
@@ -280,8 +314,8 @@ class RecordingManager: ObservableObject {
                 id: sessionId,
                 startTime: startTime,
                 endTime: Date(),
-                roomId: "", // Would need to pass this
-                roomName: "", // Would need to pass this
+                roomId: currentRoomId ?? "",
+                roomName: currentRoomName ?? "VoiceLink Room",
                 mode: mode.rawValue,
                 format: format.rawValue,
                 duration: finalDuration,
@@ -290,6 +324,7 @@ class RecordingManager: ObservableObject {
                 participants: tracks.map { $0.username }
             )
 
+            writeSessionManifest(for: session)
             recentRecordings.insert(session, at: 0)
             saveRecentRecordings()
         }
@@ -297,6 +332,8 @@ class RecordingManager: ObservableObject {
         // Reset state
         currentSessionId = nil
         recordingStartTime = nil
+        currentRoomId = nil
+        currentRoomName = nil
         tracks = []
 
         state = .idle
@@ -381,21 +418,26 @@ class RecordingManager: ObservableObject {
 
     func addUserAudio(userId: String, username: String, buffer: AVAudioPCMBuffer) {
         guard state.isRecording else { return }
+        writeRemoteAudio(userId: userId, username: username, buffer: buffer)
+    }
 
-        // For multi-track mode, create separate file for each user
-        if mode == .multiTrack {
-            if audioFiles[userId] == nil {
-                createUserTrack(userId: userId, username: username)
+    func addLocalAudio(username: String, buffer: AVAudioPCMBuffer) {
+        guard state.isRecording else { return }
+        let normalizedName = sanitizedTrackName(username.isEmpty ? "Local User" : username)
+        let localUserId = "self"
+        writeQueue.async { [weak self] in
+            guard let self else { return }
+            switch self.mode {
+            case .selfOnly:
+                self.writeBuffer(buffer, to: "mixed")
+            case .mixed:
+                self.writeBuffer(buffer, to: "mixed")
+            case .multiTrack:
+                self.ensureTrackExists(userId: localUserId, username: normalizedName)
+                self.writeBuffer(buffer, to: "mixed")
+                self.writeBuffer(buffer, to: localUserId)
             }
-        }
-
-        // Process the buffer
-        processAudioBuffer(buffer, userId: userId)
-
-        // Update track peak level
-        if let index = tracks.firstIndex(where: { $0.userId == userId }) {
-            let level = calculatePeakLevel(buffer: buffer)
-            tracks[index].peakLevel = level
+            self.updateLevels(for: localUserId, buffer: buffer)
         }
     }
 
@@ -428,19 +470,105 @@ class RecordingManager: ObservableObject {
         }
     }
 
+    private func writeRemoteAudio(userId: String, username: String, buffer: AVAudioPCMBuffer) {
+        let normalizedName = sanitizedTrackName(username.isEmpty ? userId : username)
+        writeQueue.async { [weak self] in
+            guard let self else { return }
+            switch self.mode {
+            case .selfOnly:
+                break
+            case .mixed:
+                self.writeBuffer(buffer, to: "mixed")
+            case .multiTrack:
+                self.ensureTrackExists(userId: userId, username: normalizedName)
+                self.writeBuffer(buffer, to: "mixed")
+                self.writeBuffer(buffer, to: userId)
+            }
+            self.updateLevels(for: userId, buffer: buffer)
+        }
+    }
+
+    private func ensureTrackExists(userId: String, username: String) {
+        if audioFiles[userId] == nil {
+            createUserTrack(userId: userId, username: username)
+        }
+    }
+
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, userId: String) {
-        guard let audioFile = audioFiles[userId] ?? audioFiles["mixed"] else { return }
+        writeBuffer(buffer, to: userId)
+    }
+
+    private func writeBuffer(_ buffer: AVAudioPCMBuffer, to fileKey: String) {
+        guard let audioFile = audioFiles[fileKey] else { return }
+        guard let convertedBuffer = convertedBufferIfNeeded(buffer, to: audioFile.processingFormat) else { return }
 
         do {
-            try audioFile.write(from: buffer)
+            try audioFile.write(from: convertedBuffer)
         } catch {
-            print("Failed to write audio buffer: \(error)")
+            print("Failed to write audio buffer for \(fileKey): \(error)")
+        }
+    }
+
+    private func convertedBufferIfNeeded(_ buffer: AVAudioPCMBuffer, to targetFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
+        if buffer.format == targetFormat {
+            return buffer
         }
 
-        // Update peak level for UI
-        DispatchQueue.main.async {
-            self.currentPeakLevel = self.calculatePeakLevel(buffer: buffer)
+        let targetFrameCapacity = AVAudioFrameCount(
+            max(
+                Double(buffer.frameLength) * (targetFormat.sampleRate / max(buffer.format.sampleRate, 1)),
+                1
+            )
+        )
+        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: targetFrameCapacity) else {
+            return nil
         }
+
+        guard let converter = AVAudioConverter(from: buffer.format, to: targetFormat) else {
+            return nil
+        }
+
+        var conversionError: NSError?
+        var didSupplyInput = false
+        let status = converter.convert(to: convertedBuffer, error: &conversionError) { _, outStatus in
+            if didSupplyInput {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            didSupplyInput = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if let conversionError {
+            print("Recording conversion error: \(conversionError)")
+            return nil
+        }
+
+        switch status {
+        case .haveData, .inputRanDry, .endOfStream:
+            return convertedBuffer.frameLength > 0 ? convertedBuffer : nil
+        case .error:
+            return nil
+        @unknown default:
+            return nil
+        }
+    }
+
+    private func updateLevels(for userId: String, buffer: AVAudioPCMBuffer) {
+        let level = calculatePeakLevel(buffer: buffer)
+        DispatchQueue.main.async {
+            self.currentPeakLevel = level
+            if let index = self.tracks.firstIndex(where: { $0.userId == userId }) {
+                self.tracks[index].peakLevel = level
+            }
+        }
+    }
+
+    private func sanitizedTrackName(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
     }
 
     private func calculatePeakLevel(buffer: AVAudioPCMBuffer) -> Float {
@@ -504,13 +632,42 @@ class RecordingManager: ObservableObject {
         saveRecentRecordings()
     }
 
-    func exportRecording(_ session: RecordingSession, to destination: URL, format: RecordingFormat) {
-        // TODO: Implement format conversion for export
-        // For now, just copy the files
-        for urlString in session.fileURLs {
+    func exportRecording(
+        _ session: RecordingSession,
+        to destination: URL,
+        format: RecordingFormat,
+        scope: RecordingExportScope = .everything
+    ) {
+        // TODO: Implement true format conversion for export.
+        // For now, copy the selected source files and preserve the original encoding.
+        let selectedFiles: [String]
+        switch scope {
+        case .masterMix:
+            selectedFiles = session.masterFileURLs
+        case .perUserStems:
+            selectedFiles = session.stemFileURLs
+        case .everything:
+            selectedFiles = session.fileURLs
+        }
+
+        for urlString in selectedFiles {
             let sourceURL = URL(fileURLWithPath: urlString)
             let destURL = destination.appendingPathComponent(sourceURL.lastPathComponent)
             try? FileManager.default.copyItem(at: sourceURL, to: destURL)
+        }
+
+        let manifestURL = destination.appendingPathComponent("recording-export.json")
+        let exportMetadata: [String: Any] = [
+            "sessionId": session.id,
+            "roomId": session.roomId,
+            "roomName": session.roomName,
+            "scope": scope.rawValue,
+            "requestedFormat": format.rawValue,
+            "exportedAt": ISO8601DateFormatter().string(from: Date()),
+            "files": selectedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: exportMetadata, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: manifestURL, options: .atomic)
         }
     }
 
@@ -523,6 +680,28 @@ class RecordingManager: ObservableObject {
             }
         }
         return total
+    }
+
+    private func writeSessionManifest(for session: RecordingSession) {
+        guard let firstFilePath = session.fileURLs.first else { return }
+        let sessionDirectory = URL(fileURLWithPath: firstFilePath).deletingLastPathComponent()
+        let manifestURL = sessionDirectory.appendingPathComponent("recording-session.json")
+        let payload: [String: Any] = [
+            "sessionId": session.id,
+            "roomId": session.roomId,
+            "roomName": session.roomName,
+            "mode": session.mode,
+            "format": session.format,
+            "startedAt": ISO8601DateFormatter().string(from: session.startTime),
+            "endedAt": session.endTime.map { ISO8601DateFormatter().string(from: $0) } as Any,
+            "duration": session.duration,
+            "participants": session.participants,
+            "masterFiles": session.masterFileURLs.map { URL(fileURLWithPath: $0).lastPathComponent },
+            "stemFiles": session.stemFileURLs.map { URL(fileURLWithPath: $0).lastPathComponent }
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: manifestURL, options: .atomic)
+        }
     }
 
     // MARK: - Settings Persistence
@@ -792,6 +971,8 @@ struct RecordingSettingsView: View {
 struct RecordingHistoryView: View {
     @ObservedObject var recordingManager = RecordingManager.shared
     @State private var selectedRecording: RecordingSession?
+    @State private var exportFormat: RecordingFormat = .wav
+    @State private var exportScope: RecordingExportScope = .everything
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -801,10 +982,34 @@ struct RecordingHistoryView: View {
 
                 Spacer()
 
+                if let selectedRecording {
+                    Menu("Export") {
+                        Picker("Export Type", selection: $exportScope) {
+                            ForEach(RecordingExportScope.allCases) { scope in
+                                Text(scope.displayName).tag(scope)
+                            }
+                        }
+
+                        Picker("Requested Format", selection: $exportFormat) {
+                            ForEach(RecordingFormat.allCases) { format in
+                                Text(format.displayName).tag(format)
+                            }
+                        }
+
+                        Divider()
+
+                        Button("Export Selected Recording") {
+                            exportSelectedRecording(selectedRecording)
+                        }
+                    }
+                    .accessibilityLabel("Export Selected Recording")
+                }
+
                 Button(action: openRecordingsFolder) {
                     Image(systemName: "folder")
                 }
                 .help("Open recordings folder")
+                .accessibilityLabel("Open Recordings Folder")
             }
 
             if recordingManager.recentRecordings.isEmpty {
@@ -823,6 +1028,15 @@ struct RecordingHistoryView: View {
                         .contextMenu {
                             Button("Show in Finder") {
                                 showInFinder(recording)
+                            }
+                            Button("Export Master Mix") {
+                                exportRecording(recording, scope: .masterMix)
+                            }
+                            Button("Export Per-User Stems") {
+                                exportRecording(recording, scope: .perUserStems)
+                            }
+                            Button("Export Master and Stems") {
+                                exportRecording(recording, scope: .everything)
                             }
                             Button("Delete", role: .destructive) {
                                 recordingManager.deleteRecording(recording)
@@ -843,6 +1057,31 @@ struct RecordingHistoryView: View {
             let url = URL(fileURLWithPath: firstFile)
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
+    }
+
+    private func exportSelectedRecording(_ recording: RecordingSession) {
+        exportRecording(recording, scope: exportScope)
+    }
+
+    private func exportRecording(_ recording: RecordingSession, scope: RecordingExportScope) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        panel.message = "Choose a folder for the exported recording files."
+
+        guard panel.runModal() == .OK, let destinationRoot = panel.url else { return }
+
+        let safeRoomName = recording.roomName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let exportFolderName = "\(safeRoomName.isEmpty ? "Recording" : safeRoomName)-\(recording.id.prefix(8))"
+        let exportFolder = destinationRoot.appendingPathComponent(exportFolderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
+        recordingManager.exportRecording(recording, to: exportFolder, format: exportFormat, scope: scope)
+        NSWorkspace.shared.activateFileViewerSelecting([exportFolder])
     }
 }
 

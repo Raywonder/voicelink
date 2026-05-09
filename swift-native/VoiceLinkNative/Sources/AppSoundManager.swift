@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AppKit
+import CoreAudio
 
 /// Centralized sound manager for VoiceLink app
 /// Uses actual sound files from Resources/sounds directory
@@ -17,13 +18,12 @@ class AppSoundManager: ObservableObject {
         "https://im.tappedin.fm/assets/sounds",
         "https://im.tappedin.fm/copyparty/sounds",
         "https://im.tappedin.fm/cp/sounds",
-        "https://voicelink.devinecreations.net/sounds",
-        "https://voicelink.devinecreations.net/assets/sounds",
-        "https://voicelink.devinecreations.net/downloads/sounds",
-        "https://voicelink.devinecreations.net/voicelink/sounds",
-        "https://dl.voicelink.devinecreations.net/sounds",
-        "https://dl.voicelink.devinecreations.net/copyparty/sounds",
-        "https://dl.voicelink.devinecreations.net/cp/sounds"
+        "https://voicelinkapp.app/sounds",
+        "https://voicelinkapp.app/assets/sounds",
+        "https://voicelinkapp.app/downloads/sounds",
+        "https://voicelink.dev/sounds",
+        "https://voicelink.dev/assets/sounds",
+        "https://voicelink.dev/downloads/sounds"
     ]
     
     private struct IndexedSound {
@@ -144,6 +144,7 @@ class AppSoundManager: ObservableObject {
     // Audio players cache
     private var audioPlayers: [SoundType: AVAudioPlayer] = [:]
     private var systemSounds: [SoundType: NSSound] = [:]
+    private var fallbackProcesses: [SoundType: Process] = [:]
     private var startupIntroPlayer: AVAudioPlayer?
     private var indexedSounds: [IndexedSound] = []
     private var soundsRootURL: URL?
@@ -154,9 +155,22 @@ class AppSoundManager: ObservableObject {
     private var pendingPlayAfterDownload: Set<SoundType> = []
     private var lastMissingAttemptAt: [SoundType: Date] = [:]
     private let missingRetryInterval: TimeInterval = 10
-    private let verboseLogs = false
+    private let verboseLogs = true
     private let ioQueue = DispatchQueue(label: "voicelink.sounds.download", qos: .utility)
+    private let stateQueue = DispatchQueue(label: "voicelink.sounds.state")
     private var didPublishDownloadNoticeThisLaunch = false
+
+    private var resourceBundle: Bundle {
+        if let nestedBundleURL = Bundle.main.resourceURL?.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle"),
+           let nestedBundle = Bundle(url: nestedBundleURL) {
+            return nestedBundle
+        }
+        #if SWIFT_PACKAGE
+        return Bundle.module
+        #else
+        return Bundle.main
+        #endif
+    }
 
     init() {
         loadSettings()
@@ -228,9 +242,9 @@ class AppSoundManager: ObservableObject {
         for (subdir, name, ext) in locations {
             var url: URL?
             if let sub = subdir {
-                url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: sub)
+                url = resourceBundle.url(forResource: name, withExtension: ext, subdirectory: sub)
             } else {
-                url = Bundle.main.url(forResource: name, withExtension: ext)
+                url = resourceBundle.url(forResource: name, withExtension: ext)
             }
 
             if let soundURL = url {
@@ -244,31 +258,37 @@ class AppSoundManager: ObservableObject {
     }
 
     private func cachePlayableSound(for soundType: SoundType, url: URL) -> Bool {
+        if let nsSound = NSSound(contentsOf: url, byReference: false) {
+            nsSound.volume = volume
+            systemSounds[soundType] = nsSound
+            audioPlayers.removeValue(forKey: soundType)
+            lastMissingAttemptAt[soundType] = nil
+            if verboseLogs {
+                print("AppSoundManager: cached \(soundType.rawValue) via NSSound from \(url.path)")
+            }
+            return true
+        }
         if let player = try? AVAudioPlayer(contentsOf: url) {
             player.prepareToPlay()
             player.volume = volume
             audioPlayers[soundType] = player
             systemSounds.removeValue(forKey: soundType)
             lastMissingAttemptAt[soundType] = nil
+            if verboseLogs {
+                print("AppSoundManager: cached \(soundType.rawValue) via AVAudioPlayer from \(url.path)")
+            }
             return true
         }
-        if let nsSound = NSSound(contentsOf: url, byReference: false) {
-            nsSound.volume = volume
-            systemSounds[soundType] = nsSound
-            audioPlayers.removeValue(forKey: soundType)
-            lastMissingAttemptAt[soundType] = nil
-            return true
+        if verboseLogs {
+            print("AppSoundManager: failed to cache \(soundType.rawValue) from \(url.path)")
         }
         return false
     }
     
     private func buildSoundLibraryIndex() {
-        guard let resourcesRoot = Bundle.main.resourceURL else { return }
-        let soundsRoot = resourcesRoot.appendingPathComponent("sounds", isDirectory: true)
         var index: [IndexedSound] = []
-        let roots = [soundsRoot, downloadedSoundsRoot()]
+        let roots = candidateSoundRoots(preferred: soundsRootURL)
         for root in roots {
-            guard let root else { continue }
             if let enumerator = FileManager.default.enumerator(
                 at: root,
                 includingPropertiesForKeys: [.isRegularFileKey],
@@ -295,7 +315,7 @@ class AppSoundManager: ObservableObject {
         }
 
         let assign = {
-            self.soundsRootURL = soundsRoot
+            self.soundsRootURL = roots.first(where: { $0.lastPathComponent.lowercased() == "sounds" }) ?? roots.first
             self.indexedSounds = index
         }
         if Thread.isMainThread {
@@ -310,6 +330,15 @@ class AppSoundManager: ObservableObject {
             buildSoundLibraryIndex()
         }
         guard !indexedSounds.isEmpty else { return nil }
+
+        if soundType == .userJoin {
+            let preferredJoinCue = indexedSounds.first { item in
+                item.baseNameLower == "son" && item.url.pathExtension.lowercased() == "m4a"
+            }
+            if let preferredJoinCue {
+                return preferredJoinCue.url
+            }
+        }
         
         let targetBase = soundType.rawValue.lowercased()
         let preferredExt = soundType.fileExtension.lowercased()
@@ -410,67 +439,193 @@ class AppSoundManager: ObservableObject {
     }
 
     private func resolveSoundTestURL() -> URL? {
-        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
+        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
 
-        let preferred = entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
-        }
-        if let preferred { return preferred }
+            let preferred = entries.first { url in
+                guard url.pathExtension.lowercased() == "wav" else { return false }
+                let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                return base == "sound-test" || base == "sound_test" || base == "your-sound-test"
+            }
+            if let preferred { return preferred }
 
-        return entries.first { url in
-            guard url.pathExtension.lowercased() == "wav" else { return false }
-            let base = url.deletingPathExtension().lastPathComponent.lowercased()
-            return base.contains("test")
+            if let fallback = entries.first(where: { url in
+                guard url.pathExtension.lowercased() == "wav" else { return false }
+                let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                return base.contains("test")
+            }) {
+                return fallback
+            }
         }
+        return nil
     }
 
     // MARK: - Play Sounds
 
-    func playSound(_ soundType: SoundType, force: Bool = false, allowSystemFallback: Bool = true) {
+    @discardableResult
+    func playSound(_ soundType: SoundType, force: Bool = false, allowSystemFallback: Bool = true) -> Bool {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
-                self?.playSound(soundType, force: force, allowSystemFallback: allowSystemFallback)
+                _ = self?.playSound(soundType, force: force, allowSystemFallback: allowSystemFallback)
             }
-            return
+            return false
         }
-        guard soundsEnabled || force else { return }
+        guard soundsEnabled || force else { return false }
+        if !hasUsableSystemOutputDevice() {
+            SettingsManager.shared.applySelectedAudioDevices(notifyChange: false)
+            guard hasUsableSystemOutputDevice() else {
+                NSLog("AppSoundManager: no usable system output device for %@", soundType.rawValue)
+                return false
+            }
+        }
+
+        if systemSounds[soundType] == nil && audioPlayers[soundType] == nil {
+            loadSound(soundType)
+        }
 
         if let player = audioPlayers[soundType] {
             player.volume = volume
             player.currentTime = 0
-            player.play()
-        } else if let sound = systemSounds[soundType] {
+            if player.play() {
+                if verboseLogs {
+                    print("AppSoundManager: played \(soundType.rawValue) via AVAudioPlayer cache")
+                }
+                return true
+            }
+            audioPlayers.removeValue(forKey: soundType)
+            if verboseLogs {
+                print("AppSoundManager: AVAudioPlayer cache failed for \(soundType.rawValue)")
+            }
+            NSLog("AppSoundManager: AVAudioPlayer cache failed for %@", soundType.rawValue)
+        }
+        if let sound = systemSounds[soundType] {
             sound.volume = volume
             sound.stop()
-            sound.play()
-        } else {
-            // Try to load on demand
-            loadSound(soundType)
+            if sound.play() {
+                if verboseLogs {
+                    print("AppSoundManager: played \(soundType.rawValue) via NSSound cache")
+                }
+                return true
+            }
+            systemSounds.removeValue(forKey: soundType)
+            if verboseLogs {
+                print("AppSoundManager: NSSound cache failed for \(soundType.rawValue)")
+            }
+            NSLog("AppSoundManager: NSSound cache failed for %@", soundType.rawValue)
+        }
+
+        loadSound(soundType)
+        if let player = audioPlayers[soundType] {
+            player.volume = volume
+            player.currentTime = 0
+                if player.play() {
+                    if verboseLogs {
+                        print("AppSoundManager: played \(soundType.rawValue) via AVAudioPlayer after load")
+                    }
+                    NSLog("AppSoundManager: played %@ via AVAudioPlayer after load", soundType.rawValue)
+                    return true
+                }
+            audioPlayers.removeValue(forKey: soundType)
+        }
+        if let sound = systemSounds[soundType] {
+            sound.volume = volume
+            sound.stop()
+                if sound.play() {
+                    if verboseLogs {
+                        print("AppSoundManager: played \(soundType.rawValue) via NSSound after load")
+                    }
+                    NSLog("AppSoundManager: played %@ via NSSound after load", soundType.rawValue)
+                    return true
+                }
+            systemSounds.removeValue(forKey: soundType)
+        }
+
+        if let directURL = resolveMappedSoundURL(for: soundType) ?? (soundType == .soundTest ? resolveSoundTestURL() : nil),
+           cachePlayableSound(for: soundType, url: directURL) {
             if let player = audioPlayers[soundType] {
                 player.volume = volume
                 player.currentTime = 0
-                player.play()
-            } else if let sound = systemSounds[soundType] {
+                if player.play() {
+                    if verboseLogs {
+                        print("AppSoundManager: played \(soundType.rawValue) via direct AVAudioPlayer load")
+                    }
+                    NSLog("AppSoundManager: played %@ via direct AVAudioPlayer load", soundType.rawValue)
+                    return true
+                }
+            }
+            if let sound = systemSounds[soundType] {
                 sound.volume = volume
                 sound.stop()
-                sound.play()
-            } else {
-                queueBackgroundDownload(for: soundType, playWhenReady: true)
-                if allowSystemFallback {
-                    // Optional fallback to system sound.
-                    playSystemSound(for: soundType)
+                if sound.play() {
+                    if verboseLogs {
+                        print("AppSoundManager: played \(soundType.rawValue) via direct NSSound load")
+                    }
+                    NSLog("AppSoundManager: played %@ via direct NSSound load", soundType.rawValue)
+                    return true
                 }
             }
         }
+
+        if let fallbackURL = resolveMappedSoundURL(for: soundType) ?? (soundType == .soundTest ? resolveSoundTestURL() : nil),
+           playViaAFPlay(soundType, url: fallbackURL) {
+            return true
+        }
+
+        queueBackgroundDownload(for: soundType, playWhenReady: true)
+        if verboseLogs {
+            print("AppSoundManager: queued background download for \(soundType.rawValue)")
+        }
+        if allowSystemFallback {
+            return false
+        }
+        return false
+    }
+
+    private func hasUsableSystemOutputDevice() -> Bool {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID
+        ) == noErr, deviceID != 0 else {
+            return false
+        }
+
+        var channelsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var listSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &channelsAddress, 0, nil, &listSize) == noErr,
+              listSize > 0 else {
+            return false
+        }
+
+        let rawBuffer = UnsafeMutableRawPointer.allocate(byteCount: Int(listSize), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { rawBuffer.deallocate() }
+        let bufferList = rawBuffer.bindMemory(to: AudioBufferList.self, capacity: 1)
+        guard AudioObjectGetPropertyData(deviceID, &channelsAddress, 0, nil, &listSize, bufferList) == noErr else {
+            return false
+        }
+
+        let list = UnsafeMutableAudioBufferListPointer(bufferList)
+        return list.reduce(0) { $0 + Int($1.mNumberChannels) } > 0
     }
 
     func stopSound(_ soundType: SoundType) {
@@ -496,13 +651,24 @@ class AppSoundManager: ObservableObject {
         return audioPlayers[soundType]?.duration ?? 0.6
     }
 
-    private func playSystemSound(for soundType: SoundType) {
+    @discardableResult
+    private func playSystemSound(for soundType: SoundType) -> Bool {
+        guard ProcessInfo.processInfo.environment["VOICELINK_ENABLE_SYSTEM_SOUND_FALLBACK"] == "1" else {
+            return false
+        }
         // Fallback to NSSound system sounds
         let systemSoundName: String? = {
             switch soundType {
+            case .connected: return "Glass"
+            case .reconnected: return "Glass"
             case .success: return "Glass"
             case .error: return "Basso"
             case .notification: return "Ping"
+            case .buttonClick: return "Pop"
+            case .userJoin: return "Pop"
+            case .userLeave: return "Submarine"
+            case .messageIncoming, .messageReceived, .messageSent: return "Ping"
+            case .soundTest: return "Ping"
             case .disconnected: return "Blow"
             default: return nil
             }
@@ -510,7 +676,37 @@ class AppSoundManager: ObservableObject {
 
         if let name = systemSoundName, let sound = NSSound(named: NSSound.Name(name)) {
             sound.volume = volume
-            sound.play()
+            if sound.play() {
+                return true
+            }
+        }
+        NSSound.beep()
+        return true
+    }
+
+    @discardableResult
+    private func playViaAFPlay(_ soundType: SoundType, url: URL) -> Bool {
+        fallbackProcesses[soundType]?.terminate()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+        process.arguments = [url.path]
+        do {
+            try process.run()
+            fallbackProcesses[soundType] = process
+            if verboseLogs {
+                NSLog("AppSoundManager: played %@ via afplay from %@", soundType.rawValue, url.path)
+            }
+            process.terminationHandler = { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.fallbackProcesses.removeValue(forKey: soundType)
+                }
+            }
+            return true
+        } catch {
+            if verboseLogs {
+                NSLog("AppSoundManager: afplay failed for %@ from %@ (%@)", soundType.rawValue, url.path, String(describing: error))
+            }
+            return false
         }
     }
 
@@ -650,6 +846,7 @@ class AppSoundManager: ObservableObject {
         }
         guard let introURL = pickRandomStartupIntroURL() else {
             print("AppSoundManager: No startup intro candidate found")
+            queueBackgroundStartupIntroDownloadIfNeeded()
             return false
         }
         do {
@@ -663,6 +860,13 @@ class AppSoundManager: ObservableObject {
             print("AppSoundManager: Playing startup intro \(introURL.lastPathComponent)")
             return true
         } catch {
+            if let introSound = NSSound(contentsOf: introURL, byReference: false) {
+                introSound.volume = volume
+                introSound.play()
+                startupIntroPlayed = true
+                print("AppSoundManager: Playing startup intro \(introURL.lastPathComponent) via NSSound")
+                return true
+            }
             print("AppSoundManager: Failed to play startup intro: \(error.localizedDescription)")
             return false
         }
@@ -672,58 +876,223 @@ class AppSoundManager: ObservableObject {
         guard startupIntroEnabled, !startupIntroPlayed else { return }
         if playRandomStartupIntro() { return }
 
-        // Avoid default macOS fallback tones on launch; if the sound is missing,
-        // fetch in background and notify users non-blockingly.
-        if hasPlayableVariant(for: .connected) {
-            playSound(.connected, force: true, allowSystemFallback: false)
+        queueBackgroundStartupIntroDownloadIfNeeded()
+        let played = playSound(.connected, force: true, allowSystemFallback: false)
+        if played {
             startupIntroPlayed = true
         } else {
             queueBackgroundDownload(for: .connected, playWhenReady: true, announce: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.playStartupWelcomeIfNeeded()
+            }
         }
     }
 
     private func pickRandomStartupIntroURL() -> URL? {
-        guard let soundsRoot = soundsRootURL ?? Bundle.main.resourceURL?.appendingPathComponent("sounds", isDirectory: true) else { return nil }
-        let exts: Set<String> = ["wav", "mp3", "flac", "m4a", "aiff", "aif", "aifc", "caf", "pcm"]
-        var rootLevelCandidates: [URL] = []
-        var explicit: [URL] = []
+        let preferredStartupNames: Set<String> = ["voicelink1", "voicelink2", "voicelink3", "voicelink4"]
+        let explicitIntroExtensions: Set<String> = ["wav", "aiff", "aif", "aifc", "caf", "m4a", "mp3"]
+        let fallbackExtensions: Set<String> = ["wav", "aiff", "aif", "aifc", "caf", "mp3", "flac", "m4a"]
+        let excludedFallbackNames: Set<String> = [
+            "son",
+            "user-join",
+            "user-leave",
+            "error",
+            "notification",
+            "message-incoming-ding",
+            "message-receve",
+            "whisper-start",
+            "whisper-stop",
+            "ptt-beep-high",
+            "ptt-beep-low"
+        ]
 
-        if let entries = try? FileManager.default.contentsOfDirectory(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for url in entries {
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard exts.contains(ext) else { continue }
-                rootLevelCandidates.append(url)
+        for soundsRoot in candidateSoundRoots(preferred: soundsRootURL) {
+            var fallbackCandidates: [URL] = []
+            var explicit: [URL] = []
+            var preferredStartupCandidates: [URL] = []
+
+            if let entries = try? FileManager.default.contentsOfDirectory(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for url in entries {
+                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true else { continue }
+                    let ext = url.pathExtension.lowercased()
+                    guard fallbackExtensions.contains(ext) else { continue }
+                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                    guard !excludedFallbackNames.contains(base) else { continue }
+                    fallbackCandidates.append(url)
+                    if preferredStartupNames.contains(base), ext == "wav" {
+                        preferredStartupCandidates.append(url)
+                    }
+                }
+            }
+
+            if let enumerator = FileManager.default.enumerator(
+                at: soundsRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let url as URL in enumerator {
+                    guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true else { continue }
+                    let ext = url.pathExtension.lowercased()
+                    guard explicitIntroExtensions.contains(ext) else { continue }
+                    let base = url.deletingPathExtension().lastPathComponent.lowercased()
+                    if preferredStartupNames.contains(base), ext == "wav" {
+                        preferredStartupCandidates.append(url)
+                    }
+                    if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
+                        explicit.append(url)
+                    }
+                }
+            }
+
+            if let preferredStartup = preferredStartupCandidates.randomElement() {
+                return preferredStartup
+            }
+            if let preferredIntro = explicit.randomElement() {
+                return preferredIntro
+            }
+            if let fallback = fallbackCandidates.randomElement() {
+                return fallback
             }
         }
 
-        if let randomRoot = rootLevelCandidates.randomElement() {
-            return randomRoot
+        return nil
+    }
+
+    private func startupIntroNameCandidates() -> [String] {
+        ["voicelink1", "voicelink2", "voicelink3", "voicelink4", "intro-connected", "connected"]
+    }
+
+    private func queueBackgroundStartupIntroDownloadIfNeeded() {
+        let key = "startup-intros"
+        guard beginDownloadIfNeeded(for: key) else { return }
+        ioQueue.async { [weak self] in
+            self?.downloadMissingStartupIntros()
+        }
+    }
+
+    private func downloadMissingStartupIntros() {
+        let key = "startup-intros"
+        let baseURLs = remoteSoundBaseURLs()
+        guard !baseURLs.isEmpty, let localRoot = downloadedSoundsRoot() else {
+            finishDownload(for: key, success: false)
+            return
         }
 
-        if let enumerator = FileManager.default.enumerator(
-            at: soundsRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for case let url as URL in enumerator {
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                      values.isRegularFile == true else { continue }
-                let ext = url.pathExtension.lowercased()
-                guard exts.contains(ext) else { continue }
-                let base = url.deletingPathExtension().lastPathComponent.lowercased()
-                if base.contains("intro") || base.contains("welcome") || base.contains("startup") {
-                    explicit.append(url)
+        let dirCandidates = [
+            "",
+            "sounds",
+            "ui-sounds",
+            "sounds/ui-sounds",
+            "assets/sounds",
+            "assets/sounds/ui-sounds",
+            "voiceover",
+            "welcome",
+            "startup",
+            "intro",
+            "intros",
+            "voice",
+            "default"
+        ]
+        let extCandidates = ["wav", "aiff", "aif", "aifc", "caf", "m4a", "mp3"]
+        let fm = FileManager.default
+        var downloadedAny = false
+
+        for baseURL in baseURLs {
+            for dir in dirCandidates {
+                for name in startupIntroNameCandidates() {
+                    for ext in extCandidates {
+                        var relative = ""
+                        if !dir.isEmpty { relative += "\(dir)/" }
+                        relative += "\(name).\(ext)"
+                        guard let remoteURL = URL(string: relative, relativeTo: baseURL) else { continue }
+                        var req = URLRequest(url: remoteURL)
+                        req.timeoutInterval = 8
+                        req.setValue("VoiceLinkNative/1.0", forHTTPHeaderField: "User-Agent")
+                        do {
+                            let (data, response) = try URLSession.shared.syncData(for: req)
+                            guard let http = response as? HTTPURLResponse,
+                                  (200..<300).contains(http.statusCode),
+                                  !data.isEmpty else {
+                                continue
+                            }
+                            let targetDir = localRoot.appendingPathComponent(dir, isDirectory: true)
+                            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+                            let targetFile = targetDir.appendingPathComponent("\(name).\(ext)")
+                            try data.write(to: targetFile, options: .atomic)
+                            downloadedAny = true
+                        } catch {
+                            continue
+                        }
+                    }
                 }
             }
         }
 
-        return explicit.randomElement()
+        finishDownload(for: key, success: downloadedAny)
+        guard downloadedAny else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.buildSoundLibraryIndex()
+        }
+    }
+
+    private func candidateResourceBundles() -> [Bundle] {
+        var bundles: [Bundle] = [Bundle.main, resourceBundle]
+        if let mainURL = Bundle.main.builtInPlugInsURL,
+           let enumerator = FileManager.default.enumerator(at: mainURL, includingPropertiesForKeys: nil) {
+            for case let url as URL in enumerator where url.pathExtension == "bundle" {
+                if let bundle = Bundle(url: url) {
+                    bundles.append(bundle)
+                }
+            }
+        }
+
+        var seen = Set<String>()
+        return bundles.filter { bundle in
+            let key = bundle.bundleURL.path
+            return seen.insert(key).inserted
+        }
+    }
+
+    private func candidateSoundRoots(preferred: URL? = nil) -> [URL] {
+        var roots: [URL] = []
+        if let preferred {
+            roots.append(preferred)
+        }
+        for bundle in candidateResourceBundles() {
+            if let resourceURL = bundle.resourceURL {
+                roots.append(resourceURL.appendingPathComponent("sounds", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("sounds/ui-sounds", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources", isDirectory: true))
+                roots.append(resourceURL.appendingPathComponent("VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources/sounds", isDirectory: true))
+                roots.append(resourceURL)
+            }
+        }
+
+        let explicitRoots = [
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/VoiceLinkNative_VoiceLinkNative.bundle/Contents/Resources/sounds", isDirectory: true)
+        ]
+        roots.append(contentsOf: explicitRoots)
+
+        if let downloadedRoot = downloadedSoundsRoot() {
+            roots.append(downloadedRoot)
+            roots.append(downloadedRoot.appendingPathComponent("sounds", isDirectory: true))
+        }
+
+        var seen = Set<String>()
+        return roots.filter { url in
+            guard FileManager.default.fileExists(atPath: url.path) else { return false }
+            return seen.insert(url.path).inserted
+        }
     }
 
     // MARK: - Background Sound Download
@@ -850,6 +1219,9 @@ class AppSoundManager: ObservableObject {
         names.insert(raw.replacingOccurrences(of: " ", with: "-"))
         names.insert(raw.replacingOccurrences(of: " ", with: "_"))
         names.formUnion(smartKeywords(for: soundType))
+        if soundType == .userJoin {
+            names.insert("son")
+        }
         return Array(names).filter { !$0.isEmpty }
     }
 
@@ -860,19 +1232,61 @@ class AppSoundManager: ObservableObject {
         return dedup
     }
 
+    private func markPendingPlayAfterDownload(_ soundType: SoundType) {
+        _ = stateQueue.sync {
+            pendingPlayAfterDownload.insert(soundType)
+        }
+    }
+
+    private func consumePendingPlayAfterDownload(_ soundType: SoundType) -> Bool {
+        stateQueue.sync {
+            let shouldPlay = pendingPlayAfterDownload.contains(soundType)
+            if shouldPlay {
+                pendingPlayAfterDownload.remove(soundType)
+            }
+            return shouldPlay
+        }
+    }
+
+    private func beginDownloadIfNeeded(for key: String) -> Bool {
+        stateQueue.sync {
+            if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
+                return false
+            }
+            inFlightDownloads.insert(key)
+            return true
+        }
+    }
+
+    private func finishDownload(for key: String, success: Bool) {
+        stateQueue.sync {
+            inFlightDownloads.remove(key)
+            if success {
+                downloadFailures.remove(key)
+            } else {
+                downloadFailures.insert(key)
+            }
+        }
+    }
+
+    private func hasInFlightDownloads() -> Bool {
+        stateQueue.sync {
+            !inFlightDownloads.isEmpty
+        }
+    }
+
     private func queueBackgroundDownload(for soundType: SoundType, playWhenReady: Bool, announce: Bool = true) {
         guard soundType != .soundTest else { return }
         let key = soundType.rawValue.lowercased()
         if playWhenReady {
-            pendingPlayAfterDownload.insert(soundType)
+            markPendingPlayAfterDownload(soundType)
         }
-        if inFlightDownloads.contains(key) || downloadFailures.contains(key) {
+        guard beginDownloadIfNeeded(for: key) else {
             return
         }
         if announce && criticalSoundTypesForReminder().contains(soundType) {
             publishBackgroundDownloadNotice(isReminder: false)
         }
-        inFlightDownloads.insert(key)
         ioQueue.async { [weak self] in
             self?.downloadMissingSound(soundType)
         }
@@ -880,9 +1294,11 @@ class AppSoundManager: ObservableObject {
 
     private func downloadMissingSound(_ soundType: SoundType) {
         let key = soundType.rawValue.lowercased()
-        defer { inFlightDownloads.remove(key) }
         let baseURLs = remoteSoundBaseURLs()
-        guard !baseURLs.isEmpty, let localRoot = downloadedSoundsRoot() else { return }
+        guard !baseURLs.isEmpty, let localRoot = downloadedSoundsRoot() else {
+            finishDownload(for: key, success: false)
+            return
+        }
 
         let dirCandidates = [
             "",
@@ -928,6 +1344,7 @@ class AppSoundManager: ObservableObject {
                             try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
                             let targetFile = targetDir.appendingPathComponent("\(name).\(ext)")
                             try data.write(to: targetFile, options: .atomic)
+                            finishDownload(for: key, success: true)
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
                                 // Avoid expensive full directory re-index on the main thread for each downloaded file.
@@ -937,8 +1354,7 @@ class AppSoundManager: ObservableObject {
                                     self.loadSound(soundType)
                                 }
                                 self.refreshDownloadReminderState()
-                                if self.pendingPlayAfterDownload.contains(soundType) {
-                                    self.pendingPlayAfterDownload.remove(soundType)
+                                if self.consumePendingPlayAfterDownload(soundType) {
                                     self.playSound(soundType, allowSystemFallback: false)
                                 }
                             }
@@ -950,7 +1366,7 @@ class AppSoundManager: ObservableObject {
                 }
             }
         }
-        downloadFailures.insert(key)
+        finishDownload(for: key, success: false)
         DispatchQueue.main.async { [weak self] in
             self?.refreshDownloadReminderState()
         }
@@ -969,7 +1385,7 @@ class AppSoundManager: ObservableObject {
 
     private func refreshDownloadReminderState() {
         let missingCritical = criticalSoundTypesForReminder().contains { !hasPlayableVariant(for: $0) }
-        let shouldShow = missingCritical && !inFlightDownloads.isEmpty
+        let shouldShow = missingCritical && hasInFlightDownloads()
         DispatchQueue.main.async {
             if !shouldShow {
                 self.activeSoundDownloadNotice = nil

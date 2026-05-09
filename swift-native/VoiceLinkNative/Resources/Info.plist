@@ -6,10 +6,12 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>VoiceLink</string>
+	<key>CFBundleDisplayName</key>
+	<string>VoiceLink</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>net.devinecreations.voicelink</string>
+	<string>com.devinecreations.voicelink</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -32,11 +34,19 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>33</string>
+	<string>48</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://voicelinkapp.app/downloads/voicelink/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>1i1XfpOWGVnGczAWcXLl5BP6WT7Qqzu573pjAl+nPbA=</string>
+	<key>NSCameraUsageDescription</key>
+	<string>VoiceLink needs camera access for video and profile features when enabled.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
@@ -61,6 +71,23 @@
 		<true/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 </dict>
 </plist>

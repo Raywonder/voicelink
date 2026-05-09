@@ -9,7 +9,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     static let shared = AuthenticationManager()
     static let preferredMastodonInstance = "mastodon.devinecreations.net"
     static let mastodonFallbacks: [String: String] = [
-        "md.tappedin.fm": "mastodon.devinecreations.net"
+        "md.tappedin.fm": "mastodon.devinecreations.net",
+        "layer8": "layer8.space",
+        "layer8.space": "layer8.space",
+        "layor8": "layer8.space"
     ]
     private let authDefaultsKey = "voicelink.authUser"
 
@@ -17,6 +20,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     @Published var authState: AuthState = .unauthenticated
     @Published var authError: String?
     @Published var passkeyRecommendationPending = false
+    @Published var availableTwoFactorMethods: [TwoFactorMethod] = []
+    @Published var selectedTwoFactorMethod: String?
+    @Published var twoFactorDeliveryHint: String?
+    @Published var twoFactorDeliveryStatus: String?
 
     // Mastodon OAuth state
     @Published var mastodonInstance: String = ""
@@ -50,6 +57,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         setupOAuthCallbackListener()
     }
 
+    private func isLegacyEmailSession(_ user: AuthenticatedUser) -> Bool {
+        user.authMethod == .email && user.accessToken.hasPrefix("vlemail_")
+    }
+
     private func applyAuthenticatedUser(_ user: AuthenticatedUser, notifyMastodon: Bool = false) {
         currentUser = user
         authState = .authenticated
@@ -64,6 +75,27 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         if notifyMastodon {
             NotificationCenter.default.post(name: .mastodonAccountLoaded, object: user)
         }
+    }
+
+    func updateCurrentUserContactCard(_ contactCard: AuthenticatedUser.ContactCard) {
+        guard var user = currentUser else { return }
+        user.contactCard = contactCard
+        applyAuthenticatedUser(user)
+    }
+
+    func updateCurrentUserRole(_ role: String) {
+        guard var user = currentUser else { return }
+        let normalized = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty, user.role?.lowercased() != normalized else { return }
+        user.role = normalized
+        applyAuthenticatedUser(user)
+    }
+
+    func updateCurrentUserAccessToken(_ accessToken: String) {
+        let normalized = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, var user = currentUser, user.accessToken != normalized else { return }
+        user.accessToken = normalized
+        applyAuthenticatedUser(user)
     }
 
     private func setupOAuthCallbackListener() {
@@ -116,6 +148,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         normalized = normalized.replacingOccurrences(of: "https://", with: "")
         normalized = normalized.replacingOccurrences(of: "http://", with: "")
         normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        normalized = mastodonFallbacks[normalized] ?? normalized
         return normalized.isEmpty ? preferredMastodonInstance : normalized
     }
 
@@ -133,7 +166,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             "client_name": "VoiceLink",
             "redirect_uris": "voicelink://oauth/callback",
             "scopes": "read write",
-            "website": "https://voicelink.devinecreations.net"
+            "website": "https://voicelinkapp.app"
         ]
 
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -441,18 +474,25 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     return
                 }
 
-                let user = AuthenticatedUser(
-                    id: json["userId"] as? String ?? UUID().uuidString,
-                    username: email,
-                    displayName: email.components(separatedBy: "@").first ?? email,
-                    email: email,
-                    authMethod: .email,
-                    mastodonInstance: nil,
-                    accessToken: accessToken,
-                    avatarURL: nil
-                )
-
-                self?.applyAuthenticatedUser(user)
+                if let parsedUser = self?.parseAuthenticatedUser(
+                    from: json["user"] as? [String: Any],
+                    accessTokenFallback: accessToken,
+                    authMethod: .email
+                ) {
+                    self?.applyAuthenticatedUser(parsedUser)
+                } else {
+                    let user = AuthenticatedUser(
+                        id: json["userId"] as? String ?? UUID().uuidString,
+                        username: email,
+                        displayName: email.components(separatedBy: "@").first ?? email,
+                        email: email,
+                        authMethod: .email,
+                        mastodonInstance: nil,
+                        accessToken: accessToken,
+                        avatarURL: nil
+                    )
+                    self?.applyAuthenticatedUser(user)
+                }
                 self?.pendingEmailVerification = nil
                 self?.emailVerificationExpiry = nil
                 completion(true, nil)
@@ -632,15 +672,30 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
     ) {
         authState = .authenticating
         authError = nil
-        let providersToTry: [AccountAuthProvider] = [provider]
+        availableTwoFactorMethods = []
+        selectedTwoFactorMethod = nil
+        twoFactorDeliveryHint = nil
+        twoFactorDeliveryStatus = nil
+        let providersToTry: [AccountAuthProvider]
+        switch provider {
+        case .local:
+            providersToTry = [.local, .whmcs]
+        case .whmcs:
+            providersToTry = [.whmcs, .local]
+        }
         let isSmartAccountSignIn = provider == .local
 
         func isRetryablePortalFallbackMessage(_ message: String) -> Bool {
             let lowered = message.lowercased()
             return lowered.contains("invalid credentials")
+                || lowered.contains("invalid email or password")
+                || lowered.contains("invalid email or username or password")
                 || lowered.contains("account not found")
                 || lowered.contains("user not found")
                 || lowered.contains("unknown user")
+                || lowered.contains("identity and password")
+                || lowered.contains("email and password")
+                || lowered.contains("email or username and password")
         }
 
         func normalizeAccountSignInError(_ message: String, provider: AccountAuthProvider) -> String {
@@ -652,7 +707,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     || lowered.contains("bad gateway")
                     || lowered.contains("internal server error")
                     || lowered.contains("service unavailable") {
-                    return "Client Portal sign-in is temporarily unavailable. Use your VoiceLink account, Email Code, or Mastodon for now."
+                    return "Client Account sign-in is temporarily unavailable. Use Email Code or Mastodon for now."
                 }
             }
             if provider == .local && isSmartAccountSignIn {
@@ -660,7 +715,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     || lowered.contains("cpanel")
                     || lowered.contains("client portal")
                     || lowered.contains("api credentials not configured") {
-                    return "Sign In is temporarily unavailable for that account right now. Use your VoiceLink account, Email Code, or Mastodon for now."
+                    return "Sign In is temporarily unavailable for that Client Account right now. Use Email Code or Mastodon for now."
                 }
             }
             return message
@@ -718,6 +773,9 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
                     if let requires2FA = json["requires2FA"] as? Bool, requires2FA {
                         self.authState = .unauthenticated
+                        self.availableTwoFactorMethods = Self.parseTwoFactorMethods(json["availableMethods"])
+                        self.selectedTwoFactorMethod = self.availableTwoFactorMethods.first(where: \.supportsDelivery)?.type ?? self.availableTwoFactorMethods.first?.type
+                        self.twoFactorDeliveryHint = json["hint"] as? String
                         let message = json["error"] as? String ?? json["message"] as? String ?? "Two-factor authentication code required"
                         completion(false, message, true)
                         return
@@ -753,6 +811,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                     }
 
                     self.applyAuthenticatedUser(user)
+                    self.availableTwoFactorMethods = []
+                    self.selectedTwoFactorMethod = nil
+                    self.twoFactorDeliveryHint = nil
+                    self.twoFactorDeliveryStatus = nil
                     completion(true, nil, false)
                 }
             }.resume()
@@ -761,12 +823,75 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         attempt(ArraySlice(providersToTry))
     }
 
+    func requestTwoFactorChallenge(
+        identity: String,
+        password: String,
+        serverURL: String,
+        method: String,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        guard let url = URL(string: "\(serverURL)/api/auth/local/2fa/challenge") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "identity": identity,
+            "password": password,
+            "method": method
+        ])
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self else {
+                    completion(false, "Authentication unavailable")
+                    return
+                }
+                if let error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    completion(false, "Unable to send verification code")
+                    return
+                }
+
+                self.availableTwoFactorMethods = Self.parseTwoFactorMethods(json["availableMethods"])
+                self.twoFactorDeliveryHint = json["hint"] as? String
+
+                if let success = json["success"] as? Bool, success {
+                    let methodName = self.availableTwoFactorMethods.first(where: { $0.type == method })?.name ?? method.capitalized
+                    let hint = (json["hint"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let hint, !hint.isEmpty {
+                        self.twoFactorDeliveryStatus = "\(methodName) code sent to \(hint)."
+                    } else {
+                        self.twoFactorDeliveryStatus = "\(methodName) challenge sent."
+                    }
+                    completion(true, nil)
+                    return
+                }
+
+                let message = json["error"] as? String ?? json["message"] as? String ?? "Unable to send verification code"
+                self.twoFactorDeliveryStatus = message
+                completion(false, message)
+            }
+        }.resume()
+    }
+
     // MARK: - Session Management
 
     func logout() {
         passkeyRecommendationWorkItem?.cancel()
         passkeyRecommendationWorkItem = nil
         passkeyRecommendationPending = false
+        availableTwoFactorMethods = []
+        selectedTwoFactorMethod = nil
+        twoFactorDeliveryHint = nil
+        twoFactorDeliveryStatus = nil
         currentUser = nil
         authState = .unauthenticated
         clearStoredAuth()
@@ -823,6 +948,23 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delaySeconds), execute: workItem)
     }
 
+    static func parseTwoFactorMethods(_ raw: Any?) -> [TwoFactorMethod] {
+        guard let array = raw as? [[String: Any]] else { return [] }
+        return array.compactMap { json in
+            guard let type = json["type"] as? String,
+                  let name = json["name"] as? String else {
+                return nil
+            }
+            return TwoFactorMethod(
+                type: type,
+                name: name,
+                hint: json["hint"] as? String,
+                count: json["count"] as? Int,
+                remaining: json["remaining"] as? Int
+            )
+        }
+    }
+
     // MARK: - Persistence (UserDefaults first, Keychain best-effort/no-UI)
 
     private func saveAuth(user: AuthenticatedUser) {
@@ -854,7 +996,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
               let user = decodeStoredUser(data) else {
             return false
         }
+        if isLegacyEmailSession(user) {
+            clearStoredAuth()
+            authState = .unauthenticated
+            currentUser = nil
+            return false
+        }
         applyAuthenticatedUser(user)
+        validateStoredSessionIfNeeded(for: user)
         return true
     }
 
@@ -876,9 +1025,101 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
            let data = result as? Data,
            let user = decodeStoredUser(data) {
+            if isLegacyEmailSession(user) {
+                clearStoredAuth()
+                authState = .unauthenticated
+                currentUser = nil
+                return
+            }
             applyAuthenticatedUser(user)
             UserDefaults().set(data, forKey: authDefaultsKey)
+            validateStoredSessionIfNeeded(for: user)
         }
+    }
+
+    private func validateStoredSessionIfNeeded(for user: AuthenticatedUser) {
+        guard user.authMethod == .whmcs || (user.authProvider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains("whmcs") else {
+            return
+        }
+
+        let token = user.accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            logout()
+            return
+        }
+
+        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL)
+        validateWhmcsSession(token: token, candidates: candidates) { [weak self] isValid, reachedAuthority in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let current = self.currentUser, current.id == user.id else { return }
+                guard current.accessToken == token else { return }
+
+                if isValid {
+                    return
+                }
+
+                // Keep the cached session across relaunches unless the user explicitly signs out.
+                // Background validation is advisory because linked clusters and fallback endpoints
+                // can return a transient 401 for a valid user on a different authority.
+                if reachedAuthority {
+                    self.authError = "Your client portal session may need to be refreshed. If account actions fail, sign in again."
+                }
+            }
+        }
+    }
+
+    private func validateWhmcsSession(
+        token: String,
+        candidates: [String],
+        completion: @escaping (_ isValid: Bool, _ reachedAuthority: Bool) -> Void
+    ) {
+        let queue = candidates
+        guard !queue.isEmpty else {
+            completion(false, false)
+            return
+        }
+
+        func attempt(_ remaining: ArraySlice<String>, reachedAuthority: Bool) {
+            guard let base = remaining.first,
+                  let url = APIEndpointResolver.url(base: base, path: "/api/auth/whmcs/session/\(token)") else {
+                completion(false, reachedAuthority)
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 8
+
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                if error != nil {
+                    attempt(remaining.dropFirst(), reachedAuthority: reachedAuthority)
+                    return
+                }
+
+                guard let http = response as? HTTPURLResponse else {
+                    attempt(remaining.dropFirst(), reachedAuthority: reachedAuthority)
+                    return
+                }
+
+                if http.statusCode == 200,
+                   let data,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   (json["valid"] as? Bool) == true {
+                    completion(true, true)
+                    return
+                }
+
+                if http.statusCode == 401 {
+                    completion(false, true)
+                    return
+                }
+
+                attempt(remaining.dropFirst(), reachedAuthority: true)
+            }.resume()
+        }
+
+        attempt(ArraySlice(queue), reachedAuthority: false)
     }
 
     private func clearStoredAuth() {
@@ -893,7 +1134,7 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         SecItemDelete(query as CFDictionary)
     }
 
-    private func getClientId() -> String {
+    func getClientId() -> String {
         if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
         }
@@ -926,10 +1167,14 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             username: username,
             displayName: displayName,
             email: json["email"] as? String,
+            canonicalEmail: json["canonicalEmail"] as? String,
             authMethod: authMethod,
             mastodonInstance: json["mastodonInstance"] as? String,
             accessToken: accessToken,
-            avatarURL: json["avatarURL"] as? String ?? json["avatar"] as? String
+            avatarURL: json["avatarURL"] as? String ?? json["avatar"] as? String,
+            accountId: json["accountId"] as? String,
+            canonicalAccountId: json["canonicalAccountId"] as? String,
+            linkedLocalUserId: json["linkedLocalUserId"] as? String
         )
         if let directGender = json["gender"] as? String, !directGender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             user.gender = directGender
@@ -957,7 +1202,111 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
                 recommendedAfterMinutes: passkey["recommendedAfterMinutes"] as? Int ?? 10
             )
         }
+        user.presence = (json["presence"] as? String ?? json["status"] as? String ?? "online")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        user.lastLoginAt = Self.parseDateField(json["lastLoginAt"])
+        user.lastSeenAt = Self.parseDateField(json["lastSeenAt"] ?? json["lastSeen"])
+        user.lastActiveAt = Self.parseDateField(json["lastActiveAt"])
+        if let contactCard = json["contactCard"] as? [String: Any] {
+            user.contactCard = AuthenticatedUser.ContactCard.from(json: contactCard)
+        }
         return user
+    }
+
+    static func parseDateField(_ rawValue: Any?) -> Date? {
+        guard let string = rawValue as? String else { return nil }
+        return ISO8601DateFormatter().date(from: string)
+    }
+
+    func syncCurrentUserContactCard(
+        _ contactCard: AuthenticatedUser.ContactCard,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        guard let currentUser = currentUser else {
+            completion(false, "You must be signed in to sync your contact card.")
+            return
+        }
+
+        let syncBase = APIEndpointResolver.remoteMainBaseCandidates(preferred: ServerManager.shared.baseURL).first
+            ?? APIEndpointResolver.canonicalMainBase
+        guard let url = URL(string: "\(syncBase)/api/auth/local/contact-card") else {
+            completion(false, "Unable to resolve the contact sync server.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(currentUser.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(currentUser.id, forHTTPHeaderField: "X-User-Id")
+        request.setValue(currentUser.username, forHTTPHeaderField: "X-User-Name")
+        request.setValue(currentUser.role, forHTTPHeaderField: "X-User-Role")
+        request.setValue(currentUser.authProvider ?? currentUser.authMethod.rawValue, forHTTPHeaderField: "X-Auth-Provider")
+        request.setValue(currentUser.authMethod.rawValue, forHTTPHeaderField: "X-Auth-Method")
+
+        func jsonString(_ value: String?) -> Any {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? NSNull() : trimmed
+        }
+
+        let body: [String: Any] = [
+            "contactCard": [
+                "fullName": jsonString(contactCard.fullName),
+                "firstName": jsonString(contactCard.firstName),
+                "lastName": jsonString(contactCard.lastName),
+                "nickname": jsonString(contactCard.nickname),
+                "company": jsonString(contactCard.company),
+                "email": jsonString(contactCard.email),
+                "phone": jsonString(contactCard.phone),
+                "address": jsonString(contactCard.address),
+                "city": jsonString(contactCard.city),
+                "state": jsonString(contactCard.state),
+                "postalCode": jsonString(contactCard.postalCode),
+                "country": jsonString(contactCard.country),
+                "website": jsonString(contactCard.website),
+                "notes": jsonString(contactCard.notes),
+                "organisationRole": jsonString(contactCard.organisationRole),
+                "source": jsonString(contactCard.source),
+                "importFormats": contactCard.importFormats,
+                "autoSyncedAt": ISO8601DateFormatter().string(from: contactCard.autoSyncedAt ?? Date())
+            ],
+            "contactImportFormats": contactCard.importFormats
+        ]
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            completion(false, "Unable to prepare contact card sync data.")
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool, success else {
+                    let response = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    completion(false, response?["error"] as? String ?? "Failed to sync contact card")
+                    return
+                }
+
+                if let userJson = json["user"] as? [String: Any],
+                   let parsed = self?.parseAuthenticatedUser(
+                    from: userJson,
+                    accessTokenFallback: currentUser.accessToken,
+                    authMethod: currentUser.authMethod
+                   ) {
+                    self?.applyAuthenticatedUser(parsed)
+                } else {
+                    self?.updateCurrentUserContactCard(contactCard)
+                }
+                completion(true, nil)
+            }
+        }.resume()
     }
 
     func openMastodonInstanceInBrowser(instance: String) {
@@ -971,6 +1320,50 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 // MARK: - Models
 
 struct AuthenticatedUser: Codable, Identifiable {
+    struct ContactCard: Codable {
+        var fullName: String?
+        var firstName: String?
+        var lastName: String?
+        var nickname: String?
+        var company: String?
+        var email: String?
+        var phone: String?
+        var address: String?
+        var city: String?
+        var state: String?
+        var postalCode: String?
+        var country: String?
+        var website: String?
+        var notes: String?
+        var organisationRole: String?
+        var source: String?
+        var importFormats: [String] = []
+        var autoSyncedAt: Date?
+
+        static func from(json: [String: Any]) -> ContactCard {
+            ContactCard(
+                fullName: json["fullName"] as? String,
+                firstName: json["firstName"] as? String,
+                lastName: json["lastName"] as? String,
+                nickname: json["nickname"] as? String,
+                company: json["company"] as? String,
+                email: json["email"] as? String,
+                phone: json["phone"] as? String,
+                address: json["address"] as? String,
+                city: json["city"] as? String,
+                state: json["state"] as? String,
+                postalCode: json["postalCode"] as? String,
+                country: json["country"] as? String,
+                website: json["website"] as? String,
+                notes: json["notes"] as? String,
+                organisationRole: json["organisationRole"] as? String,
+                source: json["source"] as? String,
+                importFormats: json["importFormats"] as? [String] ?? [],
+                autoSyncedAt: AuthenticationManager.parseDateField(json["autoSyncedAt"])
+            )
+        }
+    }
+
     struct PasskeyState: Codable {
         var supported: Bool = false
         var eligible: Bool = false
@@ -983,16 +1376,25 @@ struct AuthenticatedUser: Codable, Identifiable {
     let username: String
     let displayName: String
     let email: String?
+    var canonicalEmail: String?
     let authMethod: AuthMethod
     let mastodonInstance: String?
     var accessToken: String
     let avatarURL: String?
+    var accountId: String?
+    var canonicalAccountId: String?
+    var linkedLocalUserId: String?
     var role: String?
     var authProvider: String?
     var gender: String?
     var permissions: [String] = []
     var entitlements: [String: AnyCodable] = [:]
     var passkey: PasskeyState = PasskeyState()
+    var presence: String = "online"
+    var lastLoginAt: Date?
+    var lastSeenAt: Date?
+    var lastActiveAt: Date?
+    var contactCard: ContactCard?
 
     // Mastodon account factors (affects room limits)
     var followersCount: Int = 0
@@ -1110,6 +1512,20 @@ struct AnyCodable: Codable {
     }
 }
 
+struct TwoFactorMethod: Identifiable, Codable, Hashable {
+    let type: String
+    let name: String
+    let hint: String?
+    let count: Int?
+    let remaining: Int?
+
+    var id: String { type }
+
+    var supportsDelivery: Bool {
+        ["email", "sms", "voice"].contains(type)
+    }
+}
+
 enum AccountAuthProvider: String, CaseIterable, Identifiable {
     case local = "local"
     case whmcs = "whmcs"
@@ -1118,8 +1534,8 @@ enum AccountAuthProvider: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .local: return "VoiceLink Account"
-        case .whmcs: return "WHMCS Account"
+        case .local: return "Client Account"
+        case .whmcs: return "Client Account"
         }
     }
 }
@@ -1175,6 +1591,7 @@ enum AccountReputation: String, Codable {
 enum AuthMethod: String, Codable {
     case pairingCode = "pairing"
     case mastodon = "mastodon"
+    case discord = "discord"
     case email = "email"
     case adminInvite = "admin_invite"
     case whmcs = "whmcs"
@@ -1183,9 +1600,10 @@ enum AuthMethod: String, Codable {
         switch self {
         case .pairingCode: return "Pairing Code"
         case .mastodon: return "Mastodon"
+        case .discord: return "Discord"
         case .email: return "Email"
         case .adminInvite: return "Admin Invite"
-        case .whmcs: return "WHMCS"
+        case .whmcs: return "Client Account"
         }
     }
 
@@ -1193,6 +1611,7 @@ enum AuthMethod: String, Codable {
         switch self {
         case .pairingCode: return "number.circle"
         case .mastodon: return "at.circle"
+        case .discord: return "bubble.left.and.bubble.right"
         case .email: return "envelope.circle"
         case .adminInvite: return "person.badge.key"
         case .whmcs: return "building.2.crop.circle"
@@ -1209,18 +1628,68 @@ struct LinkedDevice: Codable, Identifiable {
     let authMethod: AuthMethod
     let linkedAt: Date
     var lastSeen: Date
+    var isOnline: Bool
     var isRevoked: Bool
+    var isCurrentDevice: Bool = false
 
     var statusText: String {
         if isRevoked {
             return "Revoked"
         }
-        if Date().timeIntervalSince(lastSeen) <= 300 {
+        if isCurrentDevice {
+            return "Online on this device"
+        }
+        if isOnline || Date().timeIntervalSince(lastSeen) <= 300 {
             return "Online and reachable via API"
         }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return "Offline • last seen \(formatter.localizedString(for: lastSeen, relativeTo: Date()))"
+    }
+}
+
+struct PendingDeviceApproval: Codable, Identifiable {
+    let id: String
+    let userId: String
+    let userName: String
+    let code: String
+    let status: String
+    let createdAt: Date
+    let expiresAt: Date
+    let requestedAt: Date
+    let approvedAt: Date?
+    let deniedAt: Date?
+    let reason: String?
+    let deviceId: String?
+    let deviceName: String
+    let deviceType: String
+    let clientVersion: String?
+    let timeZone: String?
+    let locale: String?
+    let locationHint: String?
+    let ip: String?
+    let userAgent: String?
+    let approvalMethods: [String]
+    let viaMastodon: Bool
+
+    var isExpired: Bool {
+        status.lowercased() == "expired" || expiresAt <= Date()
+    }
+
+    var statusText: String {
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .abbreviated
+        if isExpired {
+            return "Expired"
+        }
+        switch status.lowercased() {
+        case "approved":
+            return "Approved"
+        case "denied":
+            return "Denied"
+        default:
+            return "Expires \(relative.localizedString(for: expiresAt, relativeTo: Date()))"
+        }
     }
 }
 
@@ -1230,6 +1699,12 @@ extension Notification.Name {
     // Note: accessRevoked is already declared in ServerManager.swift
     static let deviceLinked = Notification.Name("deviceLinked")
     static let deviceUnlinked = Notification.Name("deviceUnlinked")
+    static let deviceApprovalRequested = Notification.Name("deviceApprovalRequested")
+    static let deviceApprovalPending = Notification.Name("deviceApprovalPending")
+    static let deviceApprovalApproved = Notification.Name("deviceApprovalApproved")
+    static let deviceApprovalDenied = Notification.Name("deviceApprovalDenied")
+    static let deviceApprovalResolved = Notification.Name("deviceApprovalResolved")
+    static let deviceApprovalExpired = Notification.Name("deviceApprovalExpired")
 }
 
 // MARK: - Device Revocation Manager
@@ -1238,8 +1713,26 @@ class DeviceRevocationManager: ObservableObject {
     static let shared = DeviceRevocationManager()
 
     @Published var linkedDevices: [LinkedDevice] = []
+    @Published var pendingApprovals: [PendingDeviceApproval] = []
+    @Published var pendingApprovalForCurrentDevice: PendingDeviceApproval?
     @Published var isLoading = false
     @Published var error: String?
+
+    private func currentDeviceNameCandidates() -> Set<String> {
+        var names = Set<String>()
+        if let localized = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localized.isEmpty {
+            names.insert(localized.lowercased())
+        }
+        if let host = Host.current().name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !host.isEmpty {
+            names.insert(host.lowercased())
+            if let first = host.split(separator: ".").first, !first.isEmpty {
+                names.insert(String(first).lowercased())
+            }
+        }
+        return names
+    }
 
     private var serverURL: String?
 
@@ -1249,6 +1742,34 @@ class DeviceRevocationManager: ObservableObject {
             self,
             selector: #selector(handleAccessRevoked(_:)),
             name: .accessRevoked,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleServerConnectionChanged),
+            name: .serverConnectionChanged,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceApprovalRequested(_:)),
+            name: .deviceApprovalRequested,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceApprovalPending(_:)),
+            name: .deviceApprovalPending,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceApprovalResolved(_:)),
+            name: .deviceApprovalResolved,
             object: nil
         )
     }
@@ -1271,11 +1792,127 @@ class DeviceRevocationManager: ObservableObject {
         }
     }
 
+    @objc private func handleServerConnectionChanged() {
+        guard ServerManager.shared.isConnected,
+              let baseURL = ServerManager.shared.baseURL,
+              !baseURL.isEmpty else {
+            return
+        }
+        fetchDevices(serverURL: baseURL)
+    }
+
+    @objc private func handleDeviceApprovalRequested(_ notification: Notification) {
+        guard let approval = parseApproval(from: notification.userInfo) else { return }
+        DispatchQueue.main.async {
+            self.upsertApproval(approval)
+        }
+    }
+
+    @objc private func handleDeviceApprovalPending(_ notification: Notification) {
+        guard let approval = parseApproval(from: notification.userInfo) else { return }
+        DispatchQueue.main.async {
+            self.pendingApprovalForCurrentDevice = approval
+        }
+    }
+
+    @objc private func handleDeviceApprovalResolved(_ notification: Notification) {
+        guard let approval = parseApproval(from: notification.userInfo) else { return }
+        DispatchQueue.main.async {
+            self.pendingApprovals.removeAll { $0.id == approval.id }
+            if self.pendingApprovalForCurrentDevice?.id == approval.id {
+                self.pendingApprovalForCurrentDevice = approval
+            }
+        }
+    }
+
+    private func parseApproval(from userInfo: [AnyHashable: Any]?) -> PendingDeviceApproval? {
+        guard let payload = userInfo as? [String: Any] else { return nil }
+        let formatter = ISO8601DateFormatter()
+        let requestedBy = payload["requestedBy"] as? [String: Any] ?? [:]
+        guard let approvalId = payload["approvalId"] as? String,
+              let userId = payload["userId"] as? String else {
+            return nil
+        }
+        return PendingDeviceApproval(
+            id: approvalId,
+            userId: userId,
+            userName: payload["userName"] as? String ?? "VoiceLink user",
+            code: payload["code"] as? String ?? "",
+            status: payload["status"] as? String ?? "pending",
+            createdAt: (payload["createdAt"] as? String).flatMap { formatter.date(from: $0) } ?? Date(),
+            expiresAt: (payload["expiresAt"] as? String).flatMap { formatter.date(from: $0) } ?? Date().addingTimeInterval(300),
+            requestedAt: (payload["requestedAt"] as? String).flatMap { formatter.date(from: $0) } ?? Date(),
+            approvedAt: (payload["approvedAt"] as? String).flatMap { formatter.date(from: $0) },
+            deniedAt: (payload["deniedAt"] as? String).flatMap { formatter.date(from: $0) },
+            reason: payload["reason"] as? String,
+            deviceId: requestedBy["deviceId"] as? String,
+            deviceName: requestedBy["deviceName"] as? String ?? "Unknown Device",
+            deviceType: requestedBy["deviceType"] as? String ?? "unknown",
+            clientVersion: requestedBy["clientVersion"] as? String,
+            timeZone: requestedBy["timeZone"] as? String,
+            locale: requestedBy["locale"] as? String,
+            locationHint: requestedBy["locationHint"] as? String,
+            ip: requestedBy["ip"] as? String,
+            userAgent: requestedBy["userAgent"] as? String,
+            approvalMethods: payload["approvalMethods"] as? [String] ?? ["in_app"],
+            viaMastodon: payload["viaMastodon"] as? Bool ?? false
+        )
+    }
+
+    private func upsertApproval(_ approval: PendingDeviceApproval) {
+        pendingApprovals.removeAll { $0.id == approval.id }
+        if !approval.isExpired && approval.status.lowercased() == "pending" {
+            pendingApprovals.insert(approval, at: 0)
+        }
+    }
+
+    func markCurrentDeviceOnline() {
+        guard ServerManager.shared.isConnected else { return }
+
+        let currentClientId = AuthenticationManager.shared.getClientId()
+        let currentDeviceNames = currentDeviceNameCandidates()
+        let now = Date()
+
+        if let index = linkedDevices.firstIndex(where: { device in
+            device.clientId == currentClientId
+                || currentDeviceNames.contains(device.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }) {
+            linkedDevices[index].isCurrentDevice = true
+            linkedDevices[index].isOnline = true
+            linkedDevices[index].lastSeen = now
+            return
+        }
+
+        guard let currentUser = AuthenticationManager.shared.currentUser else { return }
+        let deviceName = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? Host.current().localizedName!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "This Mac"
+
+        linkedDevices.insert(
+            LinkedDevice(
+                id: "current-\(currentClientId)",
+                deviceName: deviceName,
+                clientId: currentClientId,
+                authMethod: currentUser.authMethod,
+                linkedAt: now,
+                lastSeen: now,
+                isOnline: true,
+                isRevoked: false,
+                isCurrentDevice: true
+            ),
+            at: 0
+        )
+    }
+
     // Fetch linked devices from server
     func fetchDevices(serverURL: String) {
         self.serverURL = serverURL
         isLoading = true
         error = nil
+        markCurrentDeviceOnline()
+        fetchPendingApprovals()
+        let currentClientId = AuthenticationManager.shared.getClientId()
+        let currentDeviceNames = currentDeviceNameCandidates()
 
         guard let url = URL(string: "\(serverURL)/api/devices") else {
             error = "Invalid server URL"
@@ -1292,6 +1929,7 @@ class DeviceRevocationManager: ObservableObject {
 
                 if let error = error {
                     self?.error = error.localizedDescription
+                    self?.markCurrentDeviceOnline()
                     return
                 }
 
@@ -1317,6 +1955,9 @@ class DeviceRevocationManager: ObservableObject {
                     let formatter = ISO8601DateFormatter()
                     let linkedAt = linkedAtStr.flatMap { formatter.date(from: $0) } ?? Date()
                     let lastSeen = lastSeenStr.flatMap { formatter.date(from: $0) } ?? Date()
+                    let reportedOnline = dict["isOnline"] as? Bool ?? false
+                    let normalizedDeviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    let isCurrentDevice = clientId == currentClientId || currentDeviceNames.contains(normalizedDeviceName)
 
                     return LinkedDevice(
                         id: id,
@@ -1325,9 +1966,83 @@ class DeviceRevocationManager: ObservableObject {
                         authMethod: authMethod,
                         linkedAt: linkedAt,
                         lastSeen: lastSeen,
-                        isRevoked: dict["isRevoked"] as? Bool ?? false
+                        isOnline: reportedOnline || isCurrentDevice,
+                        isRevoked: dict["isRevoked"] as? Bool ?? false,
+                        isCurrentDevice: isCurrentDevice
                     )
                 }
+                self?.markCurrentDeviceOnline()
+            }
+        }.resume()
+    }
+
+    func fetchPendingApprovals() {
+        guard let serverURL,
+              let url = URL(string: "\(serverURL)/api/devices/approvals") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        applyAuthHeaders(to: &request)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if error != nil {
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let approvalsArray = json["approvals"] as? [[String: Any]] else {
+                    return
+                }
+                self.pendingApprovals = approvalsArray.compactMap { self.parseApproval(from: $0) }
+                    .filter { !$0.isExpired && $0.status.lowercased() == "pending" }
+            }
+        }.resume()
+    }
+
+    func approveDeviceApproval(approvalId: String, reason: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+        submitDeviceApprovalDecision(approvalId: approvalId, action: "approve", reason: reason, completion: completion)
+    }
+
+    func denyDeviceApproval(approvalId: String, reason: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+        submitDeviceApprovalDecision(approvalId: approvalId, action: "deny", reason: reason, completion: completion)
+    }
+
+    private func submitDeviceApprovalDecision(approvalId: String, action: String, reason: String? = nil, completion: @escaping (Bool, String?) -> Void) {
+        guard let serverURL,
+              let url = URL(string: "\(serverURL)/api/devices/approvals/\(approvalId)/\(action)") else {
+            completion(false, "Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let reason, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["reason": reason])
+        }
+        applyAuthHeaders(to: &request)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    completion(false, error.localizedDescription)
+                    return
+                }
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let success = json["success"] as? Bool, success else {
+                    let message = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any])?["error"] as? String
+                    completion(false, message ?? "Failed to update approval")
+                    return
+                }
+                self?.pendingApprovals.removeAll { $0.id == approvalId }
+                if self?.pendingApprovalForCurrentDevice?.id == approvalId {
+                    self?.pendingApprovalForCurrentDevice = nil
+                }
+                completion(true, nil)
             }
         }.resume()
     }
@@ -1528,6 +2243,43 @@ struct AccountPasswordAuthView: View {
     @State private var statusMessage: String?
     @State private var isLoading = false
     @State private var needsTwoFactor = false
+    @State private var isRequestingTwoFactorCode = false
+
+    private var normalizedServerURL: String {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ServerManager.mainServer }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return "https://\(trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+    }
+
+    private var whmcsPasswordResetURL: URL? {
+        URL(string: "\(normalizedServerURL)/index.php?rp=/password/reset/begin")
+    }
+
+    private var clientPortalCreateURL: URL? {
+        URL(string: "https://devine-creations.com/register.php")
+    }
+
+    private var clientPortalURL: URL? {
+        URL(string: "https://devine-creations.com/clientarea.php")
+    }
+
+    private var availableTwoFactorMethods: [TwoFactorMethod] {
+        authManager.availableTwoFactorMethods
+    }
+
+    private var deliveryMethods: [TwoFactorMethod] {
+        availableTwoFactorMethods.filter(\.supportsDelivery)
+    }
+
+    private var selectedTwoFactorMethodBinding: Binding<String> {
+        Binding(
+            get: { authManager.selectedTwoFactorMethod ?? deliveryMethods.first?.type ?? "email" },
+            set: { authManager.selectedTwoFactorMethod = $0 }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -1544,18 +2296,49 @@ struct AccountPasswordAuthView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
 
-            TextField("Username", text: $identityInput)
+            TextField("Username or email address", text: $identityInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
+                .textContentType(.username)
+                .accessibilityLabel("Username or email")
+                .accessibilityHint("Enter the VoiceLink account username or verified email address for this account.")
 
-            SecureField("Password", text: $passwordInput)
+            SecureField("Password or app password", text: $passwordInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 320)
+                .textContentType(.password)
+                .accessibilityLabel("Password")
+                .accessibilityHint("Enter the account password. If two-factor or app passwords are enabled, use the appropriate password for this account.")
 
             if needsTwoFactor {
-                TextField("2FA Code", text: $twoFactorInput)
+                if !deliveryMethods.isEmpty {
+                    Picker("Verification method", selection: selectedTwoFactorMethodBinding) {
+                        ForEach(deliveryMethods) { method in
+                            if let hint = method.hint, !hint.isEmpty {
+                                Text("\(method.name) (\(hint))").tag(method.type)
+                            } else {
+                                Text(method.name).tag(method.type)
+                            }
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 240)
+                    .accessibilityLabel("Verification method")
+                    .accessibilityHint("Choose how VoiceLink should deliver the verification code.")
+
+                    Button(isRequestingTwoFactorCode ? "Sending..." : sendButtonTitle) {
+                        requestTwoFactorCode()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRequestingTwoFactorCode)
+                }
+
+                TextField("6-digit two-factor code", text: $twoFactorInput)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
+                    .textContentType(.oneTimeCode)
+                    .accessibilityLabel("Two-factor code")
+                    .accessibilityHint("Enter the current two-factor authentication code for this account.")
             }
 
             if let statusMessage {
@@ -1569,6 +2352,37 @@ struct AccountPasswordAuthView: View {
                     .foregroundColor(.red)
                     .font(.caption)
                     .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 6) {
+                Button("Forgot Password?") {
+                    guard let url = whmcsPasswordResetURL else { return }
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.link)
+
+                Button("Forgot Username? Use Email Code Sign-In") {
+                    isPresented = false
+                }
+                .buttonStyle(.link)
+
+                Button("Create Client Account") {
+                    guard let url = clientPortalCreateURL else { return }
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.link)
+
+                Button("Open Client Account Portal") {
+                    guard let url = clientPortalURL else { return }
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.link)
+
+                Text("If your Client Account is linked through the portal, password recovery will continue through the client account email reset flow.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 340)
             }
 
             HStack(spacing: 15) {
@@ -1607,10 +2421,40 @@ struct AccountPasswordAuthView: View {
                 onSuccess?()
             } else if requires2FA {
                 needsTwoFactor = true
+                if authManager.selectedTwoFactorMethod == nil {
+                    authManager.selectedTwoFactorMethod = deliveryMethods.first?.type ?? availableTwoFactorMethods.first?.type
+                }
                 statusMessage = error ?? "Two-factor authentication code required."
             } else {
                 statusMessage = error ?? "Sign-in failed."
             }
+        }
+    }
+
+    private var sendButtonTitle: String {
+        switch authManager.selectedTwoFactorMethod {
+        case "voice":
+            return "Call Me the Code"
+        case "sms":
+            return "Text Me the Code"
+        default:
+            return "Send Code"
+        }
+    }
+
+    private func requestTwoFactorCode() {
+        let method = authManager.selectedTwoFactorMethod ?? deliveryMethods.first?.type ?? "email"
+        isRequestingTwoFactorCode = true
+        authManager.requestTwoFactorChallenge(
+            identity: identityInput,
+            password: passwordInput,
+            serverURL: normalizedServerURL,
+            method: method
+        ) { success, error in
+            isRequestingTwoFactorCode = false
+            statusMessage = success
+                ? (authManager.twoFactorDeliveryStatus ?? "Verification challenge sent.")
+                : (error ?? "Unable to send verification code.")
         }
     }
 }
@@ -1640,9 +2484,11 @@ struct EmailAuthView: View {
                 Text("Enter your email address")
                     .foregroundColor(.gray)
 
-                TextField("you@example.com", text: $emailInput)
+                TextField("name@example.com", text: $emailInput)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 300)
+                    .accessibilityLabel("Email address")
+                    .accessibilityHint("Enter a verified email address for your VoiceLink account to receive a sign-in code.")
 
                 HStack(spacing: 15) {
                     Button("Cancel") {
@@ -1662,11 +2508,14 @@ struct EmailAuthView: View {
                     .foregroundColor(.gray)
                     .multilineTextAlignment(.center)
 
-                TextField("XXXXXX", text: $codeInput)
+                TextField("6-digit sign-in code", text: $codeInput)
                     .font(.system(size: 24, weight: .bold, design: .monospaced))
                     .multilineTextAlignment(.center)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 150)
+                    .textContentType(.oneTimeCode)
+                    .accessibilityLabel("Verification code")
+                    .accessibilityHint("Enter the six-digit code that was sent to your email address.")
                     .onChange(of: codeInput) { newValue in
                         codeInput = String(newValue.uppercased().prefix(6))
                     }
@@ -1745,10 +2594,14 @@ struct AdminInviteAuthView: View {
                 .font(.title3)
                 .fontWeight(.semibold)
 
-            TextField("Server URL (https://...)", text: $serverURLInput)
+            TextField("Server URL such as https://voicelink.example.com", text: $serverURLInput)
                 .textFieldStyle(.roundedBorder)
-            TextField("Invite Token", text: $tokenInput)
+                .accessibilityLabel("Server URL")
+                .accessibilityHint("Enter the full VoiceLink server address for this admin invite.")
+            TextField("Invite token from the admin email or link", text: $tokenInput)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Invite token")
+                .accessibilityHint("Paste the admin invite token exactly as it appears in the invite.")
 
             HStack(spacing: 8) {
                 Button("Load Invite") { loadInvite() }
@@ -1759,14 +2612,22 @@ struct AdminInviteAuthView: View {
                 }
             }
 
-            TextField("Email", text: $emailInput)
+            TextField("Email address for this admin account", text: $emailInput)
                 .textFieldStyle(.roundedBorder)
-            TextField("Username", text: $usernameInput)
+                .accessibilityLabel("Email address")
+                .accessibilityHint("Enter the email address that should be attached to the admin account.")
+            TextField("Username to use for this admin account", text: $usernameInput)
                 .textFieldStyle(.roundedBorder)
-            TextField("Display Name", text: $displayNameInput)
+                .accessibilityLabel("Username")
+                .accessibilityHint("Enter the permanent username that this admin account should use.")
+            TextField("Display name shown to other users", text: $displayNameInput)
                 .textFieldStyle(.roundedBorder)
-            SecureField("Password (min 8 chars)", text: $passwordInput)
+                .accessibilityLabel("Display name")
+                .accessibilityHint("Enter the public display name that other users will see for this admin account.")
+            SecureField("Password with at least 8 characters", text: $passwordInput)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Password")
+                .accessibilityHint("Enter the password that should be used for this new admin account.")
 
             if let statusMessage {
                 Text(statusMessage)
@@ -2015,7 +2876,11 @@ struct DeviceManagementView: View {
     @State private var showRevokeConfirm = false
     @State private var showRemoveConfirm = false
     @State private var selectedDevice: LinkedDevice?
+    @State private var selectedApproval: PendingDeviceApproval?
+    @State private var showApproveConfirm = false
+    @State private var showDenyConfirm = false
     @State private var revokeReason: String = ""
+    @State private var approvalReason: String = ""
     let serverURL: String
 
     var body: some View {
@@ -2041,6 +2906,41 @@ struct DeviceManagementView: View {
             if revocationManager.isLoading {
                 ProgressView()
                     .padding()
+            } else if !revocationManager.pendingApprovals.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(revocationManager.pendingApprovals) { approval in
+                            DeviceApprovalCard(
+                                approval: approval,
+                                onApprove: {
+                                    selectedApproval = approval
+                                    showApproveConfirm = true
+                                },
+                                onDeny: {
+                                    selectedApproval = approval
+                                    showDenyConfirm = true
+                                }
+                            )
+                        }
+
+                        Divider()
+                            .padding(.vertical, 6)
+
+                        ForEach(revocationManager.linkedDevices) { device in
+                            DeviceCard(
+                                device: device,
+                                onRevoke: {
+                                    selectedDevice = device
+                                    showRevokeConfirm = true
+                                },
+                                onRemove: {
+                                    selectedDevice = device
+                                    showRemoveConfirm = true
+                                }
+                            )
+                        }
+                    }
+                }
             } else if let error = revocationManager.error {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle")
@@ -2087,6 +2987,44 @@ struct DeviceManagementView: View {
         .onAppear {
             revocationManager.fetchDevices(serverURL: serverURL)
         }
+        .alert("Approve Sign-In?", isPresented: $showApproveConfirm) {
+            TextField("Reason (optional)", text: $approvalReason)
+            Button("Cancel", role: .cancel) {
+                approvalReason = ""
+            }
+            Button("Approve") {
+                if let approval = selectedApproval {
+                    revocationManager.approveDeviceApproval(
+                        approvalId: approval.id,
+                        reason: approvalReason.isEmpty ? nil : approvalReason
+                    ) { _, _ in }
+                }
+                approvalReason = ""
+            }
+        } message: {
+            if let approval = selectedApproval {
+                Text("Approve \(approval.deviceName) to sign in to \(approval.userName)?")
+            }
+        }
+        .alert("Deny Sign-In?", isPresented: $showDenyConfirm) {
+            TextField("Reason (optional)", text: $approvalReason)
+            Button("Cancel", role: .cancel) {
+                approvalReason = ""
+            }
+            Button("Deny", role: .destructive) {
+                if let approval = selectedApproval {
+                    revocationManager.denyDeviceApproval(
+                        approvalId: approval.id,
+                        reason: approvalReason.isEmpty ? nil : approvalReason
+                    ) { _, _ in }
+                }
+                approvalReason = ""
+            }
+        } message: {
+            if let approval = selectedApproval {
+                Text("Deny sign-in request from \(approval.deviceName).")
+            }
+        }
         .alert("Revoke Device Access?", isPresented: $showRevokeConfirm) {
             TextField("Reason (optional)", text: $revokeReason)
             Button("Cancel", role: .cancel) {
@@ -2121,6 +3059,67 @@ struct DeviceManagementView: View {
     }
 }
 
+struct DeviceApprovalCard: View {
+    let approval: PendingDeviceApproval
+    let onApprove: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lock.shield")
+                .foregroundColor(.orange)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Pending sign-in approval")
+                        .font(.headline)
+                    Text(approval.code)
+                        .font(.caption.monospacedDigit())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15))
+                        .foregroundColor(.orange)
+                        .cornerRadius(4)
+                }
+
+                Text("\(approval.deviceName) • \(approval.deviceType.capitalized)")
+                    .font(.subheadline)
+                Text(approval.statusText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if let ip = approval.ip, !ip.isEmpty {
+                    Text("IP \(ip)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let locationHint = approval.locationHint, !locationHint.isEmpty {
+                    Text(locationHint)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if approval.viaMastodon {
+                    Text("Also sent by Mastodon DM")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Spacer()
+
+            Button("Approve", action: onApprove)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            Button("Deny", role: .destructive, action: onDeny)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.06))
+        .cornerRadius(10)
+    }
+}
+
 struct DeviceCard: View {
     let device: LinkedDevice
     let onRevoke: () -> Void
@@ -2130,6 +3129,7 @@ struct DeviceCard: View {
         switch device.authMethod {
         case .pairingCode: return .gray
         case .mastodon: return .purple
+        case .discord: return .indigo
         case .whmcs: return .orange
         case .email: return .blue
         case .adminInvite: return .indigo
@@ -2140,7 +3140,7 @@ struct DeviceCard: View {
         HStack {
             // Status indicator
             Circle()
-                .fill(device.isRevoked ? Color.red : Color.green)
+                .fill(device.isRevoked ? Color.red : ((device.isCurrentDevice || device.isOnline) ? Color.green : Color.orange))
                 .frame(width: 10, height: 10)
 
             VStack(alignment: .leading, spacing: 4) {

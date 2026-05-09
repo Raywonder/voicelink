@@ -13,7 +13,21 @@ class UserAudioControlManager: ObservableObject {
     @Published var focusedUserId: String?                   // Currently focused user for keyboard control
 
     // Global settings
-    @Published var masterVolume: Float = 1.0
+    @Published var masterVolume: Float = 1.0 {
+        didSet {
+            let clamped = max(0.0, min(2.0, masterVolume))
+            if clamped != masterVolume {
+                masterVolume = clamped
+                return
+            }
+            saveSettings()
+            Foundation.NotificationCenter.default.post(
+                name: Notification.Name.masterVolumeChanged,
+                object: nil,
+                userInfo: ["volume": masterVolume]
+            )
+        }
+    }
     @Published var defaultUserVolume: Float = 1.0
 
     // Volume step for keyboard controls
@@ -31,6 +45,13 @@ class UserAudioControlManager: ObservableObject {
         return userVolumes[userId] ?? defaultUserVolume
     }
 
+    func effectiveVolume(for userId: String) -> Float {
+        if isMuted(userId) {
+            return 0
+        }
+        return getVolume(for: userId) * masterVolume
+    }
+
     /// Set volume for a user
     func setVolume(for userId: String, volume: Float) {
         let clampedVolume = max(0.0, min(2.0, volume))
@@ -44,10 +65,10 @@ class UserAudioControlManager: ObservableObject {
         }
 
         // Notify audio engine
-        NotificationCenter.default.post(
-            name: .userVolumeChanged,
+        Foundation.NotificationCenter.default.post(
+            name: Notification.Name.userVolumeChanged,
             object: nil,
-            userInfo: ["userId": userId, "volume": clampedVolume * masterVolume]
+            userInfo: ["userId": userId, "volume": effectiveVolume(for: userId)]
         )
 
         saveSettings()
@@ -95,8 +116,8 @@ class UserAudioControlManager: ObservableObject {
         }
 
         // Notify audio engine
-        NotificationCenter.default.post(
-            name: .userMuteChanged,
+        Foundation.NotificationCenter.default.post(
+            name: Notification.Name.userMuteChanged,
             object: nil,
             userInfo: ["userId": userId, "muted": muted]
         )
@@ -125,8 +146,8 @@ class UserAudioControlManager: ObservableObject {
             AppSoundManager.shared.playSound(.toggleOff)
         }
 
-        NotificationCenter.default.post(
-            name: .userSoloChanged,
+        Foundation.NotificationCenter.default.post(
+            name: Notification.Name.userSoloChanged,
             object: nil,
             userInfo: ["userId": userId, "solo": solo]
         )
@@ -233,13 +254,15 @@ class UserAudioControlManager: ObservableObject {
                     }
                 }
 
-            case 48: // Tab - focus next/previous user
-                if hasShift {
-                    self.focusPreviousUser()
-                } else {
-                    self.focusNextUser()
+            case 48: // Option+Tab - focus next/previous user without stealing standard Tab navigation
+                if hasOpt {
+                    if hasShift {
+                        self.focusPreviousUser()
+                    } else {
+                        self.focusNextUser()
+                    }
+                    return nil
                 }
-                return nil
 
             case 46: // M key
                 if hasCmd {
@@ -279,32 +302,18 @@ class UserAudioControlManager: ObservableObject {
     // MARK: - Master Volume Control
 
     func increaseMasterVolume() {
-        masterVolume = min(1.5, masterVolume + volumeStep)
-        saveSettings()
+        masterVolume = min(2.0, masterVolume + volumeStep)
         AppSoundManager.shared.playButtonClickSound()
-
-        NotificationCenter.default.post(
-            name: .masterVolumeChanged,
-            object: nil,
-            userInfo: ["volume": masterVolume]
-        )
     }
 
     func decreaseMasterVolume() {
         masterVolume = max(0.0, masterVolume - volumeStep)
-        saveSettings()
 
         if masterVolume == 0 {
             AppSoundManager.shared.playSound(.toggleOff)
         } else {
             AppSoundManager.shared.playButtonClickSound()
         }
-
-        NotificationCenter.default.post(
-            name: .masterVolumeChanged,
-            object: nil,
-            userInfo: ["volume": masterVolume]
-        )
     }
 
     // MARK: - Persistence
@@ -462,7 +471,7 @@ struct UserVolumeControlPanel: View {
             .foregroundColor(.white.opacity(0.8))
 
             // Keyboard hint
-            Text("Tab to focus, Opt+\u{2191}/\u{2193} volume, Opt+M mute")
+            Text("Opt+Tab focus, Opt+\u{2191}/\u{2193} volume, Opt+M mute")
                 .font(.caption2)
                 .foregroundColor(.gray)
 
@@ -501,7 +510,7 @@ struct UserVolumeControlPanel: View {
                         get: { Double(audioControl.masterVolume) },
                         set: { audioControl.masterVolume = Float($0) }
                     ),
-                    in: 0...1.5
+                    in: 0...2.0
                 )
 
                 Text("\(Int(audioControl.masterVolume * 100))%")

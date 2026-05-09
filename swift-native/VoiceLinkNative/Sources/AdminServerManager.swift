@@ -11,6 +11,8 @@ class AdminServerManager: ObservableObject {
             case connected
             case linked
             case owned
+            case managed
+            case trusted
         }
 
         let id: String
@@ -27,6 +29,10 @@ class AdminServerManager: ObservableObject {
                 return "Linked"
             case .owned:
                 return "Owned"
+            case .managed:
+                return "Cluster"
+            case .trusted:
+                return "Trusted"
             }
         }
 
@@ -43,8 +49,11 @@ class AdminServerManager: ObservableObject {
     @Published var serverConfig: ServerConfig?
     @Published var advancedServerSettings: AdvancedServerSettings?
     @Published var connectedUsers: [AdminUserInfo] = []
+    @Published var recentUserLogins: [AdminRecentUserLogin] = []
+    @Published var searchableUsers: [AdminUserSearchEntry] = []
     @Published var serverRooms: [AdminRoomInfo] = []
     @Published var supportSessions: [AdminSupportSessionInfo] = []
+    @Published var sharedAuthGroups: [AdminSharedAuthGroup] = []
     @Published var serverStats: ServerStats?
     @Published var availableModules: [AdminModuleInfo] = []
     @Published var serverLogLines: [String] = []
@@ -58,6 +67,7 @@ class AdminServerManager: ObservableObject {
     @Published var mastodonBotError: String?
     @Published var authProviderStatus: AuthProviderStatusResponse?
     @Published var authProviderStatusError: String?
+    @Published var sharedAuthGroupsError: String?
     @Published var databaseStatus: DatabaseAdminStatus?
     @Published var moduleCategories: [String: String] = [:]
     @Published var modulesLoading: Bool = false
@@ -65,6 +75,7 @@ class AdminServerManager: ObservableObject {
     @Published var deploymentManagerStatus: DeploymentManagerStatus?
     @Published var deploymentTransports: [DeploymentTransportInfo] = []
     @Published var deploymentActionMessage: String?
+    @Published var serviceActionMessage: String?
     @Published var databaseActionMessage: String?
     @Published var isLoading: Bool = false
     @Published var error: String?
@@ -93,12 +104,17 @@ class AdminServerManager: ObservableObject {
             candidates.append(normalized)
         }
 
-        if candidates.isEmpty {
-            candidates = APIEndpointResolver.remoteMainBaseCandidates(preferred: preferred)
+        var expanded: [String] = []
+        for candidate in candidates {
+            expanded.append(contentsOf: APIEndpointResolver.transportFallbackCandidates(for: candidate))
+        }
+
+        if expanded.isEmpty {
+            expanded = APIEndpointResolver.remoteMainBaseCandidates(preferred: preferred)
         }
 
         var seen = Set<String>()
-        return candidates.filter { seen.insert($0).inserted }
+        return expanded.filter { seen.insert($0).inserted }
     }
 
     enum AdminRole: String, Codable {
@@ -153,8 +169,27 @@ class AdminServerManager: ObservableObject {
             appendTarget(id: "owned:\(server.id)", name: server.name, url: server.url, kind: .owned)
         }
 
+        for server in SettingsManager.shared.managedFederationServers {
+            appendTarget(
+                id: "managed:\(server.id)",
+                name: server.name,
+                url: server.url,
+                kind: .managed
+            )
+        }
+
+        for trustedURL in normalizedTrustedServerTargets {
+            let fallbackName = URL(string: trustedURL)?.host ?? trustedURL
+            appendTarget(
+                id: "trusted:\(trustedURL)",
+                name: fallbackName,
+                url: trustedURL,
+                kind: .trusted
+            )
+        }
+
         if targets.isEmpty {
-            appendTarget(id: "canonical-main", name: "Main VoiceLink", url: APIEndpointResolver.canonicalMainBase, kind: .connected, isDefault: true)
+            appendTarget(id: "canonical-main", name: "VoiceLink", url: APIEndpointResolver.canonicalMainBase, kind: .connected, isDefault: true)
         }
 
         managementTargets = targets
@@ -171,8 +206,8 @@ class AdminServerManager: ObservableObject {
     }
 
     var allLinkedScopeSummary: String {
-        let count = managementTargets.filter { $0.kind == .linked || $0.kind == .owned || $0.kind == .connected }.count
-        return "Shared overview across \(count) managed server\(count == 1 ? "" : "s")"
+        let count = managementTargets.count
+        return "Shared cluster overview across \(count) managed server\(count == 1 ? "" : "s")"
     }
 
     var canManageMultipleTargets: Bool {
@@ -181,6 +216,14 @@ class AdminServerManager: ObservableObject {
 
     var selectedManagementTargetName: String {
         selectedManagementTarget?.name ?? "Current Connected Server"
+    }
+
+    private var normalizedTrustedServerTargets: [String] {
+        let trusted = SettingsManager.shared.visibleManagedFederationServers.map(\.url)
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return trusted.filter { seen.insert($0).inserted }
     }
 
     private func updateSecureTransportRecoveryState() {
@@ -296,7 +339,7 @@ class AdminServerManager: ObservableObject {
         error = nil
         defer { isLoading = false }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
@@ -342,7 +385,7 @@ class AdminServerManager: ObservableObject {
     func fetchAdvancedServerSettings() async {
         guard canManageConfigEffective else { return }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -398,84 +441,96 @@ class AdminServerManager: ObservableObject {
 
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/config") else {
-            error = "Invalid server config URL"
-            return false
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let encoder = JSONEncoder()
-            request.httpBody = try encoder.encode(config)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to update server config"
-                return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/config") else {
+                continue
             }
 
-            serverConfig = config
-            NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let encoder = JSONEncoder()
+                request.httpBody = try encoder.encode(config)
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                serverConfig = config
+                NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
+                return true
+            } catch {
+                self.error = error.localizedDescription
+                continue
+            }
         }
+
+        error = error ?? "Failed to update server config"
+        return false
     }
 
     func updateAdvancedServerSettings(_ settings: AdvancedServerSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/settings") else {
-            error = "Invalid advanced settings URL"
-            return false
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let encoder = JSONEncoder()
-            request.httpBody = try encoder.encode(settings)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to update advanced server settings"
-                return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/settings") else {
+                continue
             }
 
-            advancedServerSettings = settings
-            if let current = serverConfig {
-                serverConfig = current.with(
-                    maxRooms: settings.maxRooms,
-                    lobbyWelcomeMessage: settings.lobbyWelcomeMessage,
-                    welcomeMessage: settings.welcomeMessage,
-                    requireAuth: settings.requireAuth
-                )
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
-            NotificationCenter.default.post(name: .serverConfigurationChanged, object: serverConfig)
-            return true
-        } catch {
-            self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
-            return false
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let encoder = JSONEncoder()
+                request.httpBody = try encoder.encode(settings)
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                advancedServerSettings = settings
+                if let current = serverConfig {
+                    serverConfig = current.with(
+                        maxRooms: settings.maxRooms,
+                        lobbyWelcomeMessage: settings.lobbyWelcomeMessage,
+                        welcomeMessage: settings.welcomeMessage,
+                        requireAuth: settings.requireAuth
+                    )
+                }
+                NotificationCenter.default.post(name: .serverConfigurationChanged, object: serverConfig)
+                return true
+            } catch {
+                self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
+                continue
+            }
         }
+
+        error = error ?? "Failed to update advanced server settings"
+        return false
     }
 
     func fetchDatabaseStatus() async {
@@ -565,7 +620,7 @@ class AdminServerManager: ObservableObject {
 
     func fetchConnectedUsers() async {
         guard canManageUsersEffective else { return }
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -591,6 +646,110 @@ class AdminServerManager: ObservableObject {
                 currentServerURL = base
                 return
             } catch {
+                continue
+            }
+        }
+    }
+
+    func fetchRecentUserLogins(limit: Int = 50) async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/users/recent-logins?limit=\(limit)") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                let envelope = try decoder.decode(AdminRecentUserLoginEnvelope.self, from: data)
+                recentUserLogins = envelope.users
+                currentServerURL = base
+                return
+            } catch {
+                continue
+            }
+        }
+    }
+
+    func searchUsers(query: String = "", limit: Int = 100) async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/users/search?q=\(encodedQuery)&limit=\(limit)") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                let envelope = try decoder.decode(AdminUserSearchEnvelope.self, from: data)
+                searchableUsers = envelope.users
+                currentServerURL = base
+                return
+            } catch {
+                continue
+            }
+        }
+    }
+
+    func fetchSharedAuthGroups() async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/shared-auth/groups") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+                let envelope = try decoder.decode(AdminSharedAuthGroupsEnvelope.self, from: data)
+                sharedAuthGroups = envelope.groups
+                sharedAuthGroupsError = nil
+                currentServerURL = base
+                return
+            } catch {
+                sharedAuthGroupsError = error.localizedDescription
                 continue
             }
         }
@@ -1088,8 +1247,20 @@ class AdminServerManager: ObservableObject {
                     currentServerURL = base
                     return
                 }
+                if let fallbackStats = await fetchPublicServerStats(from: base) {
+                    serverStats = fallbackStats
+                    serverStatsError = nil
+                    currentServerURL = base
+                    return
+                }
                 lastFailure = "VoiceLink could not load server stats from the connected server (\(httpResponse.statusCode))."
             } catch {
+                if let fallbackStats = await fetchPublicServerStats(from: base) {
+                    serverStats = fallbackStats
+                    serverStatsError = nil
+                    currentServerURL = base
+                    return
+                }
                 lastFailure = "VoiceLink could not load server stats from the connected server yet. \(error.localizedDescription)"
                 continue
             }
@@ -1099,11 +1270,11 @@ class AdminServerManager: ObservableObject {
         serverStatsError = lastFailure ?? "VoiceLink could not load server stats from the connected server right now."
     }
 
-    func fetchServerLogs() async {
-        guard canManageConfigEffective else { return }
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/logs") else {
-            return
-        }
+    private func fetchPublicServerStats(from base: String) async -> ServerStats? {
+        guard var components = URLComponents(string: base) else { return nil }
+        components.path = "/api/rooms"
+        components.queryItems = [URLQueryItem(name: "source", value: "app")]
+        guard let url = components.url else { return nil }
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 6
@@ -1115,15 +1286,69 @@ class AdminServerManager: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return
+                  (200..<300).contains(httpResponse.statusCode),
+                  let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return nil
             }
-            serverLogSource = json["source"] as? String
-            serverLogLines = (json["lines"] as? [String]) ?? []
+
+            let rooms = rawRooms.map { Self.adminRoom(from: $0, defaultSource: Self.sourceLabel(from: base)) }
+            let activeUsers = rooms.reduce(0) { $0 + $1.userCount }
+            let activeRooms = rooms.filter { $0.userCount > 0 }.count
+            return ServerStats(
+                totalUsers: activeUsers,
+                activeUsers: activeUsers,
+                totalRooms: rooms.count,
+                activeRooms: activeRooms,
+                uptime: 0,
+                peakUsers: activeUsers,
+                messagesPerMinute: 0,
+                bandwidthUsage: 0
+            )
         } catch {
-            self.error = "Failed to fetch server logs: \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    func fetchServerLogs() async {
+        guard canManageConfigEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        var lastFailure: String?
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/logs") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastFailure = "The server log response was invalid."
+                    continue
+                }
+                guard httpResponse.statusCode == 200,
+                      let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    lastFailure = "Server logs returned HTTP \(httpResponse.statusCode)."
+                    continue
+                }
+                serverLogSource = json["source"] as? String
+                serverLogLines = (json["lines"] as? [String]) ?? []
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                error = nil
+                return
+            } catch {
+                lastFailure = "Failed to fetch server logs from \(base): \(error.localizedDescription)"
+            }
+        }
+
+        self.error = lastFailure ?? "Failed to fetch server logs from the selected server."
     }
 
     // MARK: - Server Scheduler
@@ -1247,12 +1472,54 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func restartAllAIEndpoints(services: [String] = []) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/services/restart-all-ai") else {
+            serviceActionMessage = "Invalid AI endpoint restart URL."
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["services": services])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (json["success"] as? Bool) == true else {
+                serviceActionMessage = "Unable to restart AI endpoints right now."
+                return false
+            }
+
+            let serviceList = json["services"] as? [String] ?? services
+            let message = json["message"] as? String ?? "Restart requested."
+            if serviceList.isEmpty {
+                serviceActionMessage = message
+            } else {
+                serviceActionMessage = "\(message) \(serviceList.joined(separator: ", "))"
+            }
+            currentServerURL = effectiveServerURL
+            return true
+        } catch {
+            serviceActionMessage = "Unable to restart AI endpoints: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     // MARK: - Mastodon Bot Accounts
 
     func fetchMastodonBots() async {
         guard canManageConfigEffective else { return }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         var lastFailure: String?
 
         for base in candidates {
@@ -1364,7 +1631,7 @@ class AdminServerManager: ObservableObject {
     func fetchAuthProviderStatus() async {
         guard canManageConfigEffective else { return }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         var lastFailure: String?
 
         for base in candidates {
@@ -1547,7 +1814,7 @@ class AdminServerManager: ObservableObject {
     func fetchFederationSettings() async -> FederationSettings? {
         guard canManageConfigEffective else { return nil }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
         for base in candidates {
             guard let url = APIEndpointResolver.url(base: base, path: "/api/federation/status") else {
@@ -1573,7 +1840,7 @@ class AdminServerManager: ObservableObject {
                 }
 
                 currentServerURL = base
-                return FederationSettings(
+                return normalizedFederationSettings(FederationSettings(
                     enabled: json["enabled"] as? Bool ?? false,
                     allowIncoming: json["allowIncoming"] as? Bool ?? true,
                     allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
@@ -1584,7 +1851,7 @@ class AdminServerManager: ObservableObject {
                     maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
                     autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
                     handoffTargetServer: json["handoffTargetServer"] as? String
-                )
+                ))
             } catch {
                 continue
             }
@@ -1595,40 +1862,49 @@ class AdminServerManager: ObservableObject {
 
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let normalizedSettings = normalizedFederationSettings(settings)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/federation/settings") else {
-            return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/federation/settings") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            let payload: [String: Any] = [
+                "enabled": normalizedSettings.enabled,
+                "mode": (normalizedSettings.allowIncoming && normalizedSettings.allowOutgoing) ? "mesh" : (normalizedSettings.allowOutgoing ? "spoke" : "standalone"),
+                "globalFederation": normalizedSettings.enabled,
+                "roomApprovalRequired": normalizedSettings.requireApproval,
+                "trustedServers": normalizedSettings.trustedServers,
+                "allowIncoming": normalizedSettings.allowIncoming,
+                "allowOutgoing": normalizedSettings.allowOutgoing,
+                "maintenanceModeEnabled": normalizedSettings.maintenanceModeEnabled,
+                "autoHandoffEnabled": normalizedSettings.autoHandoffEnabled,
+                "handoffTargetServer": normalizedSettings.handoffTargetServer as Any
+            ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    currentServerURL = base
+                    updateSecureTransportRecoveryState()
+                    return true
+                }
+            } catch {
+                continue
+            }
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        let payload: [String: Any] = [
-            "enabled": settings.enabled,
-            "mode": (settings.allowIncoming && settings.allowOutgoing) ? "mesh" : (settings.allowOutgoing ? "spoke" : "standalone"),
-            "globalFederation": settings.enabled,
-            "roomApprovalRequired": settings.requireApproval,
-            "trustedServers": settings.trustedServers,
-            "allowIncoming": settings.allowIncoming,
-            "allowOutgoing": settings.allowOutgoing,
-            "maintenanceModeEnabled": settings.maintenanceModeEnabled,
-            "autoHandoffEnabled": settings.autoHandoffEnabled,
-            "handoffTargetServer": settings.handoffTargetServer as Any
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
+        return false
     }
 
     // MARK: - Deployment Manager
@@ -2324,13 +2600,13 @@ class AdminServerManager: ObservableObject {
 
     private var effectiveServerURL: String {
         if !currentServerURL.isEmpty {
-            return currentServerURL
+            return preferredAdminBase(for: currentServerURL)
         }
         if let selected = selectedManagementTarget?.url, !selected.isEmpty {
-            return selected
+            return preferredAdminBase(for: selected)
         }
         if let connected = ServerManager.shared.baseURL, !connected.isEmpty {
-            return connected
+            return preferredAdminBase(for: connected)
         }
         return APIEndpointResolver.canonicalMainBase
     }
@@ -2345,6 +2621,42 @@ class AdminServerManager: ObservableObject {
             return host
         }
         return APIEndpointResolver.normalize(base)
+    }
+
+    private func preferredAdminBase(for base: String) -> String {
+        APIEndpointResolver.preferredSecureCandidate(for: base) ?? APIEndpointResolver.normalize(base)
+    }
+
+    private var managedDefaultTrustedServers: [String] {
+        let urls = SettingsManager.shared.visibleManagedFederationServers.map(\.url)
+        var seen = Set<String>()
+        return urls
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func normalizedTrustedServers(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        return urls
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func normalizedFederationSettings(_ settings: FederationSettings) -> FederationSettings {
+        var normalized = settings
+        normalized.trustedServers = normalizedTrustedServers(settings.trustedServers)
+        normalized.blockedServers = normalizedTrustedServers(settings.blockedServers)
+
+        if normalized.enabled && normalized.trustedServers.isEmpty {
+            normalized.trustedServers = managedDefaultTrustedServers
+        }
+
+        if let handoff = normalized.handoffTargetServer {
+            let trimmed = APIEndpointResolver.normalize(handoff)
+            normalized.handoffTargetServer = trimmed.isEmpty ? nil : trimmed
+        }
+
+        return normalized
     }
 
     nonisolated private static func adminRoom(from dict: [String: Any], defaultSource: String) -> AdminRoomInfo {
@@ -2394,7 +2706,7 @@ class AdminServerManager: ObservableObject {
             isPrivate: (dict["isPrivate"] as? Bool) ?? false,
             maxUsers: (dict["maxUsers"] as? Int) ?? 50,
             userCount: usersValue,
-            createdBy: dict["createdBy"] as? String,
+            createdBy: (dict["createdBy"] as? String) ?? (dict["ownerUsername"] as? String) ?? (dict["owner"] as? String),
             createdAt: Self.parseDate(dict["createdAt"] ?? dict["created"]),
             isPermanent: (dict["isDefault"] as? Bool) ?? false,
             backgroundStream: nil,
@@ -2408,7 +2720,10 @@ class AdminServerManager: ObservableObject {
             enabled: dict["enabled"] as? Bool,
             isDefault: dict["isDefault"] as? Bool,
             hostServerName: resolvedHostServerName ?? defaultSource,
-            hostServerOwner: dict["hostServerOwner"] as? String,
+            hostServerOwner: (dict["hostServerOwner"] as? String)
+                ?? (dict["serverOwner"] as? String)
+                ?? (dict["ownerUsername"] as? String)
+                ?? (dict["createdBy"] as? String),
             serverSource: resolvedServerSource,
             updatedBy: (dict["updatedBy"] as? String) ?? (dict["lastUpdatedBy"] as? String),
             updatedAt: Self.parseDate(dict["updatedAt"] ?? dict["lastUpdated"]),
@@ -2475,18 +2790,26 @@ class AdminServerManager: ObservableObject {
     }
 
     nonisolated private static func parseDate(_ value: Any?) -> Date? {
+        func dateFromTimestamp(_ raw: TimeInterval) -> Date {
+            let seconds = raw > 1_000_000_000_000 ? raw / 1000 : raw
+            return Date(timeIntervalSince1970: seconds)
+        }
+
         switch value {
         case let date as Date:
             return date
         case let timeInterval as TimeInterval:
-            return Date(timeIntervalSince1970: timeInterval)
+            return dateFromTimestamp(timeInterval)
         case let intValue as Int:
-            return Date(timeIntervalSince1970: TimeInterval(intValue))
+            return dateFromTimestamp(TimeInterval(intValue))
         case let stringValue as String:
             let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
             if let parsed = ISO8601DateFormatter().date(from: trimmed) {
                 return parsed
+            }
+            if let timestamp = TimeInterval(trimmed) {
+                return dateFromTimestamp(timestamp)
             }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -2680,8 +3003,10 @@ struct ServerConfig: Codable {
     var maxGuestDuration: Int?
     var enableRateLimiting: Bool
     var serverVisibility: ServerVisibilityConfig
+    var serverDiscoveryReveal: ServerDiscoveryRevealConfig
     var handoffPromptMode: String
     var messageSettings: MessageSettings
+    var authSettings: ServerAuthSettingsConfig
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
     var recordingEnabled: Bool
@@ -2704,8 +3029,10 @@ struct ServerConfig: Codable {
         case maxGuestDuration
         case enableRateLimiting
         case serverVisibility
+        case serverDiscoveryReveal
         case handoffPromptMode
         case messageSettings
+        case authSettings
         case backgroundStreams
         case pushover
         case recordingEnabled
@@ -2729,8 +3056,10 @@ struct ServerConfig: Codable {
         maxGuestDuration: Int? = nil,
         enableRateLimiting: Bool = true,
         serverVisibility: ServerVisibilityConfig = ServerVisibilityConfig(),
+        serverDiscoveryReveal: ServerDiscoveryRevealConfig = ServerDiscoveryRevealConfig(),
         handoffPromptMode: String = "serverRecommended",
         messageSettings: MessageSettings = MessageSettings(),
+        authSettings: ServerAuthSettingsConfig = ServerAuthSettingsConfig(),
         backgroundStreams: BackgroundStreamsConfig? = nil,
         pushover: PushoverConfig? = nil,
         recordingEnabled: Bool = false
@@ -2753,8 +3082,10 @@ struct ServerConfig: Codable {
         self.maxGuestDuration = maxGuestDuration
         self.enableRateLimiting = enableRateLimiting
         self.serverVisibility = serverVisibility
+        self.serverDiscoveryReveal = serverDiscoveryReveal
         self.handoffPromptMode = handoffPromptMode
         self.messageSettings = messageSettings
+        self.authSettings = authSettings
         self.backgroundStreams = backgroundStreams
         self.pushover = pushover
         self.recordingEnabled = recordingEnabled
@@ -2779,13 +3110,70 @@ struct ServerConfig: Codable {
         maxGuestDuration = try container.decodeIfPresent(Int.self, forKey: .maxGuestDuration)
         enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
         serverVisibility = try container.decodeIfPresent(ServerVisibilityConfig.self, forKey: .serverVisibility) ?? ServerVisibilityConfig()
+        serverDiscoveryReveal = try container.decodeIfPresent(ServerDiscoveryRevealConfig.self, forKey: .serverDiscoveryReveal) ?? ServerDiscoveryRevealConfig()
         handoffPromptMode = try container.decodeIfPresent(String.self, forKey: .handoffPromptMode) ?? "serverRecommended"
         messageSettings = try container.decodeIfPresent(MessageSettings.self, forKey: .messageSettings) ?? MessageSettings()
+        authSettings = try container.decodeIfPresent(ServerAuthSettingsConfig.self, forKey: .authSettings) ?? ServerAuthSettingsConfig()
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
         recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
         fileSharing = try container.decodeIfPresent(ServerFileSharingConfig.self, forKey: .fileSharing)
         sslManager = try container.decodeIfPresent(ServerSSLManagerConfig.self, forKey: .sslManager)
+    }
+}
+
+struct ServerAuthSettingsConfig: Codable, Equatable {
+    var internalProviderEnabled: Bool
+    var whmcsProviderEnabled: Bool
+    var wordpressProviderEnabled: Bool
+    var composrProviderEnabled: Bool
+    var sharedMemberAuthEnabled: Bool
+    var sharedMemberAuthMode: String
+    var sharedMemberAuthProviders: [String]
+    var allowWhmcsFallback: Bool
+    var allowMastodonApprovalDelivery: Bool
+    var requireSecondDeviceApproval: Bool
+    var notifyAdminsOnLoginAttempts: Bool
+    var notifyAdminsOnLoginSuccess: Bool
+    var notifyAdminsOnLoginFailure: Bool
+    var notifyAdminsOnGeneratedLoginLogs: Bool
+    var mirrorLoginAlertsToMainChat: Bool
+    var allowedTwoFactorMethods: [String]
+
+    init(
+        internalProviderEnabled: Bool = true,
+        whmcsProviderEnabled: Bool = true,
+        wordpressProviderEnabled: Bool = true,
+        composrProviderEnabled: Bool = true,
+        sharedMemberAuthEnabled: Bool = false,
+        sharedMemberAuthMode: String = "group",
+        sharedMemberAuthProviders: [String] = ["voicelink", "composr"],
+        allowWhmcsFallback: Bool = true,
+        allowMastodonApprovalDelivery: Bool = true,
+        requireSecondDeviceApproval: Bool = false,
+        notifyAdminsOnLoginAttempts: Bool = true,
+        notifyAdminsOnLoginSuccess: Bool = true,
+        notifyAdminsOnLoginFailure: Bool = true,
+        notifyAdminsOnGeneratedLoginLogs: Bool = true,
+        mirrorLoginAlertsToMainChat: Bool = false,
+        allowedTwoFactorMethods: [String] = ["totp", "email", "sms", "voice", "passkey", "backup"]
+    ) {
+        self.internalProviderEnabled = internalProviderEnabled
+        self.whmcsProviderEnabled = whmcsProviderEnabled
+        self.wordpressProviderEnabled = wordpressProviderEnabled
+        self.composrProviderEnabled = composrProviderEnabled
+        self.sharedMemberAuthEnabled = sharedMemberAuthEnabled
+        self.sharedMemberAuthMode = sharedMemberAuthMode
+        self.sharedMemberAuthProviders = sharedMemberAuthProviders
+        self.allowWhmcsFallback = allowWhmcsFallback
+        self.allowMastodonApprovalDelivery = allowMastodonApprovalDelivery
+        self.requireSecondDeviceApproval = requireSecondDeviceApproval
+        self.notifyAdminsOnLoginAttempts = notifyAdminsOnLoginAttempts
+        self.notifyAdminsOnLoginSuccess = notifyAdminsOnLoginSuccess
+        self.notifyAdminsOnLoginFailure = notifyAdminsOnLoginFailure
+        self.notifyAdminsOnGeneratedLoginLogs = notifyAdminsOnGeneratedLoginLogs
+        self.mirrorLoginAlertsToMainChat = mirrorLoginAlertsToMainChat
+        self.allowedTwoFactorMethods = allowedTwoFactorMethods
     }
 }
 
@@ -2917,12 +3305,16 @@ struct ServerVisibilityConfig: Codable, Equatable {
     var ios: Bool
     var web: Bool
     var frontendOpen: Bool
+    var listedInDirectory: Bool
+    var allowDirectReveal: Bool
 
-    init(desktop: Bool = true, ios: Bool = true, web: Bool = true, frontendOpen: Bool = true) {
+    init(desktop: Bool = true, ios: Bool = true, web: Bool = true, frontendOpen: Bool = true, listedInDirectory: Bool = true, allowDirectReveal: Bool = true) {
         self.desktop = desktop
         self.ios = ios
         self.web = web
         self.frontendOpen = frontendOpen
+        self.listedInDirectory = listedInDirectory
+        self.allowDirectReveal = allowDirectReveal
     }
 
     enum CodingKeys: String, CodingKey {
@@ -2930,6 +3322,8 @@ struct ServerVisibilityConfig: Codable, Equatable {
         case ios
         case web
         case frontendOpen
+        case listedInDirectory
+        case allowDirectReveal
     }
 
     init(from decoder: Decoder) throws {
@@ -2938,6 +3332,55 @@ struct ServerVisibilityConfig: Codable, Equatable {
         ios = try container.decodeIfPresent(Bool.self, forKey: .ios) ?? true
         web = try container.decodeIfPresent(Bool.self, forKey: .web) ?? true
         frontendOpen = try container.decodeIfPresent(Bool.self, forKey: .frontendOpen) ?? true
+        listedInDirectory = try container.decodeIfPresent(Bool.self, forKey: .listedInDirectory) ?? true
+        allowDirectReveal = try container.decodeIfPresent(Bool.self, forKey: .allowDirectReveal) ?? true
+    }
+}
+
+struct ServerDiscoveryRevealConfig: Codable, Equatable {
+    var staticCodes: [String]
+    var rotatingCode: ServerRotatingRevealCodeConfig
+
+    init(staticCodes: [String] = [], rotatingCode: ServerRotatingRevealCodeConfig = ServerRotatingRevealCodeConfig()) {
+        self.staticCodes = staticCodes
+        self.rotatingCode = rotatingCode
+    }
+}
+
+struct ServerRotatingRevealCodeConfig: Codable, Equatable {
+    var enabled: Bool
+    var seed: String
+    var seedConfigured: Bool?
+    var intervalMinutes: Int
+    var length: Int
+    var acceptPreviousWindow: Bool
+
+    init(enabled: Bool = false, seed: String = "", seedConfigured: Bool? = nil, intervalMinutes: Int = 60, length: Int = 8, acceptPreviousWindow: Bool = true) {
+        self.enabled = enabled
+        self.seed = seed
+        self.seedConfigured = seedConfigured
+        self.intervalMinutes = intervalMinutes
+        self.length = length
+        self.acceptPreviousWindow = acceptPreviousWindow
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case seed
+        case seedConfigured
+        case intervalMinutes
+        case length
+        case acceptPreviousWindow
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        seed = try container.decodeIfPresent(String.self, forKey: .seed) ?? ""
+        seedConfigured = try container.decodeIfPresent(Bool.self, forKey: .seedConfigured)
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 60
+        length = try container.decodeIfPresent(Int.self, forKey: .length) ?? 8
+        acceptPreviousWindow = try container.decodeIfPresent(Bool.self, forKey: .acceptPreviousWindow) ?? true
     }
 }
 
@@ -3242,7 +3685,7 @@ struct DatabaseAdminStatus: Codable, Equatable {
     }
 }
 
-struct BackgroundStreamsConfig: Codable {
+struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
     var enabled: Bool
     var streams: [BackgroundStreamConfig]
     var defaultVolume: Int
@@ -3311,7 +3754,7 @@ struct BackgroundStreamsConfig: Codable {
     }
 }
 
-struct BackgroundStreamConfig: Codable, Identifiable {
+struct BackgroundStreamConfig: Codable, Identifiable, Equatable, Hashable {
     var id: String
     var name: String
     var sourceType: String?
@@ -3342,7 +3785,147 @@ struct AdminUserInfo: Codable, Identifiable {
     var transmitEnabled: Bool?
     let ipAddress: String?
     let authMethod: String?
+    let authProvider: String?
     let email: String?
+    let linkedAuthMethods: [AdminLinkedAuthMethod]?
+    let sharedAuthMode: String?
+}
+
+struct AdminRecentUserLoginEnvelope: Codable {
+    let success: Bool
+    let count: Int
+    let users: [AdminRecentUserLogin]
+}
+
+struct AdminRecentUserLogin: Codable, Identifiable {
+    let id: String
+    let socketId: String?
+    let userId: String?
+    let username: String?
+    let displayName: String?
+    let clientType: String?
+    let clientVersion: String?
+    let deviceName: String?
+    let authMethod: String?
+    let roomId: String?
+    let roomName: String?
+    let ipAddress: String?
+    let loggedInAt: String?
+
+    var displayLabel: String {
+        displayName?.isEmpty == false ? displayName! : (username?.isEmpty == false ? username! : "Unknown user")
+    }
+
+    var clientLabel: String {
+        [clientType, clientVersion.map { "build \($0)" }, deviceName.map { "on \($0)" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+}
+
+struct AdminUserSearchEnvelope: Codable {
+    let success: Bool
+    let query: String?
+    let count: Int
+    let users: [AdminUserSearchEntry]
+}
+
+struct AdminUserSearchEntry: Codable, Identifiable {
+    let rawId: String?
+    let socketId: String?
+    let userId: String?
+    let odId: String?
+    let accountId: String?
+    let username: String?
+    let displayName: String?
+    let email: String?
+    let clientType: String?
+    let clientVersion: String?
+    let deviceName: String?
+    let currentRoom: String?
+    let roomName: String?
+    let authMethod: String?
+    let authProvider: String?
+    let role: String?
+    let source: String?
+    let connected: Bool?
+
+    var id: String {
+        rawId ?? socketId ?? userId ?? accountId ?? email ?? username ?? displayName ?? "unknown-user"
+    }
+
+    var displayLabel: String {
+        displayName?.isEmpty == false ? displayName! : (username?.isEmpty == false ? username! : (email ?? "Unknown user"))
+    }
+
+    var clientLabel: String {
+        [clientType, clientVersion.map { "build \($0)" }, deviceName.map { "on \($0)" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rawId = "id"
+        case socketId
+        case userId
+        case odId
+        case accountId
+        case username
+        case displayName
+        case email
+        case clientType
+        case clientVersion
+        case deviceName
+        case currentRoom
+        case roomName
+        case authMethod
+        case authProvider
+        case role
+        case source
+        case connected
+    }
+}
+
+struct AdminLinkedAuthMethod: Codable, Hashable {
+    let provider: String
+    let externalId: String?
+    let email: String?
+    let username: String?
+    let displayName: String?
+}
+
+struct AdminSharedAuthGroupsEnvelope: Codable {
+    let success: Bool
+    let groups: [AdminSharedAuthGroup]
+}
+
+struct AdminSharedAuthGroup: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let mode: String
+    let providers: [String]
+    let source: String
+    let externalGroupId: String?
+    let externalSite: String?
+    let createdAt: String
+    let updatedAt: String
+    let members: [AdminSharedAuthMember]
+    let memberCount: Int
+}
+
+struct AdminSharedAuthMember: Codable, Identifiable, Hashable {
+    let id: String
+    let localUserId: String?
+    let email: String?
+    let username: String?
+    let displayName: String
+    let provider: String
+    let externalMemberId: String?
+    let roles: [String]
+    let aliases: [String]
+    let createdAt: String
+    let updatedAt: String
 }
 
 struct AdminRoomInfo: Codable, Identifiable {
@@ -3377,6 +3960,7 @@ struct AdminRoomInfo: Codable, Identifiable {
         case id
         case name
         case description
+        case metadata
         case isPrivate
         case maxUsers
         case userCount
@@ -3402,16 +3986,75 @@ struct AdminRoomInfo: Codable, Identifiable {
         case previousNames
     }
 
+    private struct RoomMetadata: Codable {
+        let description: String?
+        let roomDescription: String?
+        let room_description: String?
+        let details: String?
+        let topic: String?
+        let about: String?
+        let summary: String?
+        let subtitle: String?
+
+        var resolvedDescription: String? {
+            [
+                description,
+                roomDescription,
+                room_description,
+                details,
+                topic,
+                about,
+                summary,
+                subtitle
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(description, forKey: .description)
+        try container.encode(isPrivate, forKey: .isPrivate)
+        try container.encode(maxUsers, forKey: .maxUsers)
+        try container.encode(userCount, forKey: .userCount)
+        try container.encodeIfPresent(createdBy, forKey: .createdBy)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encode(isPermanent, forKey: .isPermanent)
+        try container.encodeIfPresent(backgroundStream, forKey: .backgroundStream)
+        try container.encodeIfPresent(welcomeMessage, forKey: .welcomeMessage)
+        try container.encodeIfPresent(visibility, forKey: .visibility)
+        try container.encodeIfPresent(accessType, forKey: .accessType)
+        try container.encodeIfPresent(hidden, forKey: .hidden)
+        try container.encodeIfPresent(locked, forKey: .locked)
+        try container.encodeIfPresent(recordingAllowed, forKey: .recordingAllowed)
+        try container.encodeIfPresent(accessPin, forKey: .accessPin)
+        try container.encodeIfPresent(hasAccessPin, forKey: .hasAccessPin)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encodeIfPresent(isDefault, forKey: .isDefault)
+        try container.encodeIfPresent(hostServerName, forKey: .hostServerName)
+        try container.encodeIfPresent(hostServerOwner, forKey: .hostServerOwner)
+        try container.encodeIfPresent(serverSource, forKey: .serverSource)
+        try container.encodeIfPresent(updatedBy, forKey: .updatedBy)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encode(previousNames, forKey: .previousNames)
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled Room"
-        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        let explicitDescription = try container.decodeIfPresent(String.self, forKey: .description)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let metadataDescription = try container.decodeIfPresent(RoomMetadata.self, forKey: .metadata)?.resolvedDescription
+        description = explicitDescription?.isEmpty == false ? explicitDescription! : (metadataDescription ?? "")
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 50
         userCount = try container.decodeIfPresent(Int.self, forKey: .userCount) ?? 0
         createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
-        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        createdAt = Self.decodeFlexibleDate(from: container, forKey: .createdAt)
         isPermanent = try container.decodeIfPresent(Bool.self, forKey: .isPermanent) ?? false
         backgroundStream = try container.decodeIfPresent(String.self, forKey: .backgroundStream)
         welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
@@ -3428,8 +4071,54 @@ struct AdminRoomInfo: Codable, Identifiable {
         hostServerOwner = try container.decodeIfPresent(String.self, forKey: .hostServerOwner)
         serverSource = try container.decodeIfPresent(String.self, forKey: .serverSource)
         updatedBy = try container.decodeIfPresent(String.self, forKey: .updatedBy)
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+        updatedAt = Self.decodeFlexibleDate(from: container, forKey: .updatedAt)
         previousNames = try container.decodeIfPresent([String].self, forKey: .previousNames) ?? []
+    }
+
+    private static func decodeFlexibleDate(from container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Date? {
+        func parseLocalDate(_ value: Any?) -> Date? {
+            func dateFromTimestamp(_ raw: TimeInterval) -> Date {
+                let seconds = raw > 1_000_000_000_000 ? raw / 1000 : raw
+                return Date(timeIntervalSince1970: seconds)
+            }
+            switch value {
+            case let date as Date:
+                return date
+            case let raw as TimeInterval:
+                return dateFromTimestamp(raw)
+            case let raw as Int:
+                return dateFromTimestamp(TimeInterval(raw))
+            case let raw as String:
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                if let parsed = ISO8601DateFormatter().date(from: trimmed) {
+                    return parsed
+                }
+                if let timestamp = TimeInterval(trimmed) {
+                    return dateFromTimestamp(timestamp)
+                }
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                return formatter.date(from: trimmed)
+            default:
+                return nil
+            }
+        }
+
+        if let date = try? container.decodeIfPresent(Date.self, forKey: key) {
+            return date
+        }
+        if let rawString = try? container.decodeIfPresent(String.self, forKey: key) {
+            return parseLocalDate(rawString)
+        }
+        if let rawDouble = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return parseLocalDate(rawDouble)
+        }
+        if let rawInt = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return parseLocalDate(rawInt)
+        }
+        return nil
     }
 
     init(
@@ -3574,6 +4263,38 @@ struct ServerStats: Codable {
     let peakUsers: Int
     let messagesPerMinute: Double
     let bandwidthUsage: Double
+
+    init(
+        totalUsers: Int,
+        activeUsers: Int,
+        totalRooms: Int,
+        activeRooms: Int,
+        uptime: Int,
+        peakUsers: Int,
+        messagesPerMinute: Double,
+        bandwidthUsage: Double
+    ) {
+        self.totalUsers = totalUsers
+        self.activeUsers = activeUsers
+        self.totalRooms = totalRooms
+        self.activeRooms = activeRooms
+        self.uptime = uptime
+        self.peakUsers = peakUsers
+        self.messagesPerMinute = messagesPerMinute
+        self.bandwidthUsage = bandwidthUsage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalUsers = try container.decodeIfPresent(Int.self, forKey: .totalUsers) ?? 0
+        activeUsers = try container.decodeIfPresent(Int.self, forKey: .activeUsers) ?? 0
+        totalRooms = try container.decodeIfPresent(Int.self, forKey: .totalRooms) ?? 0
+        activeRooms = try container.decodeIfPresent(Int.self, forKey: .activeRooms) ?? 0
+        uptime = try container.decodeIfPresent(Int.self, forKey: .uptime) ?? 0
+        peakUsers = try container.decodeIfPresent(Int.self, forKey: .peakUsers) ?? activeUsers
+        messagesPerMinute = try container.decodeIfPresent(Double.self, forKey: .messagesPerMinute) ?? 0
+        bandwidthUsage = try container.decodeIfPresent(Double.self, forKey: .bandwidthUsage) ?? 0
+    }
 }
 
 struct APISyncSettings: Codable {
@@ -3793,396 +4514,4 @@ struct APISyncSettings: Codable {
         snapshotIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .snapshotIntervalSeconds) ?? 180
         routingProfiles = try container.decodeIfPresent([APISyncRoutingProfile].self, forKey: .routingProfiles) ?? []
     }
-}
-
-struct APISyncRoutingProfile: Codable, Identifiable, Hashable {
-    var id: UUID
-    var label: String
-    var targetServer: String
-    var targetType: String
-    var installPath: String?
-    var manualAddress: String?
-    var actions: [String]
-
-    init(
-        id: UUID = UUID(),
-        label: String = "Routing Profile",
-        targetServer: String = "",
-        targetType: String = "domain",
-        installPath: String? = nil,
-        manualAddress: String? = nil,
-        actions: [String] = ["start"]
-    ) {
-        self.id = id
-        self.label = label
-        self.targetServer = targetServer
-        self.targetType = targetType
-        self.installPath = installPath
-        self.manualAddress = manualAddress
-        self.actions = Array(actions.prefix(4))
-    }
-}
-
-struct FederationSettings: Codable {
-    var enabled: Bool
-    var allowIncoming: Bool
-    var allowOutgoing: Bool
-    var trustedServers: [String]
-    var blockedServers: [String]
-    var autoAcceptTrusted: Bool
-    var requireApproval: Bool
-    var maintenanceModeEnabled: Bool
-    var autoHandoffEnabled: Bool
-    var handoffTargetServer: String?
-}
-
-struct ServerSchedulerStatusResponse: Codable {
-    let success: Bool
-    let status: ServerSchedulerStatus
-    let tasks: [ServerSchedulerTask]
-    let logs: [ServerSchedulerLogEntry]
-}
-
-struct ServerSchedulerStatus: Codable {
-    let service: String
-    let role: String
-    let totalVisibleTasks: Int
-    let enabledTasks: Int
-    let runningTasks: Int
-    let serverTime: String
-}
-
-struct ServerSchedulerTask: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-    let visibility: String
-    let allowUserRun: Bool
-    let enabled: Bool
-    let running: Bool
-    let intervalSeconds: Int
-    let lastRunAt: String?
-    let lastStatus: String
-    let lastDurationMs: Int
-    let lastMessage: String?
-    let nextRunAt: String?
-    let action: String?
-}
-
-struct ServerSchedulerLogEntry: Codable, Identifiable, Hashable {
-    let id: String
-    let taskId: String
-    let taskName: String
-    let actor: String
-    let trigger: String
-    let status: String
-    let message: String?
-    let durationMs: Int
-    let timestamp: String
-}
-
-struct MastodonBotAccount: Codable, Identifiable, Hashable {
-    var id: String { instance }
-    let instance: String
-    let username: String?
-    let displayName: String?
-    let enabled: Bool
-}
-
-struct AuthProviderStatusResponse: Codable {
-    let success: Bool
-    let providers: [String: AuthProviderHealth]
-    let smtp: AuthSmtpStatus
-    let recovery: AuthRecoveryStatus
-    let scheduler: AuthSchedulerStatus
-}
-
-struct AuthProviderHealth: Codable, Hashable {
-    let enabled: Bool
-    let health: String
-    let label: String?
-    let delegated: Bool?
-    let portalUrl: String?
-    let adminUrl: String?
-    let botCount: Int?
-}
-
-struct AuthSmtpStatus: Codable, Hashable {
-    let configured: Bool
-    let health: String
-    let host: String?
-    let port: Int
-    let from: String?
-}
-
-struct AuthRecoveryStatus: Codable, Hashable {
-    let emailCodesAvailable: Bool
-    let smtpRecoveryAvailable: Bool
-    let breakGlassConfigured: Bool
-}
-
-struct AuthSchedulerStatus: Codable, Hashable {
-    let available: Bool
-    let health: String
-}
-
-struct AdminModuleInfo: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-    let version: String
-    let category: String
-    var installed: Bool
-    var enabled: Bool
-    let recommended: Bool
-    let popular: Bool
-    let dependencies: [String]
-    let features: [String]
-    let configJSON: String
-}
-
-struct VoiceLinkFlexPBXHoldMediaEnvelope: Codable {
-    let success: Bool
-    let holdMedia: VoiceLinkFlexPBXHoldMediaStatus
-}
-
-struct VoiceLinkFlexPBXHoldMediaStatus: Codable, Hashable {
-    var enabled: Bool
-    var optionalSource: Bool
-    var autoReload: Bool
-    var allowedSourceTypes: [String]
-    var globalAssignment: VoiceLinkFlexPBXHoldMediaAssignment
-    var roomAssignments: [String: VoiceLinkFlexPBXHoldMediaAssignment]
-    var pbxTargets: [VoiceLinkFlexPBXTarget]
-    var sources: [VoiceLinkFlexPBXHoldMediaSource]
-    var roomCount: Int
-
-    var asRequestPayload: [String: Any] {
-        [
-            "enabled": enabled,
-            "optionalSource": optionalSource,
-            "autoReload": autoReload,
-            "allowedSourceTypes": allowedSourceTypes,
-            "globalAssignment": globalAssignment.asDictionary,
-            "roomAssignments": Dictionary(uniqueKeysWithValues: roomAssignments.map { ($0.key, $0.value.asDictionary) }),
-            "pbxTargets": pbxTargets.map(\.asDictionary)
-        ]
-    }
-}
-
-struct VoiceLinkFlexPBXHoldMediaAssignment: Codable, Hashable {
-    var enabled: Bool
-    var sourceType: String
-    var sourceId: String
-    var mohClass: String
-    var targetIds: [String]
-
-    var asDictionary: [String: Any] {
-        [
-            "enabled": enabled,
-            "sourceType": sourceType,
-            "sourceId": sourceId,
-            "mohClass": mohClass,
-            "targetIds": targetIds
-        ]
-    }
-}
-
-struct VoiceLinkFlexPBXTarget: Codable, Hashable, Identifiable {
-    var id: String
-    var name: String
-    var apiUrl: String
-    var enabled: Bool
-
-    var asDictionary: [String: Any] {
-        [
-            "id": id,
-            "name": name,
-            "apiUrl": apiUrl,
-            "enabled": enabled
-        ]
-    }
-}
-
-struct VoiceLinkFlexPBXHoldMediaSource: Codable, Hashable, Identifiable {
-    var id: String
-    var name: String
-    var sourceType: String
-    var description: String
-    var streamUrl: String
-    var supported: Bool
-    var roomId: String?
-    var roomName: String?
-}
-
-struct VoiceLinkFlexPBXHoldMediaSyncResult: Codable, Hashable {
-    let success: Bool
-    let syncedAt: Double?
-    let targets: [VoiceLinkFlexPBXHoldMediaSyncTarget]
-    let classCount: Int?
-}
-
-struct VoiceLinkFlexPBXHoldMediaSyncTarget: Codable, Hashable, Identifiable {
-    let targetId: String
-    let targetName: String
-    let apiUrl: String?
-    let classes: [VoiceLinkFlexPBXSyncedClass]
-    let success: Bool
-    let error: String?
-
-    var id: String { targetId }
-}
-
-struct VoiceLinkFlexPBXSyncedClass: Codable, Hashable, Identifiable {
-    let name: String
-    let sourceType: String
-    let roomId: String?
-    let streamUrl: String?
-    let success: Bool
-
-    var id: String { "\(name)|\(roomId ?? "global")" }
-}
-
-struct ServerConfigBackupsEnvelope: Codable, Hashable {
-    let backups: [ServerConfigBackup]
-}
-
-struct ServerConfigBackupCreateResponse: Codable, Hashable {
-    let success: Bool
-    let path: String?
-    let filename: String
-}
-
-struct ServerConfigBackup: Codable, Hashable, Identifiable {
-    let filename: String
-    let path: String?
-    let createdAt: String?
-    let label: String?
-    let size: Int?
-    let error: Bool?
-
-    var id: String { filename }
-}
-
-struct DeploymentManagerStatus: Codable {
-    let enabled: Bool
-    let supportsFreshInstall: Bool
-    let supportsExistingInstallUpdate: Bool
-    let supportsRemoteBootstrap: Bool
-    let supportedTransports: [DeploymentTransportInfo]
-    let mailConfigured: Bool
-    let defaultOwnerEmailTemplateEnabled: Bool
-}
-
-struct DeploymentTransportInfo: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-}
-
-struct DeploymentTransportsResponse: Codable {
-    let transports: [DeploymentTransportInfo]
-}
-
-struct DeploymentPackageRequest: Codable {
-    var preset: String?
-    var sanitize: Bool
-    var ownerEmail: String?
-    var targetLabel: String?
-    var targetServerUrl: String?
-    var linkedToMain: Bool
-    var trustedServers: [String]
-    var extraConfig: DeploymentExtraConfig
-}
-
-struct DeploymentExtraConfig: Codable {
-    var server: [String: String]
-    var federation: [String: String]
-    var onboarding: [String: String]
-
-    init(server: [String: String] = [:], federation: [String: String] = [:], onboarding: [String: String] = [:]) {
-        self.server = server
-        self.federation = federation
-        self.onboarding = onboarding
-    }
-}
-
-struct DeploymentPackageResponse: Codable {
-    let success: Bool
-    let bundleId: String
-    let bundleName: String
-    let zipPath: String
-    let manifest: DeploymentManifest
-}
-
-struct DeploymentManifest: Codable {
-    let id: String
-    let createdAt: String
-    let targetLabel: String?
-    let targetServerUrl: String?
-    let ownerEmail: String?
-}
-
-struct DeploymentExecutionRequest: Codable {
-    var packageOptions: DeploymentPackageRequest
-    var target: DeploymentTargetRequest
-    var bootstrap: Bool
-}
-
-struct DeploymentTargetRequest: Codable {
-    var transport: String
-    var host: String?
-    var port: Int?
-    var remotePath: String?
-    var siteRoot: String?
-    var uploadUrl: String?
-    var username: String?
-    var password: String?
-    var method: String?
-    var insecure: Bool
-    var apiBaseUrl: String?
-    var apiToken: String?
-    var sharedSecret: String?
-    var trustedServers: [String]?
-    var restartAfterBootstrap: Bool?
-    var restartUrl: String?
-    var restartMethod: String?
-}
-
-struct DeploymentExecutionResponse: Codable {
-    let success: Bool
-    let bundleId: String
-    let bundleName: String
-    let upload: DeploymentUploadResponse
-    let bootstrap: DeploymentBootstrapResponse?
-    let restart: DeploymentRestartResponse?
-}
-
-struct DeploymentUploadResponse: Codable {
-    let success: Bool
-    let transport: String
-    let remoteUrl: String
-}
-
-struct DeploymentBootstrapResponse: Codable {
-    let success: Bool
-}
-
-struct DeploymentRestartResponse: Codable {
-    let success: Bool?
-    let skipped: Bool?
-    let reason: String?
-    let error: String?
-}
-
-struct DeploymentOwnerEmailRequest: Codable {
-    var recipient: String
-    var subject: String?
-    var bundleName: String?
-    var remoteUrl: String?
-    var apiBaseUrl: String?
-}
-
-struct DeploymentSimpleResponse: Codable {
-    let success: Bool
 }

@@ -499,12 +499,12 @@ class JellyfinManager: ObservableObject, @unchecked Sendable {
 
         // Add time observer
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        session.timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak session] time in
+        session.timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { [weak session] time in
             session?.currentTime = time.seconds
         }
 
         // Observe playback state
-        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: nil) { [weak self] _ in
             self?.playNextInQueue()
         }
 
