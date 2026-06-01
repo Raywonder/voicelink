@@ -264,16 +264,24 @@ struct FederationServersView: View {
         }
         .padding()
         .task {
-            await refreshTrustedServers()
+            while !Task.isCancelled {
+                await refreshTrustedServers()
+                appState.refreshRooms()
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
         }
     }
 
     private func connect(to url: String, browseOnly: Bool) {
+        if browseOnly {
+            appState.refreshRooms()
+            appState.currentScreen = .joinRoom
+            errorMessage = "Browsing rooms from \(trustedHostLabel(url)). Your current server connection was not changed."
+            return
+        }
+
         serverManager.connectToURL(url)
         appState.refreshRooms()
-        if browseOnly {
-            appState.currentScreen = .joinRoom
-        }
     }
 
     private func disconnectCurrentServer() {

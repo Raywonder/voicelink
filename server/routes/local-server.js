@@ -28,7 +28,12 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
-const { VoiceLinkFlexPBXModule } = require('../modules/voicelink-flexpbx');
+let VoiceLinkFlexPBXModule = null;
+try {
+    ({ VoiceLinkFlexPBXModule } = require('../modules/voicelink-flexpbx'));
+} catch (error) {
+    console.warn('[Modules] Optional VoiceLink FlexPBX module unavailable:', error.message);
+}
 let DeploymentManagerModule = null;
 try {
     ({ DeploymentManagerModule } = require('../modules/deployment-manager'));
@@ -3074,7 +3079,7 @@ class VoiceLinkLocalServer {
             console.log('[Modules] Media Rooms module disabled; server-side streaming is unavailable until enabled');
         }
 
-        if (this.moduleRegistry.isModuleEnabled('voicelink-flexpbx')) {
+        if (VoiceLinkFlexPBXModule && this.moduleRegistry.isModuleEnabled('voicelink-flexpbx')) {
             try {
                 const voiceFlexConfig = this.moduleRegistry.getModule('voicelink-flexpbx')?.config || {};
                 this.modules.voiceLinkFlexPBX = new VoiceLinkFlexPBXModule({

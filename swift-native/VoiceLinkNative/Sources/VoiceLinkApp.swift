@@ -540,6 +540,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var autoReconnectObserverInstalled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard enforceSingleInstance() else { return }
+
         if CommandLine.arguments.contains("--self-test-sound-download") {
             Task { @MainActor in
                 let passed = await AppSoundManager.shared.runMissingSoundDownloadSelfTest()
@@ -755,6 +757,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow = window
             window.delegate = windowController
         }
+    }
+
+    private func enforceSingleInstance() -> Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return true
+        }
+
+        let currentProcessIdentifier = NSRunningApplication.current.processIdentifier
+        let otherInstance = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first { $0.processIdentifier != currentProcessIdentifier && !$0.isTerminated }
+
+        guard let otherInstance else {
+            return true
+        }
+
+        otherInstance.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        NSApp.terminate(nil)
+        return false
     }
 }
 
@@ -3575,14 +3596,17 @@ struct MainWindowServerCard: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Browse rooms on \(entry.name)")
 
+                if isConnected {
+                    Button("Disconnect", role: .destructive) {
+                        onDisconnect()
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Disconnect from \(entry.name)")
+                }
+
                 Menu {
                     Button("Refresh Rooms") {
                         onBrowseRooms()
-                    }
-                    if isConnected {
-                        Button("Disconnect from Server", role: .destructive) {
-                            onDisconnect()
-                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")

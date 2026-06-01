@@ -1322,8 +1322,7 @@ private struct ServersTab: View {
     private var selectedTabBinding: Binding<ServerScreenTab> {
         Binding(
             get: {
-                let resolved = ServerScreenTab(rawValue: storedTab) ?? .federation
-                return resolved == .servers ? .federation : resolved
+                ServerScreenTab(rawValue: storedTab) ?? .servers
             },
             set: { storedTab = $0.rawValue }
         )
@@ -3978,6 +3977,8 @@ private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
     }
     candidates.append("https://voicelinkapp.app")
     candidates.append("https://community.voicelinkapp.app")
+    candidates.append("https://devine-creations.com/voicelink")
+    candidates.append("https://devinecreations.net")
 
     var seen = Set<String>()
     return candidates.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }

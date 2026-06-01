@@ -29,6 +29,7 @@ class ServerManager: ObservableObject {
     private var currentServerURL: String = ""
     private var useMainServer: Bool = true
     private var domainRecoveryTimer: Timer?
+    private var backendRefreshTimer: Timer?
     private let incomingAudioQueue = DispatchQueue(label: "voicelink.incoming-audio", qos: .userInitiated)
     private let audioStartQueue = DispatchQueue(label: "voicelink.audio-start", qos: .userInitiated)
     private var pendingAudioStartWorkItem: DispatchWorkItem?
@@ -106,12 +107,20 @@ class ServerManager: ObservableObject {
             let replyToId = data["replyToId"] as? String
             let mentions = data["mentions"] as? [String]
             let roomId = data["roomId"] as? String
+            let messageType = data["type"] as? String ?? "text"
+            let userName = UserDefaults.standard.string(forKey: "voicelink.userName")
+                ?? UserDefaults.standard.string(forKey: "username")
+                ?? AuthenticationManager.shared.currentUser?.username
+                ?? "User"
 
             if isDirect, let recipient = recipientId {
                 // Direct message
                 var msgData: [String: Any] = [
                     "targetUserId": recipient,
-                    "message": content
+                    "message": content,
+                    "content": content,
+                    "type": messageType,
+                    "userName": userName
                 ]
                 if let messageId {
                     msgData["messageId"] = messageId
@@ -125,7 +134,12 @@ class ServerManager: ObservableObject {
                 self?.socket?.emit("direct-message", msgData)
             } else {
                 // Room message
-                var msgData: [String: Any] = ["message": content]
+                var msgData: [String: Any] = [
+                    "message": content,
+                    "content": content,
+                    "type": messageType,
+                    "userName": userName
+                ]
                 if let roomId, !roomId.isEmpty {
                     msgData["roomId"] = roomId
                 }
@@ -258,6 +272,7 @@ class ServerManager: ObservableObject {
     func disconnect() {
         socket?.disconnect()
         stopDomainRecoveryTimer()
+        stopBackendRefreshTimer()
         DispatchQueue.main.async {
             self.isConnected = false
             self.serverStatus = "Disconnected"
@@ -295,7 +310,7 @@ class ServerManager: ObservableObject {
             .forceWebsockets(true),
             .reconnects(true),
             .reconnectWait(2),
-            .reconnectAttempts(5)
+            .reconnectAttempts(10_000)
         ])
 
         socket = manager?.defaultSocket
@@ -327,7 +342,7 @@ class ServerManager: ObservableObject {
             .forceWebsockets(true),
             .reconnects(true),
             .reconnectWait(3),
-            .reconnectAttempts(5),
+            .reconnectAttempts(10_000),
             .secure(serverURL.hasPrefix("https"))
         ])
 
@@ -425,6 +440,23 @@ class ServerManager: ObservableObject {
         domainRecoveryTimer = nil
     }
 
+    private func startBackendRefreshTimer() {
+        stopBackendRefreshTimer()
+        backendRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self = self, self.isConnected else { return }
+            self.getRooms()
+            if let activeRoomId = self.activeRoomId {
+                self.socket?.emit("get-room-users", ["roomId": activeRoomId])
+                self.socket?.emit("get-room-messages", ["roomId": activeRoomId, "limit": 50])
+            }
+        }
+    }
+
+    private func stopBackendRefreshTimer() {
+        backendRefreshTimer?.invalidate()
+        backendRefreshTimer = nil
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
@@ -446,6 +478,7 @@ class ServerManager: ObservableObject {
             self.registerAuthenticatedSessionIfNeeded()
             self.scheduleSessionRegistrationRetry()
             self.scheduleDomainRecoveryIfNeeded()
+            self.startBackendRefreshTimer()
             // Request room list after connecting
             self.getRooms()
         }
@@ -453,6 +486,7 @@ class ServerManager: ObservableObject {
         socket.on(clientEvent: .disconnect) { [weak self] data, ack in
             print("Disconnected from server")
             self?.stopDomainRecoveryTimer()
+            self?.stopBackendRefreshTimer()
             self?.cancelPendingSessionRegistrationRetry()
             self?.registeredSocketSession = false
             self?.awaitingDeviceApproval = false
