@@ -876,7 +876,7 @@ struct AdminSupportSection: View {
                     .padding()
             } else {
                 LazyVStack(spacing: 10) {
-                    ForEach(adminManager.supportSessions) { session in
+                    ForEach(adminManager.supportSessions, id: \.id) { session in
                         AdminSupportSessionRow(session: session) { action in
                             switch action {
                             case .pickup:
@@ -3405,7 +3405,7 @@ struct AdminFederationSection: View {
                         .font(.caption)
                         .foregroundColor(.gray)
 
-                    ForEach(managedPeers) { peer in
+                    ForEach(Array(SettingsManager.managedFederationServers.enumerated()), id: \.element.id) { _, peer in
                         let isEnabled = config.trustedServers.contains(peer.url)
                         HStack(alignment: .top, spacing: 10) {
                             Toggle("", isOn: Binding(
@@ -3468,7 +3468,7 @@ struct AdminFederationSection: View {
                         set: { config.handoffTargetServer = $0.isEmpty ? nil : $0; settings = config }
                     )) {
                         Text("No automatic target").tag("")
-                        ForEach(managedPeers) { peer in
+                        ForEach(managedPeers, id: \.id) { peer in
                             Text(peer.name).tag(peer.url)
                         }
                         ForEach(config.trustedServers.filter { trusted in

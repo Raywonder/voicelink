@@ -663,8 +663,7 @@ class AdminServerManager: ObservableObject {
                         lastActiveUsername: nil,
                         lastActivityAt: nil,
                         hostServerName: room.hostServerName,
-                        hostServerOwner: room.hostServerOwner,
-                        spatialAudioEnabled: nil
+                        hostServerOwner: room.hostServerOwner
                     )
                 )
                 return true
