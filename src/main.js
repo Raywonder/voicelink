@@ -51,6 +51,10 @@ class VoiceLinkApp {
     init() {
         console.log('Initializing VoiceLink Local...');
 
+        if (!this.enforceSingleInstance()) {
+            return;
+        }
+
         // Set app paths for portable mode
         if (this.isPortable) {
             this.setupPortablePaths();
@@ -67,6 +71,44 @@ class VoiceLinkApp {
 
         // Setup IPC handlers
         this.setupIPCHandlers();
+    }
+
+    enforceSingleInstance() {
+        const gotTheLock = app.requestSingleInstanceLock();
+
+        if (!gotTheLock) {
+            console.log('Another VoiceLink instance is already running, exiting...');
+            app.quit();
+            return false;
+        }
+
+        app.on('second-instance', (event, commandLine) => {
+            const url = commandLine.find(arg => arg.startsWith('voicelink://'));
+            if (url) {
+                this.handleProtocolUrl(url);
+            }
+            this.focusMainWindow();
+        });
+
+        return true;
+    }
+
+    focusMainWindow() {
+        if (!this.mainWindow) {
+            if (app.isReady()) {
+                this.createWindow();
+            }
+            return;
+        }
+
+        if (this.mainWindow.isMinimized()) {
+            this.mainWindow.restore();
+        }
+        if (!this.mainWindow.isVisible()) {
+            this.mainWindow.show();
+        }
+        this.mainWindow.focus();
+        this.mainWindow.moveTop();
     }
 
     setupPortablePaths() {
@@ -202,24 +244,6 @@ class VoiceLinkApp {
             this.handleProtocolUrl(url);
         });
 
-        // Handle protocol URL on Windows/Linux (via second-instance)
-        const gotTheLock = app.requestSingleInstanceLock();
-        if (!gotTheLock) {
-            app.quit();
-        } else {
-            app.on('second-instance', (event, commandLine, workingDirectory) => {
-                // Find the protocol URL in command line args
-                const url = commandLine.find(arg => arg.startsWith('voicelink://'));
-                if (url) {
-                    this.handleProtocolUrl(url);
-                }
-                // Focus window if exists
-                if (this.mainWindow) {
-                    if (this.mainWindow.isMinimized()) this.mainWindow.restore();
-                    this.mainWindow.focus();
-                }
-            });
-        }
     }
 
     // Handle voicelink:// protocol URLs
@@ -236,8 +260,7 @@ class VoiceLinkApp {
                 if (!this.mainWindow) {
                     this.createWindow();
                 }
-                if (this.mainWindow.isMinimized()) this.mainWindow.restore();
-                this.mainWindow.focus();
+                this.focusMainWindow();
 
                 // Send join command to renderer
                 this.mainWindow.webContents.once('did-finish-load', () => {

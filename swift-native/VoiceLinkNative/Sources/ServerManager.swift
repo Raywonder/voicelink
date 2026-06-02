@@ -6,6 +6,8 @@ class ServerManager: ObservableObject {
 
     private var manager: SocketManager?
     private var socket: SocketIOClient?
+    private var messageObserver: NSObjectProtocol?
+    private var typingObserver: NSObjectProtocol?
 
     @Published var isConnected = false
     @Published var serverStatus: String = "Disconnected"
@@ -24,6 +26,16 @@ class ServerManager: ObservableObject {
     init() {
         // Default to main server
         self.currentServerURL = ServerManager.mainServer
+        setupMessagingBridge()
+    }
+
+    deinit {
+        if let messageObserver {
+            NotificationCenter.default.removeObserver(messageObserver)
+        }
+        if let typingObserver {
+            NotificationCenter.default.removeObserver(typingObserver)
+        }
     }
 
     func connect(toMain: Bool = true) {
@@ -206,6 +218,13 @@ class ServerManager: ObservableObject {
             }
         }
 
+        socket.on("joined-room") { data, ack in
+            print("Joined room: \(data)")
+            if let roomData = data[0] as? [String: Any] {
+                NotificationCenter.default.post(name: .roomJoined, object: roomData)
+            }
+        }
+
         // User joined room
         socket.on("user-joined") { [weak self] data, ack in
             print("User joined: \(data)")
@@ -248,7 +267,42 @@ class ServerManager: ObservableObject {
                 DispatchQueue.main.async {
                     self?.errorMessage = message
                 }
+            } else if let errorData = data[0] as? [String: Any],
+                      let message = errorData["message"] as? String {
+                DispatchQueue.main.async {
+                    self?.errorMessage = message
+                }
             }
+        }
+
+        socket.on("chat-message") { data, ack in
+            guard let messageData = data[0] as? [String: Any] else { return }
+            NotificationCenter.default.post(
+                name: .incomingChatMessage,
+                object: nil,
+                userInfo: Self.normalizedIncomingMessage(messageData)
+            )
+        }
+
+        socket.on("direct-message") { data, ack in
+            guard let messageData = data[0] as? [String: Any] else { return }
+            NotificationCenter.default.post(
+                name: .incomingDirectMessage,
+                object: nil,
+                userInfo: Self.normalizedIncomingMessage(messageData)
+            )
+        }
+
+        socket.on("typing-indicator") { data, ack in
+            guard let typingData = data[0] as? [String: Any] else { return }
+            NotificationCenter.default.post(
+                name: .userTypingIndicator,
+                object: nil,
+                userInfo: [
+                    "userId": typingData["userId"] as? String ?? typingData["senderId"] as? String ?? "",
+                    "typing": typingData["typing"] as? Bool ?? false
+                ]
+            )
         }
 
         // Server push events for sync
@@ -325,6 +379,7 @@ class ServerManager: ObservableObject {
     func joinRoom(roomId: String, username: String, password: String? = nil) {
         var joinData: [String: Any] = [
             "roomId": roomId,
+            "userName": username,
             "username": username
         ]
         if let password = password {
@@ -345,6 +400,73 @@ class ServerManager: ObservableObject {
             "muted": isMuted,
             "deafened": isDeafened
         ])
+    }
+
+    private func setupMessagingBridge() {
+        messageObserver = NotificationCenter.default.addObserver(
+            forName: .sendMessageToServer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.sendMessageNotification(notification)
+        }
+
+        typingObserver = NotificationCenter.default.addObserver(
+            forName: .sendTypingIndicator,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let typing = notification.userInfo?["typing"] as? Bool else { return }
+            self?.socket?.emit("typing-indicator", ["typing": typing])
+        }
+    }
+
+    private func sendMessageNotification(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let content = userInfo["content"] as? String,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let isDirect = userInfo["isDirect"] as? Bool ?? false
+        var payload: [String: Any] = [
+            "message": content,
+            "content": content,
+            "messageId": userInfo["messageId"] as? String ?? UUID().uuidString,
+            "type": userInfo["type"] as? String ?? "text",
+            "userName": UserDefaults.standard.string(forKey: "username") ?? "User"
+        ]
+        if let replyTo = userInfo["replyToId"] as? String {
+            payload["replyTo"] = replyTo
+        }
+
+        if isDirect {
+            guard let recipientId = userInfo["recipientId"] as? String else { return }
+            payload["targetUserId"] = recipientId
+            socket?.emit("direct-message", payload)
+        } else {
+            socket?.emit("chat-message", payload)
+        }
+    }
+
+    private static func normalizedIncomingMessage(_ data: [String: Any]) -> [String: Any] {
+        [
+            "senderId": data["senderId"] as? String
+                ?? data["userId"] as? String
+                ?? data["id"] as? String
+                ?? "",
+            "senderName": data["senderName"] as? String
+                ?? data["userName"] as? String
+                ?? data["name"] as? String
+                ?? "User",
+            "content": data["content"] as? String
+                ?? data["message"] as? String
+                ?? "",
+            "type": data["type"] as? String ?? "text",
+            "replyToId": data["replyToId"] as? String
+                ?? data["replyTo"] as? String
+                ?? ""
+        ]
     }
 
     // MARK: - Access Revocation
