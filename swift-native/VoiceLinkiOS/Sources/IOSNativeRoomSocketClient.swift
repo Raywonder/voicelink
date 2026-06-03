@@ -3,6 +3,15 @@ import AVFoundation
 import UIKit
 import SocketIO
 
+private enum VoiceLinkAudioTransportDefaults {
+    static let sampleRate = 48_000
+    static let preferredChannels = 2
+    static let frameSize = 960
+    static let pcmCodec = "pcm-f32"
+    static let preferredCodec = "opus"
+    static let engine = "apple-avengine-miniaudio-ready"
+}
+
 @MainActor
 final class IOSNativeRoomSocketClient: ObservableObject {
     static let shared = IOSNativeRoomSocketClient()
@@ -354,8 +363,15 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             if self.canEmitSocketEvent {
                 self.socket?.emit("enable-audio-relay", [
                     "enabled": true,
-                    "sampleRate": 48000,
-                    "channels": 1
+                    "sampleRate": VoiceLinkAudioTransportDefaults.sampleRate,
+                    "channels": VoiceLinkAudioTransportDefaults.preferredChannels,
+                    "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
+                    "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
+                    "engine": VoiceLinkAudioTransportDefaults.engine,
+                    "audioMode": IOSVoiceLinkAudioMode.current.rawValue,
+                    "supportsStereo": true,
+                    "supportsOpus": false,
+                    "supportsDynamicProcessing": true
                 ])
                 self.startMicrophoneCaptureIfNeeded()
             } else {
@@ -915,7 +931,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                         "audioData": encodedAudio,
                         "timestamp": packetTimestamp,
                         "sampleRate": packet.sampleRate,
-                        "channels": packet.channels
+                        "channels": packet.channels,
+                        "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
+                        "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
+                        "engine": VoiceLinkAudioTransportDefaults.engine,
+                        "audioMode": IOSVoiceLinkAudioMode.current.rawValue,
+                        "frameSize": packet.frameCount
                     ])
                 }
             }
@@ -1238,6 +1259,7 @@ private struct IOSCapturedAudioPacket {
     let audioData: Data
     let sampleRate: Double
     let channels: Int
+    let frameCount: Int
 }
 
 private final class IOSRoomMicrophoneCapture {
@@ -1251,9 +1273,12 @@ private final class IOSRoomMicrophoneCapture {
 
             let inputNode = self.engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
-            let channelCount = max(1, Int(inputFormat.channelCount))
+            let channelCount = min(
+                VoiceLinkAudioTransportDefaults.preferredChannels,
+                max(1, Int(inputFormat.channelCount))
+            )
             inputNode.removeTap(onBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, _ in
+            inputNode.installTap(onBus: 0, bufferSize: AVAudioFrameCount(VoiceLinkAudioTransportDefaults.frameSize), format: inputFormat) { buffer, _ in
                 guard let packet = self.encode(buffer: buffer, sampleRate: inputFormat.sampleRate, channels: channelCount) else {
                     return
                 }
@@ -1304,7 +1329,8 @@ private final class IOSRoomMicrophoneCapture {
         return IOSCapturedAudioPacket(
             audioData: pcmData,
             sampleRate: sampleRate > 0 ? sampleRate : 48_000,
-            channels: channels
+            channels: channels,
+            frameCount: frameCount
         )
     }
 }

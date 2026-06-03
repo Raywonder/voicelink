@@ -8,6 +8,27 @@ enum IOSAudioSessionPurpose {
     case room
 }
 
+enum IOSVoiceLinkAudioMode: String {
+    case original
+    case voiceIsolation
+    case meeting
+    case studio
+
+    static var current: IOSVoiceLinkAudioMode {
+        let rawValue = UserDefaults.standard.string(forKey: "voicelink.audio.mode") ?? IOSVoiceLinkAudioMode.original.rawValue
+        return IOSVoiceLinkAudioMode(rawValue: rawValue) ?? .original
+    }
+
+    var usesVoiceProcessing: Bool {
+        switch self {
+        case .original, .studio:
+            return false
+        case .voiceIsolation, .meeting:
+            return true
+        }
+    }
+}
+
 final class IOSAudioSessionManager {
     static let shared = IOSAudioSessionManager()
 
@@ -114,18 +135,25 @@ final class IOSAudioSessionManager {
                     options: [.allowAirPlay, .allowBluetoothA2DP]
                 )
             case .room:
-                let echoCancellationEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.echoCancellationEnabled") as? Bool ?? true
-                let noiseReductionEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.noiseReductionEnabled") as? Bool ?? true
-                let processingMode: AVAudioSession.Mode = (echoCancellationEnabled || noiseReductionEnabled)
+                let audioMode = IOSVoiceLinkAudioMode.current
+                let echoCancellationEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.echoCancellationEnabled") as? Bool ?? false
+                let noiseReductionEnabled = UserDefaults.standard.object(forKey: "voicelink.audio.noiseReductionEnabled") as? Bool ?? false
+                let processingMode: AVAudioSession.Mode = (audioMode.usesVoiceProcessing || echoCancellationEnabled || noiseReductionEnabled)
                     ? .voiceChat
                     : .measurement
                 try session.setCategory(
                     .playAndRecord,
                     mode: processingMode,
-                    options: [.defaultToSpeaker, .allowBluetoothHFP]
+                    options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .allowAirPlay, .mixWithOthers]
                 )
                 try session.setPreferredSampleRate(48_000)
-                try session.setPreferredIOBufferDuration(0.03)
+                try session.setPreferredIOBufferDuration(0.015)
+                if session.maximumInputNumberOfChannels >= 2 {
+                    try? session.setPreferredInputNumberOfChannels(2)
+                }
+                if session.maximumOutputNumberOfChannels >= 2 {
+                    try? session.setPreferredOutputNumberOfChannels(2)
+                }
             }
             try session.setActive(true, options: [])
             lastConfiguredPurpose = purpose

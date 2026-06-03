@@ -25266,7 +25266,18 @@ class VoiceLinkLocalServer {
 
             // Enable/disable audio relay for this user
             socket.on('enable-audio-relay', (data) => {
-                const { enabled, sampleRate, channels } = data;
+                const {
+                    enabled,
+                    sampleRate,
+                    channels,
+                    codec = 'pcm-f32',
+                    preferredCodec = 'opus',
+                    engine = 'legacy-relay',
+                    audioMode = 'original',
+                    supportsStereo = true,
+                    supportsOpus = false,
+                    supportsDynamicProcessing = false
+                } = data || {};
                 const user = this.users.get(socket.id);
                 const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
                 const relayEnabled = enabled !== false && transmitEnabled;
@@ -25280,6 +25291,13 @@ class VoiceLinkLocalServer {
                     this.audioBuffers.set(socket.id, {
                         sampleRate: sampleRate || 48000,
                         channels: channels || 2,
+                        codec,
+                        preferredCodec,
+                        engine,
+                        audioMode,
+                        supportsStereo,
+                        supportsOpus,
+                        supportsDynamicProcessing,
                         buffer: []
                     });
                 } else {
@@ -25291,6 +25309,16 @@ class VoiceLinkLocalServer {
                 socket.emit('relay-status', {
                     active: relayEnabled,
                     transmitEnabled,
+                    audioEngine: {
+                        server: 'voicelink-relay',
+                        preferredCodec: 'opus',
+                        fallbackCodec: 'pcm-f32',
+                        sampleRate: sampleRate || 48000,
+                        channels: channels || 2,
+                        supportsStereo: true,
+                        supportsDynamicProcessing: true,
+                        miniaudioReady: true
+                    },
                     stats: this.relayStats
                 });
             });
@@ -25302,7 +25330,17 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                const { audioData, timestamp, sampleRate, channels } = data;
+                const {
+                    audioData,
+                    timestamp,
+                    sampleRate,
+                    channels,
+                    codec = this.audioBuffers.get(socket.id)?.codec || 'pcm-f32',
+                    preferredCodec = this.audioBuffers.get(socket.id)?.preferredCodec || 'opus',
+                    engine = this.audioBuffers.get(socket.id)?.engine || 'legacy-relay',
+                    audioMode = this.audioBuffers.get(socket.id)?.audioMode || 'original',
+                    frameSize
+                } = data || {};
                 user.isSpeaking = !user.audioSettings?.muted;
                 user.lastActiveAt = new Date();
 
@@ -25323,7 +25361,12 @@ class VoiceLinkLocalServer {
                                 audioData: audioData,
                                 timestamp: timestamp,
                                 sampleRate: sampleRate,
-                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2
+                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2,
+                                codec,
+                                preferredCodec,
+                                engine,
+                                audioMode,
+                                frameSize
                             });
                         }
                     });

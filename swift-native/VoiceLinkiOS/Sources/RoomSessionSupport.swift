@@ -34,8 +34,9 @@ struct RoomSessionView: View {
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
     @AppStorage("voicelink.audio.inputMuted") private var inputMuted = false
     @AppStorage("voicelink.audio.roomOutputMuted") private var roomOutputMuted = false
-    @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = true
-    @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = true
+    @AppStorage("voicelink.audio.mode") private var audioMode = IOSVoiceLinkAudioMode.original.rawValue
+    @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = false
+    @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = false
     @AppStorage("voicelink.ios.showRoomRelayDebugDetails") private var showRoomRelayDebugDetails = false
     @AppStorage("voicelink.authProvider") private var authProvider = ""
     @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
@@ -341,6 +342,16 @@ struct RoomSessionView: View {
                         syncRoomBackgroundPlaybackState()
                         IOSActionSoundPlayer.playToggle()
                     }
+                Picker("Audio Mode", selection: $audioMode) {
+                    Text("Original Audio").tag(IOSVoiceLinkAudioMode.original.rawValue)
+                    Text("Voice Isolation").tag(IOSVoiceLinkAudioMode.voiceIsolation.rawValue)
+                    Text("Meeting Mode").tag(IOSVoiceLinkAudioMode.meeting.rawValue)
+                    Text("Studio Mode").tag(IOSVoiceLinkAudioMode.studio.rawValue)
+                }
+                .onChange(of: audioMode) { _ in
+                    IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                    IOSActionSoundPlayer.playToggle()
+                }
                 Toggle("Noise Reduction", isOn: $noiseReductionEnabled)
                     .onChange(of: noiseReductionEnabled) { _ in
                         IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
@@ -351,6 +362,9 @@ struct RoomSessionView: View {
                         IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
                         IOSActionSoundPlayer.playToggle()
                     }
+                Text("Original Audio is the default: stereo 48 kHz, no noise reduction, no automatic gain control, and no forced voice enhancement.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text("Press and hold a person to mark a whisper target. Relay playback ducks to 25% while a whisper target is active so that direct talk is easier to follow.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -505,6 +519,16 @@ struct RoomSessionView: View {
                             syncRoomBackgroundPlaybackState()
                             IOSActionSoundPlayer.playToggle()
                         }
+                    Picker("Audio Mode", selection: $audioMode) {
+                        Text("Original Audio").tag(IOSVoiceLinkAudioMode.original.rawValue)
+                        Text("Voice Isolation").tag(IOSVoiceLinkAudioMode.voiceIsolation.rawValue)
+                        Text("Meeting Mode").tag(IOSVoiceLinkAudioMode.meeting.rawValue)
+                        Text("Studio Mode").tag(IOSVoiceLinkAudioMode.studio.rawValue)
+                    }
+                    .onChange(of: audioMode) { _ in
+                        IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                        IOSActionSoundPlayer.playToggle()
+                    }
                     Toggle("Noise Reduction", isOn: $noiseReductionEnabled)
                         .onChange(of: noiseReductionEnabled) { _ in
                             IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
@@ -515,7 +539,7 @@ struct RoomSessionView: View {
                             IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
                             IOSActionSoundPlayer.playToggle()
                         }
-                    Text("Voice processing mode is enabled when Noise Reduction or Echo Cancellation is on. Turn both off for raw monitoring.")
+                    Text("Original Audio is the default. Voice processing is enabled only when the selected mode or toggles request it.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button(whisperTarget == nil ? "No Whisper Target" : "Clear Whisper Target") {
