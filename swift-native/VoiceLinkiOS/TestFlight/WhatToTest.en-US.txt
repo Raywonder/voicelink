@@ -1,37 +1,26 @@
 VoiceLink TestFlight - What to Test
-Build 79 / 1.0.0
-Date: 2026-06-02
 
-Before testing, open TestFlight and update to the latest VoiceLink build.
+Build focus: audio engine upgrade test pass.
 
-Focus for this build: confirm the emergency launch-crash fixes, safer Servers tab behavior, account sign-in state, Mastodon sign-in, server support tickets, room join stability, room system messages, audio controls, scrolling/audio performance, and accessibility. Recent tester reports were mostly older-build launch crashes, server-list crashes, audio buffering, Mastodon sign-in failure, and contact-form validation errors, so please retest those areas first.
+This build starts moving VoiceLink toward the new professional audio pipeline. It does not claim the final Miniaudio plus Opus replacement is complete yet, but it changes the client and server defaults so testers can verify Original Audio behavior before the deeper codec engine lands.
 
-1. Launch and Servers tab
-- Launch the app and confirm it reaches the native UI without crashing.
-- Open Servers. It should default to the safer Federated Rooms view and remain stable when refreshed.
-- Confirm the four expected server rows are uniquely named for VoiceLink Main, VoiceLink Community, DevineCreations on devine-creations.com, and DevineCreations on devinecreations.net.
-- If any extra generic Community row appears, report its URL.
+Please test:
 
-2. Sign-in
-- Sign in with a VoiceLink account from Settings.
-- Confirm sign-in fields disappear after success and the signed-in summary plus Sign Out action appear.
-- Test username or email login if both are available.
-- Try Mastodon sign-in with a suggested instance and a custom instance. Layer8 should work with layer8.space or layer8.
+- Join a room on iPhone and confirm microphone audio still transmits.
+- Confirm room audio is still received from another participant.
+- Confirm Original Audio is the default audio mode.
+- Confirm noise suppression, echo cancellation, and auto gain are not forced on by default.
+- In room audio controls, switch between Original Audio, Voice Isolation, Meeting Mode, and Studio Mode.
+- Confirm audio mode changes do not require leaving and rejoining the room.
+- Test with built-in speaker, wired headphones, Bluetooth headset, and AirPods if available.
+- Test with the screen locked for at least two minutes while staying in a room.
+- Test after changing audio route while connected.
+- On Mac, test room audio with the matching macOS build from this branch.
 
-3. Rooms and support tickets
-- Join rooms from Main and Community as guest and signed-in user.
-- Confirm presence, messages, join/leave system messages, and first-join server terms behave correctly.
-- From server details or room details, create a short support ticket. Confirm server/room context is included and ticket details do not post into the room.
+Known limitations for this build:
 
-4. VoiceOver and accessibility
-- With VoiceOver on, focus a person in a room. Double tap should open that profile.
-- Confirm View Profile, Direct Message, monitor, whisper, and audio-control actions remain reachable where expected.
-- Server rows, room rows, users, controls, status states, and missing descriptions should have useful spoken labels.
+- Opus encode/decode is advertised as the preferred future codec, but the current relay still falls back to Float32 PCM packets.
+- Miniaudio is represented by the new server/client capability module and defaults, but the full native Miniaudio device layer is not fully linked yet.
+- PA/whisper-specific paths may still use speech processing intentionally.
 
-5. Audio and performance
-- Confirm microphone audio reaches other room clients and incoming room audio plays on iOS.
-- Open and close audio controls while staying joined.
-- Scroll room and message lists while audio is active. Report buffering, heat, stutter, or stuck loading.
-- Background and foreground the app, then rejoin a room.
-
-Please report device model, iOS version, build number, server used, exact steps, expected result, actual result, and a screenshot or recording when possible.
+Report any distortion, clipping, one-sided stereo, device switching failures, or audio mode changes that do not take effect.
