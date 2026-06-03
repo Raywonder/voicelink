@@ -18,6 +18,32 @@ BUILD_NUMBER="${BUILD_NUMBER:-}"
 CREDENTIALS_FILE="${CREDENTIALS_FILE:-/Users/admin/dev/appstore/voicelink/ios_testflight_credentials.env}"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-voicelink.transporter}"
 LEDGER_FILE="${LEDGER_FILE:-/Users/admin/dev/appstore/voicelink/TESTFLIGHT_BUILD_LEDGER.md}"
+IOS_BUILD_KEYCHAIN_ENV="${IOS_BUILD_KEYCHAIN_ENV:-/Users/admin/dev/appstore/voicelink/ios_build_keychain.env}"
+IOS_BUILD_KEYCHAIN_PATH="${IOS_BUILD_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/voicelink-ios-build.keychain-db}"
+MACOS_SIGNING_ENV="${MACOS_SIGNING_ENV:-/Users/admin/dev/appstore/voicelink/macos_signing.env}"
+MACOS_SIGNING_KEYCHAIN_PATH="${MACOS_SIGNING_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/login.keychain-db}"
+
+if [[ -f "$IOS_BUILD_KEYCHAIN_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$IOS_BUILD_KEYCHAIN_ENV"
+fi
+
+if [[ -f "$MACOS_SIGNING_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$MACOS_SIGNING_ENV"
+fi
+
+if [[ -n "${IOS_BUILD_KEYCHAIN_PASSWORD:-}" && -f "$IOS_BUILD_KEYCHAIN_PATH" ]]; then
+  security unlock-keychain -p "$IOS_BUILD_KEYCHAIN_PASSWORD" "$IOS_BUILD_KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$IOS_BUILD_KEYCHAIN_PATH"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$IOS_BUILD_KEYCHAIN_PASSWORD" "$IOS_BUILD_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+fi
+
+if [[ -n "${MACOS_SIGNING_KEYCHAIN_PASSWORD:-}" && -f "$MACOS_SIGNING_KEYCHAIN_PATH" ]]; then
+  security unlock-keychain -p "$MACOS_SIGNING_KEYCHAIN_PASSWORD" "$MACOS_SIGNING_KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$MACOS_SIGNING_KEYCHAIN_PATH"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_SIGNING_KEYCHAIN_PASSWORD" "$MACOS_SIGNING_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+fi
 
 if [[ -f "$CREDENTIALS_FILE" ]]; then
   # shellcheck disable=SC1090

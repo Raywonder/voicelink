@@ -1,26 +1,58 @@
 VoiceLink TestFlight - What to Test
+Build 80 / 1.0.0
+Date: 2026-06-02
 
-Build focus: audio engine upgrade test pass.
+Focus: audio engine upgrade validation for Original Audio defaults, stereo relay metadata, room audio controls, and cross-device behavior. This build starts moving VoiceLink toward the professional audio pipeline requested for voice chat, podcasting, streaming, training, live events, and future studio features.
 
-This build starts moving VoiceLink toward the new professional audio pipeline. It does not claim the final Miniaudio plus Opus replacement is complete yet, but it changes the client and server defaults so testers can verify Original Audio behavior before the deeper codec engine lands.
+This is not the final Miniaudio plus Opus replacement yet. Opus is advertised as the preferred future codec, while the current relay can still fall back to Float32 PCM packets. The new server/client audio capability module is included so the native clients and backend agree on defaults before the deeper codec engine lands.
 
 Please test:
 
-- Join a room on iPhone and confirm microphone audio still transmits.
-- Confirm room audio is still received from another participant.
+1. Room audio basics
+- Join a room on iPhone and confirm microphone audio transmits.
+- Confirm incoming room audio is heard from another participant.
+- Confirm audio stays connected when moving between room views.
+- Confirm servers remain connected while browsing other server room lists.
+
+2. Original Audio defaults
 - Confirm Original Audio is the default audio mode.
-- Confirm noise suppression, echo cancellation, and auto gain are not forced on by default.
+- Confirm stereo is enabled by default.
+- Confirm sample rate is 48 kHz by default.
+- Confirm noise suppression, echo cancellation, automatic gain control, and voice enhancement are not forced on by default.
+
+3. Audio modes
 - In room audio controls, switch between Original Audio, Voice Isolation, Meeting Mode, and Studio Mode.
 - Confirm audio mode changes do not require leaving and rejoining the room.
-- Test with built-in speaker, wired headphones, Bluetooth headset, and AirPods if available.
-- Test with the screen locked for at least two minutes while staying in a room.
-- Test after changing audio route while connected.
+- Confirm processing is only enabled for modes where it is expected.
+- Report any mode that sounds distorted, clipped, one-sided, or unchanged.
+
+4. Devices and routes
+- Test built-in speaker.
+- Test receiver speaker if available.
+- Test wired headphones if available.
+- Test Bluetooth headphones or headset if available.
+- Test AirPods if available.
+- Test external USB audio devices if available.
+- Change audio route while connected and confirm the app keeps working.
+
+5. Background and interruptions
+- Stay in a room with the screen locked for at least two minutes.
+- Background and foreground the app while connected.
+- If possible, test an incoming call interruption and confirm audio recovers cleanly.
+
+6. Mixing and quality
+- If background media playback is available on your build, test media plus microphone mixing.
+- Confirm microphone, incoming participant, background media, and notification volume controls behave independently where available.
+- Report clipping, crackling, static, sample-rate mismatch, or latency spikes.
+
+7. macOS matching build
 - On Mac, test room audio with the matching macOS build from this branch.
+- Confirm macOS audio settings expose the same Original Audio, Voice Isolation, Meeting Mode, and Studio Mode options.
+- Confirm macOS defaults also preserve 48 kHz stereo Original Audio with processing off.
 
-Known limitations for this build:
-
-- Opus encode/decode is advertised as the preferred future codec, but the current relay still falls back to Float32 PCM packets.
-- Miniaudio is represented by the new server/client capability module and defaults, but the full native Miniaudio device layer is not fully linked yet.
+Known limitations for build 80:
+- Opus is the preferred target codec, but some live relay paths still use Float32 PCM fallback.
+- The Miniaudio-style capability module is included in backend and client defaults, but the full native Miniaudio device layer is not fully linked yet.
 - PA/whisper-specific paths may still use speech processing intentionally.
 
-Report any distortion, clipping, one-sided stereo, device switching failures, or audio mode changes that do not take effect.
+Report issues with device model, OS version, build number, server used, exact steps, expected result, actual result, audio device, and whether the issue happens in Original Audio, Voice Isolation, Meeting Mode, or Studio Mode.
