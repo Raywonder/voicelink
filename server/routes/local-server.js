@@ -28,6 +28,7 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
+const AudioEngineModule = require('../modules/audio-engine');
 let VoiceLinkFlexPBXModule = null;
 try {
     ({ VoiceLinkFlexPBXModule } = require('../modules/voicelink-flexpbx'));
@@ -25266,21 +25267,10 @@ class VoiceLinkLocalServer {
 
             // Enable/disable audio relay for this user
             socket.on('enable-audio-relay', (data) => {
-                const {
-                    enabled,
-                    sampleRate,
-                    channels,
-                    codec = 'pcm-f32',
-                    preferredCodec = 'opus',
-                    engine = 'legacy-relay',
-                    audioMode = 'original',
-                    supportsStereo = true,
-                    supportsOpus = false,
-                    supportsDynamicProcessing = false
-                } = data || {};
+                const registration = AudioEngineModule.buildRelayRegistration(data || {});
                 const user = this.users.get(socket.id);
                 const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
-                const relayEnabled = enabled !== false && transmitEnabled;
+                const relayEnabled = registration.enabled && transmitEnabled;
                 this.audioRelayEnabled.set(socket.id, relayEnabled);
 
                 if (relayEnabled) {
@@ -25289,15 +25279,7 @@ class VoiceLinkLocalServer {
 
                     // Initialize audio buffer for this user
                     this.audioBuffers.set(socket.id, {
-                        sampleRate: sampleRate || 48000,
-                        channels: channels || 2,
-                        codec,
-                        preferredCodec,
-                        engine,
-                        audioMode,
-                        supportsStereo,
-                        supportsOpus,
-                        supportsDynamicProcessing,
+                        ...registration,
                         buffer: []
                     });
                 } else {
@@ -25309,16 +25291,7 @@ class VoiceLinkLocalServer {
                 socket.emit('relay-status', {
                     active: relayEnabled,
                     transmitEnabled,
-                    audioEngine: {
-                        server: 'voicelink-relay',
-                        preferredCodec: 'opus',
-                        fallbackCodec: 'pcm-f32',
-                        sampleRate: sampleRate || 48000,
-                        channels: channels || 2,
-                        supportsStereo: true,
-                        supportsDynamicProcessing: true,
-                        miniaudioReady: true
-                    },
+                    audioEngine: AudioEngineModule.buildRelayStatus(registration),
                     stats: this.relayStats
                 });
             });

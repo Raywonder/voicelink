@@ -3,6 +3,34 @@ import SocketIO
 import AVFoundation
 import CoreAudio
 
+private enum VoiceLinkDesktopAudioTransport {
+    static let targetSampleRate = 48_000.0
+    static let preferredChannels: AVAudioChannelCount = 2
+    static let frameSize: AVAudioFrameCount = 960
+    static let pcmCodec = "pcm-f32"
+    static let preferredCodec = "opus"
+    static let engine = "apple-avengine-miniaudio-ready"
+
+    static var audioMode: String {
+        UserDefaults.standard.string(forKey: "audioMode") ?? "original"
+    }
+
+    static func capabilityPayload(sampleRate: Double = targetSampleRate, channels: AVAudioChannelCount = preferredChannels) -> [String: Any] {
+        [
+            "enabled": true,
+            "sampleRate": sampleRate > 0 ? sampleRate : targetSampleRate,
+            "channels": Int(max(1, channels)),
+            "codec": pcmCodec,
+            "preferredCodec": preferredCodec,
+            "engine": engine,
+            "audioMode": audioMode,
+            "supportsStereo": true,
+            "supportsOpus": false,
+            "supportsDynamicProcessing": true
+        ]
+    }
+}
+
 class ServerManager: ObservableObject {
     static let shared = ServerManager()
 
@@ -1163,10 +1191,7 @@ class ServerManager: ObservableObject {
         socket.on("p2p-fallback-needed") { [weak self] data, ack in
             print("[Audio] P2P fallback needed, switching to relay mode")
             // Enable relay mode - emit audio data through server
-            self?.socket?.emit("enable-audio-relay", [
-                "sampleRate": 48000,
-                "channels": 2
-            ])
+            self?.socket?.emit("enable-audio-relay", VoiceLinkDesktopAudioTransport.capabilityPayload())
         }
     }
 
@@ -1381,7 +1406,8 @@ class ServerManager: ObservableObject {
                 username: self.usernameForRoomUser(userId: userId),
                 data: audioBuffer,
                 timestamp: timestamp,
-                sampleRate: sampleRate
+                sampleRate: sampleRate,
+                channels: audioInfo["channels"] as? Int
             )
         }
     }
@@ -1905,7 +1931,7 @@ class ServerManager: ObservableObject {
 
     private var audioTransmitEngine: AVAudioEngine?
     private var isTransmitting = false
-    private let audioTransmissionTapBufferSize: AVAudioFrameCount = 1024
+    private let audioTransmissionTapBufferSize = VoiceLinkDesktopAudioTransport.frameSize
 
     private func scheduleAudioTransmissionStart(for roomId: String) {
         pendingAudioStartWorkItem?.cancel()
@@ -2032,13 +2058,15 @@ class ServerManager: ObservableObject {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.inputFormat(forBus: 0)
+        let channelCount = min(
+            max(AVAudioChannelCount(1), format.channelCount),
+            VoiceLinkDesktopAudioTransport.preferredChannels
+        )
 
-        // The desktop relay/playback path is mono today, so advertise mono consistently.
-        socket?.emit("enable-audio-relay", [
-            "enabled": true,
-            "sampleRate": format.sampleRate,
-            "channels": 1
-        ])
+        socket?.emit("enable-audio-relay", VoiceLinkDesktopAudioTransport.capabilityPayload(
+            sampleRate: format.sampleRate,
+            channels: channelCount
+        ))
 
         inputNode.installTap(onBus: 0, bufferSize: audioTransmissionTapBufferSize, format: format) { [weak self] buffer, time in
             guard let self = self, self.isTransmitting else { return }
@@ -2051,11 +2079,22 @@ class ServerManager: ObservableObject {
             // Convert PCM buffer to Data
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
+            let channelsToSend = Int(min(channelCount, buffer.format.channelCount))
             let inputGain = Float(SettingsManager.shared.effectiveInputVolume)
-            var scaledSamples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
-            if inputGain != 1 {
-                for index in scaledSamples.indices {
-                    scaledSamples[index] *= inputGain
+            var scaledSamples = [Float]()
+            scaledSamples.reserveCapacity(frameLength * max(1, channelsToSend))
+            if channelsToSend <= 1 {
+                scaledSamples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+                if inputGain != 1 {
+                    for index in scaledSamples.indices {
+                        scaledSamples[index] *= inputGain
+                    }
+                }
+            } else {
+                for frame in 0..<frameLength {
+                    for channelIndex in 0..<channelsToSend {
+                        scaledSamples.append(channelData[channelIndex][frame] * inputGain)
+                    }
                 }
             }
             let data = scaledSamples.withUnsafeBufferPointer {
@@ -2071,7 +2110,12 @@ class ServerManager: ObservableObject {
                 "audioData": base64Audio,
                 "timestamp": Date().timeIntervalSince1970,
                 "sampleRate": format.sampleRate,
-                "channels": 1
+                "channels": channelsToSend,
+                "codec": VoiceLinkDesktopAudioTransport.pcmCodec,
+                "preferredCodec": VoiceLinkDesktopAudioTransport.preferredCodec,
+                "engine": VoiceLinkDesktopAudioTransport.engine,
+                "audioMode": VoiceLinkDesktopAudioTransport.audioMode,
+                "frameSize": frameLength
             ])
         }
 

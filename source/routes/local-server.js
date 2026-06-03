@@ -28,6 +28,7 @@ const { VMManagerModule } = require('../modules/vm-manager');
 const { WHMCSIntegrationModule } = require('../modules/whmcs-integration');
 const { MediaRoomsModule } = require('../modules/media-rooms');
 const { UpdaterModule } = require('../modules/updater');
+const AudioEngineModule = require('../modules/audio-engine');
 let DeploymentManagerModule = null;
 try {
     ({ DeploymentManagerModule } = require('../modules/deployment-manager'));
@@ -19091,10 +19092,10 @@ class VoiceLinkLocalServer {
 
             // Enable/disable audio relay for this user
             socket.on('enable-audio-relay', (data) => {
-                const { enabled, sampleRate, channels } = data;
+                const registration = AudioEngineModule.buildRelayRegistration(data || {});
                 const user = this.users.get(socket.id);
                 const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
-                const relayEnabled = enabled !== false && transmitEnabled;
+                const relayEnabled = registration.enabled && transmitEnabled;
                 this.audioRelayEnabled.set(socket.id, relayEnabled);
 
                 if (relayEnabled) {
@@ -19103,8 +19104,7 @@ class VoiceLinkLocalServer {
 
                     // Initialize audio buffer for this user
                     this.audioBuffers.set(socket.id, {
-                        sampleRate: sampleRate || 48000,
-                        channels: channels || 2,
+                        ...registration,
                         buffer: []
                     });
                 } else {
@@ -19116,6 +19116,7 @@ class VoiceLinkLocalServer {
                 socket.emit('relay-status', {
                     active: relayEnabled,
                     transmitEnabled,
+                    audioEngine: AudioEngineModule.buildRelayStatus(registration),
                     stats: this.relayStats
                 });
             });
@@ -19127,7 +19128,17 @@ class VoiceLinkLocalServer {
                     return;
                 }
 
-                const { audioData, timestamp, sampleRate, channels } = data;
+                const {
+                    audioData,
+                    timestamp,
+                    sampleRate,
+                    channels,
+                    codec = this.audioBuffers.get(socket.id)?.codec || 'pcm-f32',
+                    preferredCodec = this.audioBuffers.get(socket.id)?.preferredCodec || 'opus',
+                    engine = this.audioBuffers.get(socket.id)?.engine || 'legacy-relay',
+                    audioMode = this.audioBuffers.get(socket.id)?.audioMode || 'original',
+                    frameSize
+                } = data || {};
                 user.isSpeaking = !user.audioSettings?.muted;
                 user.lastActiveAt = new Date();
 
@@ -19148,7 +19159,12 @@ class VoiceLinkLocalServer {
                                 audioData: audioData,
                                 timestamp: timestamp,
                                 sampleRate: sampleRate,
-                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2
+                                channels: channels || this.audioBuffers.get(socket.id)?.channels || 2,
+                                codec,
+                                preferredCodec,
+                                engine,
+                                audioMode,
+                                frameSize
                             });
                         }
                     });

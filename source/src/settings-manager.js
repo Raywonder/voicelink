@@ -131,9 +131,15 @@ class RobustSettingsManager {
             // Audio settings
             inputVolume: 1.0,
             outputVolume: 1.0,
-            noiseSuppression: true,
-            echoCancellation: true,
-            autoGainControl: true,
+            sampleRate: 48000,
+            channels: 2,
+            codec: 'opus',
+            preferredCodec: 'opus',
+            audioMode: 'original',
+            originalAudio: true,
+            noiseSuppression: false,
+            echoCancellation: false,
+            autoGainControl: false,
             selectedInputDevice: 'default',
             selectedOutputDevice: 'default',
 

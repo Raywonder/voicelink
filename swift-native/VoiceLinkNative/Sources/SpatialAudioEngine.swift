@@ -237,8 +237,9 @@ class SpatialAudioEngine: ObservableObject {
     // MARK: - Audio Data Reception
 
     /// Receive and play audio data from a remote user via server relay
-    func receiveAudioData(from userId: String, username: String, data: Data, timestamp: Double, sampleRate: Double) {
+    func receiveAudioData(from userId: String, username: String, data: Data, timestamp: Double, sampleRate: Double, channels: Int? = nil) {
         guard let engine = audioEngine, isEnabled else { return }
+        let channelCount = AVAudioChannelCount(max(1, min(channels ?? 1, 2)))
 
         // Ensure player node exists for this user
         if playerNodes[userId] == nil {
@@ -248,7 +249,7 @@ class SpatialAudioEngine: ObservableObject {
             engine.attach(playerNode)
             engine.attach(mixerNode)
 
-            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount)
             if let fmt = format {
                 engine.connect(playerNode, to: mixerNode, format: fmt)
                 engine.connect(mixerNode, to: environmentNode ?? engine.mainMixerNode, format: fmt)
@@ -268,17 +269,27 @@ class SpatialAudioEngine: ObservableObject {
         }
 
         // Convert Data to AVAudioPCMBuffer
-        let frameCount = UInt32(data.count) / 4 // 4 bytes per Float32 sample
+        let sampleCount = data.count / MemoryLayout<Float>.size
+        let frameCount = UInt32(sampleCount / max(1, Int(channelCount)))
         guard frameCount > 0 else { return }
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else { return }
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
 
         // Copy audio data into buffer
         data.withUnsafeBytes { ptr in
-            if let baseAddress = ptr.baseAddress, let channelData = buffer.floatChannelData {
-                memcpy(channelData[0], baseAddress, min(data.count, Int(frameCount) * 4))
-                buffer.frameLength = AVAudioFrameCount(frameCount)
+            guard let source = ptr.bindMemory(to: Float.self).baseAddress,
+                  let channelData = buffer.floatChannelData else { return }
+            let frames = Int(frameCount)
+            if channelCount == 1 {
+                memcpy(channelData[0], source, min(data.count, frames * MemoryLayout<Float>.size))
+            } else {
+                for frame in 0..<frames {
+                    for channelIndex in 0..<Int(channelCount) {
+                        channelData[channelIndex][frame] = source[frame * Int(channelCount) + channelIndex]
+                    }
+                }
             }
+            buffer.frameLength = AVAudioFrameCount(frameCount)
         }
 
         // Schedule buffer for playback

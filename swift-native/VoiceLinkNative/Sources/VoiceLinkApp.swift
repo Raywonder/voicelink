@@ -5893,6 +5893,38 @@ enum SyncMode: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Audio Mode
+enum VoiceLinkAudioMode: String, CaseIterable, Identifiable {
+    case original = "original"
+    case voiceIsolation = "voiceIsolation"
+    case meeting = "meeting"
+    case studio = "studio"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .original: return "Original Audio"
+        case .voiceIsolation: return "Voice Isolation"
+        case .meeting: return "Meeting Mode"
+        case .studio: return "Studio Mode"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .original:
+            return "Stereo 48 kHz with processing off. Best for music, podcasts, interviews, and studio use."
+        case .voiceIsolation:
+            return "Light cleanup for noisy rooms while preserving a natural voice."
+        case .meeting:
+            return "Stronger echo and noise handling for regular meetings."
+        case .studio:
+            return "Maximum fidelity with processing off and stereo preferred."
+        }
+    }
+}
+
 // MARK: - File Receive Mode
 enum FileReceiveMode: String, CaseIterable {
     case autoReceive = "auto"
@@ -5989,9 +6021,10 @@ class SettingsManager: ObservableObject {
     @Published var outputDevice: String = "Default"
     @Published var inputVolume: Double = 0.8
     @Published var outputVolume: Double = 0.8
-    @Published var noiseSuppression: Bool = true
-    @Published var echoCancellation: Bool = true
-    @Published var autoGainControl: Bool = true
+    @Published var audioMode: VoiceLinkAudioMode = .original
+    @Published var noiseSuppression: Bool = false
+    @Published var echoCancellation: Bool = false
+    @Published var autoGainControl: Bool = false
     @Published var localMonitorEffect: LocalMonitorEffect = .off
     @Published var localMonitorEffectAmount: Double = 50
     @Published var localMonitorLatencyMode: LocalMonitorLatencyMode = .balanced
@@ -6122,9 +6155,15 @@ class SettingsManager: ObservableObject {
         outputVolume = UserDefaults.standard.double(forKey: "outputVolume")
         if outputVolume == 0 { outputVolume = 0.8 }
 
-        noiseSuppression = UserDefaults.standard.bool(forKey: "noiseSuppression")
-        echoCancellation = UserDefaults.standard.bool(forKey: "echoCancellation")
-        autoGainControl = UserDefaults.standard.bool(forKey: "autoGainControl")
+        if let savedAudioMode = UserDefaults.standard.string(forKey: "audioMode"),
+           let parsedAudioMode = VoiceLinkAudioMode(rawValue: savedAudioMode) {
+            audioMode = parsedAudioMode
+        } else {
+            audioMode = .original
+        }
+        noiseSuppression = UserDefaults.standard.object(forKey: "noiseSuppression") as? Bool ?? false
+        echoCancellation = UserDefaults.standard.object(forKey: "echoCancellation") as? Bool ?? false
+        autoGainControl = UserDefaults.standard.object(forKey: "autoGainControl") as? Bool ?? false
         if let savedMonitorEffect = UserDefaults.standard.string(forKey: "localMonitorEffect"),
            let parsedMonitorEffect = LocalMonitorEffect(rawValue: savedMonitorEffect) {
             localMonitorEffect = parsedMonitorEffect
@@ -6201,9 +6240,10 @@ class SettingsManager: ObservableObject {
 
         // Defaults that should be true
         if !UserDefaults.standard.bool(forKey: "settingsInitialized") {
-            noiseSuppression = true
-            echoCancellation = true
-            autoGainControl = true
+            audioMode = .original
+            noiseSuppression = false
+            echoCancellation = false
+            autoGainControl = false
             autoConnect = true
             preferLocalServer = false
             soundNotifications = true
@@ -6247,6 +6287,7 @@ class SettingsManager: ObservableObject {
         UserDefaults.standard.set(outputDevice, forKey: "outputDevice")
         UserDefaults.standard.set(inputVolume, forKey: "inputVolume")
         UserDefaults.standard.set(outputVolume, forKey: "outputVolume")
+        UserDefaults.standard.set(audioMode.rawValue, forKey: "audioMode")
         UserDefaults.standard.set(noiseSuppression, forKey: "noiseSuppression")
         UserDefaults.standard.set(echoCancellation, forKey: "echoCancellation")
         UserDefaults.standard.set(autoGainControl, forKey: "autoGainControl")
@@ -7492,9 +7533,25 @@ struct SettingsView: View {
         }
 
         SettingsSection(title: "Audio Processing") {
+            Picker("Audio Mode", selection: $settings.audioMode) {
+                ForEach(VoiceLinkAudioMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: settings.audioMode) { _ in
+                settings.saveSettings()
+            }
+
+            Text(settings.audioMode.description)
+                .font(.caption)
+                .foregroundColor(.secondary)
             Toggle("Noise Suppression", isOn: $settings.noiseSuppression)
+                .onChange(of: settings.noiseSuppression) { _ in settings.saveSettings() }
             Toggle("Echo Cancellation", isOn: $settings.echoCancellation)
+                .onChange(of: settings.echoCancellation) { _ in settings.saveSettings() }
             Toggle("Auto Gain Control", isOn: $settings.autoGainControl)
+                .onChange(of: settings.autoGainControl) { _ in settings.saveSettings() }
         }
 
         SettingsSection(title: "Local Monitoring") {

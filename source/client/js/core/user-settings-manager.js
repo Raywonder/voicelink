@@ -99,8 +99,10 @@ class UserSettingsManager {
             microphoneGain: 100,
             pushToTalkKey: 'Space',
             voiceActivation: false,
-            noiseSuppression: true,
-            echoCancellation: true,
+            audioMode: 'original',
+            originalAudio: true,
+            noiseSuppression: false,
+            echoCancellation: false,
 
             // Appearance
             theme: 'dark',

@@ -46,9 +46,15 @@ class AudioEngine {
         this.settings = {
             inputVolume: 1.0,
             outputVolume: 1.0,
-            noiseSuppression: true,
-            echoCancellation: true,
-            autoGainControl: true
+            sampleRate: 48000,
+            channels: 2,
+            codec: 'opus',
+            preferredCodec: 'opus',
+            audioMode: 'original',
+            noiseSuppression: false,
+            echoCancellation: false,
+            autoGainControl: false,
+            originalAudio: true
         };
 
         this.init();
@@ -186,9 +192,10 @@ class AudioEngine {
                     volume: 1.0,
                     muted: false,
                     processing: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        originalAudio: true
                     }
                 });
             });
@@ -216,8 +223,7 @@ class AudioEngine {
         }
     }
 
-    async getUserMedia(constraints = null, options = {}) {
-        const force = !!options.force;
+    async getUserMedia(constraints = null) {
         const defaultConstraints = {
             audio: {
                 deviceId: (this.selectedInputDevice && this.selectedInputDevice !== 'default')
@@ -226,8 +232,8 @@ class AudioEngine {
                 echoCancellation: this.settings.echoCancellation,
                 noiseSuppression: this.settings.noiseSuppression,
                 autoGainControl: this.settings.autoGainControl,
-                sampleRate: 48000,
-                channelCount: 1
+                sampleRate: this.settings.sampleRate,
+                channelCount: this.settings.channels
             },
             video: false
         };
@@ -235,13 +241,7 @@ class AudioEngine {
         const finalConstraints = constraints || defaultConstraints;
 
         try {
-            const audioDeviceId = finalConstraints?.audio?.deviceId?.exact || 'default';
-            const hasLiveTrack = !!(this.localStream && this.localStream.getAudioTracks().some(track => track.readyState === 'live'));
-            if (!force && hasLiveTrack && this.selectedInputDevice === audioDeviceId) {
-                return this.localStream;
-            }
-
-            if (this.localStream && force) {
+            if (this.localStream) {
                 this.localStream.getTracks().forEach(track => track.stop());
             }
 
@@ -387,36 +387,20 @@ class AudioEngine {
     }
 
     async setInputDevice(deviceId) {
-        const nextDevice = deviceId || 'default';
-        const changed = this.selectedInputDevice !== nextDevice;
         this.selectedInputDevice = deviceId || 'default';
 
         // Restart user media with new device
-        if (changed && this.localStream) {
-            await this.getUserMedia(null, { force: true });
+        if (this.localStream) {
+            await this.getUserMedia();
         }
     }
 
-    async setOutputDevice(deviceId) {
+    setOutputDevice(deviceId) {
         this.selectedOutputDevice = deviceId || 'default';
 
-        // Safari/iOS may not support sink routing; fail gracefully and keep system default output.
-        if (this.selectedOutputDevice === 'default') {
-            return true;
-        }
-
-        try {
-            if (this.audioContext && typeof this.audioContext.setSinkId === 'function') {
-                await this.audioContext.setSinkId(this.selectedOutputDevice);
-                console.log(`AudioContext output device set to: ${this.selectedOutputDevice}`);
-                return true;
-            }
-        } catch (error) {
-            console.warn('AudioContext setSinkId failed; using system default output:', error);
-        }
-
-        console.warn('Custom output device selection not supported in this browser; using system default output');
-        return false;
+        // In a real implementation, this would switch the actual output device
+        // For now, we just update the routing for new users
+        console.log(`Output device set to: ${deviceId}`);
     }
 
     updateDeviceSelects() {
@@ -470,11 +454,9 @@ class AudioEngine {
 
     setupEventListeners() {
         // Listen for device changes
-        if (navigator.mediaDevices?.addEventListener) {
-            navigator.mediaDevices.addEventListener('devicechange', () => {
-                this.enumerateDevices();
-            });
-        }
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+            this.enumerateDevices();
+        });
 
         // Input volume control
         const inputVolumeSlider = document.getElementById('input-volume');
@@ -579,8 +561,8 @@ class AudioEngine {
                             noiseSuppression: false,
                             autoGainControl: false,
                             latency: 0.01, // Request low latency
-                            sampleRate: 48000,
-                            channelCount: 1
+                            sampleRate: this.settings.sampleRate,
+                            channelCount: this.settings.channels
                         }
                     });
                     this.micTestStream = testStream; // Store separately so we can clean it up
@@ -937,8 +919,8 @@ class AudioEngine {
                         echoCancellation: this.inputSettings.get(inputType).processing.echoCancellation,
                         noiseSuppression: this.inputSettings.get(inputType).processing.noiseSuppression,
                         autoGainControl: this.inputSettings.get(inputType).processing.autoGainControl,
-                        sampleRate: 48000,
-                        channelCount: 1
+                        sampleRate: this.settings.sampleRate,
+                        channelCount: this.settings.channels
                     },
                     video: false
                 };
