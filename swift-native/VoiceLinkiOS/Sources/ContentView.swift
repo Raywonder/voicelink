@@ -1008,6 +1008,8 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let name: String
     let description: String
     let userCount: Int
+    let botCount: Int
+    let totalVisible: Int
     let visibility: String
     let accessType: String
     let locked: Bool
@@ -1033,6 +1035,8 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         name: String,
         description: String,
         userCount: Int,
+        botCount: Int,
+        totalVisible: Int,
         visibility: String,
         accessType: String,
         locked: Bool,
@@ -1057,6 +1061,8 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         self.name = name
         self.description = description
         self.userCount = userCount
+        self.botCount = max(0, botCount)
+        self.totalVisible = max(userCount + max(0, botCount), totalVisible)
         self.visibility = visibility
         self.accessType = accessType
         self.locked = locked
@@ -1079,7 +1085,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, memberCount, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, liveBroadcast, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit, motd, motdSettings, serverRules
+        case id, name, description, users, userCount, memberCount, botCount, totalVisible, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, liveBroadcast, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit, motd, motdSettings, serverRules
     }
 
     init(from decoder: Decoder) throws {
@@ -1091,6 +1097,8 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         let explicitUserCount = RoomSummary.decodeInt(container, forKey: .userCount)
         let memberCount = RoomSummary.decodeInt(container, forKey: .memberCount)
         userCount = explicitUserCount ?? users ?? memberCount ?? 0
+        botCount = RoomSummary.decodeInt(container, forKey: .botCount) ?? 0
+        totalVisible = max(userCount + botCount, RoomSummary.decodeInt(container, forKey: .totalVisible) ?? 0)
         visibility = (try? container.decode(String.self, forKey: .visibility)) ?? "public"
         accessType = (try? container.decode(String.self, forKey: .accessType)) ?? "open"
         locked = (try? container.decode(Bool.self, forKey: .locked)) ?? false
@@ -1176,6 +1184,8 @@ private extension RoomSummary {
             name: name,
             description: description,
             userCount: userCount,
+            botCount: botCount,
+            totalVisible: totalVisible,
             visibility: visibility,
             accessType: accessType,
             locked: locked,
@@ -1278,6 +1288,8 @@ private struct FederatedRoomGroup: Identifiable, Hashable {
     let id: String
     let displayName: String
     let totalUsers: Int
+    let totalBots: Int
+    let totalVisible: Int
     let choices: [FederatedRoomChoice]
 }
 
@@ -1427,6 +1439,8 @@ private struct HomeTab: View {
                 baseURL: resolvedBase,
                 roomCount: sortedRooms.count,
                 totalUsers: sortedRooms.reduce(0) { $0 + $1.userCount },
+                totalBots: sortedRooms.reduce(0) { $0 + $1.botCount },
+                totalVisible: sortedRooms.reduce(0) { $0 + max($1.totalVisible, $1.userCount + $1.botCount) },
                 rooms: sortedRooms
             )
         }
@@ -1544,14 +1558,14 @@ private struct HomeTab: View {
                                     Text(displayOptionalDescription(server.description))
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
-                                    Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(server.totalUsers) users")
+                                    Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 .padding(.vertical, 4)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("\(server.name), \(server.baseURL), \(server.roomCount) rooms, \(server.totalUsers) users")
+                            .accessibilityLabel("\(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
                             .accessibilityHint("Double tap to browse rooms on this server.")
                         }
                     }
@@ -1826,8 +1840,7 @@ private struct HomeTab: View {
             return
         }
         do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 12
+            var request = iosServerPresenceRequest(url: url, timeout: 12)
             let token = (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !token.isEmpty {
@@ -1862,7 +1875,7 @@ private struct RoomRow: View {
             Text(displayOptionalDescription(room.description))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("\(room.userCount) users • \(displayRoomLockLabel(room.locked)) • \(displayVisibilityLabel(room.visibility)) • \(displayAccessTypeLabel(room.accessType))")
+            Text("\(occupancySummary(room)) • \(displayRoomLockLabel(room.locked)) • \(displayVisibilityLabel(room.visibility)) • \(displayAccessTypeLabel(room.accessType))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let liveBroadcastLabel {
@@ -1873,7 +1886,7 @@ private struct RoomRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(room.name), \(room.userCount) users, \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))\(liveBroadcastLabel.map { ", \($0)" } ?? "")")
+        .accessibilityLabel("\(room.name), \(occupancySummary(room)), \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))\(liveBroadcastLabel.map { ", \($0)" } ?? "")")
         .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
     }
 }
@@ -1885,6 +1898,8 @@ private struct HomeServerSummary: Identifiable, Hashable {
     let baseURL: String
     let roomCount: Int
     let totalUsers: Int
+    let totalBots: Int
+    let totalVisible: Int
     let rooms: [RoomSummary]
 }
 
@@ -1903,7 +1918,7 @@ private struct HomeServerRoomsView: View {
                     LabeledContent("Name", value: server.name)
                     LabeledContent("Address", value: server.baseURL)
                     LabeledContent("Rooms", value: "\(server.roomCount)")
-                    LabeledContent("Users", value: "\(server.totalUsers)")
+                    LabeledContent("Users and Bots", value: occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))
                     Text(displayOptionalDescription(server.description))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -1978,7 +1993,7 @@ private struct RoomDetailsView: View {
                 Section("Room") {
                     LabeledContent("Name", value: destination.room.name)
                     LabeledContent("Server", value: destination.serverLabel)
-                    LabeledContent("Users", value: "\(destination.room.userCount)")
+                    LabeledContent("Users and Bots", value: occupancySummary(destination.room))
                     LabeledContent("Lock Status", value: displayRoomLockLabel(destination.room.locked))
                     LabeledContent("Visibility", value: displayVisibilityLabel(destination.room.visibility))
                     LabeledContent("Access Type", value: displayAccessTypeLabel(destination.room.accessType))
@@ -2380,7 +2395,7 @@ private struct FederationTab: View {
                                     }
                                 }
                                 .accessibilityElement(children: .combine)
-                                .accessibilityLabel("\(group.displayName), \(group.totalUsers) users across \(group.choices.count) servers")
+                                .accessibilityLabel("\(group.displayName), \(occupancySummary(users: group.totalUsers, bots: group.totalBots, totalVisible: group.totalVisible)) across \(group.choices.count) servers")
                                 .accessibilityHint("Double tap to choose which server copy of this room to open.")
                                 .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
                                 .accessibilityAction(named: Text("Preview Room")) { openGroupedRoom(group, action: "preview") }
@@ -2507,7 +2522,7 @@ private struct FederationTab: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Text("\(group.totalUsers) users • \(group.choices.count) servers")
+            Text("\(occupancySummary(users: group.totalUsers, bots: group.totalBots, totalVisible: group.totalVisible)) • \(group.choices.count) servers")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let firstChoice {
@@ -2550,6 +2565,8 @@ private struct FederationTab: View {
                 id: normalizedFederatedRoomGroupKey(firstChoice.room.name),
                 displayName: firstChoice.room.name,
                 totalUsers: sortedChoices.reduce(0) { $0 + $1.room.userCount },
+                totalBots: sortedChoices.reduce(0) { $0 + $1.room.botCount },
+                totalVisible: sortedChoices.reduce(0) { $0 + max($1.room.totalVisible, $1.room.userCount + $1.room.botCount) },
                 choices: sortedChoices
             )
         }
@@ -2572,7 +2589,7 @@ private struct FederationRoomChoicesView: View {
             Section("Room") {
                 LabeledContent("Name", value: group.displayName)
                 LabeledContent("Servers", value: "\(group.choices.count)")
-                LabeledContent("Users", value: "\(group.totalUsers)")
+                LabeledContent("Users and Bots", value: occupancySummary(users: group.totalUsers, bots: group.totalBots, totalVisible: group.totalVisible))
             }
 
             Section("Choose Server") {
@@ -2580,7 +2597,7 @@ private struct FederationRoomChoicesView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(choice.serverLabel)
                             .font(.headline)
-                        Text("\(choice.room.userCount) users")
+                        Text(occupancySummary(choice.room))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
@@ -2604,7 +2621,7 @@ private struct FederationRoomChoicesView: View {
                         }
                     }
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(choice.room.userCount) users")
+                    .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(occupancySummary(choice.room))")
                     .accessibilityHint("Double tap for room details. Swipe down for preview and join actions.")
                     .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
@@ -4225,8 +4242,7 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
     for base in iOSMainAPIBaseCandidates(preferredBase: preferredBase) {
         let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
         guard let url = URL(string: endpoint) else { continue }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 12
+        let request = iosServerPresenceRequest(url: url, timeout: 12)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -4254,8 +4270,7 @@ private func fetchVisibleFederationBases(preferredBase: String) async -> [String
             continue
         }
 
-        var request = URLRequest(url: statusURL)
-        request.timeoutInterval = 8
+        let request = iosServerPresenceRequest(url: statusURL, timeout: 8)
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -4283,8 +4298,7 @@ private func fetchVisibleFederationBases(preferredBase: String) async -> [String
                 }
             }
             if let discoveryURL = URL(string: "\(base)/api/discovery/servers") {
-                var discoveryRequest = URLRequest(url: discoveryURL)
-                discoveryRequest.timeoutInterval = 8
+                let discoveryRequest = iosServerPresenceRequest(url: discoveryURL, timeout: 8)
                 let (discoveryData, discoveryResponse) = try await URLSession.shared.data(for: discoveryRequest)
                 if let discoveryHTTP = discoveryResponse as? HTTPURLResponse, (200...299).contains(discoveryHTTP.statusCode),
                    let discoveryRaw = (try JSONSerialization.jsonObject(with: discoveryData) as? [String: Any]),
@@ -4335,8 +4349,7 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
             group.addTask {
                 let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
                 guard let url = URL(string: endpoint) else { return [] }
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 12
+                let request = iosServerPresenceRequest(url: url, timeout: 12)
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                     return []
@@ -4614,8 +4627,7 @@ private func fetchClientVisibility(baseURL: String) async -> ClientVisibilitySet
         return .allVisible
     }
 
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 10
+    let request = iosServerPresenceRequest(url: url, timeout: 10)
 
     do {
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -4638,6 +4650,45 @@ private func fetchClientVisibility(baseURL: String) async -> ClientVisibilitySet
     } catch {
         return .allVisible
     }
+}
+
+private func occupancySummary(_ room: RoomSummary) -> String {
+    occupancySummary(users: room.userCount, bots: room.botCount, totalVisible: room.totalVisible)
+}
+
+private func occupancySummary(users: Int, bots: Int, totalVisible: Int) -> String {
+    let safeUsers = max(0, users)
+    let safeBots = max(0, bots)
+    let safeVisible = max(totalVisible, safeUsers + safeBots)
+    var parts = ["\(safeUsers) \(safeUsers == 1 ? "user" : "users")"]
+    if safeBots > 0 {
+        parts.append("\(safeBots) \(safeBots == 1 ? "bot" : "bots")")
+    }
+    if safeVisible > safeUsers + safeBots {
+        parts.append("\(safeVisible) visible")
+    }
+    return parts.joined(separator: " • ")
+}
+
+private func iosServerPresenceRequest(url: URL, timeout: TimeInterval) -> URLRequest {
+    var request = URLRequest(url: url)
+    request.timeoutInterval = timeout
+    request.setValue("ios", forHTTPHeaderField: "x-voicelink-client")
+    request.setValue("presence", forHTTPHeaderField: "x-voicelink-connection-mode")
+    let defaults = UserDefaults.standard
+    let token = (defaults.string(forKey: "voicelink.authToken") ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if !token.isEmpty {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(token, forHTTPHeaderField: "x-session-token")
+        request.setValue("account", forHTTPHeaderField: "x-voicelink-auth-level")
+    } else {
+        let displayName = (defaults.string(forKey: "voicelink.displayName") ?? "Guest")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        request.setValue("guest", forHTTPHeaderField: "x-voicelink-auth-level")
+        request.setValue(displayName.isEmpty ? "Guest" : displayName, forHTTPHeaderField: "x-voicelink-user")
+    }
+    return request
 }
 
 private func encodeAuthUserPayload(_ payload: [String: Any]) -> String {

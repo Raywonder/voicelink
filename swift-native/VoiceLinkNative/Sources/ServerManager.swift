@@ -1543,6 +1543,8 @@ class ServerManager: ObservableObject {
                     room.name,
                     room.description,
                     String(room.userCount),
+                    String(room.botCount),
+                    String(room.totalVisible),
                     room.isPrivate ? "1" : "0",
                     String(room.maxUsers),
                     room.createdBy ?? "",
@@ -1620,6 +1622,8 @@ class ServerManager: ObservableObject {
             welcomeMessage: mergedWelcomeMessage,
             liveBroadcast: primary.liveBroadcast ?? incoming.liveBroadcast,
             userCount: max(primary.userCount, incoming.userCount),
+            botCount: max(primary.botCount, incoming.botCount),
+            totalVisible: max(primary.totalVisible, incoming.totalVisible, max(primary.userCount + primary.botCount, incoming.userCount + incoming.botCount)),
             isPrivate: primary.isPrivate || incoming.isPrivate,
             isLocked: primary.isLocked || incoming.isLocked,
             recordingAllowed: primary.recordingAllowed || incoming.recordingAllowed,
@@ -2219,6 +2223,8 @@ struct ServerRoom: Identifiable {
     let welcomeMessage: String?
     let liveBroadcast: RoomLiveBroadcast?
     let userCount: Int
+    let botCount: Int
+    let totalVisible: Int
     let isPrivate: Bool
     let isLocked: Bool
     let recordingAllowed: Bool
@@ -2241,6 +2247,8 @@ struct ServerRoom: Identifiable {
         welcomeMessage: String?,
         liveBroadcast: RoomLiveBroadcast?,
         userCount: Int,
+        botCount: Int = 0,
+        totalVisible: Int = 0,
         isPrivate: Bool,
         isLocked: Bool,
         recordingAllowed: Bool,
@@ -2262,6 +2270,8 @@ struct ServerRoom: Identifiable {
         self.welcomeMessage = welcomeMessage
         self.liveBroadcast = liveBroadcast
         self.userCount = userCount
+        self.botCount = max(0, botCount)
+        self.totalVisible = max(userCount + max(0, botCount), totalVisible)
         self.isPrivate = isPrivate
         self.isLocked = isLocked
         self.recordingAllowed = recordingAllowed
@@ -2379,6 +2389,8 @@ struct ServerRoom: Identifiable {
             self.liveBroadcast = nil
         }
         self.userCount = intValue(dict["userCount"]) ?? intValue(dict["users"]) ?? intValue(dict["memberCount"]) ?? 0
+        self.botCount = intValue(dict["botCount"]) ?? 0
+        self.totalVisible = max(self.userCount + self.botCount, intValue(dict["totalVisible"]) ?? 0)
         self.isPrivate = dict["isPrivate"] as? Bool ?? dict["private"] as? Bool ?? false
         self.isLocked = dict["isLocked"] as? Bool ?? dict["locked"] as? Bool ?? false
         self.recordingAllowed = dict["recordingAllowed"] as? Bool

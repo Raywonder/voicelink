@@ -1497,6 +1497,8 @@ class AppState: ObservableObject {
                         welcomeMessage: room.welcomeMessage,
                         liveBroadcast: room.liveBroadcast,
                         userCount: room.userCount,
+                        botCount: room.botCount,
+                        totalVisible: room.totalVisible,
                         isPrivate: room.isPrivate,
                         isLocked: room.isLocked,
                         recordingAllowed: room.recordingAllowed,
@@ -1952,6 +1954,8 @@ struct Room: Identifiable, Equatable {
     let welcomeMessage: String?
     let liveBroadcast: RoomLiveBroadcast?
     var userCount: Int
+    var botCount: Int
+    var totalVisible: Int
     let isPrivate: Bool
     let isLocked: Bool
     let recordingAllowed: Bool
@@ -1974,6 +1978,8 @@ struct Room: Identifiable, Equatable {
         welcomeMessage: String? = nil,
         liveBroadcast: RoomLiveBroadcast? = nil,
         userCount: Int,
+        botCount: Int = 0,
+        totalVisible: Int = 0,
         isPrivate: Bool,
         isLocked: Bool = false,
         recordingAllowed: Bool = false,
@@ -1995,6 +2001,8 @@ struct Room: Identifiable, Equatable {
         self.welcomeMessage = welcomeMessage
         self.liveBroadcast = liveBroadcast
         self.userCount = userCount
+        self.botCount = max(0, botCount)
+        self.totalVisible = max(userCount + max(0, botCount), totalVisible)
         self.isPrivate = isPrivate
         self.isLocked = isLocked
         self.recordingAllowed = recordingAllowed
@@ -2018,6 +2026,8 @@ struct Room: Identifiable, Equatable {
         self.welcomeMessage = serverRoom.welcomeMessage
         self.liveBroadcast = serverRoom.liveBroadcast
         self.userCount = serverRoom.userCount
+        self.botCount = serverRoom.botCount
+        self.totalVisible = serverRoom.totalVisible
         self.isPrivate = serverRoom.isPrivate
         self.isLocked = serverRoom.isLocked
         self.recordingAllowed = serverRoom.recordingAllowed
@@ -2561,15 +2571,6 @@ struct MainMenuView: View {
         appState.errorMessage = "Browsing rooms from \(entry.name). Your current server connection was not changed."
     }
 
-    private func disconnectMainWindowServer(_ entry: MainWindowServerEntry) {
-        let currentBase = normalizedServerURL(appState.serverManager.baseURL ?? "")
-        guard entry.isCurrent || currentBase == normalizedServerURL(entry.url) else { return }
-        appState.serverManager.disconnect()
-        appState.currentRoom = nil
-        appState.minimizedRoom = nil
-        appState.errorMessage = "Disconnected from \(entry.name)."
-    }
-
     private func preferredServerFilterLabel(for entry: MainWindowServerEntry) -> String {
         if availableServerFilters.contains(entry.name) {
             return entry.name
@@ -2596,9 +2597,6 @@ struct MainMenuView: View {
                     onBrowseRooms: {
                         browseMainWindowServerRooms(entry)
                     },
-                    onDisconnect: {
-                        disconnectMainWindowServer(entry)
-                    }
                 )
             }
         }
@@ -3553,8 +3551,6 @@ struct MainWindowServerCard: View {
     let isConnected: Bool
     let onUseServer: () -> Void
     let onBrowseRooms: () -> Void
-    let onDisconnect: () -> Void
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
@@ -3596,13 +3592,6 @@ struct MainWindowServerCard: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("Browse rooms on \(entry.name)")
 
-                if isConnected {
-                    Button("Disconnect", role: .destructive) {
-                        onDisconnect()
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Disconnect from \(entry.name)")
-                }
 
                 Menu {
                     Button("Refresh Rooms") {

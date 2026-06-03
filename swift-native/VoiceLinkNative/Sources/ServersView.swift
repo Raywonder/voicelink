@@ -256,8 +256,6 @@ struct FederationServersView: View {
                         isConnected: normalizeServerURL(serverManager.baseURL ?? "") == normalizeServerURL(entry.url)
                     ) { browseOnly in
                         connect(to: entry.url, browseOnly: browseOnly)
-                    } onDisconnect: {
-                        disconnectCurrentServer()
                     }
                 }
             }
@@ -281,14 +279,6 @@ struct FederationServersView: View {
         }
 
         serverManager.connectToURL(url)
-        appState.refreshRooms()
-    }
-
-    private func disconnectCurrentServer() {
-        if serverManager.activeRoomId != nil {
-            serverManager.leaveRoom()
-        }
-        serverManager.disconnect()
         appState.refreshRooms()
     }
 
@@ -408,8 +398,6 @@ struct FederationServerCard: View {
     let entry: FederationServersView.Entry
     let isConnected: Bool
     let onSelect: (Bool) -> Void
-    let onDisconnect: () -> Void
-
     private var badgeColor: Color {
         switch entry.source {
         case .current: return .green
@@ -447,14 +435,13 @@ struct FederationServerCard: View {
             }
 
             HStack(spacing: 10) {
-                Button(isConnected ? "Disconnect" : "Connect") {
-                    if isConnected {
-                        onDisconnect()
-                    } else {
+                Button(isConnected ? "Current Server" : "Use Server") {
+                    if !isConnected {
                         onSelect(false)
                     }
                 }
                 .buttonStyle(.bordered)
+                .disabled(isConnected)
 
                 Button("Browse Rooms") {
                     onSelect(true)
