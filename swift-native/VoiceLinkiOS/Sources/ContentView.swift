@@ -3002,6 +3002,17 @@ private struct AdminTabView: View {
     @State private var backupStatus = ""
     @State private var isRunningBackupAction = false
     @State private var exportFile: IOSSharedFile?
+    @State private var adminRooms: [RoomSummary] = []
+    @State private var selectedAdminRoomID: String?
+    @State private var roomDraftName = ""
+    @State private var roomDraftDescription = ""
+    @State private var roomDraftVisibility = "public"
+    @State private var roomDraftAccessType = "hybrid"
+    @State private var roomDraftMaxUsers = "10"
+    @State private var roomDraftVisibleToGuests = true
+    @State private var roomDraftShowInIOS = true
+    @State private var roomOperationStatus = ""
+    @State private var isRunningRoomAction = false
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
 
@@ -3025,6 +3036,74 @@ private struct AdminTabView: View {
                             .onSubmit { applyAdminServerURL() }
                         Button("Apply Server URL") {
                             applyAdminServerURL()
+                        }
+                    }
+
+                    Section("Rooms") {
+                        if adminRooms.isEmpty {
+                            Text("No rooms loaded from this server yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Selected Room", selection: $selectedAdminRoomID) {
+                                Text("New Room").tag(String?.none)
+                                ForEach(adminRooms) { room in
+                                    Text(room.name).tag(Optional(room.id))
+                                }
+                            }
+                            .onChange(of: selectedAdminRoomID) { _ in
+                                loadSelectedRoomDraft()
+                            }
+                        }
+
+                        TextField("Room name", text: $roomDraftName)
+                            .textInputAutocapitalization(.words)
+                        TextField("Room description", text: $roomDraftDescription, axis: .vertical)
+                            .lineLimit(2...5)
+                        TextField("Maximum users", text: $roomDraftMaxUsers)
+                            .keyboardType(.numberPad)
+                        Picker("Visibility", selection: $roomDraftVisibility) {
+                            Text("Public").tag("public")
+                            Text("Private").tag("private")
+                            Text("Hidden").tag("hidden")
+                        }
+                        Picker("Access Type", selection: $roomDraftAccessType) {
+                            Text("Hybrid").tag("hybrid")
+                            Text("App Only").tag("app-only")
+                            Text("Web Only").tag("web-only")
+                            Text("Hidden").tag("hidden")
+                        }
+                        Toggle("Visible to Guests", isOn: $roomDraftVisibleToGuests)
+                        Toggle("Show in iOS", isOn: $roomDraftShowInIOS)
+
+                        HStack {
+                            Button(selectedAdminRoomID == nil ? "Create Room" : "Save Room") {
+                                Task { await saveRoomDraft() }
+                            }
+                            .disabled(isRunningRoomAction || roomDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                            Button("New") {
+                                clearRoomDraft()
+                            }
+                            .disabled(isRunningRoomAction)
+                        }
+
+                        HStack {
+                            Button("Refresh Rooms") {
+                                Task { await loadAdminRooms() }
+                            }
+                            .disabled(isRunningRoomAction)
+
+                            Button("Delete Selected", role: .destructive) {
+                                Task { await deleteSelectedRoom() }
+                            }
+                            .disabled(selectedAdminRoom == nil || isRunningRoomAction)
+                        }
+
+                        if !roomOperationStatus.isEmpty {
+                            Text(roomOperationStatus)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -3211,11 +3290,153 @@ private struct AdminTabView: View {
         }
 
         if isAdmin {
+            await loadAdminRooms()
             await loadBackups()
         } else {
+            adminRooms = []
+            selectedAdminRoomID = nil
             backups = []
             selectedBackupID = nil
         }
+    }
+
+    @MainActor
+    private func loadAdminRooms() async {
+        guard let url = URL(string: "\(normalizedBaseURL)/api/rooms?source=app&client=ios&sort=name") else { return }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: authorizedAdminRequest(url: url))
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                roomOperationStatus = "Could not load rooms."
+                return
+            }
+            adminRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+            if let selectedAdminRoomID, adminRooms.contains(where: { $0.id == selectedAdminRoomID }) {
+                loadSelectedRoomDraft()
+            } else {
+                selectedAdminRoomID = adminRooms.first?.id
+                loadSelectedRoomDraft()
+            }
+            if adminRooms.isEmpty {
+                clearRoomDraft()
+            }
+        } catch {
+            roomOperationStatus = "Could not load rooms."
+        }
+    }
+
+    @MainActor
+    private func saveRoomDraft() async {
+        let trimmedName = roomDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            roomOperationStatus = "Room name is required."
+            return
+        }
+        let maxUsers = max(1, Int(roomDraftMaxUsers.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 10)
+        let payload: [String: Any] = [
+            "name": trimmedName,
+            "description": roomDraftDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+            "maxUsers": maxUsers,
+            "visibility": roomDraftVisibility,
+            "accessType": roomDraftAccessType,
+            "visibleToGuests": roomDraftVisibleToGuests,
+            "showInIOS": roomDraftShowInIOS,
+            "isAuthenticated": true,
+            "updatedBy": "VoiceLink iOS Admin"
+        ]
+
+        let endpoint: String
+        let method: String
+        if let selectedAdminRoomID,
+           let encodedRoomId = selectedAdminRoomID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) {
+            endpoint = "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)"
+            method = "PUT"
+        } else {
+            endpoint = "\(normalizedBaseURL)/api/rooms"
+            method = "POST"
+        }
+
+        guard let url = URL(string: endpoint) else { return }
+        isRunningRoomAction = true
+        defer { isRunningRoomAction = false }
+
+        do {
+            var request = authorizedAdminRequest(url: url)
+            request.httpMethod = method
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                roomOperationStatus = "Room save failed."
+                return
+            }
+            roomOperationStatus = selectedAdminRoomID == nil ? "Room created." : "Room updated."
+            await loadAdminRooms()
+        } catch {
+            roomOperationStatus = "Room save failed."
+        }
+    }
+
+    @MainActor
+    private func deleteSelectedRoom() async {
+        guard let selectedAdminRoom,
+              let encodedRoomId = selectedAdminRoom.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)") else {
+            return
+        }
+        isRunningRoomAction = true
+        defer { isRunningRoomAction = false }
+
+        do {
+            var request = authorizedAdminRequest(url: url)
+            request.httpMethod = "DELETE"
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                roomOperationStatus = "Delete failed."
+                return
+            }
+            roomOperationStatus = "Deleted \(selectedAdminRoom.name)."
+            selectedAdminRoomID = nil
+            clearRoomDraft()
+            await loadAdminRooms()
+        } catch {
+            roomOperationStatus = "Delete failed."
+        }
+    }
+
+    private func loadSelectedRoomDraft() {
+        guard let selectedAdminRoom else {
+            clearRoomDraft()
+            return
+        }
+        roomDraftName = selectedAdminRoom.name
+        roomDraftDescription = selectedAdminRoom.description
+        roomDraftVisibility = normalizedRoomVisibility(selectedAdminRoom.visibility)
+        roomDraftAccessType = normalizedRoomAccessType(selectedAdminRoom.accessType)
+        roomDraftMaxUsers = "10"
+        roomDraftVisibleToGuests = selectedAdminRoom.visibility != "private"
+        roomDraftShowInIOS = true
+    }
+
+    private func clearRoomDraft() {
+        selectedAdminRoomID = nil
+        roomDraftName = ""
+        roomDraftDescription = ""
+        roomDraftVisibility = "public"
+        roomDraftAccessType = "hybrid"
+        roomDraftMaxUsers = "10"
+        roomDraftVisibleToGuests = true
+        roomDraftShowInIOS = true
+    }
+
+    private func authorizedAdminRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        let token = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(token, forHTTPHeaderField: "x-session-token")
+        }
+        return request
     }
 
     @MainActor
@@ -3337,6 +3558,21 @@ private struct AdminTabView: View {
 
     private var selectedBackup: IOSConfigBackup? {
         backups.first(where: { $0.id == selectedBackupID })
+    }
+
+    private var selectedAdminRoom: RoomSummary? {
+        guard let selectedAdminRoomID else { return nil }
+        return adminRooms.first(where: { $0.id == selectedAdminRoomID })
+    }
+
+    private func normalizedRoomVisibility(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["public", "private", "hidden"].contains(normalized) ? normalized : "public"
+    }
+
+    private func normalizedRoomAccessType(_ value: String) -> String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["hybrid", "app-only", "web-only", "hidden"].contains(normalized) ? normalized : "hybrid"
     }
 }
 

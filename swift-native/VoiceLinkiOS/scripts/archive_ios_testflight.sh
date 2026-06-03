@@ -60,12 +60,30 @@ fi
 cd "$ROOT_DIR"
 
 mkdir -p "$TESTFLIGHT_DIR"
-if [[ -f "$NOTES_SOURCE_FILE" ]]; then
-  cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
-  echo "Synced TestFlight notes: $WHAT_TO_TEST_FILE"
-else
-  echo "TestFlight notes source not found: $NOTES_SOURCE_FILE"
-fi
+sync_testflight_notes() {
+  mkdir -p "$TESTFLIGHT_DIR" "$(dirname "$NOTES_SOURCE_FILE")"
+  if [[ -f "$NOTES_SOURCE_FILE" && -f "$WHAT_TO_TEST_FILE" ]]; then
+    if cmp -s "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"; then
+      echo "TestFlight notes already synced: $WHAT_TO_TEST_FILE"
+    elif [[ "$WHAT_TO_TEST_FILE" -nt "$NOTES_SOURCE_FILE" ]]; then
+      cp "$WHAT_TO_TEST_FILE" "$NOTES_SOURCE_FILE"
+      echo "Synced newer repo TestFlight notes to source: $NOTES_SOURCE_FILE"
+    else
+      cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
+      echo "Synced newer source TestFlight notes to repo: $WHAT_TO_TEST_FILE"
+    fi
+  elif [[ -f "$NOTES_SOURCE_FILE" ]]; then
+    cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
+    echo "Synced TestFlight notes from source: $WHAT_TO_TEST_FILE"
+  elif [[ -f "$WHAT_TO_TEST_FILE" ]]; then
+    cp "$WHAT_TO_TEST_FILE" "$NOTES_SOURCE_FILE"
+    echo "Seeded TestFlight notes source from repo: $NOTES_SOURCE_FILE"
+  else
+    echo "No TestFlight notes found at $WHAT_TO_TEST_FILE or $NOTES_SOURCE_FILE"
+  fi
+}
+
+sync_testflight_notes
 
 if [[ -f "$ROOT_DIR/project.yml" ]]; then
   xcodegen generate

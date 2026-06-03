@@ -10205,12 +10205,55 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // OAuth callback handler for browser-based auth
-        this.app.get('/oauth/callback', (req, res) => {
-            const { code, state } = req.query;
-            // Redirect to main app with code for client-side processing
-            res.redirect(`/?oauth_code=${code}&oauth_state=${state}`);
-        });
+        // OAuth callback handler for browser-based auth and native clients.
+        const oauthCallbackHandler = (req, res) => {
+            const code = String(req.query.code || '').trim();
+            const state = String(req.query.state || '').trim();
+            const error = String(req.query.error || '').trim();
+            const callbackParams = new URLSearchParams();
+            if (code) callbackParams.set('oauth_code', code);
+            if (state) callbackParams.set('oauth_state', state);
+            if (error) callbackParams.set('oauth_error', error);
+
+            const webRedirect = `/?${callbackParams.toString()}`;
+            const nativeParams = new URLSearchParams();
+            if (code) nativeParams.set('code', code);
+            if (state) nativeParams.set('state', state);
+            if (error) nativeParams.set('error', error);
+            const nativeRedirect = `voicelink://oauth/callback?${nativeParams.toString()}`;
+            const userAgent = String(req.get('user-agent') || '').toLowerCase();
+            const wantsNative = ['ios', 'iphone', 'ipad', 'testflight', 'voicelink'].some((needle) => userAgent.includes(needle))
+                || String(req.query.client || '').toLowerCase() === 'ios'
+                || String(req.query.native || '').toLowerCase() === '1';
+
+            if (!wantsNative) {
+                res.redirect(webRedirect);
+                return;
+            }
+
+            res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Return to VoiceLink</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=${nativeRedirect.replace(/"/g, '&quot;')}">
+</head>
+<body>
+  <h1>Return to VoiceLink</h1>
+  <p>Your Mastodon sign-in returned to VoiceLink. If the app does not open automatically, use this link:</p>
+  <p><a href="${nativeRedirect.replace(/"/g, '&quot;')}">Open VoiceLink</a></p>
+  ${code ? `<p>Authorization code: <code>${code.replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char]))}</code></p>` : ''}
+  <script>window.location.replace(${JSON.stringify(nativeRedirect)});</script>
+</body>
+</html>`);
+        };
+        this.app.get([
+            '/oauth/callback',
+            '/auth/mastodon/callback',
+            '/mastodon/callback',
+            '/oauth/mastodon/callback'
+        ], oauthCallbackHandler);
 
         // Generate Mastodon share URL for a room
         this.app.get('/api/share/:roomId', (req, res) => {

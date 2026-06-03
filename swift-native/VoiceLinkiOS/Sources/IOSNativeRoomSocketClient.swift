@@ -533,11 +533,17 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             if let payload = self.socketDictionary(from: data) {
                 let roomId = Self.socketRoomId(payload, fallback: self.joinedRoomId)
                 self.mergeRoomUser(payload, fallbackRoomId: roomId)
+                let userName = normalizedSocketText(
+                    payload["userName"] ?? payload["name"] ?? payload["displayName"] ?? payload["username"],
+                    fallback: "User"
+                )
                 NotificationCenter.default.post(
                     name: .iosRoomUserJoined,
                     object: nil,
                     userInfo: [
                         "roomId": roomId,
+                        "roomName": self.joinedRoomName,
+                        "userName": userName,
                         "user": payload
                     ]
                 )
@@ -1082,29 +1088,14 @@ private final class IOSRoomAudioRelayPlayer {
     private var monitorUserId: String?
     private var userGains: [String: Float] = [:]
     private var userMuted: [String: Bool] = [:]
+    private var pendingBuffers: [AVAudioPCMBuffer] = []
+    private var isPrimedForPlayback = false
+    private let initialPrebufferPacketCount = 3
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
             guard let self else { return }
-            if !self.isConfigured, let playbackFormat = self.playbackFormat {
-                self.engine.attach(self.playerNode)
-                self.engine.connect(self.playerNode, to: self.engine.mainMixerNode, format: playbackFormat)
-                self.applyOutputVolume()
-                self.isConfigured = true
-            }
-            guard !self.engine.isRunning else {
-                if !self.playerNode.isPlaying {
-                    self.playerNode.play()
-                }
-                return
-            }
-            do {
-                self.engine.prepare()
-                try self.engine.start()
-                self.playerNode.play()
-            } catch {
-                self.engine.stop()
-            }
+            self.startEngineIfNeeded()
         }
     }
 
@@ -1113,6 +1104,8 @@ private final class IOSRoomAudioRelayPlayer {
             guard let self else { return }
             self.playerNode.stop()
             self.engine.stop()
+            self.pendingBuffers.removeAll()
+            self.isPrimedForPlayback = false
         }
     }
 
@@ -1208,14 +1201,24 @@ private final class IOSRoomAudioRelayPlayer {
                     }
                 }
             }
-            self.startIfNeeded()
-            self.playerNode.scheduleBuffer(buffer, completionHandler: nil)
+            self.pendingBuffers.append(buffer)
+            if !self.isPrimedForPlayback && self.pendingBuffers.count < self.initialPrebufferPacketCount {
+                return
+            }
+            self.startEngineIfNeeded()
+            self.isPrimedForPlayback = true
+            while !self.pendingBuffers.isEmpty {
+                let nextBuffer = self.pendingBuffers.removeFirst()
+                self.playerNode.scheduleBuffer(nextBuffer, completionHandler: nil)
+            }
         }
     }
 
     private func rebuildEngine(sampleRate: Double, channels: AVAudioChannelCount) {
         playerNode.stop()
         engine.stop()
+        pendingBuffers.removeAll()
+        isPrimedForPlayback = false
         if isConfigured {
             engine.disconnectNodeOutput(playerNode)
             engine.detach(playerNode)
@@ -1225,6 +1228,29 @@ private final class IOSRoomAudioRelayPlayer {
             standardFormatWithSampleRate: sampleRate > 0 ? sampleRate : 48_000,
             channels: max(1, channels)
         )
+    }
+
+    private func startEngineIfNeeded() {
+        if !isConfigured, let playbackFormat {
+            engine.attach(playerNode)
+            engine.connect(playerNode, to: engine.mainMixerNode, format: playbackFormat)
+            applyOutputVolume()
+            isConfigured = true
+        }
+        guard !engine.isRunning else {
+            if !playerNode.isPlaying {
+                playerNode.play()
+            }
+            return
+        }
+        do {
+            engine.prepare()
+            try engine.start()
+            playerNode.play()
+        } catch {
+            engine.stop()
+            isPrimedForPlayback = false
+        }
     }
 
     private func applyOutputVolume() {
