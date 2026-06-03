@@ -1394,6 +1394,8 @@ private struct HomeTab: View {
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
+    @State private var showNativeAccountSignIn = false
+    @State private var authRequiredServerURL = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
     private var roomsEndpoint: String { "\(normalizedBaseURL)/api/rooms?source=app&sort=\(roomSortMode.rawValue)" }
@@ -1665,6 +1667,9 @@ private struct HomeTab: View {
             .sheet(isPresented: $showAdmin) {
                 AdminTabView(serverURL: $serverURL)
             }
+            .sheet(isPresented: $showNativeAccountSignIn) {
+                IOSAccountSignInView(serverURL: authRequiredServerURL.isEmpty ? normalizedBaseURL : normalizeBaseURL(authRequiredServerURL))
+            }
         }
     }
 
@@ -1757,6 +1762,11 @@ private struct HomeTab: View {
                 try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: roomSortMode),
                 fallbackBase: normalizedBaseURL
             )
+        } catch let error as IOSRoomsAuthenticationRequired {
+            rooms = []
+            authRequiredServerURL = error.baseURL
+            errorMessage = "This server requires sign-in before rooms can be listed. Sign in with any available method."
+            showNativeAccountSignIn = true
         } catch {
             rooms = []
             errorMessage = "Could not load rooms. Check server URL and network."
@@ -2314,6 +2324,8 @@ private struct FederationTab: View {
     @State private var activeSupportContext: IOSSupportContext?
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
+    @State private var showNativeAccountSignIn = false
+    @State private var authRequiredServerURL = ""
 
     private var normalizedBaseURL: String { normalizeBaseURL(serverURL) }
     private var filteredRoomGroups: [FederatedRoomGroup] {
@@ -2435,6 +2447,9 @@ private struct FederationTab: View {
             .sheet(item: $activeSupportContext) { context in
                 IOSSupportTicketSheet(context: context)
             }
+            .sheet(isPresented: $showNativeAccountSignIn) {
+                IOSAccountSignInView(serverURL: authRequiredServerURL.isEmpty ? normalizedBaseURL : normalizeBaseURL(authRequiredServerURL))
+            }
         }
     }
 
@@ -2498,6 +2513,11 @@ private struct FederationTab: View {
                 (room, room.serverApiBase.isEmpty ? normalizedBaseURL : normalizeBaseURL(room.serverApiBase))
             }
             roomGroups = groupFederatedChoices(allRooms: allRooms, fallbackBase: normalizedBaseURL)
+        } catch let error as IOSRoomsAuthenticationRequired {
+            roomGroups = []
+            authRequiredServerURL = error.baseURL
+            errorMessage = "A federated server requires sign-in before rooms can be listed. Sign in with any available method."
+            showNativeAccountSignIn = true
         } catch {
             roomGroups = []
             errorMessage = "Could not load federated rooms."
@@ -4237,6 +4257,19 @@ private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
     return candidates.filter { seen.insert(canonicalServerIdentity(baseURL: $0, room: nil)).inserted }
 }
 
+private struct IOSRoomsAuthenticationRequired: Error, LocalizedError {
+    let baseURL: String
+
+    var errorDescription: String? {
+        "Authentication required for \(displayServerName(baseURL: baseURL))."
+    }
+}
+
+private struct IOSRoomFetchBatch {
+    let rooms: [RoomSummary]
+    let authRequiredBase: String?
+}
+
 private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: String) async throws -> ([RoomSummary], String) {
     var lastError: Error?
     for base in iOSMainAPIBaseCandidates(preferredBase: preferredBase) {
@@ -4246,6 +4279,9 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    lastError = IOSRoomsAuthenticationRequired(baseURL: normalizeBaseURL(base))
+                }
                 continue
             }
             let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
@@ -4344,24 +4380,38 @@ private func fetchVisibleFederationBases(preferredBase: String) async -> [String
 }
 
 private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortMode) async throws -> [RoomSummary] {
-    try await withThrowingTaskGroup(of: [RoomSummary].self) { group in
+    try await withThrowingTaskGroup(of: IOSRoomFetchBatch.self) { group in
         for base in bases {
             group.addTask {
                 let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
-                guard let url = URL(string: endpoint) else { return [] }
+                guard let url = URL(string: endpoint) else { return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil) }
                 let request = iosServerPresenceRequest(url: url, timeout: 12)
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    return []
+                guard let http = response as? HTTPURLResponse else {
+                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
                 }
-                return try JSONDecoder().decode([RoomSummary].self, from: data)
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: normalizeBaseURL(base))
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
+                }
+                let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
                     .map { $0.normalizedForFetchedBase(base) }
+                return IOSRoomFetchBatch(rooms: rooms, authRequiredBase: nil)
             }
         }
 
         var rooms: [RoomSummary] = []
-        for try await serverRooms in group {
-            rooms.append(contentsOf: serverRooms)
+        var firstAuthRequiredBase: String?
+        for try await batch in group {
+            rooms.append(contentsOf: batch.rooms)
+            if firstAuthRequiredBase == nil {
+                firstAuthRequiredBase = batch.authRequiredBase
+            }
+        }
+        if rooms.isEmpty, let firstAuthRequiredBase {
+            throw IOSRoomsAuthenticationRequired(baseURL: firstAuthRequiredBase)
         }
         return rooms
     }

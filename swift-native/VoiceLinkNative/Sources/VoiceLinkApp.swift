@@ -1480,9 +1480,23 @@ class AppState: ObservableObject {
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.timeoutInterval = 8
+            request.setValue("macos", forHTTPHeaderField: "x-voicelink-client")
+            request.setValue("presence", forHTTPHeaderField: "x-voicelink-connection-mode")
+            if let token = AuthenticationManager.shared.currentUser?.accessToken.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue(token, forHTTPHeaderField: "x-session-token")
+                request.setValue("account", forHTTPHeaderField: "x-voicelink-auth-level")
+            } else {
+                request.setValue("guest", forHTTPHeaderField: "x-voicelink-auth-level")
+            }
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return [] }
+                guard let http = response as? HTTPURLResponse else { return [] }
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    errorMessage = "\(sourceLabel(from: base)) requires sign-in before rooms can be listed. Use any available sign-in method for that server."
+                    return []
+                }
+                guard (200..<300).contains(http.statusCode) else { return [] }
                 guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
                 let source = sourceLabel(from: base)
                 return array.compactMap { payload in
