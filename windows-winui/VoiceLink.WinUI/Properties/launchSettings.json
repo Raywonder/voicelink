@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "VoiceLink.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "VoiceLink.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
