@@ -245,6 +245,56 @@ class ServerManager: ObservableObject {
         return []
     }
 
+    private func normalizedIncomingChatPayload(_ msgData: [String: Any], fallbackRoomId: String?) -> [String: Any]? {
+        let room = socketDictionaryValue(msgData["room"])
+        let sender = socketDictionaryValue(msgData["sender"])
+        let messageId = msgData["id"] as? String
+            ?? msgData["messageId"] as? String
+            ?? msgData["_id"] as? String
+            ?? UUID().uuidString
+        let senderId = msgData["userId"] as? String
+            ?? msgData["senderId"] as? String
+            ?? sender?["id"] as? String
+            ?? sender?["userId"] as? String
+            ?? ""
+        let senderName = msgData["userName"] as? String
+            ?? msgData["senderName"] as? String
+            ?? msgData["author"] as? String
+            ?? msgData["name"] as? String
+            ?? sender?["name"] as? String
+            ?? sender?["displayName"] as? String
+            ?? "Unknown"
+        let content = msgData["message"] as? String
+            ?? msgData["content"] as? String
+            ?? msgData["body"] as? String
+            ?? msgData["text"] as? String
+            ?? ""
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let messageType = msgData["type"] as? String
+            ?? msgData["messageType"] as? String
+            ?? ((senderId.lowercased().hasPrefix("system") || senderName.lowercased() == "system") ? "system" : "text")
+        let roomId = msgData["roomId"] as? String
+            ?? room?["roomId"] as? String
+            ?? room?["id"] as? String
+            ?? fallbackRoomId
+
+        return [
+            "messageId": messageId,
+            "senderId": senderId,
+            "senderName": senderName,
+            "content": content,
+            "type": messageType,
+            "roomId": roomId as Any,
+            "mentions": msgData["mentions"] as? [String] ?? [],
+            "isBot": msgData["isBot"] as? Bool ?? senderId.lowercased().hasPrefix("bot:"),
+            "hasAudioControls": msgData["hasAudioControls"] as? Bool ?? false,
+            "authProvider": msgData["authProvider"] as? String ?? "",
+            "transcript": msgData["transcript"] as? Bool ?? false,
+            "transcriptUserName": msgData["transcriptUserName"] as? String ?? "",
+            "replyToId": msgData["replyToId"] as? String ?? msgData["replyTo"] as? String ?? ""
+        ]
+    }
+
     func connect(toMain: Bool = true) {
         // Disconnect existing connection
         socket?.disconnect()
@@ -475,7 +525,7 @@ class ServerManager: ObservableObject {
             self.getRooms()
             if let activeRoomId = self.activeRoomId {
                 self.socket?.emit("get-room-users", ["roomId": activeRoomId])
-                self.socket?.emit("get-room-messages", ["roomId": activeRoomId, "limit": 50])
+                self.socket?.emit("get-room-messages", ["roomId": activeRoomId, "limit": 200])
             }
         }
     }
@@ -699,7 +749,7 @@ class ServerManager: ObservableObject {
                     self.audioTransmissionStatus = "Joined room"
                 }
                 self.socket?.emit("get-room-users", ["roomId": roomId])
-                self.socket?.emit("get-room-messages", ["roomId": roomId, "limit": 50])
+                self.socket?.emit("get-room-messages", ["roomId": roomId, "limit": 200])
                 self.fetchActiveRoomStream(for: roomId)
                 self.scheduleAudioTransmissionStart(for: roomId)
             } else {
@@ -928,13 +978,13 @@ class ServerManager: ObservableObject {
         // Chat message received
         socket.on("chat-message") { data, ack in
             print("Chat message received: \(data)")
-            if let msgData = data[0] as? [String: Any] {
-                let messageId = msgData["id"] as? String ?? msgData["messageId"] as? String ?? UUID().uuidString
-                let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
-                let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
-                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
-                let messageType = msgData["type"] as? String ?? "text"
-                let roomId = msgData["roomId"] as? String ?? self.activeRoomId
+            if let msgData = self.socketDictionaryValue(data.first),
+               let messagePayload = self.normalizedIncomingChatPayload(msgData, fallbackRoomId: self.activeRoomId) {
+                let senderId = messagePayload["senderId"] as? String ?? ""
+                let senderName = messagePayload["senderName"] as? String ?? "Unknown"
+                let content = messagePayload["content"] as? String ?? ""
+                let messageType = messagePayload["type"] as? String ?? "text"
+                let roomId = messagePayload["roomId"] as? String ?? self.activeRoomId
                 self.announceLiveRoomMessage(
                     senderId: senderId,
                     senderName: senderName,
@@ -946,53 +996,23 @@ class ServerManager: ObservableObject {
                 NotificationCenter.default.post(
                     name: .incomingChatMessage,
                     object: nil,
-                    userInfo: [
-                        "messageId": messageId,
-                        "senderId": senderId,
-                        "senderName": senderName,
-                        "content": content,
-                        "type": messageType,
-                        "roomId": roomId as Any,
-                        "mentions": msgData["mentions"] as? [String] ?? [],
-                        "isBot": msgData["isBot"] as? Bool ?? false,
-                        "hasAudioControls": msgData["hasAudioControls"] as? Bool ?? false,
-                        "authProvider": msgData["authProvider"] as? String ?? "",
-                        "transcript": msgData["transcript"] as? Bool ?? false,
-                        "transcriptUserName": msgData["transcriptUserName"] as? String ?? ""
-                    ]
+                    userInfo: messagePayload
                 )
             }
         }
 
         socket.on("room-messages") { data, ack in
-            guard let responseData = data.first as? [String: Any],
-                  let messages = responseData["messages"] as? [[String: Any]] else { return }
+            guard let responseData = self.socketDictionaryValue(data.first) else { return }
+            let messages = self.socketArrayDictionaryValue(responseData["messages"])
             let roomId = responseData["roomId"] as? String ?? self.activeRoomId
             for msgData in messages {
-                let messageId = msgData["id"] as? String ?? msgData["messageId"] as? String ?? UUID().uuidString
-                let senderId = msgData["userId"] as? String ?? msgData["senderId"] as? String ?? ""
-                let senderName = msgData["userName"] as? String ?? msgData["senderName"] as? String ?? "Unknown"
-                let content = msgData["message"] as? String ?? msgData["content"] as? String ?? ""
-                let messageType = msgData["type"] as? String ?? "text"
+                guard var messagePayload = self.normalizedIncomingChatPayload(msgData, fallbackRoomId: roomId) else { continue }
+                messagePayload["historical"] = true
 
                 NotificationCenter.default.post(
                     name: .incomingChatMessage,
                     object: nil,
-                    userInfo: [
-                        "messageId": messageId,
-                        "senderId": senderId,
-                        "senderName": senderName,
-                        "content": content,
-                        "type": messageType,
-                        "roomId": roomId as Any,
-                        "mentions": msgData["mentions"] as? [String] ?? [],
-                        "isBot": msgData["isBot"] as? Bool ?? false,
-                        "hasAudioControls": msgData["hasAudioControls"] as? Bool ?? false,
-                        "authProvider": msgData["authProvider"] as? String ?? "",
-                        "transcript": msgData["transcript"] as? Bool ?? false,
-                        "transcriptUserName": msgData["transcriptUserName"] as? String ?? "",
-                        "historical": true
-                    ]
+                    userInfo: messagePayload
                 )
             }
         }
@@ -1519,7 +1539,7 @@ class ServerManager: ObservableObject {
             }
         }
         fetchActiveRoomStream(for: joinedRoomId)
-        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 50])
+        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 200])
         scheduleAudioTransmissionStart(for: joinedRoomId)
 
         var joinedPayload = roomData

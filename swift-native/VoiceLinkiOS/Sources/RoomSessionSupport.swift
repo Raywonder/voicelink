@@ -54,6 +54,7 @@ struct RoomSessionView: View {
     @State private var showAudioControls = true
     @State private var showPeopleAudioState = true
     @State private var expandedUserAudioControls: Set<String> = []
+    @State private var showRoomMessages = false
     @State private var showDirectMessages = false
     @State private var whisperTarget: IOSDirectMessageTarget?
     @State private var monitorTarget: IOSDirectMessageTarget?
@@ -121,7 +122,7 @@ struct RoomSessionView: View {
     }
 
     private var isPresentingAuxiliarySheet: Bool {
-        showDetails || showControls || showPeople || showSettings || showRoomAdmin || showDirectMessages
+        showDetails || showControls || showPeople || showSettings || showRoomAdmin || showRoomMessages || showDirectMessages
     }
 
     var body: some View {
@@ -143,6 +144,7 @@ struct RoomSessionView: View {
             .sheet(isPresented: $showPeople, onDismiss: handleAuxiliaryInterfaceDismissed) { peopleSheet }
             .sheet(isPresented: $showSettings, onDismiss: handleAuxiliaryInterfaceDismissed) { roomSettingsSheet }
             .sheet(isPresented: $showRoomAdmin, onDismiss: handleAuxiliaryInterfaceDismissed) { roomAdminSheet }
+            .sheet(isPresented: $showRoomMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { roomMessagesSheet }
             .sheet(isPresented: $showDirectMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { directMessagesSheet }
         }
         .onAppear {
@@ -246,38 +248,55 @@ struct RoomSessionView: View {
 
     @ViewBuilder
     private var roomChatSection: some View {
-        if showChat || !roomMessages.isEmpty {
-            Section("Room Chat") {
-                if roomMessages.isEmpty {
-                    Text("No room messages yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(roomMessages)) { message in
-                        roomMessageRow(for: message)
+        Section("Room Chat") {
+            if roomMessages.isEmpty {
+                Text("No room messages yet.")
+                    .foregroundStyle(.secondary)
+            } else if showChat {
+                ForEach(Array(roomMessages.prefix(12))) { message in
+                    roomMessageRow(for: message)
+                }
+                if roomMessages.count > 12 {
+                    Button("Show All Room Messages") {
+                        presentRoomInterface { showRoomMessages = true }
+                        IOSActionSoundPlayer.playConfirm()
                     }
+                }
+            } else {
+                Button("Show Room Messages") {
+                    protectRoomDuringInterfaceChange()
+                    showChat = true
+                    showRoomMessages = true
+                    IOSActionSoundPlayer.playConfirm()
                 }
             }
 
-            Section("Send Message") {
-                if let replyTarget {
-                    HStack {
-                        Text("Replying to \(replyTarget.author)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Clear") {
-                            self.replyTarget = nil
-                            IOSActionSoundPlayer.playClose()
-                        }
+            Button(showChat ? "Hide Inline Messages" : "Show Inline Messages") {
+                protectRoomDuringInterfaceChange()
+                showChat.toggle()
+                IOSActionSoundPlayer.playToggle()
+            }
+        }
+
+        Section("Send Message") {
+            if let replyTarget {
+                HStack {
+                    Text("Replying to \(replyTarget.author)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear") {
+                        self.replyTarget = nil
+                        IOSActionSoundPlayer.playClose()
                     }
                 }
-                TextField("Type a room message", text: $draftMessage, axis: .vertical)
-                    .lineLimit(1...4)
-                Button("Send to Room") {
-                    sendRoomMessage()
-                }
-                .disabled(draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            TextField("Type a room message", text: $draftMessage, axis: .vertical)
+                .lineLimit(1...4)
+            Button("Send to Room") {
+                sendRoomMessage()
+            }
+            .disabled(draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -367,6 +386,10 @@ struct RoomSessionView: View {
                     protectRoomDuringInterfaceChange()
                     showChat.toggle()
                     IOSActionSoundPlayer.playToggle()
+                }
+                Button("Room Messages") {
+                    presentRoomInterface { showRoomMessages = true }
+                    IOSActionSoundPlayer.playConfirm()
                 }
                 Button("Room Audio Settings") {
                     presentRoomInterface { showControls = true }
@@ -604,8 +627,53 @@ struct RoomSessionView: View {
         }
     }
 
+    private var roomMessagesSheet: some View {
+        NavigationStack {
+            List {
+                Section("Room Messages") {
+                    if roomMessages.isEmpty {
+                        Text("No room messages yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(roomMessages)) { message in
+                            roomMessageRow(for: message)
+                        }
+                    }
+                }
+
+                Section("Send Message") {
+                    if let replyTarget {
+                        HStack {
+                            Text("Replying to \(replyTarget.author)")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Clear") {
+                                self.replyTarget = nil
+                                IOSActionSoundPlayer.playClose()
+                            }
+                        }
+                    }
+                    TextField("Type a room message", text: $draftMessage, axis: .vertical)
+                        .lineLimit(1...5)
+                    Button("Send to Room") {
+                        sendRoomMessage()
+                    }
+                    .disabled(draftMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .navigationTitle("Room Messages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { showRoomMessages = false }
+                }
+            }
+        }
+    }
+
     private var roomSettingsSheet: some View {
-        SettingsTab(roomState: roomState, openServers: {})
+        SettingsTab(roomState: roomState, openServers: {}, onClose: { showSettings = false })
     }
 
     private var roomAdminSheet: some View {

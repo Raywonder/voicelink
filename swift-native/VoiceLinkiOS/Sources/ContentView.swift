@@ -2680,6 +2680,7 @@ private struct FederationRoomChoicesView: View {
 }
 
 private struct MessagesTab: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @AppStorage("voicelink.authToken") private var authToken = ""
     @AppStorage("voicelink.displayName") private var displayName = ""
@@ -2832,6 +2833,13 @@ private struct MessagesTab: View {
             }
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 
@@ -3683,6 +3691,7 @@ struct SettingsTab: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject var roomState: IOSRoomMessagingState
     let openServers: () -> Void
+    var onClose: (() -> Void)? = nil
     @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
@@ -3848,6 +3857,15 @@ struct SettingsTab: View {
 
             }
             .navigationTitle("Settings")
+            .toolbar {
+                if let onClose {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") {
+                            onClose()
+                        }
+                    }
+                }
+            }
             .confirmationDialog("Choose a sign-in method", isPresented: $showAuthOptions, titleVisibility: .visible) {
                 Button("Quick Pair") {
                     openServers()

@@ -1,11 +1,10 @@
-Build 84 focuses on room reliability and administrator testing:
+Build 85 focuses on room visibility and settings parity:
 
-- Room chat now requests and displays a larger prior message history when joining.
-- Repeated messages are no longer hidden unless they are immediate duplicates.
-- Room system messages keep their server timestamps when available.
-- Admin or room-management accounts now see the native Admin controls from inside an active room.
-- Room audio controls are compact in the room view, with detailed audio settings in the room audio settings sheet.
-- The iOS relay player uses a deeper initial buffer to reduce join-time audio stutter.
-- Server room history delivery now sends up to 200 messages on join/request.
+- Room chat is always available in the active room view, even when there are no messages yet.
+- A dedicated Room Messages sheet mirrors the macOS room chat workflow more closely.
+- People in Room and Room Messages remain reachable from Room Actions while connected.
+- Profile and Settings sheets now include Done controls so users can get back to the room.
+- macOS room history and live chat now preserve system-message payloads that use alternate keys such as body, text, author, or nested sender data.
+- macOS and iOS both request up to 200 prior room messages for better room history after joining.
 
-Please test joining a room as an admin, opening Room Actions > Room Administration, viewing prior user/system messages, sending repeated test messages, and listening for smoother room audio immediately after join.
+Please test joining a room from iOS and macOS, confirming People in Room shows other users, confirming prior user and system messages appear, opening Room Actions > Room Messages, opening Profile and Settings and returning with Done, and sending a new room message from both platforms.
