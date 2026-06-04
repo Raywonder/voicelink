@@ -1,17 +1,17 @@
-Build 82 / 1.0.0 - What to Test
+Build 83 / 1.0.0 - What to Test
 
-Focus: guest-denied room authentication prompts, federation sessions that stay connected but idle in the background, admin room controls, Mastodon callback repair follow-up, clearer room/system join and leave messages, and continued Original Audio validation.
+Focus: authenticated community room-management testing, Mastodon OAuth callback return-to-app repair, smoother first-audio relay buffering, simplified server names, and continued Original Audio validation.
 
 Please test:
-1. Federation: browse rooms across connected servers. Servers should remain connected in the background, and only the focused server/room should be active.
-2. Guest access: join a guest-allowed room, then try a room/server that denies guests. VoiceLink should prompt for authentication instead of silently failing.
-3. Mastodon sign-in: confirm callback no longer lands on a plain 404 page. If a Return to VoiceLink page appears, use Open VoiceLink and verify the app resumes cleanly.
-4. Room presence: join with two users and confirm users/bots, join/leave messages, and room user lists update correctly.
-5. VoiceOver: confirm join/leave/system messages are useful and not repeated excessively.
-6. Admin controls: as an admin, create, edit, refresh, and delete a test room. Confirm non-admin users cannot manage rooms.
-7. Audio: confirm Original Audio defaults to 48 kHz stereo with processing off. Test Voice Isolation, Meeting Mode, and Studio Mode without leaving the room.
-8. Routes/background: test speaker, wired/Bluetooth/AirPods if available, screen lock, background/foreground, and route changes while connected.
-9. Quality: report buffering, choppy audio, clipping, static, sample-rate mismatch, or latency spikes with server, device, route, and mode.
-10. macOS: test the matching Mac build 82 for room audio, admin controls, and Original Audio defaults.
+1. Mastodon sign-in: start sign-in from the app and confirm the callback returns through VoiceLink instead of leaving you on the website. If the Return to VoiceLink page appears, choose Open VoiceLink and verify the app resumes cleanly.
+2. Community server room management: while signed in to the Community server, create, edit, refresh, and delete a test room from iOS and macOS. This is intentionally allowed for authenticated testers.
+3. Admin boundaries: confirm full server configuration, users, backups, and server controls still require true admin access.
+4. Federation: browse rooms across connected servers. Servers should remain connected in the background, and only the focused server or room should be active.
+5. Room presence: join with two users and confirm users, bots, join/leave messages, and room user lists update correctly.
+6. VoiceOver: confirm join/leave/system messages are useful and not repeated excessively.
+7. Audio relay start: join a room and listen for less buffering or choppiness during the first few seconds of incoming audio.
+8. Audio modes: confirm Original Audio defaults to 48 kHz stereo with processing off. Test Voice Isolation, Meeting Mode, and Studio Mode without leaving the room.
+9. Routes/background: test speaker, wired/Bluetooth/AirPods if available, screen lock, background/foreground, and route changes while connected.
+10. macOS: test the matching Mac build 83 for room audio, community room controls, and Original Audio defaults.
 
 Known limits: full Miniaudio plus Opus device/codec replacement is still in progress; some relay paths can still fall back to Float32 PCM.
