@@ -1,10 +1,10 @@
-Build 85 focuses on room visibility and settings parity:
+Build 86 focuses on iOS room controls, microphone status, and sound parity:
 
-- Room chat is always available in the active room view, even when there are no messages yet.
-- A dedicated Room Messages sheet mirrors the macOS room chat workflow more closely.
-- People in Room and Room Messages remain reachable from Room Actions while connected.
-- Profile and Settings sheets now include Done controls so users can get back to the room.
-- macOS room history and live chat now preserve system-message payloads that use alternate keys such as body, text, author, or nested sender data.
-- macOS and iOS both request up to 200 prior room messages for better room history after joining.
+- iOS no longer shows whisper, monitor, or per-user audio controls for your own user row.
+- Long-pressing your own user row now gives a clear message instead of setting yourself as a whisper target.
+- iOS now reports live microphone sample rate, frame buffer size, channel count, codec, and audio engine metadata with room audio state.
+- The iOS room audio status now announces when the microphone is active and shows the current capture format.
+- iOS now includes the same bundled sound assets as the macOS app so action, room, whisper, and status sounds do not diverge.
+- The Windows desktop shortcut on this laptop has been pointed at the runnable WPF build while the WinUI startup crash is isolated.
 
-Please test joining a room from iOS and macOS, confirming People in Room shows other users, confirming prior user and system messages appear, opening Room Actions > Room Messages, opening Profile and Settings and returning with Done, and sending a new room message from both platforms.
+Please test joining a room from iOS, opening People in Room, focusing your own user row, and confirming whisper and monitor controls are not offered for yourself. Then focus another user and confirm whisper/monitor actions are still available. Also confirm the room audio status reports microphone active with sample rate and buffer details, and that room/action sounds match the macOS app.
