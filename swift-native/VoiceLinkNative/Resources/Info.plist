@@ -4,9 +4,9 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
-	<key>CFBundleExecutable</key>
-	<string>VoiceLink</string>
 	<key>CFBundleDisplayName</key>
+	<string>VoiceLink</string>
+	<key>CFBundleExecutable</key>
 	<string>VoiceLink</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
@@ -34,37 +34,11 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>48</string>
+	<string>83</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://voicelinkapp.app/downloads/voicelink/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>1i1XfpOWGVnGczAWcXLl5BP6WT7Qqzu573pjAl+nPbA=</string>
-	<key>NSCameraUsageDescription</key>
-	<string>VoiceLink needs camera access for video and profile features when enabled.</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright 2026 VoiceLink. All rights reserved.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>VoiceLink needs access to your local network to connect to voice servers.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>VoiceLink needs access to your microphone for voice chat.</string>
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
-	<key>NSNetworkVolumesUsageDescription</key>
-	<string>VoiceLink needs network volume access for file transfers and shared media libraries.</string>
-	<key>NSRemovableVolumesUsageDescription</key>
-	<string>VoiceLink needs removable volume access for file transfers and media playback.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsForMedia</key>
@@ -89,5 +63,31 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>VoiceLink needs camera access for video and profile features when enabled.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2026 VoiceLink. All rights reserved.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>VoiceLink needs access to your local network to connect to voice servers.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>VoiceLink needs access to your microphone for voice chat.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>VoiceLink needs network volume access for file transfers and shared media libraries.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>VoiceLink needs removable volume access for file transfers and media playback.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://voicelinkapp.app/downloads/voicelink/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>1i1XfpOWGVnGczAWcXLl5BP6WT7Qqzu573pjAl+nPbA=</string>
 </dict>
 </plist>
