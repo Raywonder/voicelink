@@ -12,6 +12,7 @@ struct RoomSessionDestination: Identifiable, Hashable {
     let showChatByDefault: Bool
     let chatMessageOrder: String
     let chatMessageLimit: Int
+    let canManageRooms: Bool
 
     var id: String { "\(baseURL)|\(roomId)|join" }
 }
@@ -28,6 +29,7 @@ struct RoomPreviewDestination: Identifiable, Hashable {
 
 struct RoomSessionView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @AppStorage("voicelink.authToken") private var authToken = ""
     @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
@@ -48,6 +50,7 @@ struct RoomSessionView: View {
     @State private var showControls = false
     @State private var showPeople = false
     @State private var showSettings = false
+    @State private var showRoomAdmin = false
     @State private var showAudioControls = true
     @State private var showPeopleAudioState = true
     @State private var expandedUserAudioControls: Set<String> = []
@@ -64,11 +67,13 @@ struct RoomSessionView: View {
     @State private var roomAudioDuckTask: Task<Void, Never>?
     @State private var draftMessage = ""
     @State private var draftDirectMessage = ""
+    @State private var canManageRooms: Bool
 
     init(destination: RoomSessionDestination, roomState: IOSRoomMessagingState) {
         self.destination = destination
         self.roomState = roomState
         _showChat = State(initialValue: destination.showChatByDefault)
+        _canManageRooms = State(initialValue: destination.canManageRooms)
     }
 
     private var isSignedIn: Bool {
@@ -84,7 +89,7 @@ struct RoomSessionView: View {
                 let messageRoomName = normalizedIOSRoomIdentity(message.roomName)
                 return messageRoomId == targetRoomId || messageRoomName == targetRoomName
             }
-            .suffix(destination.chatMessageLimit)
+            .suffix(max(destination.chatMessageLimit, 150))
         return destination.chatMessageOrder == "oldest-first"
             ? Array(roomItems)
             : Array(roomItems.reversed())
@@ -116,7 +121,7 @@ struct RoomSessionView: View {
     }
 
     private var isPresentingAuxiliarySheet: Bool {
-        showDetails || showControls || showPeople || showSettings || showDirectMessages
+        showDetails || showControls || showPeople || showSettings || showRoomAdmin || showDirectMessages
     }
 
     var body: some View {
@@ -137,6 +142,7 @@ struct RoomSessionView: View {
             .sheet(isPresented: $showControls, onDismiss: handleAuxiliaryInterfaceDismissed) { roomControlsSheet }
             .sheet(isPresented: $showPeople, onDismiss: handleAuxiliaryInterfaceDismissed) { peopleSheet }
             .sheet(isPresented: $showSettings, onDismiss: handleAuxiliaryInterfaceDismissed) { roomSettingsSheet }
+            .sheet(isPresented: $showRoomAdmin, onDismiss: handleAuxiliaryInterfaceDismissed) { roomAdminSheet }
             .sheet(isPresented: $showDirectMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { directMessagesSheet }
         }
         .onAppear {
@@ -153,6 +159,7 @@ struct RoomSessionView: View {
                 authProvider: authProvider,
                 authUserJSON: authUserJSON
             )
+            Task { await refreshRoomAdminAccess() }
             joinSoundTask?.cancel()
             joinSoundTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 900_000_000)
@@ -293,81 +300,44 @@ struct RoomSessionView: View {
         }
     }
 
+    private var roomAudioModeLabel: String {
+        switch IOSVoiceLinkAudioMode.current {
+        case .original:
+            return "Original Audio"
+        case .voiceIsolation:
+            return "Voice Isolation"
+        case .meeting:
+            return "Meeting Mode"
+        case .studio:
+            return "Studio Mode"
+        }
+    }
+
     @ViewBuilder
     private var roomAudioSection: some View {
         if showAudioControls {
-            Section("Audio") {
+            Section("Audio Settings") {
+                LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
+                LabeledContent("Room Output", value: roomOutputMuted ? "Muted" : "On")
+                LabeledContent("Audio Mode", value: roomAudioModeLabel)
                 if showRoomRelayDebugDetails {
                     LabeledContent("Relay", value: socketClient.audioRelayStatus)
                 }
-                LabeledContent("Whisper Target", value: whisperTarget?.name ?? "None")
-                Toggle("Mute Microphone", isOn: $inputMuted)
-                    .onChange(of: inputMuted) { _ in
-                        syncRoomAudioState()
-                        IOSActionSoundPlayer.playToggle()
-                    }
-                Toggle("Mute Room Output", isOn: $roomOutputMuted)
-                    .onChange(of: roomOutputMuted) { _ in
-                        syncRoomAudioState()
-                        IOSActionSoundPlayer.playToggle()
-                    }
-                Slider(value: $inputGain, in: 0...3) {
-                    Text("Input Level")
-                } minimumValueLabel: {
-                    Text("0%")
-                } maximumValueLabel: {
-                    Text("300%")
+                Button("Audio Settings") {
+                    presentRoomInterface { showControls = true }
+                    IOSActionSoundPlayer.playConfirm()
                 }
-                .accessibilityValue("\(Int(inputGain * 100)) percent")
-                .accessibilityAdjustableAction { direction in
-                    adjustGainValue(&inputGain, direction: direction)
-                }
-                Slider(value: $outputGain, in: 0...3) {
-                    Text("Output Level")
-                } minimumValueLabel: {
-                    Text("0%")
-                } maximumValueLabel: {
-                    Text("300%")
-                }
-                .accessibilityValue("\(Int(outputGain * 100)) percent")
-                .accessibilityAdjustableAction { direction in
-                    adjustGainValue(&outputGain, direction: direction)
-                }
-                .onChange(of: outputGain) { newValue in
-                    socketClient.setPlaybackGain(Float(newValue))
-                    updateRoomBackgroundPlaybackVolume()
-                }
-                Toggle("Mute Media Playback", isOn: $mediaMuted)
-                    .onChange(of: mediaMuted) { _ in
-                        syncRoomBackgroundPlaybackState()
-                        IOSActionSoundPlayer.playToggle()
-                    }
-                Picker("Audio Mode", selection: $audioMode) {
-                    Text("Original Audio").tag(IOSVoiceLinkAudioMode.original.rawValue)
-                    Text("Voice Isolation").tag(IOSVoiceLinkAudioMode.voiceIsolation.rawValue)
-                    Text("Meeting Mode").tag(IOSVoiceLinkAudioMode.meeting.rawValue)
-                    Text("Studio Mode").tag(IOSVoiceLinkAudioMode.studio.rawValue)
-                }
-                .onChange(of: audioMode) { _ in
-                    IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                .accessibilityHint("Opens the room audio settings subtab with microphone, output, media, and processing controls.")
+                Button(inputMuted ? "Unmute Microphone" : "Mute Microphone") {
+                    inputMuted.toggle()
+                    syncRoomAudioState()
                     IOSActionSoundPlayer.playToggle()
                 }
-                Toggle("Noise Reduction", isOn: $noiseReductionEnabled)
-                    .onChange(of: noiseReductionEnabled) { _ in
-                        IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
-                        IOSActionSoundPlayer.playToggle()
-                    }
-                Toggle("Echo Cancellation", isOn: $echoCancellationEnabled)
-                    .onChange(of: echoCancellationEnabled) { _ in
-                        IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
-                        IOSActionSoundPlayer.playToggle()
-                    }
-                Text("Original Audio is the default: stereo 48 kHz, no noise reduction, no automatic gain control, and no forced voice enhancement.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("Press and hold a person to mark a whisper target. Relay playback ducks to 25% while a whisper target is active so that direct talk is easier to follow.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Button(roomOutputMuted ? "Unmute Room Output" : "Mute Room Output") {
+                    roomOutputMuted.toggle()
+                    syncRoomAudioState()
+                    IOSActionSoundPlayer.playToggle()
+                }
             }
         }
     }
@@ -398,7 +368,7 @@ struct RoomSessionView: View {
                     showChat.toggle()
                     IOSActionSoundPlayer.playToggle()
                 }
-                Button("Audio and Room Controls") {
+                Button("Room Audio Settings") {
                     presentRoomInterface { showControls = true }
                     IOSActionSoundPlayer.playConfirm()
                 }
@@ -419,6 +389,13 @@ struct RoomSessionView: View {
                     protectRoomDuringInterfaceChange()
                     showPeopleAudioState.toggle()
                     IOSActionSoundPlayer.playToggle()
+                }
+                if canManageRooms {
+                    Divider()
+                    Button("Room Administration") {
+                        presentRoomInterface { showRoomAdmin = true }
+                        IOSActionSoundPlayer.playConfirm()
+                    }
                 }
                 Divider()
                 Button("Leave Room", role: .destructive) {
@@ -461,7 +438,7 @@ struct RoomSessionView: View {
     private var roomControlsSheet: some View {
         NavigationStack {
             Form {
-                Section("Room Controls") {
+                Section("Room View") {
                     Toggle("Show Chat", isOn: $showChat)
                         .onChange(of: showChat) { _ in
                             protectRoomDuringInterfaceChange()
@@ -479,7 +456,7 @@ struct RoomSessionView: View {
                         }
                 }
 
-                Section("Audio") {
+                Section("Audio Settings") {
                     Toggle("Mute Microphone", isOn: $inputMuted)
                         .onChange(of: inputMuted) { _ in
                             syncRoomAudioState()
@@ -629,6 +606,10 @@ struct RoomSessionView: View {
 
     private var roomSettingsSheet: some View {
         SettingsTab(roomState: roomState, openServers: {})
+    }
+
+    private var roomAdminSheet: some View {
+        AdminTabView(serverURL: .constant(destination.baseURL))
     }
 
     private func roomUserRow(for target: IOSDirectMessageTarget, includeRoleBadges: Bool) -> some View {
@@ -951,6 +932,35 @@ struct RoomSessionView: View {
         socketClient.setPlaybackGain(Float(outputGain))
         updateRoomBackgroundPlaybackVolume()
         socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
+        Task { await refreshRoomAdminAccess() }
+    }
+
+    @MainActor
+    private func refreshRoomAdminAccess() async {
+        guard let url = URL(string: "\(destination.baseURL)/api/admin/status") else {
+            canManageRooms = destination.canManageRooms
+            return
+        }
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10
+            let token = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !token.isEmpty {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue(token, forHTTPHeaderField: "x-session-token")
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                canManageRooms = destination.canManageRooms
+                return
+            }
+            let permissions = json["permissions"] as? [String: Bool]
+            let isAdmin = (json["isAdmin"] as? Bool) ?? false
+            canManageRooms = ((json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] ?? false)) || isAdmin || destination.canManageRooms
+        } catch {
+            canManageRooms = destination.canManageRooms
+        }
     }
 
     @ViewBuilder

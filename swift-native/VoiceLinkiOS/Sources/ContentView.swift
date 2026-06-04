@@ -486,7 +486,7 @@ final class IOSRoomMessagingState: ObservableObject {
         )
         let incomingType = normalizedIOSSocketValue(info["type"], fallback: "")
         let type = incomingType.isEmpty && (info["isBot"] as? Bool) == true ? "bot" : (incomingType.isEmpty ? "text" : incomingType)
-        let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
+        let ts = normalizedIOSMessageTimestamp(info["timestamp"])
         let roomMatchesActive = activeRoomId.isEmpty
             || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
             || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
@@ -496,6 +496,7 @@ final class IOSRoomMessagingState: ObservableObject {
                 && $0.author.caseInsensitiveCompare(author.isEmpty ? "User" : author) == .orderedSame
                 && $0.body == body
                 && $0.type.caseInsensitiveCompare(type.isEmpty ? "text" : type) == .orderedSame
+                && abs($0.timestamp.timeIntervalSince1970 - ts) < 2
         }) {
             return
         }
@@ -591,7 +592,7 @@ final class IOSRoomMessagingState: ObservableObject {
             fallback: "Speaker"
         )
         let body = normalizedIOSSocketValue(info["body"] ?? info["text"], fallback: "")
-        let ts = info["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
+        let ts = normalizedIOSMessageTimestamp(info["timestamp"])
         let roomMatchesActive = activeRoomId.isEmpty
             || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
             || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
@@ -687,6 +688,20 @@ private func normalizedIOSSocketValue(_ value: Any?, fallback: String) -> String
         return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     return text
+}
+
+private func normalizedIOSMessageTimestamp(_ value: Any?) -> TimeInterval {
+    if let time = value as? TimeInterval {
+        return time > 10_000_000_000 ? time / 1000.0 : time
+    }
+    let text = normalizedIOSSocketValue(value, fallback: "")
+    if let doubleValue = Double(text) {
+        return doubleValue > 10_000_000_000 ? doubleValue / 1000.0 : doubleValue
+    }
+    if let date = ISO8601DateFormatter().date(from: text) {
+        return date.timeIntervalSince1970
+    }
+    return Date().timeIntervalSince1970
 }
 
 func normalizedIOSRoomIdentity(_ value: String) -> String {
@@ -1390,6 +1405,7 @@ private struct HomeTab: View {
     @State private var showGuestJoinPrompt = false
     @State private var showServerPolicyPrompt = false
     @State private var isAdmin = false
+    @State private var canManageRooms = false
     @State private var showAdmin = false
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
@@ -1576,7 +1592,7 @@ private struct HomeTab: View {
             .navigationTitle("Servers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isAdmin {
+                if isAdmin || canManageRooms {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             showAdmin = true
@@ -1716,7 +1732,8 @@ private struct HomeTab: View {
                 backgroundStreamVolume: room.streamVolume,
                 showChatByDefault: room.showChatInIOS,
                 chatMessageOrder: room.iosChatMessageOrder,
-                chatMessageLimit: room.iosChatMessageLimit
+                chatMessageLimit: room.iosChatMessageLimit,
+                canManageRooms: isAdmin || canManageRooms
             )
             return
         }
@@ -1847,6 +1864,7 @@ private struct HomeTab: View {
     private func refreshAdminAccess() async {
         guard let url = URL(string: "\(normalizedBaseURL)/api/admin/status") else {
             isAdmin = false
+            canManageRooms = false
             return
         }
         do {
@@ -1860,10 +1878,13 @@ private struct HomeTab: View {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 isAdmin = false
+                canManageRooms = false
                 return
             }
             let json = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
             isAdmin = (json["isAdmin"] as? Bool) ?? false
+            let permissions = json["permissions"] as? [String: Bool]
+            canManageRooms = ((json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] ?? false)) || isAdmin
         } catch {
             isAdmin = false
         }
@@ -2478,7 +2499,8 @@ private struct FederationTab: View {
                 backgroundStreamVolume: choice.room.streamVolume,
                 showChatByDefault: choice.room.showChatInIOS,
                 chatMessageOrder: choice.room.iosChatMessageOrder,
-                chatMessageLimit: choice.room.iosChatMessageLimit
+                chatMessageLimit: choice.room.iosChatMessageLimit,
+                canManageRooms: false
             )
             return
         }
@@ -2765,7 +2787,7 @@ private struct MessagesTab: View {
                         Text(roomState.isInRoom ? "No room messages yet." : "Join a room to see activity.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(roomState.roomMessages.suffix(25).reversed()) { message in
+                        ForEach(roomState.roomMessages.suffix(100).reversed()) { message in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(message.author)
                                     .font(.subheadline.weight(.semibold))
@@ -3019,7 +3041,7 @@ func iosMergedVisibleTargets(primary: [IOSDirectMessageTarget], secondary: [IOSD
     }
 }
 
-private struct AdminTabView: View {
+struct AdminTabView: View {
     @Binding var serverURL: String
     @AppStorage("voicelink.authToken") private var authToken = ""
     @State private var isLoading = false

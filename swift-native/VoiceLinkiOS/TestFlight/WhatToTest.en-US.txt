@@ -1,17 +1,11 @@
-Build 83 / 1.0.0 - What to Test
+Build 84 focuses on room reliability and administrator testing:
 
-Focus: authenticated community room-management testing, Mastodon OAuth callback return-to-app repair, smoother first-audio relay buffering, simplified server names, and continued Original Audio validation.
+- Room chat now requests and displays a larger prior message history when joining.
+- Repeated messages are no longer hidden unless they are immediate duplicates.
+- Room system messages keep their server timestamps when available.
+- Admin or room-management accounts now see the native Admin controls from inside an active room.
+- Room audio controls are compact in the room view, with detailed audio settings in the room audio settings sheet.
+- The iOS relay player uses a deeper initial buffer to reduce join-time audio stutter.
+- Server room history delivery now sends up to 200 messages on join/request.
 
-Please test:
-1. Mastodon sign-in: start sign-in from the app and confirm the callback returns through VoiceLink instead of leaving you on the website. If the Return to VoiceLink page appears, choose Open VoiceLink and verify the app resumes cleanly.
-2. Community server room management: while signed in to the Community server, create, edit, refresh, and delete a test room from iOS and macOS. This is intentionally allowed for authenticated testers.
-3. Admin boundaries: confirm full server configuration, users, backups, and server controls still require true admin access.
-4. Federation: browse rooms across connected servers. Servers should remain connected in the background, and only the focused server or room should be active.
-5. Room presence: join with two users and confirm users, bots, join/leave messages, and room user lists update correctly.
-6. VoiceOver: confirm join/leave/system messages are useful and not repeated excessively.
-7. Audio relay start: join a room and listen for less buffering or choppiness during the first few seconds of incoming audio.
-8. Audio modes: confirm Original Audio defaults to 48 kHz stereo with processing off. Test Voice Isolation, Meeting Mode, and Studio Mode without leaving the room.
-9. Routes/background: test speaker, wired/Bluetooth/AirPods if available, screen lock, background/foreground, and route changes while connected.
-10. macOS: test the matching Mac build 83 for room audio, community room controls, and Original Audio defaults.
-
-Known limits: full Miniaudio plus Opus device/codec replacement is still in progress; some relay paths can still fall back to Float32 PCM.
+Please test joining a room as an admin, opening Room Actions > Room Administration, viewing prior user/system messages, sending repeated test messages, and listening for smoother room audio immediately after join.

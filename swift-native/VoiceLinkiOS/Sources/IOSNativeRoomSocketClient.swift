@@ -170,7 +170,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     func requestRoomMessages() {
         guard !joinedRoomId.isEmpty else { return }
         guard canEmitSocketEvent else { return }
-        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 100])
+        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 200])
     }
 
     func refreshRoomSnapshotViaHTTP() async {
@@ -504,7 +504,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     "roomName": roomName,
                     "speaker": speaker,
                     "body": body,
-                    "timestamp": Date().timeIntervalSince1970
+                    "timestamp": normalizedSocketTimestamp(payload["timestamp"])
                 ]
             )
         }
@@ -732,7 +732,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
         guard !normalizedRoomId.isEmpty,
               let encodedRoomId = normalizedRoomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)/messages?limit=100") else {
+              let url = URL(string: "\(normalizedBaseURL)/api/rooms/\(encodedRoomId)/messages?limit=200") else {
             return
         }
 
@@ -1020,7 +1020,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 "body": body,
                 "isBot": (payload["isBot"] as? Bool) ?? false,
                 "type": type.isEmpty ? "text" : type,
-                "timestamp": Date().timeIntervalSince1970
+                "timestamp": normalizedSocketTimestamp(payload["timestamp"])
             ]
         )
     }
@@ -1051,6 +1051,20 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         }
         return nil
     }
+}
+
+private func normalizedSocketTimestamp(_ value: Any?) -> TimeInterval {
+    if let time = value as? TimeInterval {
+        return time > 10_000_000_000 ? time / 1000.0 : time
+    }
+    let text = normalizedSocketText(value, fallback: "")
+    if let doubleValue = Double(text) {
+        return doubleValue > 10_000_000_000 ? doubleValue / 1000.0 : doubleValue
+    }
+    if let date = ISO8601DateFormatter().date(from: text) {
+        return date.timeIntervalSince1970
+    }
+    return Date().timeIntervalSince1970
 }
 
 private func normalizedSocketText(_ value: Any?, fallback: String = "") -> String {
@@ -1090,8 +1104,8 @@ private final class IOSRoomAudioRelayPlayer {
     private var userMuted: [String: Bool] = [:]
     private var pendingBuffers: [AVAudioPCMBuffer] = []
     private var isPrimedForPlayback = false
-    private let initialPrebufferPacketCount = 5
-    private let maxPendingBufferCount = 18
+    private let initialPrebufferPacketCount = 7
+    private let maxPendingBufferCount = 28
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
