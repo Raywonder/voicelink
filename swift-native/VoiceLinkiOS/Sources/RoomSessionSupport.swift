@@ -884,6 +884,12 @@ struct RoomSessionView: View {
     }
 
     private func toggleWhisperTarget(_ target: IOSDirectMessageTarget) {
+        guard !isCurrentRoomUser(target) else {
+            roomState.statusText = "Whisper is only available for other users."
+            UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
+            IOSActionSoundPlayer.playError()
+            return
+        }
         if whisperTarget?.id == target.id {
             whisperTarget = nil
             socketClient.setPlaybackDuckScale(1.0)
@@ -902,6 +908,12 @@ struct RoomSessionView: View {
     }
 
     private func toggleMonitorTarget(_ target: IOSDirectMessageTarget) {
+        guard !isCurrentRoomUser(target) else {
+            roomState.statusText = "Monitoring is only available for other users."
+            UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
+            IOSActionSoundPlayer.playError()
+            return
+        }
         if monitorTarget?.id == target.id {
             monitorTarget = nil
             socketClient.setMonitorUserId(nil)
@@ -917,7 +929,54 @@ struct RoomSessionView: View {
         IOSActionSoundPlayer.playToggle()
     }
 
+    private func isCurrentRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        let targetId = normalizedRoomUserIdentity(target.id)
+        let targetName = normalizedRoomUserIdentity(target.name)
+        let localIds = [
+            authUserValue(keys: ["id", "userId", "clientId", "sub", "email"]),
+            UserDefaults.standard.string(forKey: "voicelink.userId")
+        ]
+        .compactMap { normalizedRoomUserIdentity($0 ?? "") }
+        .filter { !$0.isEmpty }
+        let localNames = [
+            destination.displayName,
+            authUserValue(keys: ["name", "displayName", "username", "userName", "email"]),
+            UserDefaults.standard.string(forKey: "voicelink.displayName"),
+            UserDefaults.standard.string(forKey: "voicelink.accountDisplayName"),
+            UserDefaults.standard.string(forKey: "voicelink.userName")
+        ]
+        .compactMap { normalizedRoomUserIdentity($0 ?? "") }
+        .filter { !$0.isEmpty }
+
+        return (!targetId.isEmpty && localIds.contains(targetId))
+            || (!targetName.isEmpty && localNames.contains(targetName))
+    }
+
+    private func normalizedRoomUserIdentity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func authUserValue(keys: [String]) -> String {
+        guard let data = authUserJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            return ""
+        }
+        for key in keys {
+            if let value = dictionary[key] {
+                let text = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty, text.lowercased() != "null" {
+                    return text
+                }
+            }
+        }
+        return ""
+    }
+
     private func canShowPerUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
+        if isCurrentRoomUser(target) {
+            return false
+        }
         if target.isBot {
             return target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "audio"
                 && target.hasAudioControls

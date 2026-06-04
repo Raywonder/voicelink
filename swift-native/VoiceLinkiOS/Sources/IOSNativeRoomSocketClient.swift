@@ -26,6 +26,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     @Published private(set) var roomUsers: [IOSDirectMessageTarget] = []
     @Published private(set) var userPlaybackGains: [String: Float] = [:]
     @Published private(set) var userPlaybackMuted: [String: Bool] = [:]
+    @Published private(set) var microphoneSampleRate: Double = 0
+    @Published private(set) var microphoneBufferSize: Int = 0
+    @Published private(set) var microphoneChannelCount: Int = 0
 
     private struct PendingSession {
         let baseURL: String
@@ -905,7 +908,13 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "deafened": outputMuted,
             "transmitEnabled": !inputMuted,
             "localMuted": inputMuted,
-            "outputMuted": outputMuted
+            "outputMuted": outputMuted,
+            "sampleRate": microphoneSampleRate > 0 ? microphoneSampleRate : Double(VoiceLinkAudioTransportDefaults.sampleRate),
+            "bufferSize": microphoneBufferSize > 0 ? microphoneBufferSize : VoiceLinkAudioTransportDefaults.frameSize,
+            "channels": microphoneChannelCount > 0 ? microphoneChannelCount : VoiceLinkAudioTransportDefaults.preferredChannels,
+            "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
+            "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
+            "engine": VoiceLinkAudioTransportDefaults.engine
         ])
     }
 
@@ -925,8 +934,16 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 let encodedAudio = packet.audioData.base64EncodedString()
                 let packetTimestamp = Date().timeIntervalSince1970
                 Task { @MainActor [weak self] in
-                    guard let self,
-                          !self.joinedRoomId.isEmpty,
+                    guard let self else {
+                        return
+                    }
+                    self.microphoneSampleRate = packet.sampleRate
+                    self.microphoneBufferSize = packet.frameCount
+                    self.microphoneChannelCount = packet.channels
+                    self.audioRelayStatus = "Microphone active, \(Int(packet.sampleRate)) Hz, \(packet.frameCount) frame buffer."
+                    self.publishAudioState()
+
+                    guard !self.joinedRoomId.isEmpty,
                           !self.inputMuted,
                           let socket = self.socket,
                           socket.status == .connected else {
