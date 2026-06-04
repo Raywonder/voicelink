@@ -1,76 +1,17 @@
-VoiceLink TestFlight - What to Test
-Build 81 / 1.0.0
-Date: 2026-06-03
+Build 82 / 1.0.0 - What to Test
 
-Focus: Mastodon sign-in callback repair, smoother room join audio startup, clearer room/system messages when users join or leave, iOS admin room management, and continued audio engine validation for Original Audio defaults, stereo relay metadata, room audio controls, and cross-device behavior.
-
-This is not the final Miniaudio plus Opus replacement yet. Opus is advertised as the preferred future codec, while the current relay can still fall back to Float32 PCM packets. The new server/client audio capability module is included so the native clients and backend agree on defaults before the deeper codec engine lands.
+Focus: guest-denied room authentication prompts, federation sessions that stay connected but idle in the background, admin room controls, Mastodon callback repair follow-up, clearer room/system join and leave messages, and continued Original Audio validation.
 
 Please test:
+1. Federation: browse rooms across connected servers. Servers should remain connected in the background, and only the focused server/room should be active.
+2. Guest access: join a guest-allowed room, then try a room/server that denies guests. VoiceLink should prompt for authentication instead of silently failing.
+3. Mastodon sign-in: confirm callback no longer lands on a plain 404 page. If a Return to VoiceLink page appears, use Open VoiceLink and verify the app resumes cleanly.
+4. Room presence: join with two users and confirm users/bots, join/leave messages, and room user lists update correctly.
+5. VoiceOver: confirm join/leave/system messages are useful and not repeated excessively.
+6. Admin controls: as an admin, create, edit, refresh, and delete a test room. Confirm non-admin users cannot manage rooms.
+7. Audio: confirm Original Audio defaults to 48 kHz stereo with processing off. Test Voice Isolation, Meeting Mode, and Studio Mode without leaving the room.
+8. Routes/background: test speaker, wired/Bluetooth/AirPods if available, screen lock, background/foreground, and route changes while connected.
+9. Quality: report buffering, choppy audio, clipping, static, sample-rate mismatch, or latency spikes with server, device, route, and mode.
+10. macOS: test the matching Mac build 82 for room audio, admin controls, and Original Audio defaults.
 
-1. Mastodon sign-in
-- Sign in with a Mastodon account from TestFlight.
-- Confirm the callback no longer lands on a plain server 404 page.
-- If a "Return to VoiceLink" page appears, activate "Open VoiceLink" and confirm the app returns to sign-in flow cleanly.
-- Report the server domain and Mastodon instance if callback still fails.
-
-2. Room audio basics
-- Join a room on iPhone and confirm microphone audio transmits.
-- Confirm incoming room audio is heard from another participant.
-- Confirm audio stays connected when moving between room views.
-- Confirm servers remain connected while browsing other server room lists.
-- Listen for the first few seconds after joining and report whether incoming audio still buffers, chops, or drops.
-
-3. Room messages and user events
-- Join with two users and confirm join and leave messages appear in the room message view.
-- Confirm VoiceOver announces useful user join and leave messages without excessive repeated chatter.
-- Confirm room user lists update after a user joins or leaves.
-
-4. iOS admin controls
-- Sign in as a server admin and open Settings, Admin.
-- Confirm rooms load from the selected server.
-- Create a test room, edit its name or description, refresh the list, then delete it.
-- Confirm non-admin users cannot manage rooms.
-
-5. Original Audio defaults
-- Confirm Original Audio is the default audio mode.
-- Confirm stereo is enabled by default.
-- Confirm sample rate is 48 kHz by default.
-- Confirm noise suppression, echo cancellation, automatic gain control, and voice enhancement are not forced on by default.
-
-6. Audio modes
-- In room audio controls, switch between Original Audio, Voice Isolation, Meeting Mode, and Studio Mode.
-- Confirm audio mode changes do not require leaving and rejoining the room.
-- Confirm processing is only enabled for modes where it is expected.
-- Report any mode that sounds distorted, clipped, one-sided, or unchanged.
-
-7. Devices and routes
-- Test built-in speaker.
-- Test receiver speaker if available.
-- Test wired headphones if available.
-- Test Bluetooth headphones or headset if available.
-- Test AirPods if available.
-- Test external USB audio devices if available.
-- Change audio route while connected and confirm the app keeps working.
-
-8. Background and interruptions
-- Stay in a room with the screen locked for at least two minutes.
-- Background and foreground the app while connected.
-- If possible, test an incoming call interruption and confirm audio recovers cleanly.
-
-9. Mixing and quality
-- If background media playback is available on your build, test media plus microphone mixing.
-- Confirm microphone, incoming participant, background media, and notification volume controls behave independently where available.
-- Report clipping, crackling, static, sample-rate mismatch, or latency spikes.
-
-10. macOS matching build
-- On Mac, test room audio with the matching macOS build from this branch.
-- Confirm macOS audio settings expose the same Original Audio, Voice Isolation, Meeting Mode, and Studio Mode options.
-- Confirm macOS defaults also preserve 48 kHz stereo Original Audio with processing off.
-
-Known limitations for build 81:
-- Opus is the preferred target codec, but some live relay paths still use Float32 PCM fallback.
-- The Miniaudio-style capability module is included in backend and client defaults, but the full native Miniaudio device layer is not fully linked yet.
-- PA/whisper-specific paths may still use speech processing intentionally.
-
-Report issues with device model, OS version, build number, server used, exact steps, expected result, actual result, audio device, and whether the issue happens in Original Audio, Voice Isolation, Meeting Mode, or Studio Mode.
+Known limits: full Miniaudio plus Opus device/codec replacement is still in progress; some relay paths can still fall back to Float32 PCM.
