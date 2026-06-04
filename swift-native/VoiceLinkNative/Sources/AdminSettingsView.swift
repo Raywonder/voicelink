@@ -177,6 +177,7 @@ struct AdminSettingsView: View {
         switch adminManager.adminRole {
         case .owner: return "crown.fill"
         case .admin: return "shield.fill"
+        case .roomManager: return "rectangle.3.group.bubble.left"
         case .moderator: return "person.badge.shield.checkmark"
         case .none: return "person"
         }
@@ -186,6 +187,7 @@ struct AdminSettingsView: View {
         switch adminManager.adminRole {
         case .owner: return .yellow
         case .admin: return .purple
+        case .roomManager: return .green
         case .moderator: return .blue
         case .none: return .gray
         }
@@ -197,6 +199,8 @@ struct AdminSettingsView: View {
             return "Owner / Admin"
         case .admin:
             return "Admin"
+        case .roomManager:
+            return "Room Manager"
         case .moderator:
             return "Moderator"
         case .none:

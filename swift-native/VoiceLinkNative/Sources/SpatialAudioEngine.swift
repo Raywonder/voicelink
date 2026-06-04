@@ -13,6 +13,10 @@ class SpatialAudioEngine: ObservableObject {
     private var environmentNode: AVAudioEnvironmentNode?
     private var playerNodes: [String: AVAudioPlayerNode] = [:]
     private var spatialMixers: [String: AVAudioMixerNode] = [:]
+    private var pendingRelayBuffers: [String: [AVAudioPCMBuffer]] = [:]
+    private var primedRelayUsers: Set<String> = []
+    private let initialRelayPrebufferPacketCount = 5
+    private let maxRelayPendingBufferCount = 18
     private var observers: [NSObjectProtocol] = []
 
     // User positions in 3D space
@@ -225,6 +229,8 @@ class SpatialAudioEngine: ObservableObject {
             engine.detach(playerNode)
             playerNodes.removeValue(forKey: userId)
         }
+        pendingRelayBuffers.removeValue(forKey: userId)
+        primedRelayUsers.remove(userId)
 
         if let mixerNode = spatialMixers[userId] {
             engine.detach(mixerNode)
@@ -265,6 +271,8 @@ class SpatialAudioEngine: ObservableObject {
             }
 
             playerNode.play()
+            pendingRelayBuffers[userId] = []
+            primedRelayUsers.remove(userId)
             print("[SpatialAudio] Created player node for user: \(userId)")
         }
 
@@ -292,11 +300,27 @@ class SpatialAudioEngine: ObservableObject {
             buffer.frameLength = AVAudioFrameCount(frameCount)
         }
 
-        // Schedule buffer for playback
+        // Schedule buffered playback to reduce choppy relay starts during joins and route changes.
         if let playerNode = playerNodes[userId] {
             applyVolume(for: userId)
             RecordingManager.shared.addUserAudio(userId: userId, username: username, buffer: buffer)
-            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+            var queue = pendingRelayBuffers[userId] ?? []
+            queue.append(buffer)
+            if queue.count > maxRelayPendingBufferCount {
+                queue.removeFirst(queue.count - maxRelayPendingBufferCount)
+            }
+            if !primedRelayUsers.contains(userId) && queue.count < initialRelayPrebufferPacketCount {
+                pendingRelayBuffers[userId] = queue
+                return
+            }
+            primedRelayUsers.insert(userId)
+            pendingRelayBuffers[userId] = []
+            for queuedBuffer in queue {
+                playerNode.scheduleBuffer(queuedBuffer, completionHandler: nil)
+            }
+            if !playerNode.isPlaying {
+                playerNode.play()
+            }
         }
     }
 

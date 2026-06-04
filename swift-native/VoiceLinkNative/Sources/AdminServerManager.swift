@@ -120,6 +120,7 @@ class AdminServerManager: ObservableObject {
     enum AdminRole: String, Codable {
         case none = "none"
         case moderator = "moderator"
+        case roomManager = "room-manager"
         case admin = "admin"
         case owner = "owner"
 
@@ -128,7 +129,7 @@ class AdminServerManager: ObservableObject {
         }
 
         var canManageRooms: Bool {
-            self == .admin || self == .owner
+            self == .roomManager || self == .admin || self == .owner
         }
 
         var canManageServer: Bool {
@@ -308,6 +309,11 @@ class AdminServerManager: ObservableObject {
                     isAdmin = json["isAdmin"] as? Bool ?? false
                     if let roleStr = json["role"] as? String {
                         adminRole = AdminRole(rawValue: roleStr) ?? .none
+                    }
+                    let permissions = json["permissions"] as? [String: Any]
+                    let serverCanManageRooms = (json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] as? Bool) ?? isAdmin
+                    if serverCanManageRooms && !adminRole.canManageRooms {
+                        adminRole = .roomManager
                     }
                     if adminRole == .none, let fallbackRole {
                         adminRole = fallbackRole

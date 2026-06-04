@@ -13,6 +13,40 @@
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceLink Downloads - Desktop Apps and VoiceLink Web Access</title>
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search || '');
+            const code = params.get('oauth_code') || params.get('code');
+            const state = params.get('oauth_state') || params.get('state');
+            const error = params.get('oauth_error') || params.get('error');
+            if (!code && !error) return;
+
+            const nativeParams = new URLSearchParams();
+            if (code) nativeParams.set('code', code);
+            if (state) nativeParams.set('state', state);
+            if (error) nativeParams.set('error', error);
+            const nativeUrl = 'voicelink://oauth/callback?' + nativeParams.toString();
+            const webUrl = '/client/?' + params.toString();
+
+            function renderReturnScreen() {
+                document.title = 'Return to VoiceLink';
+                document.body.innerHTML = '<main class="container" role="main" style="max-width:760px;margin:0 auto;padding:40px 20px;line-height:1.5;">'
+                    + '<h1>Return to VoiceLink</h1>'
+                    + '<p>Your Mastodon sign-in returned to VoiceLink. The app should reopen automatically.</p>'
+                    + '<p><a class="download-btn" href="' + nativeUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">Open VoiceLink app</a></p>'
+                    + '<p><a href="' + webUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">Continue in VoiceLink Web Access</a></p>'
+                    + '<p aria-live="polite">If nothing happens, use the Open VoiceLink app link above.</p>'
+                    + '</main>';
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', renderReturnScreen, { once: true });
+            } else {
+                renderReturnScreen();
+            }
+            setTimeout(function () { window.location.href = nativeUrl; }, 150);
+        }());
+    </script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {

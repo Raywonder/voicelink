@@ -3272,6 +3272,31 @@ class VoiceLinkLocalServer {
         return this.getSchedulerRole(req) === 'admin';
     }
 
+    getRoomManagementAccess(req) {
+        const user = this.getAnyAuthUserFromRequest
+            ? this.getAnyAuthUserFromRequest(req)
+            : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
+        const role = resolveEffectiveAdminRole(user);
+        const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
+        const host = String((req.get && req.get('host')) || req.headers?.host || '').toLowerCase();
+        const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').toLowerCase();
+        const origin = String(req.headers?.origin || '').toLowerCase();
+        const publicHost = `${host} ${forwardedHost} ${origin}`;
+        const isCommunityServer = publicHost.includes('community.voicelinkapp.app')
+            || publicHost.includes('community.voicelink.app')
+            || publicHost.includes(':3110')
+            || process.env.VOICELINK_COMMUNITY_TEST_ROOM_ADMIN === 'true';
+        const canManageRooms = isAdmin || (Boolean(user) && isCommunityServer);
+        return {
+            user,
+            role,
+            isAdmin,
+            isModerator: role === 'staff',
+            canManageRooms,
+            communityRoomManagement: Boolean(user) && isCommunityServer && !isAdmin
+        };
+    }
+
     parseBool(value, defaultValue = false) {
         if (value === undefined || value === null || value === '') {
             return defaultValue;
@@ -9043,9 +9068,11 @@ class VoiceLinkLocalServer {
                 denyList = []
             } = req.body;
             const roomId = req.body.roomId || uuidv4();
+            const access = this.getRoomManagementAccess(req);
+            const requestIsAuthenticated = Boolean(access.user) || isAuthenticated === true;
 
             // Enforce guest restrictions
-            if (!isAuthenticated) {
+            if (!requestIsAuthenticated) {
                 // Guests can only create public rooms
                 if (visibility !== 'public') {
                     return res.status(403).json({
@@ -9118,12 +9145,13 @@ class VoiceLinkLocalServer {
                 privacyLevel: privacyLevel || visibility,
                 encrypted: encrypted || false,
                 creatorHandle,
-                createdBy: creatorHandle || null,
+                createdBy: creatorHandle || access.user?.username || access.user?.displayName || access.user?.email || null,
+                managedByAuthenticatedCommunityTester: access.communityRoomManagement,
                 isDefault: isDefault || false,
                 template: template || null,
                 createdAt: new Date(),
                 updatedAt: new Date(),
-                updatedBy: creatorHandle || null,
+                updatedBy: creatorHandle || access.user?.username || access.user?.displayName || access.user?.email || null,
                 previousNames: [],
                 expiresAt,
                 audioSettings: {
@@ -10210,7 +10238,7 @@ class VoiceLinkLocalServer {
             if (state) callbackParams.set('oauth_state', state);
             if (error) callbackParams.set('oauth_error', error);
 
-            const webRedirect = `/?${callbackParams.toString()}`;
+            const webRedirect = `/client/?${callbackParams.toString()}`;
             const nativeParams = new URLSearchParams();
             if (code) nativeParams.set('code', code);
             if (state) nativeParams.set('state', state);
@@ -10399,6 +10427,14 @@ class VoiceLinkLocalServer {
                 return res.status(404).json({ error: 'Room not found' });
             }
 
+            const access = this.getRoomManagementAccess(req);
+            if (!access.canManageRooms) {
+                return res.status(403).json({
+                    error: 'Authenticated community room management access is required.',
+                    requiresAuth: true
+                });
+            }
+
             // Kick all users from room
             if (room.users && room.users.length > 0) {
                 this.io.to(roomId).emit('room-deleted', { reason: 'Room closed by admin' });
@@ -10429,6 +10465,14 @@ class VoiceLinkLocalServer {
 
             if (!room) {
                 return res.status(404).json({ error: 'Room not found' });
+            }
+
+            const access = this.getRoomManagementAccess(req);
+            if (!access.canManageRooms) {
+                return res.status(403).json({
+                    error: 'Authenticated community room management access is required.',
+                    requiresAuth: true
+                });
             }
 
             const normalizedPreviousNames = Array.isArray(room.previousNames)
@@ -14103,14 +14147,20 @@ class VoiceLinkLocalServer {
         });
 
         this.app.get('/api/admin/status', (req, res) => {
-            const user = this.getAnyAuthUserFromRequest ? this.getAnyAuthUserFromRequest(req) : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
-            const role = resolveEffectiveAdminRole(user);
-            const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
+            const access = this.getRoomManagementAccess(req);
             res.json({
-                isAdmin,
-                role,
-                isModerator: role === 'staff',
-                user: user ? publicLocalUser(user) : null
+                isAdmin: access.isAdmin,
+                role: access.role,
+                isModerator: access.isModerator,
+                canManageRooms: access.canManageRooms,
+                communityRoomManagement: access.communityRoomManagement,
+                permissions: {
+                    rooms: access.canManageRooms,
+                    config: access.isAdmin,
+                    users: access.isAdmin,
+                    server: access.role === 'owner'
+                },
+                user: access.user ? publicLocalUser(access.user) : null
             });
         });
 

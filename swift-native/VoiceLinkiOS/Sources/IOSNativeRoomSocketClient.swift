@@ -1090,7 +1090,8 @@ private final class IOSRoomAudioRelayPlayer {
     private var userMuted: [String: Bool] = [:]
     private var pendingBuffers: [AVAudioPCMBuffer] = []
     private var isPrimedForPlayback = false
-    private let initialPrebufferPacketCount = 3
+    private let initialPrebufferPacketCount = 5
+    private let maxPendingBufferCount = 18
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
@@ -1202,6 +1203,9 @@ private final class IOSRoomAudioRelayPlayer {
                 }
             }
             self.pendingBuffers.append(buffer)
+            if self.pendingBuffers.count > self.maxPendingBufferCount {
+                self.pendingBuffers.removeFirst(self.pendingBuffers.count - self.maxPendingBufferCount)
+            }
             if !self.isPrimedForPlayback && self.pendingBuffers.count < self.initialPrebufferPacketCount {
                 return
             }

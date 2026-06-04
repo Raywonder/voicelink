@@ -3030,6 +3030,7 @@ private struct AdminTabView: View {
     @State private var draftAdminURL = ""
     @State private var isAdmin = false
     @State private var adminRole = "user"
+    @State private var canManageRooms = false
     @State private var adminAccessMessage = "Checking access..."
     @State private var backups: [IOSConfigBackup] = []
     @State private var backupLabel = ""
@@ -3059,9 +3060,10 @@ private struct AdminTabView: View {
                 Section("Access") {
                     LabeledContent("Role", value: adminRole.capitalized)
                     LabeledContent("Admin Access", value: isAdmin ? "Granted" : "Restricted")
+                    LabeledContent("Room Management", value: canManageRooms ? "Enabled" : "Restricted")
                     Text(adminAccessMessage)
                         .font(.footnote)
-                        .foregroundColor(isAdmin ? .secondary : .orange)
+                        .foregroundColor((isAdmin || canManageRooms) ? .secondary : .orange)
                 }
 
                 if isAdmin {
@@ -3075,7 +3077,9 @@ private struct AdminTabView: View {
                             applyAdminServerURL()
                         }
                     }
+                }
 
+                if canManageRooms {
                     Section("Rooms") {
                         if adminRooms.isEmpty {
                             Text("No rooms loaded from this server yet.")
@@ -3143,7 +3147,9 @@ private struct AdminTabView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
 
+                if isAdmin {
                     Section("Backups") {
                         TextField("Optional backup label", text: $backupLabel)
                             .textInputAutocapitalization(.never)
@@ -3311,27 +3317,35 @@ private struct AdminTabView: View {
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 isAdmin = false
+                canManageRooms = false
                 adminRole = "user"
                 adminAccessMessage = "Not authenticated for admin API access."
                 return
             }
             isAdmin = (json["isAdmin"] as? Bool) ?? false
+            let permissions = json["permissions"] as? [String: Any]
+            canManageRooms = (json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] as? Bool) ?? isAdmin
             adminRole = String((json["role"] as? String) ?? "user")
             adminAccessMessage = isAdmin
                 ? "Server API confirms this account can manage settings."
-                : "Signed-in role is not admin."
+                : (canManageRooms ? "Community testing access allows room management for this signed-in account." : "Signed-in role is not admin.")
         } catch {
             isAdmin = false
+            canManageRooms = false
             adminRole = "user"
             adminAccessMessage = "Could not verify admin role right now."
         }
 
-        if isAdmin {
+        if canManageRooms {
             await loadAdminRooms()
-            await loadBackups()
         } else {
             adminRooms = []
             selectedAdminRoomID = nil
+        }
+
+        if isAdmin {
+            await loadBackups()
+        } else {
             backups = []
             selectedBackupID = nil
         }
@@ -4441,15 +4455,15 @@ private func configuredServerPresentation(baseURL: String) -> ConfiguredServerPr
     switch host {
     case "voicelinkapp.app", "www.voicelinkapp.app", "64.20.46.178":
         return ConfiguredServerPresentation(
-            name: "VoiceLink Main from VoiceLink on voicelinkapp.app",
+            name: "VoiceLink Main",
             domain: "voicelinkapp.app",
-            description: "Official VoiceLink main server."
+            description: "Official VoiceLink server."
         )
     case "community.voicelinkapp.app", "www.community.voicelinkapp.app", "64.20.46.179":
         return ConfiguredServerPresentation(
-            name: "VoiceLink Community from VoiceLink on community.voicelinkapp.app",
+            name: "VoiceLink Community",
             domain: "community.voicelinkapp.app",
-            description: "Official VoiceLink community server."
+            description: "Community server for rooms, testing, and federation."
         )
     case "devine-creations.com", "www.devine-creations.com":
         guard path == "voicelink" || path.isEmpty else { return nil }

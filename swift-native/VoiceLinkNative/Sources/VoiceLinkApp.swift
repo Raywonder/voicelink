@@ -5991,13 +5991,13 @@ class SettingsManager: ObservableObject {
     static let defaultManagedFederationServers: [ManagedFederationServer] = [
         ManagedFederationServer(
             url: APIEndpointResolver.canonicalMainBase,
-            name: "VoiceLink Main from VoiceLink on voicelinkapp.app",
-            description: "Primary managed VoiceLink federation authority and default production peer."
+            name: "VoiceLink Main",
+            description: "Primary VoiceLink federation authority and default production peer."
         ),
         ManagedFederationServer(
             url: APIEndpointResolver.communityNode2Base,
-            name: "VoiceLink Community from VoiceLink on community.voicelinkapp.app",
-            description: "Secondary managed federation peer used for continuity, fallback, and maintenance handoff."
+            name: "VoiceLink Community",
+            description: "Community rooms, testing, and federation peer."
         ),
         ManagedFederationServer(
             url: APIEndpointResolver.devineCreationsComBase,
