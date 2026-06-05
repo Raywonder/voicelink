@@ -151,7 +151,6 @@ struct RoomSessionView: View {
             IOSAudioSessionManager.shared.activate(for: .room)
             socketClient.setPlaybackGain(Float(outputGain))
             syncRoomAudioState()
-            startRoomBackgroundPlaybackIfNeeded()
             socketClient.startSession(
                 baseURL: destination.baseURL,
                 roomId: destination.roomId,
@@ -170,6 +169,7 @@ struct RoomSessionView: View {
             }
             memberRefreshTask?.cancel()
             memberRefreshTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
                 while !Task.isCancelled {
                     socketClient.requestRoomUsersIfDue(minimumInterval: 6.0)
                     if socketClient.roomUsers.isEmpty {
@@ -203,8 +203,6 @@ struct RoomSessionView: View {
             guard joinedRoomId == destination.roomId else { return }
             startRoomBackgroundPlaybackIfNeeded()
             socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
-            socketClient.requestRoomMessages()
-            Task { await socketClient.refreshRoomSnapshotViaHTTP() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosPlayTestSound)) { _ in
             playTestSoundWithRoomDuck()

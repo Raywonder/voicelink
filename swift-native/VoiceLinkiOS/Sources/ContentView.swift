@@ -120,6 +120,7 @@ final class IOSRoomMessagingState: ObservableObject {
     @Published var selectedProfileName: String?
     @Published var statusText = ""
     private let announcementManager = IOSRoomAnnouncementManager.shared
+    private var recentSystemMessageKeys: [String: Date] = [:]
 
     init() {
         NotificationCenter.default.addObserver(
@@ -491,6 +492,14 @@ final class IOSRoomMessagingState: ObservableObject {
             || normalizedIOSRoomIdentity(roomId) == normalizedIOSRoomIdentity(activeRoomId)
             || (!roomName.isEmpty && normalizedIOSRoomIdentity(roomName) == normalizedIOSRoomIdentity(activeRoomName))
         guard !roomId.isEmpty, !body.isEmpty, roomMatchesActive else { return }
+        if shouldSuppressRepeatedSystemMessage(
+            roomId: roomId,
+            author: author.isEmpty ? "User" : author,
+            body: body,
+            type: type.isEmpty ? "text" : type
+        ) {
+            return
+        }
         if roomMessages.contains(where: {
             normalizedIOSRoomIdentity($0.roomId) == normalizedIOSRoomIdentity(roomId)
                 && $0.author.caseInsensitiveCompare(author.isEmpty ? "User" : author) == .orderedSame
@@ -565,6 +574,31 @@ final class IOSRoomMessagingState: ObservableObject {
             "type": "system",
             "timestamp": Date().timeIntervalSince1970
         ])
+    }
+
+    private func shouldSuppressRepeatedSystemMessage(roomId: String, author: String, body: String, type: String) -> Bool {
+        let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedType == "system" || normalizedAuthor == "system" else { return false }
+
+        let now = Date()
+        recentSystemMessageKeys = recentSystemMessageKeys.filter { now.timeIntervalSince($0.value) < 90 }
+        let normalizedBody = body
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
+        guard !normalizedBody.isEmpty else { return false }
+
+        let key = [
+            normalizedIOSRoomIdentity(roomId),
+            normalizedAuthor.isEmpty ? "system" : normalizedAuthor,
+            normalizedBody
+        ].joined(separator: "|")
+        if let lastSeen = recentSystemMessageKeys[key], now.timeIntervalSince(lastSeen) < 45 {
+            return true
+        }
+        recentSystemMessageKeys[key] = now
+        return false
     }
 
     private func handleDirectMessage(_ info: [AnyHashable: Any]?) {
@@ -1634,11 +1668,16 @@ private struct HomeTab: View {
                 HomeServerRoomsView(
                     server: server,
                     clientVisibleOnIOS: clientVisibility.ios,
-                    onOpenRoom: { room, action in
+                    canManageRooms: isAdmin || canManageRooms,
+                    onJoinRoom: { room in
                         activeServer = nil
-                        openRoom(room, action: action)
+                        openRoom(room, action: "join")
                     },
                     onShareRoom: { room in shareRoom(room) },
+                    onOpenServerAdmin: {
+                        activeServer = nil
+                        showAdmin = true
+                    },
                     onContactSupport: { context in
                         activeServer = nil
                         activeSupportContext = context
@@ -1938,9 +1977,13 @@ private struct HomeServerRoomsView: View {
     @Environment(\.dismiss) private var dismiss
     let server: HomeServerSummary
     let clientVisibleOnIOS: Bool
-    let onOpenRoom: (RoomSummary, String) -> Void
+    let canManageRooms: Bool
+    let onJoinRoom: (RoomSummary) -> Void
     let onShareRoom: (RoomSummary) -> Void
+    let onOpenServerAdmin: () -> Void
     let onContactSupport: (IOSSupportContext) -> Void
+    @State private var activePreview: RoomPreviewDestination?
+    @State private var activeDetails: RoomDetailsDestination?
 
     var body: some View {
         NavigationStack {
@@ -1959,6 +2002,22 @@ private struct HomeServerRoomsView: View {
                     .accessibilityHint("Opens a private support ticket for this server.")
                 }
 
+                if canManageRooms {
+                    Section("Server Actions") {
+                        Button("Create Room") {
+                            dismiss()
+                            onOpenServerAdmin()
+                        }
+                        .accessibilityHint("Opens the server administration tools to create a room.")
+
+                        Button("Edit Rooms") {
+                            dismiss()
+                            onOpenServerAdmin()
+                        }
+                        .accessibilityHint("Opens the server administration tools to edit and remove rooms.")
+                    }
+                }
+
                 Section("Rooms") {
                     if !clientVisibleOnIOS {
                         Text("Rooms are hidden on iOS by this server's policy.")
@@ -1969,24 +2028,24 @@ private struct HomeServerRoomsView: View {
                     } else {
                         ForEach(server.rooms) { room in
                             Button {
-                                onOpenRoom(room, "details")
+                                showDetails(for: room)
                             } label: {
                                 RoomRow(room: room)
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
-                                Button("Room Details") { onOpenRoom(room, "details") }
-                                Button("Join Room") { onOpenRoom(room, "join") }
-                                Button("Preview Room") { onOpenRoom(room, "preview") }
+                                Button("Room Details") { showDetails(for: room) }
+                                Button("Join Room") { onJoinRoom(room) }
+                                Button("Preview Room") { showPreview(for: room) }
                                 Button("Share Room") { onShareRoom(room) }
                                 Button("Contact Server Support") {
                                     onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
                                 }
                             }
                             .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
-                            .accessibilityAction(named: Text("Room Details")) { onOpenRoom(room, "details") }
-                            .accessibilityAction(named: Text("Join Room")) { onOpenRoom(room, "join") }
-                            .accessibilityAction(named: Text("Preview Room")) { onOpenRoom(room, "preview") }
+                            .accessibilityAction(named: Text("Room Details")) { showDetails(for: room) }
+                            .accessibilityAction(named: Text("Join Room")) { onJoinRoom(room) }
+                            .accessibilityAction(named: Text("Preview Room")) { showPreview(for: room) }
                             .accessibilityAction(named: Text("Share Room")) { onShareRoom(room) }
                             .accessibilityAction(named: Text("Contact Server Support")) {
                                 onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
@@ -1994,6 +2053,12 @@ private struct HomeServerRoomsView: View {
                         }
                     }
                 }
+            }
+            .sheet(item: $activePreview) { preview in
+                RoomPreviewView(destination: preview)
+            }
+            .sheet(item: $activeDetails) { details in
+                RoomDetailsView(destination: details)
             }
             .navigationTitle(server.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -2005,6 +2070,30 @@ private struct HomeServerRoomsView: View {
                 }
             }
         }
+    }
+
+    private func showDetails(for room: RoomSummary) {
+        activeDetails = RoomDetailsDestination(
+            id: "\(server.baseURL)|\(room.id)|details",
+            room: room,
+            serverLabel: server.name,
+            baseURL: resolvedBaseURL(for: room)
+        )
+    }
+
+    private func showPreview(for room: RoomSummary) {
+        activePreview = RoomPreviewDestination(
+            roomId: room.id,
+            roomName: room.name,
+            roomDescription: room.description,
+            baseURL: resolvedBaseURL(for: room),
+            room: room
+        )
+    }
+
+    private func resolvedBaseURL(for room: RoomSummary) -> String {
+        let roomBase = room.serverApiBase.trimmingCharacters(in: .whitespacesAndNewlines)
+        return roomBase.isEmpty ? server.baseURL : normalizeBaseURL(roomBase)
     }
 }
 

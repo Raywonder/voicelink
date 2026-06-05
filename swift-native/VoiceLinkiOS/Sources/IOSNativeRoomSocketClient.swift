@@ -351,17 +351,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             }
             self.requestRoomUsers()
             self.requestRoomMessages()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.requestRoomUsersIfDue(minimumInterval: 0.3)
-                self?.requestRoomMessages()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.requestRoomUsersIfDue(minimumInterval: 0.6)
-                self?.requestRoomMessages()
-            }
             Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                await self?.refreshRoomSnapshotViaHTTP()
+                try? await Task.sleep(nanoseconds: 1_250_000_000)
+                guard let self, self.joinedRoomId == roomId, self.roomUsers.isEmpty else { return }
+                self.requestRoomUsersIfDue(minimumInterval: 1.0)
+                await self.refreshRoomSnapshotViaHTTP()
             }
             if self.canEmitSocketEvent {
                 self.socket?.emit("enable-audio-relay", [
