@@ -79,6 +79,25 @@ class MastodonOAuthManager {
         localStorage.removeItem('voicelink_mastodon_session');
     }
 
+    getBrowserBasePath() {
+        const path = window.location?.pathname || '/';
+        const mountPoints = ['/voicelink-node/', '/voicelink/'];
+        for (const mount of mountPoints) {
+            const trimmed = mount.replace(/\/$/, '');
+            if (path === trimmed || path.startsWith(mount)) {
+                return trimmed;
+            }
+        }
+        return '';
+    }
+
+    getRedirectUri() {
+        if (window.nativeAPI) {
+            return 'urn:ietf:wg:oauth:2.0:oob';
+        }
+        return `${window.location.origin}${this.getBrowserBasePath()}/oauth/callback`;
+    }
+
     /**
      * Normalize user-entered Mastodon-compatible instance names.
      */
@@ -129,11 +148,7 @@ class MastodonOAuthManager {
             return { clientId: this.clientId, clientSecret: this.clientSecret };
         }
 
-        // Determine redirect URI based on environment
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'  // Out-of-band for native apps
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         try {
             const response = await fetch(`${instanceUrl}/api/v1/apps`, {
@@ -179,10 +194,7 @@ class MastodonOAuthManager {
     async startAuth(instanceUrl) {
         await this.registerApp(instanceUrl);
 
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         // Generate state for CSRF protection
         const state = this.generateState();
@@ -225,10 +237,7 @@ class MastodonOAuthManager {
             }
         }
 
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         // Exchange code for token
         const response = await fetch(`${this.instanceUrl}/oauth/token`, {
