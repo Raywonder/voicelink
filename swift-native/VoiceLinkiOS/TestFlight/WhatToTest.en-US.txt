@@ -1,10 +1,16 @@
-Build 86 focuses on iOS room controls, microphone status, and sound parity:
+Build 86 focuses on iOS room controls, microphone status, sound parity, and authentication follow-up.
 
-- iOS no longer shows whisper, monitor, or per-user audio controls for your own user row.
-- Long-pressing your own user row now gives a clear message instead of setting yourself as a whisper target.
-- iOS now reports live microphone sample rate, frame buffer size, channel count, codec, and audio engine metadata with room audio state.
-- The iOS room audio status now announces when the microphone is active and shows the current capture format.
-- iOS now includes the same bundled sound assets as the macOS app so action, room, whisper, and status sounds do not diverge.
-- The Windows desktop shortcut on this laptop has been pointed at the runnable WPF build while the WinUI startup crash is isolated.
+What changed:
+- iOS no longer shows whisper, monitor, or per-user audio controls for the current user's own row.
+- Long-pressing the current user's own row now gives a clear message instead of setting that user as a whisper target.
+- iOS now reports microphone sample rate, frame buffer size, channel count, codec, and audio engine metadata with room audio state.
+- Room audio status now announces when the microphone is active and shows the current capture format.
+- iOS now includes the same bundled sound assets as the macOS app so action, room, whisper, and status sounds stay consistent.
 
-Please test joining a room from iOS, opening People in Room, focusing your own user row, and confirming whisper and monitor controls are not offered for yourself. Then focus another user and confirm whisper/monitor actions are still available. Also confirm the room audio status reports microphone active with sample rate and buffer details, and that room/action sounds match the macOS app.
+Please test:
+- Join a room from iOS, open People in Room, focus your own user row, and confirm whisper and monitor controls are not offered for yourself.
+- Focus another user and confirm whisper and monitor actions are still available where permitted.
+- Confirm room audio status reports microphone active, including sample rate and buffer details.
+- Confirm room, action, whisper, and status sounds match the macOS app.
+- Confirm microphone permission is requested only when needed and does not repeatedly prompt after permission is granted.
+- Sign in with Mastodon or another supported authentication method and confirm VoiceLink returns to the app after successful authentication.
