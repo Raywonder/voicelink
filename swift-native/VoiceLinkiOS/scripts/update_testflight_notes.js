@@ -290,6 +290,9 @@ async function ensureExternalBetaReviewSubmission(token, { buildId }) {
     if (message.includes('409') || message.toLowerCase().includes('already')) {
       return 'already-submitted';
     }
+    if (message.includes('INVALID_QC_STATE')) {
+      return 'already-submitted-or-approved';
+    }
     if (message.includes('ENTITY_ERROR.ATTRIBUTE.INVALID') || message.toLowerCase().includes('beta app review')) {
       return 'not-required';
     }
