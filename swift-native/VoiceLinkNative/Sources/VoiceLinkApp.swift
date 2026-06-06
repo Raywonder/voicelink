@@ -2565,6 +2565,10 @@ struct MainMenuView: View {
         if entry.isCurrent || currentBase == normalizedServerURL(entry.url) {
             appState.currentScreen = .mainMenu
             appState.refreshRooms()
+            if browseRooms {
+                selectedServerFilter = "All Servers"
+                selectedBrowserTab = .federatedRooms
+            }
             return
         }
 
@@ -2578,11 +2582,7 @@ struct MainMenuView: View {
     }
 
     private func browseMainWindowServerRooms(_ entry: MainWindowServerEntry) {
-        appState.currentScreen = .mainMenu
-        appState.refreshRooms()
-        selectedServerFilter = preferredServerFilterLabel(for: entry)
-        selectedBrowserTab = .federatedRooms
-        appState.errorMessage = "Browsing rooms from \(entry.name). Your current server connection was not changed."
+        connectMainWindowServer(entry, browseRooms: true)
     }
 
     private func preferredServerFilterLabel(for entry: MainWindowServerEntry) -> String {
@@ -2605,9 +2605,6 @@ struct MainMenuView: View {
                 MainWindowServerCard(
                     entry: entry,
                     isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
-                    onUseServer: {
-                        connectMainWindowServer(entry, browseRooms: false)
-                    },
                     onBrowseRooms: {
                         browseMainWindowServerRooms(entry)
                     },
@@ -2645,15 +2642,6 @@ struct MainMenuView: View {
                         .foregroundColor(.white)
 
                     Spacer()
-
-                    Picker("Browse", selection: $selectedBrowserTab) {
-                        ForEach(MainBrowserTab.allCases) { tab in
-                            Text(tab.rawValue).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 280)
-                    .accessibilityLabel("Browse servers or federated rooms")
 
                     Button("Search or Join") {
                         appState.currentScreen = .joinRoom
@@ -2774,158 +2762,170 @@ struct MainMenuView: View {
                     .cornerRadius(10)
                 }
 
-                ScrollView {
-                    if selectedBrowserTab == .servers {
+                TabView(selection: $selectedBrowserTab) {
+                    ScrollView {
                         serverListView()
-                    } else if roomLayoutOption == .list {
-                        LazyVStack(spacing: 12) {
-                            ForEach(roomsForDisplay) { room in
-                                let canAdminRoom = appState.canManageRoom(room)
-                                RoomCard(
-                                    room: room,
-                                    descriptionText: appState.displayDescription(for: room),
-                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
-                                    isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom,
-                                    onFocus: { appState.setFocusedRoom(room) }
-                                ) {
-                                    appState.joinOrShowRoom(room)
-                                } onPreview: {
-                                    PeekManager.shared.togglePreview(
-                                        for: room,
-                                        canPreview: SettingsManager.shared.canPreviewRoom(
-                                            roomId: room.id,
-                                            userCount: room.userCount,
-                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
-                                        )
-                                    )
-                                } onShare: {
-                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(roomURL, forType: .string)
-                                    AppSoundManager.shared.playSound(.success)
-                                } onOpenAdmin: {
-                                    appState.currentScreen = .admin
-                                } onCreateRoom: {
-                                    appState.currentScreen = .createRoom
-                                } onDeleteRoom: {
-                                    appState.deleteRoomFromMenu(room)
-                                } onOpenDetails: {
-                                    selectedRoomDetails = room
-                                } onOpenActionMenu: {
-                                    selectedRoomActionRoom = room
-                                    showRoomActionMenuSheet = true
-                                }
-                            }
-                        }
-                    } else if roomLayoutOption == .grid {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12)], spacing: 12) {
-                            ForEach(roomsForDisplay) { room in
-                                let canAdminRoom = appState.canManageRoom(room)
-                                RoomCard(
-                                    room: room,
-                                    descriptionText: appState.displayDescription(for: room),
-                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
-                                    isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom,
-                                    onFocus: { appState.setFocusedRoom(room) }
-                                ) {
-                                    appState.joinOrShowRoom(room)
-                                } onPreview: {
-                                    PeekManager.shared.togglePreview(
-                                        for: room,
-                                        canPreview: SettingsManager.shared.canPreviewRoom(
-                                            roomId: room.id,
-                                            userCount: room.userCount,
-                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
-                                        )
-                                    )
-                                } onShare: {
-                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(roomURL, forType: .string)
-                                    AppSoundManager.shared.playSound(.success)
-                                } onOpenAdmin: {
-                                    appState.currentScreen = .admin
-                                } onCreateRoom: {
-                                    appState.currentScreen = .createRoom
-                                } onDeleteRoom: {
-                                    appState.deleteRoomFromMenu(room)
-                                } onOpenDetails: {
-                                    selectedRoomDetails = room
-                                } onOpenActionMenu: {
-                                    selectedRoomActionRoom = room
-                                    showRoomActionMenuSheet = true
-                                }
-                            }
-                        }
-                    } else {
-                        VStack(spacing: 8) {
-                            HStack(spacing: 12) {
-                                Text("Room").frame(maxWidth: .infinity, alignment: .leading)
-                                Text("Users").frame(width: 70, alignment: .trailing)
-                                Text("Status").frame(width: 90, alignment: .leading)
-                                Text("Actions").frame(width: 170, alignment: .trailing)
-                            }
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 8)
-
-                            ForEach(roomsForDisplay) { room in
-                                let canAdminRoom = appState.canManageRoom(room)
-                                RoomColumnRow(
-                                    room: room,
-                                    descriptionText: appState.displayDescription(for: room),
-                                    roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
-                                    isActiveRoom: appState.activeRoomId == room.id,
-                                    isAdmin: canAdminRoom,
-                                    onFocus: { appState.setFocusedRoom(room) }
-                                ) {
-                                    appState.joinOrShowRoom(room)
-                                } onPreview: {
-                                    PeekManager.shared.togglePreview(
-                                        for: room,
-                                        canPreview: SettingsManager.shared.canPreviewRoom(
-                                            roomId: room.id,
-                                            userCount: room.userCount,
-                                            hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
-                                        )
-                                    )
-                                } onShare: {
-                                    let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(roomURL, forType: .string)
-                                    AppSoundManager.shared.playSound(.success)
-                                } onOpenAdmin: {
-                                    appState.currentScreen = .admin
-                                } onCreateRoom: {
-                                    appState.currentScreen = .createRoom
-                                } onDeleteRoom: {
-                                    appState.deleteRoomFromMenu(room)
-                                } onOpenDetails: {
-                                    selectedRoomDetails = room
-                                } onOpenActionMenu: {
-                                    selectedRoomActionRoom = room
-                                    showRoomActionMenuSheet = true
-                                }
-                            }
-                        }
-                    }
-
-                        if selectedBrowserTab == .servers, federationServerEntries.isEmpty {
+                        if federationServerEntries.isEmpty {
                             Text("No servers available.")
                                 .foregroundColor(.gray)
                                 .padding()
-                        } else if selectedBrowserTab == .federatedRooms, appState.rooms.isEmpty && appState.isConnected {
+                        }
+                    }
+                    .tabItem {
+                        Label("Servers", systemImage: "server.rack")
+                    }
+                    .tag(MainBrowserTab.servers)
+
+                    ScrollView {
+                        if roomLayoutOption == .list {
+                            LazyVStack(spacing: 12) {
+                                ForEach(roomsForDisplay) { room in
+                                    let canAdminRoom = appState.canManageRoom(room)
+                                    RoomCard(
+                                        room: room,
+                                        descriptionText: appState.displayDescription(for: room),
+                                        roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
+                                        isActiveRoom: appState.activeRoomId == room.id,
+                                        isAdmin: canAdminRoom,
+                                        onFocus: { appState.setFocusedRoom(room) }
+                                    ) {
+                                        appState.joinOrShowRoom(room)
+                                    } onPreview: {
+                                        PeekManager.shared.togglePreview(
+                                            for: room,
+                                            canPreview: SettingsManager.shared.canPreviewRoom(
+                                                roomId: room.id,
+                                                userCount: room.userCount,
+                                                hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                            )
+                                        )
+                                    } onShare: {
+                                        let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(roomURL, forType: .string)
+                                        AppSoundManager.shared.playSound(.success)
+                                    } onOpenAdmin: {
+                                        appState.currentScreen = .admin
+                                    } onCreateRoom: {
+                                        appState.currentScreen = .createRoom
+                                    } onDeleteRoom: {
+                                        appState.deleteRoomFromMenu(room)
+                                    } onOpenDetails: {
+                                        selectedRoomDetails = room
+                                    } onOpenActionMenu: {
+                                        selectedRoomActionRoom = room
+                                        showRoomActionMenuSheet = true
+                                    }
+                                }
+                            }
+                        } else if roomLayoutOption == .grid {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12)], spacing: 12) {
+                                ForEach(roomsForDisplay) { room in
+                                    let canAdminRoom = appState.canManageRoom(room)
+                                    RoomCard(
+                                        room: room,
+                                        descriptionText: appState.displayDescription(for: room),
+                                        roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
+                                        isActiveRoom: appState.activeRoomId == room.id,
+                                        isAdmin: canAdminRoom,
+                                        onFocus: { appState.setFocusedRoom(room) }
+                                    ) {
+                                        appState.joinOrShowRoom(room)
+                                    } onPreview: {
+                                        PeekManager.shared.togglePreview(
+                                            for: room,
+                                            canPreview: SettingsManager.shared.canPreviewRoom(
+                                                roomId: room.id,
+                                                userCount: room.userCount,
+                                                hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                            )
+                                        )
+                                    } onShare: {
+                                        let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(roomURL, forType: .string)
+                                        AppSoundManager.shared.playSound(.success)
+                                    } onOpenAdmin: {
+                                        appState.currentScreen = .admin
+                                    } onCreateRoom: {
+                                        appState.currentScreen = .createRoom
+                                    } onDeleteRoom: {
+                                        appState.deleteRoomFromMenu(room)
+                                    } onOpenDetails: {
+                                        selectedRoomDetails = room
+                                    } onOpenActionMenu: {
+                                        selectedRoomActionRoom = room
+                                        showRoomActionMenuSheet = true
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(spacing: 8) {
+                                HStack(spacing: 12) {
+                                    Text("Room").frame(maxWidth: .infinity, alignment: .leading)
+                                    Text("Users").frame(width: 70, alignment: .trailing)
+                                    Text("Status").frame(width: 90, alignment: .leading)
+                                    Text("Actions").frame(width: 170, alignment: .trailing)
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.gray)
+                                .padding(.horizontal, 8)
+
+                                ForEach(roomsForDisplay) { room in
+                                    let canAdminRoom = appState.canManageRoom(room)
+                                    RoomColumnRow(
+                                        room: room,
+                                        descriptionText: appState.displayDescription(for: room),
+                                        roomHasActiveMedia: appState.roomHasActiveMusic[room.id] == true,
+                                        isActiveRoom: appState.activeRoomId == room.id,
+                                        isAdmin: canAdminRoom,
+                                        onFocus: { appState.setFocusedRoom(room) }
+                                    ) {
+                                        appState.joinOrShowRoom(room)
+                                    } onPreview: {
+                                        PeekManager.shared.togglePreview(
+                                            for: room,
+                                            canPreview: SettingsManager.shared.canPreviewRoom(
+                                                roomId: room.id,
+                                                userCount: room.userCount,
+                                                hasActiveMedia: appState.roomHasActiveMusic[room.id] == true
+                                            )
+                                        )
+                                    } onShare: {
+                                        let roomURL = "https://voicelinkapp.app/?room=\(room.id)"
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(roomURL, forType: .string)
+                                        AppSoundManager.shared.playSound(.success)
+                                    } onOpenAdmin: {
+                                        appState.currentScreen = .admin
+                                    } onCreateRoom: {
+                                        appState.currentScreen = .createRoom
+                                    } onDeleteRoom: {
+                                        appState.deleteRoomFromMenu(room)
+                                    } onOpenDetails: {
+                                        selectedRoomDetails = room
+                                    } onOpenActionMenu: {
+                                        selectedRoomActionRoom = room
+                                        showRoomActionMenuSheet = true
+                                    }
+                                }
+                            }
+                        }
+
+                        if appState.rooms.isEmpty && appState.isConnected {
                             Text("No rooms available. Create one!")
                                 .foregroundColor(.gray)
                                 .padding()
-                        } else if selectedBrowserTab == .federatedRooms, appState.rooms.isEmpty && !appState.isConnected {
+                        } else if appState.rooms.isEmpty && !appState.isConnected {
                             Text("Connect to server to see rooms")
                                 .foregroundColor(.gray)
                                 .padding()
                         }
                     }
+                    .tabItem {
+                        Label("Federation", systemImage: "globe")
+                    }
+                    .tag(MainBrowserTab.federatedRooms)
                 }
                 .frame(maxHeight: 470)
                 .focusable()
@@ -3049,6 +3049,7 @@ struct MainMenuView: View {
             .background(Color.black.opacity(0.2))
         }
     }
+}
 // MARK: - Room Card
 struct RoomCard: View {
     @ObservedObject private var settings = SettingsManager.shared
@@ -3563,7 +3564,6 @@ struct RoomColumnRow: View {
 struct MainWindowServerCard: View {
     let entry: MainMenuView.MainWindowServerEntry
     let isConnected: Bool
-    let onUseServer: () -> Void
     let onBrowseRooms: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3593,29 +3593,17 @@ struct MainWindowServerCard: View {
             }
 
             HStack(spacing: 8) {
-                Button(isConnected ? "Current Server" : "Use Server") {
-                    onUseServer()
-                }
-                .buttonStyle(.bordered)
-                .disabled(isConnected)
-                .accessibilityLabel(isConnected ? "\(entry.name) is the current server" : "Use \(entry.name) as the active server")
-
                 Button("Browse Rooms") {
                     onBrowseRooms()
                 }
                 .buttonStyle(.borderedProminent)
-                .accessibilityLabel("Browse rooms on \(entry.name)")
+                .accessibilityLabel(isConnected ? "Browse rooms on current server \(entry.name)" : "Browse rooms on \(entry.name)")
 
-
-                Menu {
-                    Button("Refresh Rooms") {
-                        onBrowseRooms()
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
+                if isConnected {
+                    Text("Active server")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.green)
                 }
-                .menuStyle(.borderlessButton)
-                .accessibilityLabel("More actions for \(entry.name)")
             }
         }
         .padding()

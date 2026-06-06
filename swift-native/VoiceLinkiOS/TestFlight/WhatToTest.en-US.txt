@@ -1,16 +1,17 @@
-Build 86 focuses on iOS room controls, microphone status, sound parity, and authentication follow-up.
+Build 87 focuses on authentication reliability, room browsing, and audio/session stability across VoiceLink clients.
 
 What changed:
-- iOS no longer shows whisper, monitor, or per-user audio controls for the current user's own row.
-- Long-pressing the current user's own row now gives a clear message instead of setting that user as a whisper target.
-- iOS now reports microphone sample rate, frame buffer size, channel count, codec, and audio engine metadata with room audio state.
-- Room audio status now announces when the microphone is active and shows the current capture format.
-- iOS now includes the same bundled sound assets as the macOS app so action, room, whisper, and status sounds stay consistent.
+- Supported authentication flows should be available consistently across platforms, including Client Account, VoiceLink account, and server-provided browser sign-in methods.
+- Successful Mastodon or other browser authentication should return to VoiceLink instead of leaving users on the website.
+- Microphone permission prompts should appear only when needed and should not repeat after permission is granted.
+- Room and server browsing should keep users focused on the selected server instead of disconnecting or kicking them out after previewing a room.
+- The macOS server browser uses real tabs for Servers and Federation so the active browsing context is clearer.
+- Room messages, system messages, visible users, and admin room actions should be easier to find and verify in supported rooms.
+- Audio join behavior continues to be tuned for lower buffering and clearer microphone status reporting.
 
 Please test:
-- Join a room from iOS, open People in Room, focus your own user row, and confirm whisper and monitor controls are not offered for yourself.
-- Focus another user and confirm whisper and monitor actions are still available where permitted.
-- Confirm room audio status reports microphone active, including sample rate and buffer details.
-- Confirm room, action, whisper, and status sounds match the macOS app.
-- Confirm microphone permission is requested only when needed and does not repeatedly prompt after permission is granted.
-- Sign in with Mastodon or another supported authentication method and confirm VoiceLink returns to the app after successful authentication.
+- Sign in with Mastodon, Client Account, or another supported server method and confirm VoiceLink returns to the app after authentication.
+- Join the Community server, browse rooms, preview a room, and confirm the selected server remains active.
+- In a room, confirm users, room messages, system messages, and available admin actions appear where expected for the account role.
+- Confirm microphone permission is not requested repeatedly after it has already been granted.
+- Confirm room audio starts without repeated system-message chatter and report any buffering, clipping, or delayed microphone status.

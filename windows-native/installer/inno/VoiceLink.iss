@@ -38,12 +38,24 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+Type: files; Name: "{userdesktop}\VoiceLink.lnk"
+Type: files; Name: "{commondesktop}\VoiceLink.lnk"
+Type: files; Name: "{localappdata}\Programs\VoiceLink\VoiceLink.exe"
+Type: files; Name: "{localappdata}\Programs\VoiceLink\VoiceLink.WinUI.exe"
+Type: files; Name: "{localappdata}\Programs\VoiceLink\VoiceLinkNative.exe"
+Type: filesandordirs; Name: "{localappdata}\Programs\VoiceLink"
+
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Registry]
+Root: HKLM; Subkey: "Software\DevineCreations\VoiceLink"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\DevineCreations\VoiceLink"; ValueType: string; ValueName: "Client"; ValueData: "Native"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: postinstall skipifsilent shellexec nowait

@@ -2557,11 +2557,35 @@ class VoiceLinkLocalServer {
         const configPath = process.env.VOICELINK_WHMCS_CONFIG_PATH || this.detectWhmcsConfigPath();
         return {
             enabled: process.env.VOICELINK_WHMCS_ADMIN_BRIDGE !== 'false',
-            phpBin: process.env.VOICELINK_PHP_BIN || 'php',
+            phpBin: process.env.VOICELINK_PHP_BIN || this.detectWhmcsPhpBin(),
             configPath,
             autoDetected: !process.env.VOICELINK_WHMCS_CONFIG_PATH && !!configPath,
             adminUrl: process.env.VOICELINK_WHMCS_ADMIN_URL || ''
         };
+    }
+
+    detectWhmcsPhpBin() {
+        const candidates = [
+            '/opt/cpanel/ea-php82/root/usr/bin/php',
+            '/opt/cpanel/ea-php81/root/usr/bin/php',
+            '/opt/cpanel/ea-php83/root/usr/bin/php',
+            '/usr/local/bin/php',
+            '/usr/bin/php',
+            'php'
+        ];
+        for (const candidate of candidates) {
+            if (candidate === 'php') {
+                return candidate;
+            }
+            try {
+                if (fs.existsSync(candidate)) {
+                    return candidate;
+                }
+            } catch {
+                // Continue to the next candidate.
+            }
+        }
+        return 'php';
     }
 
     async whmcsLocalApiRequest(action, params = {}) {
@@ -2607,7 +2631,10 @@ class VoiceLinkLocalServer {
             }
             return parsed.admin;
         } catch (error) {
-            console.warn('[WHMCS] Admin bridge failed:', error.message);
+            const safeMessage = String(error.message || 'WHMCS admin bridge failed')
+                .split(loginPassword).join('<password-redacted>')
+                .split(loginIdentity).join('<identity-redacted>');
+            console.warn('[WHMCS] Admin bridge failed:', safeMessage);
             return null;
         }
     }
@@ -2691,7 +2718,16 @@ class VoiceLinkLocalServer {
             ?? false;
         if (!rawSetting) return false;
         if (!user?.id) return false;
+        if (this.hasImplicitDeviceApprovalAccess(user)) return false;
         return Array.isArray(otherSessions) && otherSessions.length > 0;
+    }
+
+    hasImplicitDeviceApprovalAccess(user = {}) {
+        const provider = String(user.authProvider || user.provider || '').trim().toLowerCase();
+        const role = this.normalizeUserRole(user.role || (user.isAdmin ? 'admin' : ''));
+        const trustedProvider = provider === 'whmcs_admin'
+            || (provider === 'whmcs' && user.trustedDeviceApprover === true);
+        return trustedProvider && (role === 'owner' || role === 'admin');
     }
 
     buildDeviceApprovalSummary(approval) {
