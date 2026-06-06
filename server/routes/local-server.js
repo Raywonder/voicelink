@@ -3281,7 +3281,7 @@ class VoiceLinkLocalServer {
         const user = this.getAnyAuthUserFromRequest
             ? this.getAnyAuthUserFromRequest(req)
             : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
-        const role = resolveEffectiveAdminRole(user);
+        const role = this.normalizeUserRole(user?.role || 'none');
         const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
         const host = String((req.get && req.get('host')) || req.headers?.host || '').toLowerCase();
         const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').toLowerCase();
@@ -15937,7 +15937,10 @@ class VoiceLinkLocalServer {
         });
 
         this.app.get('/api/admin/logs', (req, res) => {
-            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+            const access = this.getRoomManagementAccess ? this.getRoomManagementAccess(req) : null;
+            const canReadLogs = access?.isAdmin === true
+                || (this.isLocalAdminRequest && this.isLocalAdminRequest(req));
+            if (!canReadLogs) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
             }
             try {
