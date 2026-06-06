@@ -1203,6 +1203,11 @@ class AppState: ObservableObject {
                 self.currentScreen = .voiceChat
                 self.pendingJoinRoomId = nil
                 self.errorMessage = "Joined \(joinedRoom.name)."
+                self.serverManager.refreshActiveRoomState(reason: "mac-room-view-active")
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    self.serverManager.refreshActiveRoomState(reason: "mac-room-view-settled")
+                }
             }
         }
 
@@ -2262,6 +2267,7 @@ struct MainMenuView: View {
     @State private var selectedRoomActionRoom: Room?
     @State private var showRoomActionMenuSheet = false
     @State private var roomBrowserWidth: CGFloat = 0
+    @State private var pendingBrowseServerFilter: String?
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -2561,13 +2567,18 @@ struct MainMenuView: View {
     }
 
     private func connectMainWindowServer(_ entry: MainWindowServerEntry, browseRooms: Bool) {
+        let shouldOpenRooms = browseRooms && AuthenticationManager.shared.authState == .authenticated
+        if shouldOpenRooms {
+            selectedBrowserTab = .federatedRooms
+            pendingBrowseServerFilter = preferredServerFilterLabel(for: entry)
+        }
+
         let currentBase = normalizedServerURL(appState.serverManager.baseURL ?? "")
         if entry.isCurrent || currentBase == normalizedServerURL(entry.url) {
             appState.currentScreen = .mainMenu
             appState.refreshRooms()
-            if browseRooms {
-                selectedServerFilter = "All Servers"
-                selectedBrowserTab = .federatedRooms
+            if shouldOpenRooms {
+                selectedServerFilter = pendingBrowseServerFilter ?? preferredServerFilterLabel(for: entry)
             }
             return
         }
@@ -2578,7 +2589,9 @@ struct MainMenuView: View {
         appState.serverManager.connectToURL(entry.url)
         appState.refreshRooms()
         appState.currentScreen = .mainMenu
-        appState.errorMessage = browseRooms ? "Connected to \(entry.name). Browsing rooms..." : "Connected to \(entry.name)."
+        appState.errorMessage = browseRooms
+            ? (shouldOpenRooms ? "Connected to \(entry.name). Browsing rooms..." : "Sign in to browse rooms from \(entry.name).")
+            : "Connected to \(entry.name)."
     }
 
     private func browseMainWindowServerRooms(_ entry: MainWindowServerEntry) {
@@ -3013,8 +3026,16 @@ struct MainMenuView: View {
             }
             .frame(maxWidth: .infinity)
             .onAppear {
-                selectedServerFilter = "All Servers"
                 roomScopeFilter = .all
+            }
+            .onReceive(appState.$rooms) { _ in
+                guard let pendingBrowseServerFilter else { return }
+                if availableServerFilters.contains(pendingBrowseServerFilter) {
+                    selectedServerFilter = pendingBrowseServerFilter
+                    self.pendingBrowseServerFilter = nil
+                } else if selectedBrowserTab == .federatedRooms {
+                    selectedServerFilter = "All Servers"
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .roomBrowseSetLayout)) { notification in
                 if let value = notification.object as? String {
@@ -4229,6 +4250,31 @@ struct VoiceChatView: View {
         }
     }
 
+    private var sameAccountRoomSessionCount: Int {
+        let currentUserId = appState.serverManager.currentUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selfCandidates = Set([
+            appState.username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
+            appState.preferredDisplayName().lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        ].filter { !$0.isEmpty })
+
+        let matchingSessions = appState.serverManager.currentRoomUsers.filter { user in
+            if let currentUserId, !currentUserId.isEmpty,
+               user.id == currentUserId || user.odId == currentUserId {
+                return true
+            }
+            return selfCandidates.contains(user.username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return matchingSessions.count
+    }
+
+    private var sameAccountStatusText: String? {
+        let extraSessions = max(0, sameAccountRoomSessionCount - 1)
+        guard extraSessions > 0 else { return nil }
+        return extraSessions == 1
+            ? "This account is also in this room on 1 other device."
+            : "This account is also in this room on \(extraSessions) other devices."
+    }
+
     private var selectedDirectMessages: [MessagingManager.ChatMessage] {
         guard let userId = selectedDirectMessageUserId else { return [] }
         return messagingManager.getDirectMessages(with: userId)
@@ -4594,10 +4640,10 @@ struct VoiceChatView: View {
                             .accessibilityLabel("Members List")
                             .accessibilityAddTraits(.isHeader)
                         Spacer()
-                        Text("\(visibleRoomUsers.count + 1)")
+                        Text("\(visibleRoomUsers.count + max(1, sameAccountRoomSessionCount))")
                             .font(.caption)
                             .foregroundColor(.gray)
-                            .accessibilityLabel("\(visibleRoomUsers.count + 1) members")
+                            .accessibilityLabel("\(visibleRoomUsers.count + max(1, sameAccountRoomSessionCount)) members")
                     }
 
                     ScrollView {
@@ -4611,6 +4657,13 @@ struct VoiceChatView: View {
                                 isSpeaking: appState.serverManager.isAudioTransmitting && !isMuted,
                                 isCurrentUser: true
                             )
+                            if let sameAccountStatusText {
+                                Text(sameAccountStatusText)
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .padding(.horizontal, 8)
+                                    .accessibilityLabel(sameAccountStatusText)
+                            }
 
                             // Show other users from server
                             ForEach(visibleRoomUsers) { user in

@@ -76,6 +76,8 @@ class ServerManager: ObservableObject {
     private var registeredSocketSession = false
     private var pendingSessionRegistrationWorkItem: DispatchWorkItem?
     private var awaitingDeviceApproval = false
+    private var recentRoomJoinSoundKeys: [String: Date] = [:]
+    private var recentUserJoinSoundKeys: [String: Date] = [:]
     @Published var currentRoomMediaVolume: Float = 0.12
     @Published private(set) var currentRoomMediaMuted: Bool = false
 
@@ -535,6 +537,47 @@ class ServerManager: ObservableObject {
         backendRefreshTimer = nil
     }
 
+    func refreshActiveRoomState(reason: String = "manual") {
+        guard let activeRoomId else { return }
+        refreshRoomState(roomId: activeRoomId, reason: reason)
+    }
+
+    private func refreshRoomState(roomId: String, reason: String) {
+        let trimmedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRoomId.isEmpty else { return }
+        socket?.emit("get-room-users", ["roomId": trimmedRoomId, "reason": reason])
+        socket?.emit("get-room-messages", ["roomId": trimmedRoomId, "limit": 200, "reason": reason])
+    }
+
+    private func shouldPlayRoomJoinSound(roomId: String) -> Bool {
+        let key = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return false }
+        let now = Date()
+        recentRoomJoinSoundKeys = recentRoomJoinSoundKeys.filter { now.timeIntervalSince($0.value) < 10 }
+        if let lastPlayed = recentRoomJoinSoundKeys[key],
+           now.timeIntervalSince(lastPlayed) < 3 {
+            return false
+        }
+        recentRoomJoinSoundKeys[key] = now
+        return true
+    }
+
+    private func shouldPlayUserJoinSound(for user: RoomUser, roomId: String?) -> Bool {
+        if isLikelyLocalMessage(senderId: user.odId, senderName: user.username) {
+            return false
+        }
+        let roomKey = roomId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? activeRoomId ?? "room"
+        let key = "\(roomKey)|\(user.id)"
+        let now = Date()
+        recentUserJoinSoundKeys = recentUserJoinSoundKeys.filter { now.timeIntervalSince($0.value) < 10 }
+        if let lastPlayed = recentUserJoinSoundKeys[key],
+           now.timeIntervalSince(lastPlayed) < 3 {
+            return false
+        }
+        recentUserJoinSoundKeys[key] = now
+        return true
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
@@ -748,8 +791,7 @@ class ServerManager: ObservableObject {
                     self.activeRoomId = roomId
                     self.audioTransmissionStatus = "Joined room"
                 }
-                self.socket?.emit("get-room-users", ["roomId": roomId])
-                self.socket?.emit("get-room-messages", ["roomId": roomId, "limit": 200])
+                self.refreshRoomState(roomId: roomId, reason: "join-event")
                 self.fetchActiveRoomStream(for: roomId)
                 self.scheduleAudioTransmissionStart(for: roomId)
             } else {
@@ -764,7 +806,9 @@ class ServerManager: ObservableObject {
                 }
             }
             NotificationCenter.default.post(name: .roomJoined, object: joinedPayload)
-            AppSoundManager.shared.playSound(.userJoin)
+            if let roomId, self.shouldPlayRoomJoinSound(roomId: roomId) {
+                AppSoundManager.shared.playSound(.userJoin)
+            }
         }
         let joinSuccessEvents = ["joined-room", "room-joined", "join-room-success"]
         for eventName in joinSuccessEvents {
@@ -782,10 +826,10 @@ class ServerManager: ObservableObject {
                 DispatchQueue.main.async {
                     if !self.currentRoomUsers.contains(where: { $0.id == user.id }) {
                         self.currentRoomUsers.append(user)
-                        // Play user join sound
-                        AppSoundManager.shared.playSound(.userJoin)
-                        // Announce user joined
-                        AccessibilityManager.shared.announceUserJoined(user.username)
+                        if self.shouldPlayUserJoinSound(for: user, roomId: self.activeRoomId) {
+                            AppSoundManager.shared.playSound(.userJoin)
+                            AccessibilityManager.shared.announceUserJoined(user.username)
+                        }
                     }
                 }
             }
@@ -801,8 +845,8 @@ class ServerManager: ObservableObject {
                 guard !userId.isEmpty else { return }
                 DispatchQueue.main.async {
                     // Get username before removing for announcement
-                    let userName = self.currentRoomUsers.first(where: { $0.id == userId })?.username
-                    self.currentRoomUsers.removeAll { $0.id == userId }
+                    let userName = self.currentRoomUsers.first(where: { $0.id == userId || $0.odId == userId })?.username
+                    self.currentRoomUsers.removeAll { $0.id == userId || $0.odId == userId }
                     // Play user leave sound
                     AppSoundManager.shared.playSound(.userLeave)
                     // Announce user left
@@ -1539,7 +1583,7 @@ class ServerManager: ObservableObject {
             }
         }
         fetchActiveRoomStream(for: joinedRoomId)
-        socket?.emit("get-room-messages", ["roomId": joinedRoomId, "limit": 200])
+        refreshRoomState(roomId: joinedRoomId, reason: "join-ack")
         scheduleAudioTransmissionStart(for: joinedRoomId)
 
         var joinedPayload = roomData
@@ -2449,6 +2493,8 @@ struct ServerRoom: Identifiable {
 struct RoomUser: Identifiable {
     let id: String
     let odId: String
+    let sessionId: String?
+    let deviceId: String?
     let username: String
     let displayName: String
     let isBot: Bool
@@ -2459,12 +2505,33 @@ struct RoomUser: Identifiable {
     let transmitEnabled: Bool
 
     init?(from dict: [String: Any]) {
-        guard let odId = dict["odId"] as? String ?? dict["id"] as? String,
-              let username = dict["username"] as? String ?? dict["name"] as? String else {
+        guard let odId = dict["odId"] as? String
+                ?? dict["userId"] as? String
+                ?? dict["accountId"] as? String
+                ?? dict["id"] as? String,
+              let username = dict["username"] as? String
+                ?? dict["userName"] as? String
+                ?? dict["name"] as? String
+                ?? dict["displayName"] as? String else {
             return nil
         }
-        self.id = odId
         self.odId = odId
+        self.sessionId = dict["sessionId"] as? String
+            ?? dict["socketId"] as? String
+            ?? dict["socketID"] as? String
+            ?? dict["connectionId"] as? String
+        self.deviceId = dict["deviceId"] as? String
+            ?? dict["clientId"] as? String
+            ?? dict["deviceName"] as? String
+        self.id = [
+            self.sessionId,
+            self.deviceId,
+            dict["presenceId"] as? String,
+            dict["participantId"] as? String,
+            odId
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .first { !$0.isEmpty } ?? odId
         self.username = username
         self.displayName = dict["displayName"] as? String ?? username
         self.isBot = dict["isBot"] as? Bool ?? false
