@@ -23,7 +23,7 @@ Nodes may operate independently or optionally connect to the canonical service.
 ## Canonical Server
 
 Recommended:
-https://voicelink.devinecreations.net
+https://voicelinkapp.app
 
 Responsibilities:
 - Primary API
@@ -33,6 +33,57 @@ Responsibilities:
 - Apple App Store backend
 
 The canonical server is authoritative but does not own user data.
+
+---
+
+## Account-Owned Runtime Layout
+
+Every hosted VoiceLink server runtime MUST be organized by the account that owns
+or operates that server, then by VoiceLink role and domain. Avoid ambiguous
+runtime names such as `voicelink-local`, `local`, or `node2` unless they are
+only temporary working directories.
+
+Canonical cPanel/server-account layout:
+
+```text
+~/apps/voicelink/
+  main/<domain>/
+  community/<domain>/
+  dev/<domain>/
+  cms/<domain>/
+  remote/<domain>/
+```
+
+Rules:
+
+- `main/<domain>/` is for the account's primary VoiceLink server, for example
+  `~/apps/voicelink/main/voicelinkapp.app/`.
+- `community/<domain>/` is for community-facing shared servers, for example
+  `~/apps/voicelink/community/community.voicelinkapp.app/`.
+- `dev/<domain>/` is for development or staging servers, for example
+  `~/apps/voicelink/dev/voicelink.dev/`.
+- `cms/<domain>/` is for CMS-backed runtimes and integration glue tied to a
+  WordPress, Composr, WHMCS, or similar site.
+- `remote/<domain>/` is for a server hosted by this account for a remote user or
+  organization that does not have a local system account on the same host.
+- PM2/systemd/service names MUST include the account or owner context and the
+  domain, for example `voicelinkapp.app-main`,
+  `community.voicelinkapp.app-community`, or
+  `devinecreations.net-cms`.
+- Public display names should be human-readable, for example `VoiceLink Main`,
+  `Community VoiceLink`, or `VoiceLink Development`, not only `VoiceLink Server`.
+
+Domain ownership rule:
+
+- Domains under the `voicelink` account belong under that account's
+  `~/apps/voicelink/...` tree.
+- Domains under the `devinecr` account belong under that account's
+  `~/apps/voicelink/...` tree.
+- Any account hosting VoiceLink for itself or others follows the same structure.
+
+Do not move or rename a live runtime until the process manager entry, reverse
+proxy, document root, download links, update manifests, cron jobs, and monitoring
+checks have all been updated together.
 
 ---
 
@@ -46,7 +97,7 @@ The canonical server is authoritative but does not own user data.
 
 ### Secondary / VPS Nodes
 Example:
-https://node2.voicelink.devinecreations.net
+https://dev.voicelinkapp.app
 
 - Treated as peer instances
 - Register with main server

@@ -1936,6 +1936,52 @@ License: Commercial + EULA
 PUBLIC (Permissive Open Source):
 - voicelink-protocol (schemas, specs)
 - voicelink-sdk (client SDKs)
+
+## Hosted Runtime Ownership and Naming
+
+VoiceLink hosted server installs are account-owned. The account that owns or
+operates a domain must also own the canonical runtime folder for that domain.
+
+Canonical layout:
+
+```text
+~/apps/voicelink/
+  main/<domain>/
+  community/<domain>/
+  dev/<domain>/
+  cms/<domain>/
+  remote/<domain>/
+```
+
+Required rules:
+
+- `voicelinkapp.app` belongs under the main VoiceLink account as
+  `~/apps/voicelink/main/voicelinkapp.app/`.
+- `community.voicelinkapp.app` belongs under the main VoiceLink account as
+  `~/apps/voicelink/community/community.voicelinkapp.app/`.
+- `voicelink.dev` and development-only servers belong under
+  `~/apps/voicelink/dev/<domain>/`.
+- CMS-backed runtimes and integration services belong under
+  `~/apps/voicelink/cms/<domain>/`.
+- Hosted servers for remote owners without local accounts belong under
+  `~/apps/voicelink/remote/<domain>/`.
+- Devine Creations account servers belong under the Devine Creations account's
+  own `~/apps/voicelink/...` tree.
+- Any other customer or hosting account follows the same ownership rule.
+
+Process and service names must include owner/domain context. Do not leave
+permanent production services named only `VoiceLink`, `voicelink-local`,
+`local`, or `node2`. Good examples:
+
+- `voicelinkapp.app-main`
+- `community.voicelinkapp.app-community`
+- `voicelink.dev-dev`
+- `devinecreations.net-cms`
+
+Do not rename or move a live server runtime unless all related PM2/systemd
+process names, reverse proxy rules, document roots, update/download manifests,
+cron jobs, monitoring checks, and backup paths are updated in the same change.
+
 License: Apache-2.0 preferred
 
 ============================================================

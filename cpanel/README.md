@@ -16,6 +16,33 @@ Suggested integration paths:
 - `apps/voicelink`
 - `apps/voicelink/server-backup`
 
+Canonical managed-runtime paths:
+
+```text
+apps/voicelink/
+  main/<domain>/
+  community/<domain>/
+  dev/<domain>/
+  cms/<domain>/
+  remote/<domain>/
+```
+
+Use the cPanel account that owns or operates the server:
+
+- the `voicelink` account owns `voicelinkapp.app`,
+  `community.voicelinkapp.app`, and `voicelink.dev` runtimes
+- the `devinecr` account owns Devine Creations VoiceLink runtimes
+- any other hosting account uses its own `apps/voicelink/...` tree
+
+Use domain-aware process names. Prefer names like
+`voicelinkapp.app-main`, `community.voicelinkapp.app-community`, or
+`devinecreations.net-cms`; avoid permanent names such as `voicelink-local`,
+`local`, or `node2`.
+
+Use `remote/<domain>/` only when this account hosts a VoiceLink server for a
+remote owner or organization that does not have its own local cPanel/system
+account on this host.
+
 Useful cPanel-backed capabilities:
 
 - file manager compatible upload/share paths
