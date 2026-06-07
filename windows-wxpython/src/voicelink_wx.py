@@ -13,8 +13,8 @@ import wx
 
 
 APP_NAME = "VoiceLinkWX"
-APP_VERSION = "0.1.0.5"
-APP_BUILD = 5
+APP_VERSION = "0.1.0.6"
+APP_BUILD = 6
 DEFAULT_SERVER = "https://voicelinkapp.app"
 LEGACY_DEFAULT_SERVERS = {
     "https://voicelink.devinecreations.net",
@@ -232,6 +232,10 @@ class VoiceLinkApi:
         encoded = quote(room_id, safe="")
         payload = self.get_json(f"/api/rooms/{encoded}/messages?limit=200")
         return list_from_payload(payload, ("messages", "data", "items"))
+
+    def room_join_url(self, room_id: str) -> str:
+        encoded = quote(room_id, safe="")
+        return f"{self.base_url}/join/{encoded}"
 
     @staticmethod
     def extract_error(exc: Exception) -> str:
@@ -461,6 +465,57 @@ class AuthDialog(wx.Dialog):
         self._set_status("Signed in." if self.token else "Saved session removed.")
 
 
+class RoomDetailsDialog(wx.Dialog):
+    def __init__(self, parent: wx.Window, room: RoomRecord, join_url: str) -> None:
+        super().__init__(parent, title=f"Room details - {room.name}", size=(620, 480))
+        self.join_url = join_url
+
+        root = wx.BoxSizer(wx.VERTICAL)
+        summary = wx.TextCtrl(
+            self,
+            value=self._format_room_details(room, join_url),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2,
+        )
+        root.Add(summary, 1, wx.EXPAND | wx.ALL, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        join_button = wx.Button(self, wx.ID_OK, "Join room")
+        close_button = wx.Button(self, wx.ID_CANCEL, "Close")
+        join_button.SetDefault()
+        buttons.AddStretchSpacer(1)
+        buttons.Add(join_button, 0, wx.RIGHT, 8)
+        buttons.Add(close_button, 0)
+        root.Add(buttons, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.SetSizer(root)
+        summary.SetFocus()
+
+    def _format_room_details(self, room: RoomRecord, join_url: str) -> str:
+        raw = room.raw if isinstance(room.raw, dict) else {}
+        fields = [
+            ("Room", room.name),
+            ("Description", room.description),
+            ("Room ID", room.room_id),
+            ("Join URL", join_url),
+            ("Topic", raw.get("topic")),
+            ("Status", raw.get("status")),
+            ("Visibility", raw.get("visibility") or ("Private" if raw.get("isPrivate") else "Public")),
+            ("Users", raw.get("userCount") or raw.get("users") or raw.get("participants")),
+            ("Owner", raw.get("owner") or raw.get("createdBy")),
+        ]
+        lines = ["Room details", ""]
+        for label, value in fields:
+            rendered = display_value(value).strip()
+            if rendered:
+                lines.append(f"{label}: {rendered}")
+        lines.extend([
+            "",
+            "Press Enter on Join room to open this room in VoiceLink web access.",
+            "Press Escape or Close to return to the room list.",
+        ])
+        return "\n".join(lines)
+
+
 class MainFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title="VoiceLink for Windows", size=(980, 680))
@@ -483,10 +538,11 @@ class MainFrame(wx.Frame):
         self.refresh_button = wx.Button(panel, label="Refresh rooms")
         self.users_button = wx.Button(panel, label="Show room users")
         self.messages_button = wx.Button(panel, label="Show room messages")
+        self.details_button = wx.Button(panel, label="Room details")
         self.auth_button = wx.Button(panel, label="Sign in")
         self.logout_button = wx.Button(panel, label="Sign out")
         self.admin_button = wx.Button(panel, label="Open admin")
-        for button in (self.refresh_button, self.users_button, self.messages_button, self.auth_button, self.logout_button, self.admin_button):
+        for button in (self.refresh_button, self.users_button, self.messages_button, self.details_button, self.auth_button, self.logout_button, self.admin_button):
             actions.Add(button, 0, wx.RIGHT, 8)
         connection.Add(actions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         root.Add(connection, 0, wx.EXPAND | wx.ALL, 8)
@@ -515,6 +571,7 @@ class MainFrame(wx.Frame):
         server_menu = wx.Menu()
         server_menu.Append(1001, "Connect\tCtrl+L")
         server_menu.Append(1002, "Refresh rooms\tF5")
+        server_menu.Append(1008, "Room details\tEnter")
         server_menu.Append(1003, "Sign in\tCtrl+Shift+L")
         server_menu.Append(1006, "Sign out")
         server_menu.Append(1004, "Open admin")
@@ -529,6 +586,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, lambda _event: self.connect(), id=1001)
         self.Bind(wx.EVT_MENU, lambda _event: self.refresh_rooms(), id=1002)
+        self.Bind(wx.EVT_MENU, lambda _event: self.show_room_details(), id=1008)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_sign_in(), id=1003)
         self.Bind(wx.EVT_MENU, lambda _event: self.logout(), id=1006)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_admin(), id=1004)
@@ -540,10 +598,12 @@ class MainFrame(wx.Frame):
         self.refresh_button.Bind(wx.EVT_BUTTON, lambda _event: self.refresh_rooms())
         self.users_button.Bind(wx.EVT_BUTTON, lambda _event: self.show_room_users())
         self.messages_button.Bind(wx.EVT_BUTTON, lambda _event: self.show_room_messages())
+        self.details_button.Bind(wx.EVT_BUTTON, lambda _event: self.show_room_details())
         self.auth_button.Bind(wx.EVT_BUTTON, lambda _event: self.open_sign_in())
         self.logout_button.Bind(wx.EVT_BUTTON, lambda _event: self.logout())
         self.admin_button.Bind(wx.EVT_BUTTON, lambda _event: self.open_admin())
-        self.rooms_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _event: self.show_room_messages())
+        self.rooms_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda _event: self.show_room_details())
+        self.rooms_list.Bind(wx.EVT_KEY_DOWN, self._on_rooms_key_down)
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
     def _load_settings(self) -> None:
@@ -685,6 +745,13 @@ class MainFrame(wx.Frame):
             return None
         return self.rooms[index]
 
+    def _on_rooms_key_down(self, event: wx.KeyEvent) -> None:
+        key_code = event.GetKeyCode()
+        if key_code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self.show_room_details()
+            return
+        event.Skip()
+
     def _format_records(self, title: str, records: list[Any]) -> str:
         if not records:
             return f"{title}\n\nNo records returned."
@@ -748,6 +815,20 @@ class MainFrame(wx.Frame):
         if not room:
             return
         self.run_background("Loading room messages.", lambda: ("messages", self.api.room_messages(room.room_id)))
+
+    def show_room_details(self) -> None:
+        room = self._selected_room()
+        if not room:
+            return
+        self.api.configure(self.server_url.GetValue(), self.api.token)
+        join_url = self.api.room_join_url(room.room_id)
+        dialog = RoomDetailsDialog(self, room, join_url)
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                webbrowser.open(join_url)
+                self.set_status(f"Opening {room.name}.")
+        finally:
+            dialog.Destroy()
 
     def open_sign_in(self) -> None:
         dialog = AuthDialog(

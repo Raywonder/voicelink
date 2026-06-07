@@ -2,7 +2,7 @@ param(
     [string]$Python = "",
     [string]$Configuration = "Release",
     [string]$Version = "0.1.0",
-    [string]$Build = "5",
+    [string]$Build = "6",
     [string]$OutputDir = "E:\Downloads\VoiceLinkWX"
 )
 
@@ -74,7 +74,7 @@ $manifest = [ordered]@{
     file_name = $zipName
     portable_url = "/downloads/voicelink/windows/$zipName"
     checksum_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-    release_notes = "VoiceLinkWX $Version.$Build adds Check for Updates, opens the central VoiceLink web admin dashboard correctly, defaults new installs to the main VoiceLink server, and replaces raw JSON connection details with readable server status."
+    release_notes = "VoiceLinkWX $Version.$Build fixes Enter on the room list. Pressing Enter now opens an accessible room details dialog with Join room as the default action."
 }
 $manifestPath = Join-Path $OutputDir "voicelink-wxpython-update.json"
 [System.IO.File]::WriteAllText(

@@ -9920,7 +9920,7 @@ class VoiceLinkLocalServer {
 
             const platformDefaults = {
                 macos: ['VoiceLink-1.0.0-macos.pkg', 'VoiceLinkMacOS.zip'],
-                windows: ['VoiceLinkWX-0.1.0.5-windows-setup.exe', 'VoiceLinkWX-0.1.0.5-win-x64-portable.zip'],
+                windows: ['VoiceLinkWX-0.1.0.6-windows-setup.exe', 'VoiceLinkWX-0.1.0.6-win-x64-portable.zip'],
                 linux: ['VoiceLink-linux.AppImage', 'voicelink-local_1.0.0_amd64.deb']
             };
 
@@ -10031,11 +10031,11 @@ class VoiceLinkLocalServer {
                     releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'
                 },
                 windows: {
-                    version: '0.1.0.5',
-                    buildNumber: 5,
-                    downloadURL: `${downloadBase}/VoiceLinkWX-0.1.0.5-windows-setup.exe`,
+                    version: '0.1.0.6',
+                    buildNumber: 6,
+                    downloadURL: `${downloadBase}/VoiceLinkWX-0.1.0.6-windows-setup.exe`,
                     smartTarget: 'windows',
-                    releaseNotes: 'Latest Windows wxPython build adds Check for Updates, opens the central web admin dashboard correctly, defaults new installs to the main VoiceLink server, and replaces raw JSON connection details with readable server status.'
+                    releaseNotes: 'Latest Windows wxPython build fixes Enter on the room list. Pressing Enter now opens an accessible room details dialog with Join room as the default action.'
                 },
                 linux: {
                     version: '1.0.4',
@@ -10067,13 +10067,13 @@ class VoiceLinkLocalServer {
             const updateAllowed = !isStoreManagedChannel;
             const checksumByPlatform = {
                 macos: readChecksum('VoiceLink-1.0.0-macos.pkg'),
-                windows: readChecksum('VoiceLinkWX-0.1.0.5-windows-setup.exe'),
+                windows: readChecksum('VoiceLinkWX-0.1.0.6-windows-setup.exe'),
                 linux: readChecksum('VoiceLink-linux.AppImage')
             };
 
             const windowsArtifacts = {
-                portable: fileExists('VoiceLinkWX-0.1.0.5-win-x64-portable.zip'),
-                setup: fileExists('VoiceLinkWX-0.1.0.5-windows-setup.exe'),
+                portable: fileExists('VoiceLinkWX-0.1.0.6-win-x64-portable.zip'),
+                setup: fileExists('VoiceLinkWX-0.1.0.6-windows-setup.exe'),
                 manifest: fileExists('voicelink-wxpython-update.json')
             };
 
@@ -10128,10 +10128,10 @@ class VoiceLinkLocalServer {
                         ]
                     },
                     windows: {
-                        version: '0.1.0.5',
+                        version: '0.1.0.6',
                         downloads: [
-                            buildEntry('VoiceLinkWX-0.1.0.5-windows-setup.exe', 'Windows Setup Installer', 'native', 'Current build', 'windows'),
-                            buildEntry('VoiceLinkWX-0.1.0.5-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
+                            buildEntry('VoiceLinkWX-0.1.0.6-windows-setup.exe', 'Windows Setup Installer', 'native', 'Current build', 'windows'),
+                            buildEntry('VoiceLinkWX-0.1.0.6-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
                             buildEntry('voicelink-wxpython-update.json', 'Windows Update Manifest', 'metadata', 'Current build', 'windows')
                         ]
                     },
