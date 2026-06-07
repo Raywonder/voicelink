@@ -2693,6 +2693,119 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    private func postBulkModuleAction(endpoint: String, successPrefix: String) async -> Bool {
+        let targets: [ManagementTarget]
+        if manageAllLinkedServers {
+            refreshManagementTargets()
+            targets = managementTargets
+        } else if let selected = selectedManagementTarget {
+            targets = [selected]
+        } else {
+            targets = [
+                ManagementTarget(
+                    id: "current",
+                    name: selectedManagementTargetName,
+                    url: effectiveServerURL,
+                    kind: .connected,
+                    isDefault: true
+                )
+            ]
+        }
+
+        var changedTotal = 0
+        var successCount = 0
+        var failures: [String] = []
+
+        for target in targets {
+            let result = await postBulkModuleActionToTarget(
+                endpoint: endpoint,
+                target: target,
+                applyToCluster: manageAllLinkedServers
+            )
+            if result.ok {
+                successCount += 1
+                changedTotal += result.changed
+            } else {
+                failures.append("\(target.name): \(result.error)")
+            }
+        }
+
+        await refreshModulesCenter()
+        if failures.isEmpty {
+            let scope = manageAllLinkedServers && targets.count > 1
+                ? " across \(targets.count) managed servers"
+                : ""
+            moduleActionMessage = changedTotal > 0
+                ? "\(successPrefix)\(scope): \(changedTotal) changed."
+                : "\(successPrefix)\(scope): already current."
+            return true
+        }
+
+        if successCount > 0 {
+            moduleActionMessage = "\(successPrefix): \(successCount) server\(successCount == 1 ? "" : "s") updated, \(failures.count) failed."
+            error = failures.first
+            return false
+        }
+
+        error = failures.first ?? "Bulk module action failed"
+        return false
+    }
+
+    private func postBulkModuleActionToTarget(
+        endpoint: String,
+        target: ManagementTarget,
+        applyToCluster: Bool
+    ) async -> (ok: Bool, changed: Int, error: String) {
+        let targetBase = preferredAdminBase(for: target.url)
+        guard let url = URL(string: "\(targetBase)/api/modules/bulk/\(endpoint)") else {
+            error = "Invalid server URL"
+            return (false, 0, "Invalid server URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "applyToCluster": applyToCluster
+        ], options: [])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return (false, 0, "Invalid module action response")
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let serverError = payload["error"] as? String {
+                    return (false, 0, serverError)
+                } else {
+                    return (false, 0, "Bulk module action failed (\(httpResponse.statusCode))")
+                }
+            }
+
+            guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return (true, 0, "")
+            }
+
+            if let success = payload["success"] as? Bool, success == false {
+                let failures = (payload["failed"] as? [[String: Any]]) ?? []
+                let firstFailure = failures.compactMap { $0["error"] as? String }.first
+                return (false, 0, firstFailure ?? (payload["error"] as? String) ?? "Bulk module action failed")
+            }
+
+            let installedCount = (payload["installed"] as? [Any])?.count ?? 0
+            let updatedCount = (payload["updated"] as? [Any])?.count ?? 0
+            let changedCount = max(installedCount, updatedCount)
+            return (true, changedCount, "")
+        } catch {
+            return (false, 0, error.localizedDescription)
+        }
+    }
+
     private func postModuleAction(moduleId: String, endpoint: String, body: [String: Any]) async -> Bool {
         guard let url = URL(string: "\(effectiveServerURL)/api/modules/\(moduleId)/\(endpoint)") else {
             error = "Invalid server URL"

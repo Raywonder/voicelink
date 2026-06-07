@@ -2557,11 +2557,35 @@ class VoiceLinkLocalServer {
         const configPath = process.env.VOICELINK_WHMCS_CONFIG_PATH || this.detectWhmcsConfigPath();
         return {
             enabled: process.env.VOICELINK_WHMCS_ADMIN_BRIDGE !== 'false',
-            phpBin: process.env.VOICELINK_PHP_BIN || 'php',
+            phpBin: process.env.VOICELINK_PHP_BIN || this.detectWhmcsPhpBin(),
             configPath,
             autoDetected: !process.env.VOICELINK_WHMCS_CONFIG_PATH && !!configPath,
             adminUrl: process.env.VOICELINK_WHMCS_ADMIN_URL || ''
         };
+    }
+
+    detectWhmcsPhpBin() {
+        const candidates = [
+            '/opt/cpanel/ea-php82/root/usr/bin/php',
+            '/opt/cpanel/ea-php81/root/usr/bin/php',
+            '/opt/cpanel/ea-php83/root/usr/bin/php',
+            '/usr/local/bin/php',
+            '/usr/bin/php',
+            'php'
+        ];
+        for (const candidate of candidates) {
+            if (candidate === 'php') {
+                return candidate;
+            }
+            try {
+                if (fs.existsSync(candidate)) {
+                    return candidate;
+                }
+            } catch {
+                // Continue to the next candidate.
+            }
+        }
+        return 'php';
     }
 
     async whmcsLocalApiRequest(action, params = {}) {
@@ -2607,7 +2631,10 @@ class VoiceLinkLocalServer {
             }
             return parsed.admin;
         } catch (error) {
-            console.warn('[WHMCS] Admin bridge failed:', error.message);
+            const safeMessage = String(error.message || 'WHMCS admin bridge failed')
+                .split(loginPassword).join('<password-redacted>')
+                .split(loginIdentity).join('<identity-redacted>');
+            console.warn('[WHMCS] Admin bridge failed:', safeMessage);
             return null;
         }
     }
@@ -2691,7 +2718,16 @@ class VoiceLinkLocalServer {
             ?? false;
         if (!rawSetting) return false;
         if (!user?.id) return false;
+        if (this.hasImplicitDeviceApprovalAccess(user)) return false;
         return Array.isArray(otherSessions) && otherSessions.length > 0;
+    }
+
+    hasImplicitDeviceApprovalAccess(user = {}) {
+        const provider = String(user.authProvider || user.provider || '').trim().toLowerCase();
+        const role = this.normalizeUserRole(user.role || (user.isAdmin ? 'admin' : ''));
+        const trustedProvider = provider === 'whmcs_admin'
+            || (provider === 'whmcs' && user.trustedDeviceApprover === true);
+        return trustedProvider && (role === 'owner' || role === 'admin');
     }
 
     buildDeviceApprovalSummary(approval) {
@@ -3276,7 +3312,7 @@ class VoiceLinkLocalServer {
         const user = this.getAnyAuthUserFromRequest
             ? this.getAnyAuthUserFromRequest(req)
             : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
-        const role = resolveEffectiveAdminRole(user);
+        const role = this.normalizeUserRole(user?.role || 'none');
         const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
         const host = String((req.get && req.get('host')) || req.headers?.host || '').toLowerCase();
         const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').toLowerCase();
@@ -15932,7 +15968,10 @@ class VoiceLinkLocalServer {
         });
 
         this.app.get('/api/admin/logs', (req, res) => {
-            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+            const access = this.getRoomManagementAccess ? this.getRoomManagementAccess(req) : null;
+            const canReadLogs = access?.isAdmin === true
+                || (this.isLocalAdminRequest && this.isLocalAdminRequest(req));
+            if (!canReadLogs) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
             }
             try {
@@ -18157,6 +18196,59 @@ class VoiceLinkLocalServer {
         // Get installed modules
         this.app.get('/api/modules/installed', (req, res) => {
             res.json(this.moduleRegistry.getInstalledModules());
+        });
+
+        this.app.post('/api/modules/bulk/install-missing', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.installMissingModules({
+                    policy,
+                    customConfigById: req.body?.customConfigById || {}
+                });
+                if (result.installed?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/bulk/update-all', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.updateInstalledModules({ policy });
+                if (result.updated?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
         });
 
         // Export module bundle for peer sync (required modules are public; others require admin auth)

@@ -18,7 +18,13 @@
   </Package>
 
   <Fragment>
-    <ComponentGroup Id="ProductComponents" Directory="ProgramFiles64Folder">
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="VoiceLink" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Files Include="../../publish/win-x64/**" />
     </ComponentGroup>
   </Fragment>
@@ -30,8 +36,8 @@
           Id="ProgramMenuVoiceLinkShortcut"
           Name="VoiceLink"
           Description="Launch VoiceLink"
-          Target="[ProgramFiles64Folder]VoiceLinkNative.exe"
-          WorkingDirectory="ProgramFiles64Folder" />
+          Target="[INSTALLFOLDER]VoiceLinkNative.exe"
+          WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\DevineCreations\VoiceLink" Name="ProgramMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -44,8 +50,8 @@
           Id="DesktopVoiceLinkShortcut"
           Name="VoiceLink"
           Description="Launch VoiceLink"
-          Target="[ProgramFiles64Folder]VoiceLinkNative.exe"
-          WorkingDirectory="ProgramFiles64Folder" />
+          Target="[INSTALLFOLDER]VoiceLinkNative.exe"
+          WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\DevineCreations\VoiceLink" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>

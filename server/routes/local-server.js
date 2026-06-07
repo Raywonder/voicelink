@@ -3281,7 +3281,7 @@ class VoiceLinkLocalServer {
         const user = this.getAnyAuthUserFromRequest
             ? this.getAnyAuthUserFromRequest(req)
             : (this.getLocalAuthUserFromRequest ? this.getLocalAuthUserFromRequest(req) : null);
-        const role = resolveEffectiveAdminRole(user);
+        const role = this.normalizeUserRole(user?.role || 'none');
         const isAdmin = role === 'owner' || role === 'admin' || role === 'staff';
         const host = String((req.get && req.get('host')) || req.headers?.host || '').toLowerCase();
         const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').toLowerCase();
@@ -15937,7 +15937,10 @@ class VoiceLinkLocalServer {
         });
 
         this.app.get('/api/admin/logs', (req, res) => {
-            if (this.isLocalAdminRequest && !this.isLocalAdminRequest(req)) {
+            const access = this.getRoomManagementAccess ? this.getRoomManagementAccess(req) : null;
+            const canReadLogs = access?.isAdmin === true
+                || (this.isLocalAdminRequest && this.isLocalAdminRequest(req));
+            if (!canReadLogs) {
                 return res.status(403).json({ success: false, error: 'Admin access required' });
             }
             try {
@@ -18162,6 +18165,59 @@ class VoiceLinkLocalServer {
         // Get installed modules
         this.app.get('/api/modules/installed', (req, res) => {
             res.json(this.moduleRegistry.getInstalledModules());
+        });
+
+        this.app.post('/api/modules/bulk/install-missing', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.installMissingModules({
+                    policy,
+                    customConfigById: req.body?.customConfigById || {}
+                });
+                if (result.installed?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/bulk/update-all', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.updateInstalledModules({ policy });
+                if (result.updated?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
         });
 
         // Export module bundle for peer sync (required modules are public; others require admin auth)

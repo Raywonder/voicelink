@@ -721,6 +721,68 @@ class ModuleRegistry {
     }
 
     /**
+     * Install every available module that is not currently installed.
+     * Dependencies are resolved locally before dependents are attempted.
+     */
+    installMissingModules(options = {}) {
+        const policy = options.policy || {};
+        const revoked = new Set(Array.isArray(policy.revoked) ? policy.revoked : []);
+        const customConfigById = options.customConfigById && typeof options.customConfigById === 'object'
+            ? options.customConfigById
+            : {};
+        const pending = Object.keys(AVAILABLE_MODULES)
+            .filter(id => !this.installedModules.installed[id])
+            .filter(id => !revoked.has(id));
+        const actions = [];
+        const failed = [];
+        const skipped = Object.keys(AVAILABLE_MODULES)
+            .filter(id => revoked.has(id))
+            .map(id => ({ moduleId: id, reason: 'revoked-by-policy' }));
+
+        let madeProgress = true;
+        while (pending.length && madeProgress) {
+            madeProgress = false;
+            for (let index = pending.length - 1; index >= 0; index -= 1) {
+                const moduleId = pending[index];
+                const module = AVAILABLE_MODULES[moduleId];
+                const dependencies = Array.isArray(module.dependencies) ? module.dependencies : [];
+                const unresolved = dependencies.filter(dep => !this.installedModules.installed[dep]);
+                if (unresolved.length) continue;
+
+                const result = this.installModule(moduleId, customConfigById[moduleId] || {});
+                actions.push({
+                    moduleId,
+                    action: 'install',
+                    success: !!result.success,
+                    error: result.error || null
+                });
+                if (!result.success) {
+                    failed.push({ moduleId, error: result.error || 'Install failed' });
+                }
+                pending.splice(index, 1);
+                madeProgress = true;
+            }
+        }
+
+        for (const moduleId of pending) {
+            const module = AVAILABLE_MODULES[moduleId];
+            const dependencies = Array.isArray(module.dependencies) ? module.dependencies : [];
+            failed.push({
+                moduleId,
+                error: `Missing dependency: ${dependencies.filter(dep => !this.installedModules.installed[dep]).join(', ') || 'unknown'}`
+            });
+        }
+
+        return {
+            success: failed.length === 0,
+            installed: actions.filter(entry => entry.success).map(entry => entry.moduleId),
+            actions,
+            skipped,
+            failed
+        };
+    }
+
+    /**
      * Uninstall a module
      */
     uninstallModule(moduleId) {
@@ -758,6 +820,65 @@ class ModuleRegistry {
         this.saveInstalledModules();
 
         return { success: true, config: this.installedModules.installed[moduleId].config };
+    }
+
+    /**
+     * Reconcile installed module records with the current module catalog defaults.
+     * This preserves admin customizations while adding new default keys and cleaning install order.
+     */
+    updateInstalledModules(options = {}) {
+        const policy = options.policy || {};
+        const revoked = new Set(Array.isArray(policy.revoked) ? policy.revoked : []);
+        const actions = [];
+        const skipped = [];
+        let changed = false;
+
+        for (const moduleId of Object.keys(this.installedModules.installed)) {
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module) {
+                skipped.push({ moduleId, reason: 'not-in-current-catalog' });
+                continue;
+            }
+
+            const installed = this.installedModules.installed[moduleId];
+            const currentConfig = installed.config && typeof installed.config === 'object' ? installed.config : {};
+            const nextConfig = {
+                ...module.defaultConfig,
+                ...currentConfig
+            };
+            if (revoked.has(moduleId)) {
+                nextConfig.enabled = false;
+            }
+
+            const before = JSON.stringify(currentConfig);
+            const after = JSON.stringify(nextConfig);
+            if (before !== after) {
+                installed.config = nextConfig;
+                installed.updatedAt = Date.now();
+                changed = true;
+                actions.push({ moduleId, action: 'reconcile', success: true });
+            } else {
+                actions.push({ moduleId, action: 'check', success: true, changed: false });
+            }
+        }
+
+        const dedupedOrder = Array.from(new Set(this.installedModules.installOrder))
+            .filter(id => this.installedModules.installed[id]);
+        if (dedupedOrder.length !== this.installedModules.installOrder.length) {
+            this.installedModules.installOrder = dedupedOrder;
+            changed = true;
+        }
+
+        if (changed) {
+            this.saveInstalledModules();
+        }
+
+        return {
+            success: true,
+            updated: actions.filter(entry => entry.action === 'reconcile').map(entry => entry.moduleId),
+            actions,
+            skipped
+        };
     }
 
     /**

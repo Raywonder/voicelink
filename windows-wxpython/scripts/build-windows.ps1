@@ -15,6 +15,8 @@ $dist = Join-Path $root "dist"
 $work = Join-Path $root "build"
 $entry = Join-Path $root "src\voicelink_wx.py"
 $icon = Join-Path $repoRoot "assets\icons\voicelink.ico"
+$innoScript = Join-Path $root "installer\inno\VoiceLinkWX.iss"
+$iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 
 if (-not $Python) {
     $uvPython = Join-Path $env:APPDATA "uv\python\cpython-3.12.12-windows-x86_64-none\python.exe"
@@ -72,7 +74,7 @@ $manifest = [ordered]@{
     file_name = $zipName
     portable_url = "/downloads/voicelink/windows/$zipName"
     checksum_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-    release_notes = "VoiceLinkWX $Version.$Build adds a native wxPython Windows client preview with accessible server status, room lists, room users, and room message views."
+    release_notes = "VoiceLinkWX $Version.$Build keeps Windows on the wxPython client, adds Client Account and VoiceLink Account sign-in, validates saved sessions before use, discovers browser authentication providers from the server, and falls back to guest room browsing when allowed."
 }
 $manifestPath = Join-Path $OutputDir "voicelink-wxpython-update.json"
 [System.IO.File]::WriteAllText(
@@ -82,6 +84,41 @@ $manifestPath = Join-Path $OutputDir "voicelink-wxpython-update.json"
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $OutputDir "VoiceLinkWX.exe") -Force
 
+$setupPath = $null
+if (Test-Path $innoScript) {
+    if (-not (Test-Path $iscc)) {
+        $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+    }
+
+    if (Test-Path $iscc) {
+        $setupVersion = "$Version.$Build"
+        & $iscc "/DMyAppVersion=$setupVersion" "/DPublishDir=$appDir" "/DOutputDir=$OutputDir" $innoScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup build failed."
+        }
+
+        $setupPath = Join-Path $OutputDir "VoiceLinkWX-$setupVersion-windows-setup.exe"
+        if (Test-Path $setupPath) {
+            $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setupPath).Hash.ToLowerInvariant()
+            [System.IO.File]::WriteAllText(
+                "$setupPath.sha256",
+                "$setupHash  $(Split-Path -Leaf $setupPath)`r`n",
+                [System.Text.UTF8Encoding]::new($false))
+            $manifest.installer_url = "/downloads/voicelink/windows/$(Split-Path -Leaf $setupPath)"
+            $manifest.installer_checksum_sha256 = $setupHash
+            [System.IO.File]::WriteAllText(
+                $manifestPath,
+                ($manifest | ConvertTo-Json -Depth 4),
+                [System.Text.UTF8Encoding]::new($false))
+        }
+    } else {
+        Write-Warning "Inno Setup compiler not found; portable artifacts were built without a setup EXE."
+    }
+}
+
 Write-Host "Executable: $exe"
 Write-Host "Portable: $zipPath"
 Write-Host "Manifest: $manifestPath"
+if ($setupPath) {
+    Write-Host "Installer: $setupPath"
+}
