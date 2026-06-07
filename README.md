@@ -164,7 +164,7 @@ Download the latest release for your platform:
 
 ### Server Directory Display
 
-VoiceLink clients group server selection by owner. Each owner heading shows the number of servers currently listed for that owner, for example `VoiceLink (2 servers)` or `Devine Creations (2 servers)`.
+VoiceLink clients group server selection by owner. Each owner appears as a button that shows the number of servers currently listed for that owner, for example `VoiceLink (2 servers)` or `Devine Creations (2 servers)`. Users open that owner button to show the servers behind it.
 
 Server owners can configure the owner display name, public server display name, and display mode from the server administration settings. The server API exposes this metadata through discovery so macOS, iOS, federation search, and public directory views use the same owner grouping and searchable labels.
 

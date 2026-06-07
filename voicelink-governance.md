@@ -136,7 +136,7 @@ Per-user server ownership and entitlement rule:
   - license state
   - next renewal or entitlement status
 - DevineCreations is allowed two primary server entitlements because it operates more than one domain. This is an explicit domain-based exception and must remain visible in billing and licensing logic.
-- Server selection views must group servers by owner, display the number of servers in each owner group, and use server-provided owner/display metadata where available.
+- Server selection views must group servers behind owner buttons, display the number of servers in each owner group, and use server-provided owner/display metadata where available.
 - Server owners can choose how their server appears in clients from administrative settings. Discovery APIs should expose owner display name, server display name, display mode, and owner group count information without leaking private install details.
 - Future WHMCS and account-entitlement work must treat:
   - one user-owned server install as the normal case
