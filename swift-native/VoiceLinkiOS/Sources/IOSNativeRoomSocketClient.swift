@@ -1115,8 +1115,9 @@ private final class IOSRoomAudioRelayPlayer {
     private var userMuted: [String: Bool] = [:]
     private var pendingBuffers: [AVAudioPCMBuffer] = []
     private var isPrimedForPlayback = false
-    private let initialPrebufferPacketCount = 7
-    private let maxPendingBufferCount = 28
+    private var scheduledBufferCount = 0
+    private let initialPrebufferPacketCount = 5
+    private let maxPendingBufferCount = 40
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in
@@ -1132,6 +1133,7 @@ private final class IOSRoomAudioRelayPlayer {
             self.engine.stop()
             self.pendingBuffers.removeAll()
             self.isPrimedForPlayback = false
+            self.scheduledBufferCount = 0
         }
     }
 
@@ -1238,7 +1240,7 @@ private final class IOSRoomAudioRelayPlayer {
             self.isPrimedForPlayback = true
             while !self.pendingBuffers.isEmpty {
                 let nextBuffer = self.pendingBuffers.removeFirst()
-                self.playerNode.scheduleBuffer(nextBuffer, completionHandler: nil)
+                self.scheduleBuffer(nextBuffer)
             }
         }
     }
@@ -1248,6 +1250,7 @@ private final class IOSRoomAudioRelayPlayer {
         engine.stop()
         pendingBuffers.removeAll()
         isPrimedForPlayback = false
+        scheduledBufferCount = 0
         if isConfigured {
             engine.disconnectNodeOutput(playerNode)
             engine.detach(playerNode)
@@ -1279,6 +1282,16 @@ private final class IOSRoomAudioRelayPlayer {
         } catch {
             engine.stop()
             isPrimedForPlayback = false
+        }
+    }
+
+    private func scheduleBuffer(_ buffer: AVAudioPCMBuffer) {
+        scheduledBufferCount += 1
+        playerNode.scheduleBuffer(buffer) { [weak self] in
+            guard let self else { return }
+            self.renderQueue.async {
+                self.scheduledBufferCount = max(0, self.scheduledBufferCount - 1)
+            }
         }
     }
 

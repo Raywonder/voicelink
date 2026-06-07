@@ -5361,6 +5361,7 @@ struct UserRow: View {
     @ObservedObject private var serverManager = ServerManager.shared
     @ObservedObject private var adminManager = AdminServerManager.shared
     @ObservedObject private var whisperManager = WhisperModeManager.shared
+    @ObservedObject private var localMonitor = LocalMonitorManager.shared
     @State private var shareInProgress = false
     @State private var transmitChangeInProgress = false
     @State private var interactionMode: InteractionMode = .audio
@@ -5434,6 +5435,30 @@ struct UserRow: View {
         !isCurrentUser && !(isBotUser && !botHasAudioControls)
     }
 
+    private var canShowAudioControls: Bool {
+        !(isBotUser && !botHasAudioControls)
+    }
+
+    private var userRowAccessibilityLabel: String {
+        var parts = [displayUsername]
+        if isCurrentUser {
+            parts.append("Current user")
+        }
+        if isBotUser {
+            parts.append(botHasAudioControls ? "Audio bot" : "Text bot")
+        }
+        if isSpeaking {
+            parts.append("Speaking")
+        }
+        if isMuted {
+            parts.append("Muted")
+        }
+        if isDeafened {
+            parts.append("Deafened")
+        }
+        return parts.joined(separator: ", ")
+    }
+
     private var interactionButtonLabel: String {
         if interactionMode == .whisper && canWhisperToUser {
             return showControls ? "Hide Whisper Controls for \(displayUsername)" : "Show Whisper Controls for \(displayUsername)"
@@ -5453,6 +5478,13 @@ struct UserRow: View {
         } else if whisperManager.whisperTargetUserId == userId {
             whisperManager.clearWhisperTarget()
         }
+    }
+
+    private func toggleAudioControls() {
+        if interactionMode == .whisper && canWhisperToUser {
+            prepareWhisperTarget()
+        }
+        showControls.toggle()
     }
 
     private func startWhisperIfNeeded() {
@@ -5535,10 +5567,7 @@ struct UserRow: View {
                         }
 
                         Button(action: {
-                            if interactionMode == .whisper && canWhisperToUser {
-                                prepareWhisperTarget()
-                            }
-                            showControls.toggle()
+                            toggleAudioControls()
                         }) {
                             HStack(spacing: 4) {
                                 Image(systemName: showControls ? "chevron.up" : "chevron.down")
@@ -5602,10 +5631,12 @@ struct UserRow: View {
                         Label("View \(displayUsername) Profile", systemImage: "person.circle")
                     }
                 } else {
-                    Button(action: {
-                        setInteractionMode(.whisper)
-                    }) {
-                        Label("Whisper", systemImage: "mic.badge.plus")
+                    if canWhisperToUser {
+                        Button(action: {
+                            setInteractionMode(.whisper)
+                        }) {
+                            Label("Whisper", systemImage: "mic.badge.plus")
+                        }
                     }
 
                     Button(action: {
@@ -5703,6 +5734,34 @@ struct UserRow: View {
                         print("View profile of \(displayUsername)")
                     }) {
                         Label("View \(displayUsername) Profile", systemImage: "person.circle")
+                    }
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(userRowAccessibilityLabel)
+            .accessibilityHint("Use actions for available user actions. Whisper is hidden on your own user row.")
+            .accessibilityActions {
+                Button("Send Direct Message") {
+                    MessagingManager.shared.sendDirectMessage(
+                        to: userId,
+                        username: displayUsername,
+                        content: "Hi \(displayUsername)"
+                    )
+                }
+                if canShowAudioControls {
+                    Button(showControls ? "Hide Audio Controls" : "Show Audio Controls") {
+                        toggleAudioControls()
+                    }
+                }
+                if canWhisperToUser {
+                    Button("Whisper") {
+                        setInteractionMode(.whisper)
+                    }
+                }
+                if isCurrentUser {
+                    Button(localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring") {
+                        localMonitor.toggleMonitoring()
+                        AccessibilityManager.shared.announceAudioStatus(localMonitor.isMonitoring ? "local monitoring off" : "local monitoring on")
                     }
                 }
             }

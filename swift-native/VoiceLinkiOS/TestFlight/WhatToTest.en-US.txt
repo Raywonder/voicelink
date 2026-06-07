@@ -1,18 +1,21 @@
-Build 92 focuses on the new three-tab VoiceLink navigation.
+Build 93 focuses on audio stability and VoiceOver user actions.
 
 What changed:
-- Servers is now tab one for server owner buttons, server selection, and search.
-- Federated Rooms is now tab two and shows rooms across available connected servers.
-- Settings is now tab three.
-- iOS no longer hides Federated Rooms inside the Servers screen segmented control.
-- macOS now starts on Servers by default, then offers Federated Rooms and Settings as separate tabs.
-- Server owner buttons still show how many servers each owner runs, such as VoiceLink (2 servers) or Devine Creations (2 servers).
+- iOS room audio relay now uses a smaller initial prebuffer and a larger packet queue to reduce join-time buffering while keeping playback stable.
+- VoiceOver actions on iOS people and bot rows are now based on what each row can actually do.
+- The current logged-in user row can still show monitoring and audio controls, but no longer exposes Whisper.
+- Other people expose Whisper only when they have audio available.
+- Text-only bots expose text actions such as profile and direct message without audio controls.
+- Audio bots can expose both text actions and audio-related actions.
+- iOS room message rows now expose Reply and Direct Message actions to improve message handling with VoiceOver.
+- macOS user rows now mirror the same rule that Whisper is hidden for the current user, with explicit VoiceOver actions for direct message, audio controls, and local monitoring.
 
 Please test:
-- Open iOS and confirm the root tabs are Servers, Federated Rooms, and Settings in that order.
-- Open Servers and confirm VoiceLink and Devine Creations appear as owner buttons with server counts.
-- Open Federated Rooms and confirm the room list loads without changing the selected server unexpectedly.
-- Open Settings and confirm settings remain available as the third tab.
-- On macOS, confirm the same tab order: Servers, Federated Rooms, Settings.
-- Confirm selecting a server still switches to browsing that server's rooms.
-- Confirm existing room browsing, preview, join, user list, messages, and microphone status still work after the server browser change.
+- Join a room on iOS with VoiceOver enabled.
+- Focus your own user row and confirm Monitoring or Audio Controls are available, but Whisper is not.
+- Focus another person with audio and confirm Whisper and audio actions are available.
+- Focus a text-only bot and confirm only text-related actions are offered.
+- Focus an audio-capable bot and confirm both text and audio actions are offered.
+- Send and receive room messages on iOS, then confirm message rows expose Reply and Direct Message actions.
+- Join a room and confirm audio starts with less buffering and no new distortion or clipping.
+- On macOS, confirm your own row does not offer Whisper and still provides local monitoring/audio actions.

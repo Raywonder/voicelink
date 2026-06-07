@@ -743,16 +743,22 @@ struct RoomSessionView: View {
                     Button("View Profile") {
                         openProfile(for: target)
                     }
-                    Button("Direct Message") {
-                        openDirectMessages(with: target)
+                    if canDirectMessageRoomUser(target) {
+                        Button("Direct Message") {
+                            openDirectMessages(with: target)
+                        }
                     }
-                    if canShowPerUserAudioControls(for: target) {
+                    if canMonitorRoomUser(target) {
                         Button(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring") {
                             toggleMonitorTarget(target)
                         }
+                    }
+                    if canWhisperToRoomUser(target) {
                         Button(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper") {
                             toggleWhisperTarget(target)
                         }
+                    }
+                    if canShowPerUserAudioControls(for: target) {
                         Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
                             toggleUserAudioControls(for: target)
                         }
@@ -769,16 +775,22 @@ struct RoomSessionView: View {
             Button("View Profile") {
                 openProfile(for: target)
             }
-            Button("Direct Message \(target.name)") {
-                openDirectMessages(with: target)
+            if canDirectMessageRoomUser(target) {
+                Button("Direct Message \(target.name)") {
+                    openDirectMessages(with: target)
+                }
             }
-            if canShowPerUserAudioControls(for: target) {
+            if canWhisperToRoomUser(target) {
                 Button(whisperTarget?.id == target.id ? "Stop Whisper Target" : "Whisper to \(target.name)") {
                     toggleWhisperTarget(target)
                 }
+            }
+            if canMonitorRoomUser(target) {
                 Button(monitorTarget?.id == target.id ? "Stop Monitoring \(target.name)" : "Monitor \(target.name)") {
                     toggleMonitorTarget(target)
                 }
+            }
+            if canShowPerUserAudioControls(for: target) {
                 Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
                     toggleUserAudioControls(for: target)
                 }
@@ -792,7 +804,15 @@ struct RoomSessionView: View {
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.55)
                 .onEnded { _ in
-                    toggleWhisperTarget(target)
+                    if canWhisperToRoomUser(target) {
+                        toggleWhisperTarget(target)
+                    } else if canMonitorRoomUser(target) {
+                        toggleMonitorTarget(target)
+                    } else if canDirectMessageRoomUser(target) {
+                        openDirectMessages(with: target)
+                    } else {
+                        openProfile(for: target)
+                    }
                 }
         )
     }
@@ -820,13 +840,24 @@ struct RoomSessionView: View {
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(roomMessageAccessibilityLabel(for: message))
+        .accessibilityHint("Use actions to reply or direct message the sender when available.")
+        .accessibilityActions {
+            Button("Reply") {
+                replyToRoomMessage(message)
+            }
+            if let target = roomMessageDirectMessageTarget(for: message), canDirectMessageRoomUser(target) {
+                Button("Direct Message \(target.name)") {
+                    openDirectMessages(with: target)
+                }
+            }
+        }
         .contextMenu {
             Button("Reply to \(message.author)") {
-                replyTarget = message
-                draftMessage = "@\(message.author) "
-                IOSActionSoundPlayer.playConfirm()
+                replyToRoomMessage(message)
             }
-            if let target = visibleRoomUsers.first(where: { $0.name == message.author }) {
+            if let target = roomMessageDirectMessageTarget(for: message), canDirectMessageRoomUser(target) {
                 Button("Direct Message \(target.name)") {
                     openDirectMessages(with: target)
                 }
@@ -882,8 +913,10 @@ struct RoomSessionView: View {
     }
 
     private func toggleWhisperTarget(_ target: IOSDirectMessageTarget) {
-        guard !isCurrentRoomUser(target) else {
-            roomState.statusText = "Whisper is only available for other users."
+        guard canWhisperToRoomUser(target) else {
+            roomState.statusText = isCurrentRoomUser(target)
+                ? "Whisper is only available for other users."
+                : "Whisper is only available for people or bots with audio."
             UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
             IOSActionSoundPlayer.playError()
             return
@@ -906,8 +939,8 @@ struct RoomSessionView: View {
     }
 
     private func toggleMonitorTarget(_ target: IOSDirectMessageTarget) {
-        guard !isCurrentRoomUser(target) else {
-            roomState.statusText = "Monitoring is only available for other users."
+        guard canMonitorRoomUser(target) else {
+            roomState.statusText = "Monitoring is only available for people or audio-capable bots."
             UIAccessibility.post(notification: .announcement, argument: roomState.statusText)
             IOSActionSoundPlayer.playError()
             return
@@ -950,6 +983,36 @@ struct RoomSessionView: View {
             || (!targetName.isEmpty && localNames.contains(targetName))
     }
 
+    private func canDirectMessageRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        !isSystemOnlyRoomUser(target)
+    }
+
+    private func canMonitorRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        if target.isBot {
+            return isAudioCapableRoomUser(target)
+        }
+        return target.hasAudioControls || isCurrentRoomUser(target)
+    }
+
+    private func canWhisperToRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        !isCurrentRoomUser(target) && isAudioCapableRoomUser(target)
+    }
+
+    private func isAudioCapableRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        if target.isBot {
+            return target.hasAudioControls && targetBotType(target) == "audio"
+        }
+        return target.hasAudioControls
+    }
+
+    private func isSystemOnlyRoomUser(_ target: IOSDirectMessageTarget) -> Bool {
+        target.isBot && targetBotType(target) == "system"
+    }
+
+    private func targetBotType(_ target: IOSDirectMessageTarget) -> String {
+        target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     private func normalizedRoomUserIdentity(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -972,19 +1035,12 @@ struct RoomSessionView: View {
     }
 
     private func canShowPerUserAudioControls(for target: IOSDirectMessageTarget) -> Bool {
-        if isCurrentRoomUser(target) {
-            return false
-        }
-        if target.isBot {
-            return target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "audio"
-                && target.hasAudioControls
-        }
-        return target.hasAudioControls
+        isAudioCapableRoomUser(target)
     }
 
     private func roomUserBotStatusLabel(for target: IOSDirectMessageTarget) -> String? {
         guard target.isBot else { return nil }
-        switch target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch targetBotType(target) {
         case "audio":
             return "Audio bot"
         case "system":
@@ -1000,7 +1056,7 @@ struct RoomSessionView: View {
             return message
         }
         guard target.isBot else { return nil }
-        switch target.botType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch targetBotType(target) {
         case "audio":
             return "This bot supports audio controls."
         case "system":
@@ -1250,10 +1306,50 @@ struct RoomSessionView: View {
     }
 
     private func roomUserAccessibilityHint(for target: IOSDirectMessageTarget) -> String {
-        if canShowPerUserAudioControls(for: target) {
-            return "Double tap to open this user's profile. Use actions for direct messages, monitoring, whisper, and audio controls."
+        let actions = roomUserAvailableActionNames(for: target)
+        if actions.isEmpty {
+            return "Double tap to open this user's profile."
         }
-        return "Double tap to open this user's profile. Use actions for direct messages and other available interactions."
+        return "Double tap to open this user's profile. Available actions: \(actions.joined(separator: ", "))."
+    }
+
+    private func roomUserAvailableActionNames(for target: IOSDirectMessageTarget) -> [String] {
+        var actions = ["View Profile"]
+        if canDirectMessageRoomUser(target) {
+            actions.append("Direct Message")
+        }
+        if canMonitorRoomUser(target) {
+            actions.append(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring")
+        }
+        if canWhisperToRoomUser(target) {
+            actions.append(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper")
+        }
+        if canShowPerUserAudioControls(for: target) {
+            actions.append(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls")
+        }
+        return actions
+    }
+
+    private func replyToRoomMessage(_ message: IOSRoomMessageItem) {
+        replyTarget = message
+        draftMessage = "@\(message.author) "
+        IOSActionSoundPlayer.playConfirm()
+    }
+
+    private func roomMessageDirectMessageTarget(for message: IOSRoomMessageItem) -> IOSDirectMessageTarget? {
+        visibleRoomUsers.first {
+            $0.name.localizedCaseInsensitiveCompare(message.author) == .orderedSame
+        }
+    }
+
+    private func roomMessageAccessibilityLabel(for message: IOSRoomMessageItem) -> String {
+        var parts = [message.author, message.body.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if message.isSystemMessage {
+            parts.append("System message")
+        } else if message.isBotMessage {
+            parts.append("Bot message")
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func adjustGainValue(_ value: inout Double, direction: AccessibilityAdjustmentDirection) {
