@@ -15,14 +15,24 @@ APPCAST_URL="${APPCAST_URL:-https://voicelinkapp.app/downloads/voicelink/appcast
 DOWNLOAD_BASE_URL="${DOWNLOAD_BASE_URL:-https://voicelinkapp.app/downloads/voicelink}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
-NOTARIZE="${NOTARIZE:-0}"
+NOTARIZE="${NOTARIZE:-1}"
 DOWNLOAD_URL_PREFIX="${DOWNLOAD_BASE_URL%/}/"
 MACOS_SIGNING_ENV="${MACOS_SIGNING_ENV:-/Users/admin/dev/appstore/voicelink/macos_signing.env}"
+MACOS_NOTARY_ENV="${MACOS_NOTARY_ENV:-/Users/admin/dev/appstore/voicelink/appstoreconnect_api.env}"
 MACOS_SIGNING_KEYCHAIN_PATH="${MACOS_SIGNING_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/login.keychain-db}"
+NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-}"
+NOTARY_APPLE_ID="${NOTARY_APPLE_ID:-}"
+NOTARY_PASSWORD="${NOTARY_PASSWORD:-}"
+NOTARY_TEAM_ID="${NOTARY_TEAM_ID:-${DEVELOPMENT_TEAM:-}}"
 
 if [[ -f "$MACOS_SIGNING_ENV" ]]; then
   # shellcheck disable=SC1090
   source "$MACOS_SIGNING_ENV"
+fi
+
+if [[ -f "$MACOS_NOTARY_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$MACOS_NOTARY_ENV"
 fi
 
 if [[ -n "${MACOS_SIGNING_KEYCHAIN_PASSWORD:-}" && -f "$MACOS_SIGNING_KEYCHAIN_PATH" ]]; then
@@ -59,6 +69,39 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
   echo "ERROR: No Developer ID Application signing identity found. Set SIGN_IDENTITY explicitly." >&2
   exit 1
 fi
+
+notarize_and_staple() {
+  local app_bundle="$1"
+  local submit_zip="$DIST_DIR/$APP_NAME-$APP_VERSION-$APP_BUILD-notary-submit.zip"
+  local args=()
+
+  if ! command -v xcrun >/dev/null 2>&1 || ! xcrun notarytool --help >/dev/null 2>&1; then
+    echo "ERROR: xcrun notarytool is required for macOS notarization." >&2
+    return 1
+  fi
+
+  if [[ -n "$NOTARY_KEYCHAIN_PROFILE" ]]; then
+    args=(--keychain-profile "$NOTARY_KEYCHAIN_PROFILE")
+  elif [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" && -n "${ASC_PRIVATE_KEY_PATH:-}" ]]; then
+    args=(--key "$ASC_PRIVATE_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+  elif [[ -n "$NOTARY_APPLE_ID" && -n "$NOTARY_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
+    args=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$NOTARY_TEAM_ID")
+  else
+    echo "ERROR: NOTARIZE=1 but no notary credentials were found." >&2
+    echo "Set NOTARY_KEYCHAIN_PROFILE, ASC_KEY_ID/ASC_ISSUER_ID/ASC_PRIVATE_KEY_PATH, or NOTARY_APPLE_ID/NOTARY_PASSWORD/NOTARY_TEAM_ID." >&2
+    return 1
+  fi
+
+  rm -f "$submit_zip"
+  ditto -c -k --keepParent "$app_bundle" "$submit_zip"
+  echo "Submitting $submit_zip for Apple notarization..."
+  xcrun notarytool submit "$submit_zip" "${args[@]}" --wait
+  echo "Stapling notarization ticket to $app_bundle..."
+  xcrun stapler staple "$app_bundle"
+  xcrun stapler validate "$app_bundle"
+  spctl --assess --type execute --verbose=4 "$app_bundle"
+  rm -f "$submit_zip"
+}
 
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 ZIP_NAME="$APP_NAME-$APP_VERSION-$APP_BUILD-macOS.zip"
@@ -156,14 +199,15 @@ fi
 codesign --force --timestamp --options runtime --entitlements "$DIST_DIR/entitlements.plist" --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 codesign --force --timestamp --options runtime --entitlements "$DIST_DIR/entitlements.plist" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
-spctl --assess --type execute "$APP_BUNDLE" || true
+
+if [[ "$NOTARIZE" == "1" ]]; then
+  notarize_and_staple "$APP_BUNDLE"
+else
+  spctl --assess --type execute "$APP_BUNDLE" || true
+fi
 
 ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
 cp "$ZIP_PATH" "$APPCAST_DIR/$ZIP_NAME"
-
-if [[ "$NOTARIZE" == "1" ]]; then
-  echo "Notarization requested. Submit $ZIP_PATH with xcrun notarytool before publishing."
-fi
 
 SPARKLE_BIN=""
 for candidate in \

@@ -5,6 +5,7 @@ VoiceLink macOS updates use the normal Sparkle 2 pattern:
 - ship one visible `VoiceLink.app` bundle;
 - embed `Sparkle.framework` inside `VoiceLink.app/Contents/Frameworks`;
 - sign the app with a consistent Apple code signing identity;
+- notarize and staple the app before the final public zip is generated;
 - publish a zip that contains exactly one top-level `.app`;
 - publish an HTTPS appcast with Sparkle EdDSA signatures.
 
@@ -39,7 +40,15 @@ APP_BUILD="49" \
 swift-native/VoiceLinkNative/scripts/macos_sparkle_release.sh
 ```
 
-The script builds, bundles, embeds Sparkle, signs, zips, generates the appcast when Sparkle tools are available, and runs artifact checks.
+The script builds, bundles, embeds Sparkle, signs with hardened runtime, notarizes, staples the app, zips the stapled app, generates the appcast when Sparkle tools are available, and runs artifact checks.
+
+Notarization credentials are loaded from `/Users/admin/dev/appstore/voicelink/appstoreconnect_api.env` by default. The script accepts either:
+
+- `NOTARY_KEYCHAIN_PROFILE`
+- `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_PRIVATE_KEY_PATH`
+- `NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, and `NOTARY_TEAM_ID`
+
+Set `NOTARIZE=0` only for local diagnostic packaging that will not be published.
 
 ## Verification
 
@@ -56,4 +65,4 @@ The script builds, bundles, embeds Sparkle, signs, zips, generates the appcast w
 - zip layout with exactly one top-level `.app`;
 - appcast contains an EdDSA signature and expected build when present.
 
-Before publishing, also test a real update from build N to N+1 on Intel. Test Apple Silicon separately when available.
+Before publishing, also confirm `spctl --assess --type execute --verbose=4 VoiceLink.app` accepts the app. Test a real update from build N to N+1 on Intel. Test Apple Silicon separately when available.
