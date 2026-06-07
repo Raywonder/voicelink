@@ -13,8 +13,13 @@ import wx
 
 
 APP_NAME = "VoiceLinkWX"
-APP_VERSION = "0.1.0.4"
-DEFAULT_SERVER = "https://voicelink.devinecreations.net"
+APP_VERSION = "0.1.0.5"
+APP_BUILD = 5
+DEFAULT_SERVER = "https://voicelinkapp.app"
+LEGACY_DEFAULT_SERVERS = {
+    "https://voicelink.devinecreations.net",
+    "http://voicelink.devinecreations.net",
+}
 CONFIG_DIR = Path.home() / "AppData" / "Roaming" / "VoiceLinkWX"
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
@@ -102,6 +107,20 @@ class VoiceLinkApi:
         if not response.content:
             return {}
         return response.json()
+
+    def check_updates(self) -> dict[str, Any]:
+        result = self.post_json(
+            "/api/updates/check",
+            {
+                "platform": "windows",
+                "currentVersion": APP_VERSION,
+                "buildNumber": APP_BUILD,
+                "distChannel": "direct",
+                "client": "windows-wxpython",
+            },
+            timeout=12.0,
+        )
+        return result if isinstance(result, dict) else {}
 
     def health(self) -> Any:
         return self.get_json("/api/health")
@@ -500,6 +519,7 @@ class MainFrame(wx.Frame):
         server_menu.Append(1006, "Sign out")
         server_menu.Append(1004, "Open admin")
         help_menu = wx.Menu()
+        help_menu.Append(1007, "Check for updates")
         help_menu.Append(1005, "About VoiceLink")
         menu_bar.Append(file_menu, "File")
         menu_bar.Append(server_menu, "Server")
@@ -512,7 +532,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.open_sign_in(), id=1003)
         self.Bind(wx.EVT_MENU, lambda _event: self.logout(), id=1006)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_admin(), id=1004)
-        self.Bind(wx.EVT_MENU, lambda _event: wx.MessageBox("VoiceLinkWX native Windows preview", "About VoiceLink"), id=1005)
+        self.Bind(wx.EVT_MENU, lambda _event: self.check_for_updates(), id=1007)
+        self.Bind(wx.EVT_MENU, lambda _event: wx.MessageBox(f"VoiceLink for Windows\nVersion {APP_VERSION}, build {APP_BUILD}", "About VoiceLink"), id=1005)
 
     def _bind_events(self) -> None:
         self.connect_button.Bind(wx.EVT_BUTTON, lambda _event: self.connect())
@@ -530,7 +551,10 @@ class MainFrame(wx.Frame):
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except Exception:
             return
-        self.server_url.SetValue(data.get("server_url", DEFAULT_SERVER))
+        saved_server = normalize_base_url(data.get("server_url", DEFAULT_SERVER))
+        if saved_server in LEGACY_DEFAULT_SERVERS:
+            saved_server = DEFAULT_SERVER
+        self.server_url.SetValue(saved_server)
         token = data.get("access_token", "") or data.get("session_token", "")
         self.api.configure(self.server_url.GetValue(), token)
 
@@ -573,27 +597,14 @@ class MainFrame(wx.Frame):
         action, payload = result
         if action == "connected":
             health, config, admin, session = payload
-            session_line = "Guest access."
+            session_line = "Signed in as a guest."
             if session.get("valid") is True:
                 user = session.get("user") if isinstance(session.get("user"), dict) else {}
                 user_label = display_value(user.get("displayName") or user.get("username") or user.get("email") or session.get("provider"))
                 session_line = f"Signed in as {user_label}."
             elif self.api.token:
                 session_line = f"Saved session was not accepted: {display_value(session.get('error'))}"
-            lines = [
-                "Connected.",
-                session_line,
-                "",
-                "Health:",
-                json.dumps(health, indent=2, ensure_ascii=False),
-                "",
-                "Config:",
-                json.dumps(config, indent=2, ensure_ascii=False),
-                "",
-                "Admin status:",
-                json.dumps(admin, indent=2, ensure_ascii=False),
-            ]
-            self.details.SetValue("\n".join(lines))
+            self.details.SetValue(self._format_server_summary(health, config, admin, session_line))
             self.set_status("Connected. Refreshing rooms.")
             self.refresh_rooms()
         elif action == "rooms":
@@ -612,6 +623,60 @@ class MainFrame(wx.Frame):
         elif action == "messages":
             self.details.SetValue(self._format_records("Room messages", payload))
             self.set_status("Room messages loaded.")
+        elif action == "updates":
+            self._show_update_result(payload)
+
+    def _format_server_summary(self, health: Any, config: Any, admin: Any, session_line: str) -> str:
+        health = health if isinstance(health, dict) else {}
+        config = config if isinstance(config, dict) else {}
+        admin = admin if isinstance(admin, dict) else {}
+
+        server_name = display_value(config.get("displayName") or config.get("serverName") or "VoiceLink server")
+        status = display_value(health.get("status") or "unknown")
+        rooms = display_value(health.get("rooms") if health.get("rooms") is not None else "unknown")
+        users = display_value(health.get("users") if health.get("users") is not None else "unknown")
+        allow_guests = bool(config.get("allowGuests"))
+        registration = bool(config.get("registrationEnabled"))
+        public_url = display_value(config.get("publicUrl")) or normalize_base_url(self.server_url.GetValue())
+        visibility = config.get("serverVisibility") if isinstance(config.get("serverVisibility"), dict) else {}
+        visible_places = [
+            label
+            for key, label in (("desktop", "desktop"), ("ios", "iOS"), ("web", "web"), ("listedInDirectory", "directory"))
+            if visibility.get(key)
+        ]
+
+        permissions = admin.get("permissions") if isinstance(admin.get("permissions"), dict) else {}
+        can_manage = bool(admin.get("isAdmin") or admin.get("isModerator") or any(permissions.values()))
+        admin_line = (
+            "Administration: this session can manage the server."
+            if can_manage
+            else "Administration: not signed in as an admin. Sign in with an owner or admin account to manage rooms, users, config, and server settings."
+        )
+
+        ssl = config.get("sslManager") if isinstance(config.get("sslManager"), dict) else {}
+        ssl_line = ""
+        if ssl:
+            ssl_status = display_value(ssl.get("status") or "unknown")
+            ssl_line = f"SSL manager: {ssl_status} for {display_value(', '.join(ssl.get('domains') or [])) or public_url}."
+
+        lines = [
+            f"Connected to {server_name}.",
+            session_line,
+            f"Server health: {status}. Rooms available: {rooms}. People online: {users}.",
+            f"Guest access: {'enabled' if allow_guests else 'disabled'}. Account registration: {'enabled' if registration else 'disabled'}.",
+            f"Public URL: {public_url}.",
+        ]
+        if visible_places:
+            lines.append(f"Listed for: {', '.join(visible_places)}.")
+        lines.append(admin_line)
+        if ssl_line:
+            lines.append(ssl_line)
+        lines.extend([
+            "",
+            "Use Server, Open admin to manage the central VoiceLink dashboard in your browser.",
+            "Use Server, Sign in when admin options are unavailable.",
+        ])
+        return "\n".join(lines)
 
     def _selected_room(self) -> RoomRecord | None:
         index = self.rooms_list.GetFirstSelected()
@@ -645,6 +710,28 @@ class MainFrame(wx.Frame):
             return "connected", (self.api.health(), self.api.config(), self.api.admin_status(), session)
 
         self.run_background("Connecting.", worker)
+
+    def check_for_updates(self) -> None:
+        self.api.configure(self.server_url.GetValue(), self.api.token)
+        self.run_background("Checking for updates.", lambda: ("updates", self.api.check_updates()))
+
+    def _show_update_result(self, payload: dict[str, Any]) -> None:
+        if payload.get("updateAvailable"):
+            version = display_value(payload.get("version") or "new version")
+            notes = display_value(payload.get("releaseNotes") or "No release notes were provided.")
+            url = display_value(payload.get("downloadURL") or payload.get("smartDownloadURL") or "")
+            message = f"VoiceLink {version} is available.\n\n{notes}"
+            if url:
+                message += f"\n\nOpen the installer download now?"
+            response = wx.MessageBox(message, "VoiceLink update available", wx.YES_NO | wx.ICON_INFORMATION)
+            if response == wx.YES and url:
+                webbrowser.open(url)
+            self.set_status(f"Update available: {version}.")
+            return
+
+        message = display_value(payload.get("message") or f"You are running the latest VoiceLink for Windows build, version {APP_VERSION}.")
+        wx.MessageBox(message, "VoiceLink updates", wx.OK | wx.ICON_INFORMATION)
+        self.set_status("No VoiceLink update is available.")
 
     def refresh_rooms(self) -> None:
         self.api.configure(self.server_url.GetValue(), self.api.token)
@@ -692,7 +779,7 @@ class MainFrame(wx.Frame):
 
     def open_admin(self) -> None:
         base = normalize_base_url(self.server_url.GetValue())
-        webbrowser.open(f"{base}/admin")
+        webbrowser.open(f"{base}/client/index.html?open=admin")
 
 
 class VoiceLinkApp(wx.App):

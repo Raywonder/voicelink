@@ -9920,7 +9920,7 @@ class VoiceLinkLocalServer {
 
             const platformDefaults = {
                 macos: ['VoiceLink-1.0.0-macos.pkg', 'VoiceLinkMacOS.zip'],
-                windows: ['VoiceLink-1.0.0-windows-portable.exe', 'VoiceLink-1.0.0-windows-setup.exe', 'VoiceLink-windows.zip'],
+                windows: ['VoiceLinkWX-0.1.0.5-windows-setup.exe', 'VoiceLinkWX-0.1.0.5-win-x64-portable.zip'],
                 linux: ['VoiceLink-linux.AppImage', 'voicelink-local_1.0.0_amd64.deb']
             };
 
@@ -10031,11 +10031,11 @@ class VoiceLinkLocalServer {
                     releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'
                 },
                 windows: {
-                    version: '1.0.4',
-                    buildNumber: 26,
-                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-windows-portable.exe`,
+                    version: '0.1.0.5',
+                    buildNumber: 5,
+                    downloadURL: `${downloadBase}/VoiceLinkWX-0.1.0.5-windows-setup.exe`,
                     smartTarget: 'windows',
-                    releaseNotes: 'Latest Windows build includes federation-aware room listing and improved auth flow. Setup installer and builder package are available on the downloads page.'
+                    releaseNotes: 'Latest Windows wxPython build adds Check for Updates, opens the central web admin dashboard correctly, defaults new installs to the main VoiceLink server, and replaces raw JSON connection details with readable server status.'
                 },
                 linux: {
                     version: '1.0.4',
@@ -10067,14 +10067,14 @@ class VoiceLinkLocalServer {
             const updateAllowed = !isStoreManagedChannel;
             const checksumByPlatform = {
                 macos: readChecksum('VoiceLink-1.0.0-macos.pkg'),
-                windows: readChecksum('VoiceLink-1.0.0-windows-portable.exe'),
+                windows: readChecksum('VoiceLinkWX-0.1.0.5-windows-setup.exe'),
                 linux: readChecksum('VoiceLink-linux.AppImage')
             };
 
             const windowsArtifacts = {
-                portable: fileExists('VoiceLink-1.0.0-windows-portable.exe'),
-                setup: fileExists('VoiceLink-1.0.0-windows-setup.exe'),
-                buildZip: fileExists('VoiceLink-1.0.0-windows-build.zip')
+                portable: fileExists('VoiceLinkWX-0.1.0.5-win-x64-portable.zip'),
+                setup: fileExists('VoiceLinkWX-0.1.0.5-windows-setup.exe'),
+                manifest: fileExists('voicelink-wxpython-update.json')
             };
 
             res.json({
@@ -10128,11 +10128,11 @@ class VoiceLinkLocalServer {
                         ]
                     },
                     windows: {
-                        version: '1.0.4',
+                        version: '0.1.0.5',
                         downloads: [
-                            buildEntry('VoiceLink-1.0.0-windows-portable.exe', 'Windows Portable EXE', 'native', 'Current build', 'windows'),
-                            buildEntry('VoiceLink-1.0.0-windows-setup.exe', 'Windows Setup EXE Installer', 'native', 'Current build', 'windows'),
-                            buildEntry('VoiceLink-1.0.0-windows-build.zip', 'Windows Installer Builder ZIP', 'tools', 'Current build', 'windows')
+                            buildEntry('VoiceLinkWX-0.1.0.5-windows-setup.exe', 'Windows Setup Installer', 'native', 'Current build', 'windows'),
+                            buildEntry('VoiceLinkWX-0.1.0.5-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
+                            buildEntry('voicelink-wxpython-update.json', 'Windows Update Manifest', 'metadata', 'Current build', 'windows')
                         ]
                     },
                 linux: {
@@ -10202,6 +10202,12 @@ class VoiceLinkLocalServer {
         // Serve the public landing page at root.
         this.app.get('/', (req, res) => {
             res.sendFile(path.join(appRootDir, 'index.html'));
+        });
+
+        // Serve the central admin UI from the browser client. The admin panel
+        // still enforces normal session permissions after the app opens.
+        this.app.get(['/admin', '/admin/'], (req, res) => {
+            res.redirect(302, '/client/index.html?open=admin');
         });
 
         // Serve downloads page

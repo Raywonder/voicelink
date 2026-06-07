@@ -159,6 +159,11 @@ class VoiceLinkApp {
             return;
         }
 
+        if (openTarget === 'admin' || openTarget === 'dashboard' || openTarget === 'server-admin') {
+            setTimeout(() => this.showAdminPanel(), 500);
+            return;
+        }
+
         const authTargets = new Map([
             ['login', 'local-login'],
             ['signin', 'local-login'],
