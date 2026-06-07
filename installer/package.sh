@@ -43,6 +43,13 @@ mkdir -p "$BUILD_DIR/$PACKAGE_NAME/docs/public"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/docs/authenticated"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/logs"
 
+# Copy documentation used by installed server docs and owner/admin setup flows.
+if [ -d "$SOURCE_DIR/docs" ]; then
+    cp -r "$SOURCE_DIR/docs/." "$BUILD_DIR/$PACKAGE_NAME/docs/public/"
+fi
+cp "$SOURCE_DIR/README.md" "$BUILD_DIR/$PACKAGE_NAME/docs/README.md" 2>/dev/null || true
+cp "$SOURCE_DIR/voicelink-governance.md" "$BUILD_DIR/$PACKAGE_NAME/docs/voicelink-governance.md" 2>/dev/null || true
+
 # Remove dev files
 find "$BUILD_DIR/$PACKAGE_NAME" -name "*.test.js" -delete
 find "$BUILD_DIR/$PACKAGE_NAME" -name ".DS_Store" -delete
