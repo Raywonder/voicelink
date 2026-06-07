@@ -2275,6 +2275,7 @@ struct MainMenuView: View {
     @State private var showRoomActionMenuSheet = false
     @State private var roomBrowserWidth: CGFloat = 0
     @State private var pendingBrowseServerFilter: String?
+    @State private var expandedServerOwnerGroups: Set<String> = []
 
     var statusColor: Color {
         switch appState.serverStatus {
@@ -2658,20 +2659,39 @@ struct MainMenuView: View {
         LazyVStack(spacing: 12) {
             ForEach(federationServerEntryGroups, id: \.owner) { group in
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("\(group.owner) (\(group.servers.count) server\(group.servers.count == 1 ? "" : "s"))")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityLabel("\(group.owner), \(group.servers.count) server\(group.servers.count == 1 ? "" : "s")")
+                    let serverCount = group.servers.count
+                    let isExpanded = expandedServerOwnerGroups.contains(group.owner)
+                    Button {
+                        if expandedServerOwnerGroups.contains(group.owner) {
+                            expandedServerOwnerGroups.remove(group.owner)
+                        } else {
+                            expandedServerOwnerGroups.insert(group.owner)
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .accessibilityHidden(true)
+                            Text("\(group.owner) (\(serverCount) server\(serverCount == 1 ? "" : "s"))")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
+                    .accessibilityHint(isExpanded ? "Press to hide this owner's servers." : "Press to show this owner's servers.")
 
-                    ForEach(group.servers) { entry in
-                        MainWindowServerCard(
-                            entry: entry,
-                            isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
-                            onBrowseRooms: {
-                                browseMainWindowServerRooms(entry)
-                            },
-                        )
+                    if isExpanded {
+                        ForEach(group.servers) { entry in
+                            MainWindowServerCard(
+                                entry: entry,
+                                isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
+                                onBrowseRooms: {
+                                    browseMainWindowServerRooms(entry)
+                                },
+                            )
+                        }
                     }
                 }
             }

@@ -1444,6 +1444,7 @@ private struct HomeTab: View {
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
+    @State private var expandedServerOwnerGroups: Set<String> = []
     @State private var showNativeAccountSignIn = false
     @State private var authRequiredServerURL = ""
 
@@ -1613,10 +1614,27 @@ private struct HomeTab: View {
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
                             let serverCount = group.servers.count
-                            Text("\(group.owner) (\(serverCount) server\(serverCount == 1 ? "" : "s"))")
-                                .font(.headline)
-                                .accessibilityAddTraits(.isHeader)
-                                .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
+                            let isExpanded = expandedServerOwnerGroups.contains(group.owner) || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            Button {
+                                if expandedServerOwnerGroups.contains(group.owner) {
+                                    expandedServerOwnerGroups.remove(group.owner)
+                                } else {
+                                    expandedServerOwnerGroups.insert(group.owner)
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                        .accessibilityHidden(true)
+                                    Text("\(group.owner) (\(serverCount) server\(serverCount == 1 ? "" : "s"))")
+                                        .font(.headline)
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
+                            .accessibilityHint(isExpanded ? "Double tap to hide this owner's servers." : "Double tap to show this owner's servers.")
+                            .accessibilityAddTraits(.isButton)
+                            if isExpanded {
                                 ForEach(group.servers) { server in
                                     Button {
                                 activeServer = server
@@ -1640,6 +1658,7 @@ private struct HomeTab: View {
                             .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
                             .accessibilityHint("Double tap to browse rooms on this server.")
                         }
+                            }
                         }
                     }
                 }
