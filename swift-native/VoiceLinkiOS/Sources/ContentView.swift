@@ -1638,7 +1638,6 @@ private struct HomeTab: View {
                             .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
                             .accessibilityHint("Double tap to browse rooms on this server.")
                         }
-                            }
                         }
                     }
                 }
