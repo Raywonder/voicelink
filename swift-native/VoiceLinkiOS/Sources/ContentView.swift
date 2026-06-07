@@ -3777,6 +3777,8 @@ private struct IOSShareSheet: UIViewControllerRepresentable {
 }
 
 struct SettingsTab: View {
+    private static let voiceLinkAccessWhatsAppURL = URL(string: "https://chat.whatsapp.com/HesAnbKsTTN5neH11BxzSz?mode=gi_t")!
+
     @Environment(\.openURL) private var openURL
     @ObservedObject var roomState: IOSRoomMessagingState
     let openServers: () -> Void
@@ -3899,6 +3901,15 @@ struct SettingsTab: View {
                         }
                         .padding(.top, 4)
                     }
+                }
+
+                Section("Feedback") {
+                    Button("Join VoiceLink Access WhatsApp Group") {
+                        openURL(Self.voiceLinkAccessWhatsAppURL)
+                    }
+                    Text("Use this group for VoiceLink access feedback, beta coordination, and support discussion.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Client Account") {

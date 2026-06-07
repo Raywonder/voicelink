@@ -493,6 +493,13 @@ struct VoiceLinkApp: App {
                     }
                 }
                 .help("Open VoiceLink documentation")
+
+                Button("Join VoiceLink Access WhatsApp Group") {
+                    if let url = URL(string: "https://chat.whatsapp.com/HesAnbKsTTN5neH11BxzSz?mode=gi_t") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .help("Open the VoiceLink Access WhatsApp group invite")
             }
         }
     }
@@ -8217,6 +8224,20 @@ struct SettingsView: View {
             }
         }
 
+        SettingsSection(title: "Feedback and Community") {
+            VStack(alignment: .leading, spacing: 10) {
+                Button("Join VoiceLink Access WhatsApp Group") {
+                    openVoiceLinkAccessWhatsAppGroup()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Opens the VoiceLink Access WhatsApp group invite in WhatsApp or your browser.")
+
+                Text("Use this group for VoiceLink access feedback, beta coordination, and support discussion.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        }
+
         SettingsSection(title: "Network") {
             Text("Local IP: \(appState.localIP)")
                 .font(.caption)
@@ -8230,6 +8251,11 @@ struct SettingsView: View {
             .buttonStyle(.bordered)
             .foregroundColor(.red)
         }
+    }
+
+    private func openVoiceLinkAccessWhatsAppGroup() {
+        guard let url = URL(string: "https://chat.whatsapp.com/HesAnbKsTTN5neH11BxzSz?mode=gi_t") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func submitDiagnosticsFromAdvanced() {

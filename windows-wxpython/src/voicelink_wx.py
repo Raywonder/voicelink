@@ -16,6 +16,7 @@ APP_NAME = "VoiceLinkWX"
 APP_VERSION = "0.1.0.6"
 APP_BUILD = 6
 DEFAULT_SERVER = "https://voicelinkapp.app"
+WHATSAPP_GROUP_URL = "https://chat.whatsapp.com/HesAnbKsTTN5neH11BxzSz?mode=gi_t"
 LEGACY_DEFAULT_SERVERS = {
     "https://voicelink.devinecreations.net",
     "http://voicelink.devinecreations.net",
@@ -576,6 +577,8 @@ class MainFrame(wx.Frame):
         server_menu.Append(1006, "Sign out")
         server_menu.Append(1004, "Open admin")
         help_menu = wx.Menu()
+        help_menu.Append(1009, "Join VoiceLink Access WhatsApp Group")
+        help_menu.AppendSeparator()
         help_menu.Append(1007, "Check for updates")
         help_menu.Append(1005, "About VoiceLink")
         menu_bar.Append(file_menu, "File")
@@ -590,8 +593,13 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.open_sign_in(), id=1003)
         self.Bind(wx.EVT_MENU, lambda _event: self.logout(), id=1006)
         self.Bind(wx.EVT_MENU, lambda _event: self.open_admin(), id=1004)
+        self.Bind(wx.EVT_MENU, lambda _event: self.open_whatsapp_group(), id=1009)
         self.Bind(wx.EVT_MENU, lambda _event: self.check_for_updates(), id=1007)
         self.Bind(wx.EVT_MENU, lambda _event: wx.MessageBox(f"VoiceLink for Windows\nVersion {APP_VERSION}, build {APP_BUILD}", "About VoiceLink"), id=1005)
+
+    def open_whatsapp_group(self) -> None:
+        webbrowser.open(WHATSAPP_GROUP_URL)
+        self.set_status("Opening VoiceLink Access WhatsApp group.")
 
     def _bind_events(self) -> None:
         self.connect_button.Bind(wx.EVT_BUTTON, lambda _event: self.connect())
