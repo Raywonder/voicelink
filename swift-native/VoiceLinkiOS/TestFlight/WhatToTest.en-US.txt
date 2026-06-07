@@ -1,19 +1,16 @@
-Build 90 focuses on server owner grouping, server counts, and updated server install packages.
+Build 91 focuses on owner-button server browsing.
 
 What changed:
-- VoiceLink server directories can now include owner display metadata, owner groups, server display mode, domain, and searchable labels.
-- The iOS Servers screen groups visible servers by owner and now shows the number of servers in each owner group, such as VoiceLink (2 servers) or Devine Creations (2 servers).
-- The macOS server browser uses the same owner grouping and server-count headings.
-- The macOS app uses clearer owner-first labels for the built-in VoiceLink and Devine Creations servers.
-- macOS server administration now includes controls for server owner display name and how the server should appear in server selection and federation search.
-- Linked server sync now prefers the API-provided app display name when present.
-- Server owner and user documentation now explains owner groups, server counts, display modes, and first-time owner setup.
-- Updated VoiceLink server tar and zip installers are published next to the client downloads and include the current server API and documentation.
+- Server owners now appear as buttons instead of always-open headings.
+- Each owner button shows how many servers that owner runs, such as VoiceLink (2 servers) or Devine Creations (2 servers).
+- Opening an owner button reveals that owner's servers. This keeps each platform owner's server set together and avoids mixing all servers into one long list.
+- Searching on iOS still exposes matching owner groups so search results are not hidden.
+- User, administrator, and governance docs now describe owner buttons and server-count behavior.
 
 Please test:
-- Open Servers on iOS and confirm VoiceLink servers appear under VoiceLink with a server count, and Devine Creations servers appear under Devine Creations with a server count.
-- On macOS, browse the server list and confirm owner headings include the server count.
-- Search by owner name, server display name, or domain and confirm the expected servers remain visible.
-- On macOS, open server administration for a server you manage and confirm the owner display name and server list display controls are present.
-- Change the display mode on a test server, save, refresh the server list, and confirm the API/client label reflects the selected display style.
-- Confirm existing room browsing, preview, join, user list, messages, and microphone status still work after the server list changes.
+- Open Servers on iOS and confirm VoiceLink and Devine Creations appear as owner buttons with server counts.
+- Open VoiceLink and confirm its servers appear only after opening that owner button.
+- Open Devine Creations and confirm its servers appear only after opening that owner button.
+- On macOS, open the Servers tab and confirm the same owner-button behavior.
+- Confirm selecting a server still switches to browsing that server's rooms.
+- Confirm existing room browsing, preview, join, user list, messages, and microphone status still work after the server browser change.
