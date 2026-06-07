@@ -1,11 +1,11 @@
-﻿version: 1.0.0.85
+﻿version: 1.0.0.88
 files:
   - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: k3SlmybJcBlTFIZd7XG6XgS9nesDN7MbMc7bes2cFACf+UsLO6dRtJqb82Zj0vL7+KRVPzJe0YhLwqw0Kx5rNQ==
-    size: 366204845
+    sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
+    size: 366204867
 path: VoiceLinkMacOS.zip
-sha512: k3SlmybJcBlTFIZd7XG6XgS9nesDN7MbMc7bes2cFACf+UsLO6dRtJqb82Zj0vL7+KRVPzJe0YhLwqw0Kx5rNQ==
-buildNumber: 85
-releaseDate: "2026-06-07T07:19:59.000Z"
+sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
+buildNumber: 88
+releaseDate: "2026-06-07T08:27:03.000Z"
 releaseNotes: >-
-  Build 85 updates VoiceLink macOS with the latest room browsing, authentication, admin, and audio/session stability fixes from the native desktop tree.
+  Build 88 updates VoiceLink macOS with the latest room browsing, authentication, admin module-management, and audio/session stability fixes from the native desktop tree.
