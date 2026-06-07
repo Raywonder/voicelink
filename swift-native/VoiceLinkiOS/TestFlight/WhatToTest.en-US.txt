@@ -1,14 +1,18 @@
-Build 89 focuses on server selection clarity and administrator-controlled server display names.
+Build 90 focuses on server owner grouping, server counts, and updated server install packages.
 
 What changed:
 - VoiceLink server directories can now include owner display metadata, owner groups, server display mode, domain, and searchable labels.
-- The iOS Servers screen groups visible servers by owner when that information is available or can be inferred from known VoiceLink and Devine Creations domains.
+- The iOS Servers screen groups visible servers by owner and now shows the number of servers in each owner group, such as VoiceLink (2 servers) or Devine Creations (2 servers).
+- The macOS server browser uses the same owner grouping and server-count headings.
 - The macOS app uses clearer owner-first labels for the built-in VoiceLink and Devine Creations servers.
 - macOS server administration now includes controls for server owner display name and how the server should appear in server selection and federation search.
 - Linked server sync now prefers the API-provided app display name when present.
+- Server owner and user documentation now explains owner groups, server counts, display modes, and first-time owner setup.
+- Updated VoiceLink server tar and zip installers are published next to the client downloads and include the current server API and documentation.
 
 Please test:
-- Open Servers on iOS and confirm VoiceLink servers appear under VoiceLink and Devine Creations servers appear under Devine Creations.
+- Open Servers on iOS and confirm VoiceLink servers appear under VoiceLink with a server count, and Devine Creations servers appear under Devine Creations with a server count.
+- On macOS, browse the server list and confirm owner headings include the server count.
 - Search by owner name, server display name, or domain and confirm the expected servers remain visible.
 - On macOS, open server administration for a server you manage and confirm the owner display name and server list display controls are present.
 - Change the display mode on a test server, save, refresh the server list, and confirm the API/client label reflects the selected display style.
