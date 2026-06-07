@@ -18167,6 +18167,59 @@ class VoiceLinkLocalServer {
             res.json(this.moduleRegistry.getInstalledModules());
         });
 
+        this.app.post('/api/modules/bulk/install-missing', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.installMissingModules({
+                    policy,
+                    customConfigById: req.body?.customConfigById || {}
+                });
+                if (result.installed?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.post('/api/modules/bulk/update-all', async (req, res) => {
+            if (!this.isAdminRequest(req)) {
+                return res.status(403).json({ success: false, error: 'Admin access required' });
+            }
+            try {
+                const policy = getServerPolicyConfig().moduleGovernance;
+                const result = this.moduleRegistry.updateInstalledModules({ policy });
+                if (result.updated?.length) {
+                    await this.initializeModules();
+                }
+                res.json({
+                    ...result,
+                    cluster: {
+                        requested: !!req.body?.applyToCluster,
+                        appliedLocally: true,
+                        propagation: req.body?.applyToCluster
+                            ? 'cluster-propagation-queued-for-managed-api-sync'
+                            : 'local-only'
+                    }
+                });
+            } catch (error) {
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
         // Export module bundle for peer sync (required modules are public; others require admin auth)
         this.app.get('/api/modules/:moduleId/bundle', (req, res) => {
             const module = this.moduleRegistry.getModule(req.params.moduleId);
