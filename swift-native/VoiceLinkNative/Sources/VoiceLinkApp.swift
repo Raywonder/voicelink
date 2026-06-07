@@ -2500,6 +2500,7 @@ struct MainMenuView: View {
     struct MainWindowServerEntry: Identifiable {
         let id: String
         let name: String
+        let ownerGroup: String
         let url: String
         let description: String
         let sourceLabel: String
@@ -2519,6 +2520,7 @@ struct MainMenuView: View {
         return MainWindowServerEntry(
             id: base,
             name: serverDisplayName,
+            ownerGroup: ownerGroupLabel(forName: serverDisplayName, url: base),
             url: base,
             description: "The server currently powering your room list, chat, licensing sync, and room actions.",
             sourceLabel: "Current",
@@ -2526,11 +2528,29 @@ struct MainMenuView: View {
         )
     }
 
+    private func ownerGroupLabel(forName name: String, url: String) -> String {
+        let value = "\(name) \(url)".lowercased()
+        if value.contains("devine-creations.com") || value.contains("devinecreations.net") || value.contains("devine creations") {
+            return "Devine Creations"
+        }
+        if value.contains("voicelinkapp.app") || value.contains("voicelink.dev") || value.contains("voicelink") {
+            return "VoiceLink"
+        }
+        if let host = URL(string: url)?.host, !host.isEmpty {
+            let components = host.split(separator: ".")
+            if components.count >= 2 {
+                return components.suffix(2).joined(separator: ".")
+            }
+            return host
+        }
+        return "Other Servers"
+    }
+
     private var federationServerEntries: [MainWindowServerEntry] {
         var entries: [MainWindowServerEntry] = []
         var seen = Set<String>()
 
-        func append(url rawURL: String, name: String, description: String, source: String, isCurrent: Bool = false) {
+        func append(url rawURL: String, name: String, description: String, source: String, ownerGroup: String? = nil, isCurrent: Bool = false) {
             let normalized = normalizedServerURL(rawURL)
             guard !normalized.isEmpty, !seen.contains(normalized) else { return }
             seen.insert(normalized)
@@ -2538,6 +2558,7 @@ struct MainMenuView: View {
                 MainWindowServerEntry(
                     id: normalized,
                     name: name,
+                    ownerGroup: ownerGroup?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? ownerGroup! : ownerGroupLabel(forName: name, url: normalized),
                     url: normalized,
                     description: description,
                     sourceLabel: source,
@@ -2571,6 +2592,20 @@ struct MainMenuView: View {
         }
 
         return entries
+    }
+
+    private var federationServerEntryGroups: [(owner: String, servers: [MainWindowServerEntry])] {
+        let grouped = Dictionary(grouping: federationServerEntries) { entry in
+            entry.ownerGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Other Servers" : entry.ownerGroup
+        }
+        return grouped
+            .map { owner, servers in
+                (
+                    owner: owner,
+                    servers: servers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                )
+            }
+            .sorted { $0.owner.localizedCaseInsensitiveCompare($1.owner) == .orderedAscending }
     }
 
     private func connectMainWindowServer(_ entry: MainWindowServerEntry, browseRooms: Bool) {
@@ -2621,14 +2656,24 @@ struct MainMenuView: View {
 
     private func serverListView() -> some View {
         LazyVStack(spacing: 12) {
-            ForEach(federationServerEntries) { entry in
-                MainWindowServerCard(
-                    entry: entry,
-                    isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
-                    onBrowseRooms: {
-                        browseMainWindowServerRooms(entry)
-                    },
-                )
+            ForEach(federationServerEntryGroups, id: \.owner) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(group.owner) (\(group.servers.count) server\(group.servers.count == 1 ? "" : "s"))")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityLabel("\(group.owner), \(group.servers.count) server\(group.servers.count == 1 ? "" : "s")")
+
+                    ForEach(group.servers) { entry in
+                        MainWindowServerCard(
+                            entry: entry,
+                            isConnected: entry.isCurrent || normalizedServerURL(appState.serverManager.baseURL ?? "") == normalizedServerURL(entry.url),
+                            onBrowseRooms: {
+                                browseMainWindowServerRooms(entry)
+                            },
+                        )
+                    }
+                }
             }
         }
     }

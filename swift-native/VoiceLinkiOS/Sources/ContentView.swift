@@ -1612,9 +1612,11 @@ private struct HomeTab: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
-                            Text(group.owner)
+                            let serverCount = group.servers.count
+                            Text("\(group.owner) (\(serverCount) server\(serverCount == 1 ? "" : "s"))")
                                 .font(.headline)
                                 .accessibilityAddTraits(.isHeader)
+                                .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
                                 ForEach(group.servers) { server in
                                     Button {
                                 activeServer = server
