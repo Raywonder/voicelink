@@ -5132,8 +5132,9 @@ class VoiceLinkLocalServer {
 
         // Health check endpoint for monitoring
         this.app.get("/health", (req, res) => {
+            const service = String(process.env.VOICELINK_SERVICE_ID || process.env.VOICELINK_PROCESS_NAME || 'voicelink').trim() || 'voicelink';
             res.json({
-                service: "voicelink-local",
+                service,
                 status: "healthy",
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
@@ -6357,8 +6358,9 @@ class VoiceLinkLocalServer {
 
         // Compatibility endpoint used by older/native clients
         this.app.get('/api/health', (req, res) => {
+            const service = String(process.env.VOICELINK_SERVICE_ID || process.env.VOICELINK_PROCESS_NAME || 'voicelink').trim() || 'voicelink';
             res.json({
-                service: 'voicelink-local',
+                service,
                 status: 'healthy',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
@@ -6368,8 +6370,9 @@ class VoiceLinkLocalServer {
 
         // API info endpoint (alias for mobile apps)
         this.app.get('/api/info', (req, res) => {
+            const service = String(process.env.VOICELINK_SERVICE_ID || process.env.VOICELINK_PROCESS_NAME || 'voicelink').trim() || 'voicelink';
             res.json({
-                service: 'voicelink-local',
+                service,
                 status: 'healthy',
                 version: '1.0.1',
                 timestamp: new Date().toISOString(),
@@ -6386,7 +6389,7 @@ class VoiceLinkLocalServer {
             const connectedUsers = this.getConnectedUsersCount();
 
             res.json({
-                service: 'voicelink-local',
+                service: String(process.env.VOICELINK_SERVICE_ID || process.env.VOICELINK_PROCESS_NAME || 'voicelink').trim() || 'voicelink',
                 status: 'ok',
                 timestamp: new Date().toISOString(),
                 pollIntervalSeconds,

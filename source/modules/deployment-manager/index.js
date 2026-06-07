@@ -98,6 +98,104 @@ function sanitizeFileToken(value, fallback = 'server') {
     return normalized || fallback;
 }
 
+function sanitizeDomainToken(value, fallback = 'server') {
+    const token = sanitizeFileToken(value, fallback).toLowerCase();
+    return token.includes('.') ? token : fallback;
+}
+
+function inferDeploymentRole({ role, siteType, deploymentMode, domain } = {}) {
+    const explicit = String(role || '').trim().toLowerCase();
+    if (['main', 'community', 'dev', 'cms', 'remote'].includes(explicit)) return explicit;
+
+    const mode = String(deploymentMode || '').trim().toLowerCase();
+    if (['main', 'community', 'dev', 'cms', 'remote'].includes(mode)) return mode;
+
+    const normalizedSiteType = String(siteType || '').trim().toLowerCase();
+    if (['wordpress', 'whmcs', 'composr', 'cpanel', 'installatron', 'cms'].includes(normalizedSiteType)) {
+        return 'cms';
+    }
+
+    const host = String(domain || '').trim().toLowerCase();
+    if (host.startsWith('community.') || host.includes('.community.')) return 'community';
+    if (host.startsWith('dev.') || host.includes('.dev.') || host.includes('staging')) return 'dev';
+    return 'main';
+}
+
+function buildDeploymentLayout({ target = {}, deployPayload = {}, serverConfig = {}, ownerConfig = {} } = {}) {
+    const targetInfo = deployPayload.deploymentLink?.target || {};
+    const deploymentMode = serverConfig.deploymentMode || deployPayload.deploymentLink?.deploymentMode || target.deploymentMode;
+    const siteType = serverConfig.siteType || target.siteType || targetInfo.siteType;
+    const domain = sanitizeDomainToken(
+        serverConfig.domain
+        || target.domain
+        || targetInfo.domain
+        || extractHostname(target.publicUrl || target.targetServerUrl || target.apiBaseUrl || deployPayload.targetServerUrl)
+        || target.host
+    );
+    const role = inferDeploymentRole({
+        role: serverConfig.role || target.role || targetInfo.role,
+        siteType,
+        deploymentMode,
+        domain
+    });
+    const accountOwner = String(
+        ownerConfig.accountOwner
+        || serverConfig.accountOwner
+        || serverConfig.targetUser
+        || target.accountOwner
+        || target.username
+        || targetInfo.accountOwner
+        || 'voicelink'
+    ).trim() || 'voicelink';
+    const accountHome = accountOwner.startsWith('/') ? accountOwner : path.posix.join('/home', accountOwner);
+    const installRoot = String(
+        serverConfig.installRoot
+        || serverConfig.remotePath
+        || target.remotePath
+        || targetInfo.installRoot
+        || path.posix.join(accountHome, 'apps', 'voicelink', role, domain)
+    ).trim();
+    const processName = sanitizeFileToken(
+        serverConfig.processName
+        || target.processName
+        || `${domain}-${role}`,
+        `${domain}-${role}`
+    );
+    const serviceId = sanitizeFileToken(
+        serverConfig.serviceId
+        || target.serviceId
+        || processName,
+        processName
+    );
+    const appPort = String(serverConfig.appPort || serverConfig.port || target.appPort || target.servicePort || '').trim();
+    const displayName = String(
+        serverConfig.displayName
+        || serverConfig.name
+        || target.displayName
+        || target.label
+        || `${domain} VoiceLink ${role}`
+    ).trim();
+
+    return {
+        accountOwner,
+        accountHome,
+        domain,
+        role,
+        siteType: siteType || null,
+        installRoot,
+        processName,
+        serviceId,
+        displayName,
+        appPort: appPort || null,
+        pm2: {
+            enabled: serverConfig.pm2Enabled !== false && target.pm2Enabled !== false,
+            processName,
+            serviceId,
+            appPort: appPort || null
+        }
+    };
+}
+
 function createRequestPromise(urlString, options = {}, body = null) {
     return new Promise((resolve, reject) => {
         const client = urlString.startsWith('https://') ? https : http;
@@ -204,10 +302,13 @@ class DeploymentManagerModule {
             'VoiceLink-linux.AppImage',
             'voicelink-local_1.0.0_amd64.deb'
         ];
+        const homeDir = process.env.HOME || '';
+        const configuredDownloadsRoot = process.env.VOICELINK_DOWNLOADS_DIR
+            || (homeDir ? path.join(homeDir, 'downloads', 'voicelink') : null);
         const roots = [
             path.join(this.appRoot, 'swift-native', 'VoiceLinkNative'),
-            '/home/devinecr/downloads/voicelink'
-        ];
+            configuredDownloadsRoot
+        ].filter(Boolean);
         const artifacts = [];
         const seen = new Set();
 
@@ -334,8 +435,9 @@ class DeploymentManagerModule {
             if (!target.host || !target.username) {
                 return { ok: false, error: 'SFTP deployment requires a host and username.' };
             }
-            if (options.requireRemoteCredentials && !target.remotePath) {
-                return { ok: false, error: 'Choose a remote install path for SFTP deployments.' };
+            const layout = buildDeploymentLayout({ target, serverConfig: options.extraConfig?.server || {}, ownerConfig: options.extraConfig?.owner || {} });
+            if (options.requireRemoteCredentials && !target.remotePath && !layout.installRoot) {
+                return { ok: false, error: 'Choose a remote install path or provide a domain so VoiceLink can derive apps/voicelink/<role>/<domain>.' };
             }
         }
 
@@ -382,7 +484,13 @@ class DeploymentManagerModule {
         const basePath = serverConfig.basePath || extractBasePath(targetServerUrl);
         const targetAccountOwner = ownerConfig.accountOwner || serverConfig.accountOwner || serverConfig.targetUser || null;
         const deploymentMode = String(serverConfig.deploymentMode || options.deploymentMode || 'fresh').trim().toLowerCase();
-        const installRoot = serverConfig.installRoot || serverConfig.remotePath || null;
+        const deploymentLayout = buildDeploymentLayout({
+            target: options.target || {},
+            deployPayload: { targetServerUrl },
+            serverConfig: { ...serverConfig, deploymentMode, domain: targetDomain },
+            ownerConfig
+        });
+        const installRoot = serverConfig.installRoot || serverConfig.remotePath || deploymentLayout.installRoot || null;
         const deploymentLink = {
             deploymentMode,
             sourceInstallUrl: normalizePublicUrl(serverConfig.sourceInstallUrl || options.sourceInstallUrl) || null,
@@ -390,12 +498,14 @@ class DeploymentManagerModule {
                 label: targetLabel,
                 publicUrl: targetServerUrl,
                 domain: targetDomain || null,
+                role: deploymentLayout.role,
                 basePath,
                 installRoot,
                 siteRoot: serverConfig.siteRoot || null,
                 accountOwner: targetAccountOwner,
                 whmcsClientOwner: ownerConfig.whmcsClientOwner || null
             },
+            deploymentLayout,
             ownership: {
                 owner: ownerConfig.owner || targetLabel || targetDomain || null,
                 accountOwner: targetAccountOwner,
@@ -427,6 +537,9 @@ class DeploymentManagerModule {
             },
             moduleUpdatePolicy: {
                 enabled: moduleUpdateConfig.enabled !== 'false',
+                autoEnableUpdates: moduleUpdateConfig.autoEnableUpdates !== 'false',
+                autoInstallLatest: moduleUpdateConfig.autoInstallLatest !== 'false',
+                installAllMissingModules: moduleUpdateConfig.installAllMissingModules !== 'false',
                 localFirst: moduleUpdateConfig.localFirst !== 'false',
                 notifyClients: moduleUpdateConfig.notifyClients !== 'false',
                 preserveConfig: moduleUpdateConfig.preserveConfig !== 'false',
@@ -534,7 +647,8 @@ class DeploymentManagerModule {
         }
 
         if (transport === 'sftp') {
-            const remotePath = target.remotePath || '.';
+            const layout = buildDeploymentLayout({ target });
+            const remotePath = target.remotePath || layout.installRoot || '.';
             const args = [];
             const mkdirArgs = [];
             if (target.port) {
@@ -619,7 +733,8 @@ class DeploymentManagerModule {
         }
 
         if (String(target.transport || '').toLowerCase() === 'sftp' && target.host && target.username) {
-            const remotePath = target.remotePath || '.';
+            const layout = buildDeploymentLayout({ target, deployPayload, serverConfig: deployPayload?.extraConfig?.server || {}, ownerConfig: deployPayload?.extraConfig?.owner || {} });
+            const remotePath = target.remotePath || layout.installRoot || '.';
             const args = [];
             if (target.port) {
                 args.push('-p', String(target.port));
@@ -636,14 +751,28 @@ class DeploymentManagerModule {
             const tempExtractRoot = path.posix.join(remotePath, '.deploy-extract');
             const siteType = String(deployPayload?.extraConfig?.server?.siteType || '').trim().toLowerCase();
             const siteRoot = String(target.siteRoot || deployPayload?.extraConfig?.server?.siteRoot || remotePath).trim() || remotePath;
+            const remoteUser = String(target.username || '').trim() || 'voicelink';
+            const remoteHome = path.posix.join('/home', remoteUser);
             const schedulerReportPath = path.posix.join(remotePath, 'site-integration-report.json');
             const databaseReportPath = path.posix.join(remotePath, 'database-integration-report.json');
+            const modulePolicyPath = path.posix.join(remotePath, 'module-update-policy.json');
+            const pm2ReportPath = path.posix.join(remotePath, 'pm2-deployment-report.json');
+            const modulePolicyPayload = Buffer.from(JSON.stringify(deployPayload?.deploymentLink?.moduleUpdatePolicy || {}, null, 2)).toString('base64');
+            const pm2Port = String(layout.appPort || deployPayload?.extraConfig?.server?.appPort || deployPayload?.extraConfig?.server?.port || '').trim();
+            const pm2ProcessName = layout.processName;
+            const pm2ServiceId = layout.serviceId;
+            const pm2DisplayName = layout.displayName;
             const wordpressPluginRoot = path.posix.join(siteRoot, 'wp-content', 'plugins', 'voicelink-wordpress');
             const composrBridgeRoot = path.posix.join(siteRoot, 'sources_custom', 'voicelink');
             const composrPageRoot = path.posix.join(siteRoot, 'pages', 'comcode_custom', 'EN');
             const whmcsAddonRoot = path.posix.join(siteRoot, 'modules', 'addons', 'voicelink-whmcs');
             const whmcsHooksRoot = path.posix.join(whmcsAddonRoot, 'hooks');
             const whmcsTemplatesRoot = path.posix.join(siteRoot, 'templates', 'voicelink');
+            const whmcsTempRoot = path.posix.join(remoteHome, 'tmp', 'whmcs');
+            const whmcsCacheRoot = path.posix.join(whmcsTempRoot, 'cache');
+            const whmcsCompiledTemplatesRoot = path.posix.join(whmcsTempRoot, 'templates_c');
+            const whmcsAttachmentsRoot = path.posix.join(remoteHome, 'attachments', 'voicelink');
+            const whmcsDownloadsRoot = path.posix.join(remoteHome, 'downloads', 'voicelink');
             const cpanelBridgeRoot = path.posix.join(remotePath, 'cpanel');
             const cpanelFileShareRoot = path.posix.join(siteRoot, 'public_html', 'shared', 'voicelink');
             const installatronAppRoot = path.posix.join(siteRoot, 'installatron', 'voicelink');
@@ -703,10 +832,11 @@ class DeploymentManagerModule {
             const whmcsInstallCommands = [
                 `if [ -d ${shellQuote(path.posix.join(tempExtractRoot, 'voicelink-deploy', 'whmcs', 'voicelink-whmcs'))} ]; then mkdir -p ${shellQuote(whmcsAddonRoot)}; cp -R ${shellQuote(path.posix.join(tempExtractRoot, 'voicelink-deploy', 'whmcs', 'voicelink-whmcs'))}/. ${shellQuote(whmcsAddonRoot)}/; fi`,
                 `mkdir -p ${shellQuote(whmcsHooksRoot)} ${shellQuote(whmcsTemplatesRoot)}`,
+                `mkdir -p ${shellQuote(whmcsTempRoot)} ${shellQuote(whmcsCacheRoot)} ${shellQuote(whmcsCompiledTemplatesRoot)} ${shellQuote(whmcsAttachmentsRoot)} ${shellQuote(whmcsDownloadsRoot)} || true`,
                 `printf %s ${shellQuote(reportPayload)} | base64 --decode > ${shellQuote(schedulerReportPath)}`,
                 `printf %s ${shellQuote(databasePayload)} | base64 --decode > ${shellQuote(databaseReportPath)}`,
                 `if [ -f ${shellQuote(path.posix.join(siteRoot, 'configuration.php'))} ]; then python3 - <<'PY'\nimport json, pathlib, re\npath = pathlib.Path(${JSON.stringify(databaseReportPath)})\nconfig = pathlib.Path(${JSON.stringify(path.posix.join(siteRoot, 'configuration.php'))}).read_text(errors='ignore')\ndata = json.loads(path.read_text())\nfor key, pattern in {'db_name': r\"\\$db_name\\s*=\\s*'([^']+)'\", 'db_username': r\"\\$db_username\\s*=\\s*'([^']+)'\", 'db_host': r\"\\$db_host\\s*=\\s*'([^']+)'\", 'license': r\"\\$license\\s*=\\s*'([^']+)'\"}.items():\n    match = re.search(pattern, config)\n    if match:\n        data.setdefault('whmcs', {})[key] = match.group(1)\ndata.setdefault('whmcs', {})['configurationDetected'] = True\npath.write_text(json.dumps(data, indent=2))\nPY\nfi`,
-                `python3 - <<'PY'\nimport json, pathlib\npath = pathlib.Path(${JSON.stringify(schedulerReportPath)})\ndata = json.loads(path.read_text())\ndata['whmcs'] = {'addonInstalled': pathlib.Path(${JSON.stringify(whmcsAddonRoot)}).exists(), 'siteRoot': ${JSON.stringify(siteRoot)}, 'adminDirDetected': pathlib.Path(${JSON.stringify(path.posix.join(siteRoot, 'admin'))}).exists()}\npath.write_text(json.dumps(data, indent=2))\nPY`
+                `python3 - <<'PY'\nimport json, pathlib\npath = pathlib.Path(${JSON.stringify(schedulerReportPath)})\ndata = json.loads(path.read_text())\ndata['whmcs'] = {\n  'addonInstalled': pathlib.Path(${JSON.stringify(whmcsAddonRoot)}).exists(),\n  'siteRoot': ${JSON.stringify(siteRoot)},\n  'adminDirDetected': pathlib.Path(${JSON.stringify(path.posix.join(siteRoot, 'admin'))}).exists(),\n  'ownerAccount': ${JSON.stringify(remoteUser)},\n  'ownerHome': ${JSON.stringify(remoteHome)},\n  'tempRoot': ${JSON.stringify(whmcsTempRoot)},\n  'cacheRoot': ${JSON.stringify(whmcsCacheRoot)},\n  'compiledTemplatesRoot': ${JSON.stringify(whmcsCompiledTemplatesRoot)},\n  'attachmentsRoot': ${JSON.stringify(whmcsAttachmentsRoot)},\n  'downloadsRoot': ${JSON.stringify(whmcsDownloadsRoot)}\n}\npath.write_text(json.dumps(data, indent=2))\nPY`
             ].join(' && ');
             const cpanelInstallCommands = [
                 `if [ -f ${shellQuote(path.posix.join(tempExtractRoot, 'voicelink-deploy', 'cpanel', 'voicelink-cpanel', 'bridge.php'))} ]; then mkdir -p ${shellQuote(cpanelBridgeRoot)}; cp -R ${shellQuote(path.posix.join(tempExtractRoot, 'voicelink-deploy', 'cpanel'))}/. ${shellQuote(cpanelBridgeRoot)}/; fi`,
@@ -738,6 +868,14 @@ class DeploymentManagerModule {
                 siteType === 'whmcs' ? whmcsInstallCommands : 'true',
                 siteType === 'cpanel' ? cpanelInstallCommands : 'true',
                 siteType === 'installatron' ? installatronInstallCommands : 'true',
+                `printf %s ${shellQuote(modulePolicyPayload)} | base64 --decode > ${shellQuote(modulePolicyPath)}`,
+                layout.pm2.enabled
+                    ? [
+                        `PM2_STATUS=not-installed`,
+                        `if command -v pm2 >/dev/null 2>&1 && [ -f ${shellQuote(path.posix.join(remotePath, 'server', 'routes', 'local-server.js'))} ]; then cd ${shellQuote(remotePath)}; pm2 delete ${shellQuote(pm2ProcessName)} >/dev/null 2>&1 || true; ${pm2Port ? `PORT=${shellQuote(pm2Port)} ` : ''}NODE_ENV=production VOICELINK_SERVICE_ID=${shellQuote(pm2ServiceId)} VOICELINK_PROCESS_NAME=${shellQuote(pm2ProcessName)} VOICELINK_SERVER_NAME=${shellQuote(pm2DisplayName)} pm2 start server/routes/local-server.js --name ${shellQuote(pm2ProcessName)} >/dev/null 2>&1 && pm2 save >/dev/null 2>&1 && PM2_STATUS=created; fi`,
+                        `printf '{"enabled":true,"status":"%s","processName":${JSON.stringify(JSON.stringify(pm2ProcessName))},"serviceId":${JSON.stringify(JSON.stringify(pm2ServiceId))},"appPort":${JSON.stringify(JSON.stringify(pm2Port || null))},"installRoot":${JSON.stringify(JSON.stringify(remotePath))}}\\n' "$PM2_STATUS" > ${shellQuote(pm2ReportPath)}`
+                    ].join(' && ')
+                    : 'true',
                 `rm -rf ${JSON.stringify(tempExtractRoot)}`,
                 `rm -f ${JSON.stringify(remoteBundlePath)}`,
                 `printf %s ${JSON.stringify(remoteDeployConfig)} | base64 --decode > ${JSON.stringify(path.posix.join(remotePath, 'deploy-config.json'))}`

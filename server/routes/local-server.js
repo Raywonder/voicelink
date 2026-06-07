@@ -854,6 +854,15 @@ class VoiceLinkLocalServer {
         return 'voicelink.local';
     }
 
+    getConfiguredServiceIdentifier() {
+        return String(
+            process.env.VOICELINK_SERVICE_ID
+            || process.env.VOICELINK_PROCESS_NAME
+            || this.getConfiguredServerHostname()
+            || 'voicelink'
+        ).trim() || 'voicelink';
+    }
+
     getDefaultSenderAddress() {
         const hostname = this.getConfiguredServerHostname()
             .replace(/[^a-z0-9.-]/gi, '')
@@ -7724,7 +7733,7 @@ class VoiceLinkLocalServer {
         // Health check endpoint for monitoring
         this.app.get("/health", (req, res) => {
             res.json({
-                service: "voicelink-local",
+                service: this.getConfiguredServiceIdentifier(),
                 status: "healthy",
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
@@ -9762,7 +9771,7 @@ class VoiceLinkLocalServer {
         // Compatibility endpoint used by older/native clients
         this.app.get('/api/health', (req, res) => {
             res.json({
-                service: 'voicelink-local',
+                service: this.getConfiguredServiceIdentifier(),
                 status: 'healthy',
                 timestamp: new Date().toISOString(),
                 rooms: this.rooms.size,
@@ -9773,7 +9782,7 @@ class VoiceLinkLocalServer {
         // API info endpoint (alias for mobile apps)
         this.app.get('/api/info', (req, res) => {
             res.json({
-                service: 'voicelink-local',
+                service: this.getConfiguredServiceIdentifier(),
                 status: 'healthy',
                 version: '1.0.1',
                 timestamp: new Date().toISOString(),
@@ -9790,7 +9799,7 @@ class VoiceLinkLocalServer {
             const connectedUsers = this.getConnectedUsersCount();
 
             res.json({
-                service: 'voicelink-local',
+                service: this.getConfiguredServiceIdentifier(),
                 status: 'ok',
                 timestamp: new Date().toISOString(),
                 pollIntervalSeconds,
