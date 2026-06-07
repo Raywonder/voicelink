@@ -250,7 +250,7 @@ class StatusManager: ObservableObject {
         let matches = detector?.matches(in: message, range: NSRange(message.startIndex..., in: message)) ?? []
 
         return matches.compactMap { match in
-            guard let range = Range(match.range, in: message) else { return nil }
+            guard let range = Range(match.range(at: 0), in: message) else { return nil }
             return URL(string: String(message[range]))
         }
     }
@@ -266,7 +266,7 @@ class StatusManager: ObservableObject {
         let matches = detector?.matches(in: message, range: NSRange(message.startIndex..., in: message)) ?? []
 
         for match in matches.reversed() {
-            guard let range = Range(match.range, in: message),
+            guard let range = Range(match.range(at: 0), in: message),
                   let url = match.url,
                   let attrRange = Range(range, in: attributed) else { continue }
 
@@ -315,7 +315,7 @@ class StatusManager: ObservableObject {
         let autoLinkMatches = detector?.matches(in: plainMessage, range: NSRange(plainMessage.startIndex..., in: plainMessage)) ?? []
         for match in autoLinkMatches.reversed() {
             guard
-                let range = Range(match.range, in: plainMessage),
+                let range = Range(match.range(at: 0), in: plainMessage),
                 let url = match.url,
                 let attrRange = Range(range, in: attributed)
             else {

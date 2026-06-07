@@ -11,6 +11,8 @@ struct AdminModulesSection: View {
     @State private var showFlexPBXHoldMediaManager = false
     @State private var showBackupManager = false
     @State private var showSSLManager = false
+    @State private var selectedModuleID: String?
+    @AccessibilityFocusState private var focusedModuleID: String?
 
     struct ModuleEditorRequest: Identifiable {
         let module: AdminModuleInfo
@@ -57,6 +59,14 @@ struct AdminModulesSection: View {
             }
     }
 
+    private var missingModuleCount: Int {
+        adminManager.availableModules.filter { !$0.installed }.count
+    }
+
+    private var installedModuleCount: Int {
+        adminManager.availableModules.filter { $0.installed && $0.id != "ssl-manager" }.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             AdminHelpSection(
@@ -78,6 +88,28 @@ struct AdminModulesSection: View {
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
+                Button(action: {
+                    runAction("install-all-missing", focusModuleID: selectedModuleID ?? filteredModules.first?.id) {
+                        await adminManager.installAllMissingModules()
+                    }
+                }) {
+                    Label("Install All Missing", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(actionInFlight != nil || missingModuleCount == 0)
+                .accessibilityHint("Installs every module that is not installed on the selected server. If All Cluster Servers is enabled, the request is marked for cluster API sync.")
+
+                Button(action: {
+                    runAction("update-all", focusModuleID: selectedModuleID ?? filteredModules.first?.id) {
+                        await adminManager.updateAllModules()
+                    }
+                }) {
+                    Label("Update All", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.bordered)
+                .disabled(actionInFlight != nil || installedModuleCount == 0)
+                .accessibilityHint("Reconciles installed modules with the current API module catalog and preserves existing custom settings.")
+
                 Button(action: {
                     Task { await adminManager.refreshModulesCenter() }
                 }) {
@@ -156,14 +188,14 @@ struct AdminModulesSection: View {
                             if module.installed {
                                 if module.id != "ssl-manager" {
                                     Button(module.enabled ? "Disable" : "Enable") {
-                                        runAction("toggle-\(module.id)") {
+                                        runAction("toggle-\(module.id)", focusModuleID: module.id) {
                                             await adminManager.setModuleEnabled(module.id, enabled: !module.enabled)
                                         }
                                     }
                                     .buttonStyle(.bordered)
 
                                     Button("Update") {
-                                        runAction("update-\(module.id)") {
+                                        runAction("update-\(module.id)", focusModuleID: module.id) {
                                             await adminManager.updateModule(module.id, enabled: module.enabled)
                                         }
                                     }
@@ -199,7 +231,7 @@ struct AdminModulesSection: View {
 
                                 if module.id != "ssl-manager" {
                                     Button("Uninstall", role: .destructive) {
-                                        runAction("uninstall-\(module.id)") {
+                                        runAction("uninstall-\(module.id)", focusModuleID: module.id) {
                                             await adminManager.uninstallModule(module.id)
                                         }
                                     }
@@ -207,7 +239,7 @@ struct AdminModulesSection: View {
                                 }
                             } else {
                                 Button("Install") {
-                                    runAction("install-\(module.id)") {
+                                    runAction("install-\(module.id)", focusModuleID: module.id) {
                                         await adminManager.installModule(module.id)
                                     }
                                 }
@@ -238,6 +270,20 @@ struct AdminModulesSection: View {
                     .padding()
                     .background(Color.white.opacity(0.05))
                     .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(selectedModuleID == module.id ? Color.blue.opacity(0.85) : Color.clear, lineWidth: 2)
+                    )
+                    .onTapGesture {
+                        selectedModuleID = module.id
+                        focusedModuleID = module.id
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityFocused($focusedModuleID, equals: module.id)
+                    .accessibilityAction(named: "Select Module") {
+                        selectedModuleID = module.id
+                        focusedModuleID = module.id
+                    }
                 }
             }
 
@@ -250,6 +296,7 @@ struct AdminModulesSection: View {
         }
         .task {
             await adminManager.refreshModulesCenter()
+            selectedModuleID = selectedModuleID ?? filteredModules.first?.id
         }
         .sheet(item: $configEditorModule) { request in
             ModuleConfigEditorSheet(
@@ -275,11 +322,26 @@ struct AdminModulesSection: View {
         }
     }
 
-    private func runAction(_ key: String, operation: @escaping () async -> Bool) {
+    private func runAction(_ key: String, focusModuleID: String? = nil, operation: @escaping () async -> Bool) {
+        if let focusModuleID {
+            selectedModuleID = focusModuleID
+        }
         actionInFlight = key
         Task {
             _ = await operation()
             actionInFlight = nil
+            restoreModuleFocus(preferredID: focusModuleID)
+        }
+    }
+
+    private func restoreModuleFocus(preferredID: String?) {
+        let target = preferredID
+            ?? selectedModuleID
+            ?? filteredModules.first?.id
+        guard let target else { return }
+        selectedModuleID = target
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            focusedModuleID = target
         }
     }
 }
