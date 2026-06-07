@@ -1,17 +1,15 @@
-Build 88 focuses on authentication reliability, room browsing, and audio/session stability across VoiceLink clients.
+Build 89 focuses on server selection clarity and administrator-controlled server display names.
 
 What changed:
-- Supported authentication flows should be available consistently across platforms, including Client Account, VoiceLink account, and server-provided browser sign-in methods.
-- Successful Mastodon or other browser authentication should return to VoiceLink instead of leaving users on the website.
-- Microphone permission prompts should appear only when needed and should not repeat after permission is granted.
-- Room and server browsing should keep users focused on the selected server instead of disconnecting or kicking them out after previewing a room.
-- The macOS server browser uses real tabs for Servers and Federation so the active browsing context is clearer.
-- Room messages, system messages, visible users, and admin room actions should be easier to find and verify in supported rooms.
-- Audio join behavior continues to be tuned for lower buffering and clearer microphone status reporting.
+- VoiceLink server directories can now include owner display metadata, owner groups, server display mode, domain, and searchable labels.
+- The iOS Servers screen groups visible servers by owner when that information is available or can be inferred from known VoiceLink and Devine Creations domains.
+- The macOS app uses clearer owner-first labels for the built-in VoiceLink and Devine Creations servers.
+- macOS server administration now includes controls for server owner display name and how the server should appear in server selection and federation search.
+- Linked server sync now prefers the API-provided app display name when present.
 
 Please test:
-- Sign in with Mastodon, Client Account, or another supported server method and confirm VoiceLink returns to the app after authentication.
-- Join the Community server, browse rooms, preview a room, and confirm the selected server remains active.
-- In a room, confirm users, room messages, system messages, and available admin actions appear where expected for the account role.
-- Confirm microphone permission is not requested repeatedly after it has already been granted.
-- Confirm room audio starts without repeated system-message chatter and report any buffering, clipping, or delayed microphone status.
+- Open Servers on iOS and confirm VoiceLink servers appear under VoiceLink and Devine Creations servers appear under Devine Creations.
+- Search by owner name, server display name, or domain and confirm the expected servers remain visible.
+- On macOS, open server administration for a server you manage and confirm the owner display name and server list display controls are present.
+- Change the display mode on a test server, save, refresh the server list, and confirm the API/client label reflects the selected display style.
+- Confirm existing room browsing, preview, join, user list, messages, and microphone status still work after the server list changes.
