@@ -162,6 +162,12 @@ Download the latest release for your platform:
 - **Installation**: Extract ZIP, place `VoiceLink.app` in `/Applications`, launch.
 - **Recovery controls in app**: Use `Audio` menu or Settings -> Audio to refresh devices or restart macOS audio services if device lists come up empty after reboot or route changes.
 
+### Server Directory Display
+
+VoiceLink clients group server selection by owner. Each owner heading shows the number of servers currently listed for that owner, for example `VoiceLink (2 servers)` or `Devine Creations (2 servers)`.
+
+Server owners can configure the owner display name, public server display name, and display mode from the server administration settings. The server API exposes this metadata through discovery so macOS, iOS, federation search, and public directory views use the same owner grouping and searchable labels.
+
 #### 🪟 **Windows**
 - Windows desktop is currently not released for production users in this channel.
 

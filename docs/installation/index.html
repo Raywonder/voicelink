@@ -524,12 +524,17 @@ npm start
                     <strong>Recommended owner setup order:</strong> Configure the server first, then create or link the owner's VoiceLink and client portal accounts. This lets the installer connect back to the main API, register the server, and attach the correct shared license to both the owned server and the owner's desktop client.
                 </div>
 
+                <div class="note-box">
+                    <strong>Server directory display:</strong> VoiceLink clients group servers by owner. Set the server owner display name, public display name, and display mode in the administrative settings before advertising the server. The API exposes those values to desktop, iOS, federation search, and public discovery, and each owner heading shows how many servers that owner currently runs.
+                </div>
+
                 <h3>Recommended First-Time Server Owner Flow</h3>
                 <ol class="steps-list">
                     <li>Use <strong>Deploy or Set Up New Server</strong> from the desktop client or server admin flow.</li>
                     <li>Choose whether the install should live on a subdomain, in a side-by-side app directory, or at site root only if you explicitly want full replacement.</li>
                     <li>Create or link the client portal account so billing, licensing, owned domains, and support details all stay tied to the same owner identity.</li>
                     <li>Let VoiceLink link supported identity sources such as VoiceLink sign-in, WHMCS account, cPanel user, owned domain, or <code>/home/&lt;user&gt;</code> install path.</li>
+                    <li>Set the server owner display name. For example, use <strong>VoiceLink</strong> for hosted <code>voicelinkapp.app</code> and <code>voicelink.dev</code> servers, or <strong>Devine Creations</strong> for <code>devine-creations.com</code> and <code>devinecreations.net</code> servers.</li>
                     <li>For WHMCS installs such as <code>/home/devinecr/public_html</code>, keep the billing portal in place and let VoiceLink integrate through addon, template, and client/admin bridge paths instead of replacing the site root.</li>
                     <li>For cPanel-backed installs, let VoiceLink use side-by-side app paths and file-manager friendly shared folders so server file sharing, backups, and uploads can still be managed from the hosting account.</li>
                     <li>Confirm that Main, Community, and the new owned server all appear in the desktop app once licensing finishes syncing.</li>

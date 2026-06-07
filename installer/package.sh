@@ -24,6 +24,12 @@ mkdir -p "$OUTPUT_DIR"
 echo "Copying source files..."
 cp -r "$SOURCE_DIR/server" "$BUILD_DIR/$PACKAGE_NAME/"
 cp -r "$SOURCE_DIR/client" "$BUILD_DIR/$PACKAGE_NAME/"
+if [ -d "$SOURCE_DIR/source/server" ]; then
+    cp -r "$SOURCE_DIR/source/server/." "$BUILD_DIR/$PACKAGE_NAME/server/"
+fi
+if [ -d "$SOURCE_DIR/source/client" ]; then
+    cp -r "$SOURCE_DIR/source/client/." "$BUILD_DIR/$PACKAGE_NAME/client/"
+fi
 cp -r "$SOURCE_DIR/source/assets" "$BUILD_DIR/$PACKAGE_NAME/assets" 2>/dev/null || mkdir -p "$BUILD_DIR/$PACKAGE_NAME/assets"
 cp "$SOURCE_DIR/package.json" "$BUILD_DIR/$PACKAGE_NAME/"
 cp "$SOURCE_DIR/package-lock.json" "$BUILD_DIR/$PACKAGE_NAME/" 2>/dev/null || true
