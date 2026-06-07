@@ -849,6 +849,99 @@ class VoiceLinkLocalServer {
         return 'voicelink.local';
     }
 
+    getConfiguredServerOwnerDisplayConfig(source = null) {
+        const config = deployConfig.getConfig() || {};
+        const serverConfig = source || config.server || {};
+        const ownershipConfig = config.ownership || {};
+        const domain = String(
+            serverConfig.domain
+            || serverConfig.publicDomain
+            || this.getConfiguredServerHostname()
+            || ''
+        ).trim();
+        const accountOwner = String(
+            serverConfig.accountOwner
+            || ownershipConfig.accountOwner
+            || ownershipConfig.linkedVoiceLinkAccount
+            || process.env.VOICELINK_ACCOUNT_OWNER
+            || ''
+        ).trim();
+        const rawOwner = String(
+            serverConfig.ownerDisplayName
+            || serverConfig.serverOwnerDisplayName
+            || ownershipConfig.ownerDisplayName
+            || ownershipConfig.linkedServerOwner
+            || ownershipConfig.owner
+            || serverConfig.owner
+            || accountOwner
+            || ''
+        ).trim();
+        const ownerDisplayName = this.normalizeServerOwnerDisplayName(rawOwner, domain, accountOwner);
+        const configuredName = String(serverConfig.name || this.getConfiguredServerName() || '').trim();
+        const displayName = String(serverConfig.displayName || configuredName || domain || 'VoiceLink Server').trim();
+        const requestedMode = String(serverConfig.serverDisplayMode || serverConfig.displayMode || '').trim();
+        const allowedModes = new Set(['displayName', 'domain', 'owner', 'ownerDomain', 'ownerThenDisplayName']);
+        const serverDisplayMode = allowedModes.has(requestedMode) ? requestedMode : 'ownerThenDisplayName';
+        const publicLabel = this.composeServerDisplayLabel({
+            displayName,
+            domain,
+            ownerDisplayName,
+            mode: serverDisplayMode
+        });
+
+        return {
+            ownerDisplayName,
+            serverOwnerDisplayName: ownerDisplayName,
+            serverOwnerGroup: ownerDisplayName || displayName || domain || 'VoiceLink',
+            serverDisplayMode,
+            serverDisplayName: publicLabel,
+            serverDisplay: {
+                mode: serverDisplayMode,
+                ownerDisplayName,
+                publicLabel
+            },
+            domain,
+            accountOwner: accountOwner || null
+        };
+    }
+
+    normalizeServerOwnerDisplayName(rawOwner = '', domain = '', accountOwner = '') {
+        const candidate = String(rawOwner || '').trim();
+        if (candidate && !['dom', 'devinecr', 'devinecr2', 'voicelinkapp'].includes(candidate.toLowerCase())) {
+            return candidate;
+        }
+        const haystack = `${candidate} ${accountOwner} ${domain}`.toLowerCase();
+        if (haystack.includes('devine')) return 'Devine Creations';
+        if (haystack.includes('voicelink')) return 'VoiceLink';
+        if (candidate) return candidate;
+        if (accountOwner) return accountOwner;
+        return domain ? domain.split('.').slice(-2).join('.') : 'VoiceLink';
+    }
+
+    composeServerDisplayLabel({ displayName = '', domain = '', ownerDisplayName = '', mode = 'ownerThenDisplayName' } = {}) {
+        const cleanName = String(displayName || '').trim();
+        const cleanDomain = String(domain || '').trim();
+        const cleanOwner = String(ownerDisplayName || '').trim();
+        switch (mode) {
+            case 'domain':
+                return cleanDomain || cleanName || cleanOwner || 'VoiceLink Server';
+            case 'owner':
+                return cleanOwner || cleanName || cleanDomain || 'VoiceLink Server';
+            case 'ownerDomain':
+                return [cleanOwner, cleanDomain].filter(Boolean).join(' - ') || cleanName || 'VoiceLink Server';
+            case 'displayName':
+                return cleanName || cleanDomain || cleanOwner || 'VoiceLink Server';
+            case 'ownerThenDisplayName':
+            default:
+                if (cleanOwner && cleanName && cleanName.toLowerCase() !== cleanOwner.toLowerCase()) {
+                    return cleanDomain
+                        ? `${cleanOwner} - ${cleanName} (${cleanDomain})`
+                        : `${cleanOwner} - ${cleanName}`;
+                }
+                return cleanName || cleanDomain || cleanOwner || 'VoiceLink Server';
+        }
+    }
+
     getConfiguredServiceIdentifier() {
         return String(
             process.env.VOICELINK_SERVICE_ID
@@ -15716,9 +15809,15 @@ class VoiceLinkLocalServer {
             const configuredServerName = String(config.server?.name || '').trim();
             const configuredDisplayName = String(config.server?.displayName || configuredServerName || '').trim();
             const configuredPublicUrl = String(config.server?.publicUrl || '').trim() || null;
+            const ownerDisplay = this.getConfiguredServerOwnerDisplayConfig(config.server || {});
             const flattened = {
                 serverName: configuredServerName || configuredDisplayName || 'VoiceLink',
                 displayName: configuredDisplayName || configuredServerName || 'VoiceLink',
+                serverDisplayName: ownerDisplay.serverDisplayName,
+                serverOwnerDisplayName: ownerDisplay.serverOwnerDisplayName,
+                serverOwnerGroup: ownerDisplay.serverOwnerGroup,
+                serverDisplayMode: ownerDisplay.serverDisplayMode,
+                serverDisplay: ownerDisplay.serverDisplay,
                 publicUrl: configuredPublicUrl,
                 serverDescription: config.server?.description || config.server?.tagline || '',
                 maxUsers: Number(config.server?.maxUsers || config.rooms?.maxUsers || 500),
@@ -15783,6 +15882,9 @@ class VoiceLinkLocalServer {
                     typeof updates.serverName === 'string'
                     || typeof updates.displayName === 'string'
                     || typeof updates.serverDisplayName === 'string'
+                    || typeof updates.serverDisplayMode === 'string'
+                    || typeof updates.serverOwnerDisplayName === 'string'
+                    || (updates.serverDisplay && typeof updates.serverDisplay === 'object')
                     || typeof updates.publicUrl === 'string'
                     || typeof updates.motd === 'string'
                     || (updates.motdSettings && typeof updates.motdSettings === 'object')
@@ -15826,9 +15928,20 @@ class VoiceLinkLocalServer {
                     const nextServerName = typeof updates.serverName === 'string'
                         ? (updates.serverName.trim() || existingServer.name || 'VoiceLink')
                         : (existingServer.name || 'VoiceLink');
+                    const requestedServerDisplay = updates.serverDisplay && typeof updates.serverDisplay === 'object'
+                        ? updates.serverDisplay
+                        : {};
+                    const requestedDisplayMode = typeof updates.serverDisplayMode === 'string'
+                        ? updates.serverDisplayMode.trim()
+                        : (typeof requestedServerDisplay.mode === 'string' ? requestedServerDisplay.mode.trim() : '');
+                    const requestedOwnerDisplayName = typeof updates.serverOwnerDisplayName === 'string'
+                        ? updates.serverOwnerDisplayName.trim()
+                        : (typeof requestedServerDisplay.ownerDisplayName === 'string' ? requestedServerDisplay.ownerDisplayName.trim() : '');
                     deployConfig.updateSection('server', {
                         name: nextServerName,
                         displayName: requestedDisplayName || existingServer.displayName || nextServerName,
+                        serverDisplayMode: requestedDisplayMode || existingServer.serverDisplayMode || existingServer.displayMode || 'ownerThenDisplayName',
+                        ownerDisplayName: requestedOwnerDisplayName || existingServer.ownerDisplayName || existingServer.serverOwnerDisplayName || '',
                         description: updates.serverDescription || '',
                         welcomeMessage: updates.welcomeMessage || null,
                         lobbyWelcomeMessage: typeof updates.lobbyWelcomeMessage === 'string'
@@ -23244,16 +23357,43 @@ class VoiceLinkLocalServer {
                 ).trim();
                 const accountOwner = String(server.accountOwner || server.linkedVoiceLinkAccount || server.clientAccount || '').trim();
                 const explicitName = String(server.displayName || server.directoryName || '').trim();
-                const fromPart = owner ? ` from ${owner}` : '';
-                const onPart = domain ? ` on ${domain}` : '';
-                const displayName = explicitName || `${displayBaseName}${fromPart}${onPart}`.trim();
+                const ownerDisplayName = this.normalizeServerOwnerDisplayName(
+                    server.ownerDisplayName || server.serverOwnerDisplayName || owner,
+                    domain,
+                    accountOwner
+                );
+                const requestedMode = String(server.serverDisplayMode || server.displayMode || server.serverDisplay?.mode || '').trim();
+                const displayMode = new Set(['displayName', 'domain', 'owner', 'ownerDomain', 'ownerThenDisplayName']).has(requestedMode)
+                    ? requestedMode
+                    : 'ownerThenDisplayName';
+                const publicDisplayName = this.composeServerDisplayLabel({
+                    displayName: explicitName || displayBaseName,
+                    domain,
+                    ownerDisplayName,
+                    mode: displayMode
+                });
+                const displayName = publicDisplayName || explicitName || displayBaseName || domain || url;
+                const searchText = [
+                    displayName,
+                    explicitName,
+                    displayBaseName,
+                    domain,
+                    ownerDisplayName,
+                    owner,
+                    accountOwner,
+                    ...(Array.isArray(server.aliases) ? server.aliases : [])
+                ].filter(Boolean).join(' ');
 
                 return {
                     configuredName,
                     displayName,
                     domain,
                     owner: owner || null,
-                    accountOwner: accountOwner || null
+                    accountOwner: accountOwner || null,
+                    ownerDisplayName,
+                    serverOwnerGroup: ownerDisplayName || owner || accountOwner || domain || displayName,
+                    displayMode,
+                    searchText
                 };
             };
 
@@ -23275,6 +23415,12 @@ class VoiceLinkLocalServer {
                     displayName: identity.displayName,
                     domain: identity.domain || null,
                     owner: identity.owner,
+                    serverOwnerDisplayName: identity.ownerDisplayName,
+                    ownerDisplayName: identity.ownerDisplayName,
+                    serverOwnerGroup: identity.serverOwnerGroup,
+                    serverDisplayMode: identity.displayMode,
+                    appDisplayName: identity.displayName,
+                    searchText: identity.searchText,
                     accountOwner: identity.accountOwner,
                     linkedServerOwner: server.linkedServerOwner || null,
                     linkedVoiceLinkAccount: server.linkedVoiceLinkAccount || null,
@@ -23345,7 +23491,32 @@ class VoiceLinkLocalServer {
                 return new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0);
             });
 
-            res.json({ servers, count: servers.length });
+            const ownerGroups = Array.from(servers.reduce((groups, server) => {
+                const key = String(server.serverOwnerGroup || server.serverOwnerDisplayName || server.owner || server.accountOwner || 'Other Servers').trim() || 'Other Servers';
+                if (!groups.has(key)) {
+                    groups.set(key, {
+                        id: key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'servers',
+                        displayName: key,
+                        serverCount: 0,
+                        domains: [],
+                        servers: []
+                    });
+                }
+                const group = groups.get(key);
+                group.serverCount += 1;
+                if (server.domain && !group.domains.includes(server.domain)) {
+                    group.domains.push(server.domain);
+                }
+                group.servers.push({
+                    url: server.url,
+                    apiUrl: server.apiUrl,
+                    displayName: server.displayName,
+                    domain: server.domain
+                });
+                return groups;
+            }, new Map()).values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+            res.json({ servers, ownerGroups, count: servers.length });
         });
 
         // ============================================

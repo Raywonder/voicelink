@@ -3122,6 +3122,10 @@ extension Notification.Name {
 
 struct ServerConfig: Codable {
     var serverName: String
+    var serverDisplayName: String?
+    var serverOwnerDisplayName: String
+    var serverOwnerGroup: String?
+    var serverDisplayMode: String
     var serverDescription: String
     var maxUsers: Int
     var maxRooms: Int
@@ -3148,6 +3152,10 @@ struct ServerConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case serverName
+        case serverDisplayName
+        case serverOwnerDisplayName
+        case serverOwnerGroup
+        case serverDisplayMode
         case serverDescription
         case maxUsers
         case maxRooms
@@ -3175,6 +3183,10 @@ struct ServerConfig: Codable {
 
     init(
         serverName: String = "VoiceLink",
+        serverDisplayName: String? = nil,
+        serverOwnerDisplayName: String = "",
+        serverOwnerGroup: String? = nil,
+        serverDisplayMode: String = "ownerThenDisplayName",
         serverDescription: String = "",
         maxUsers: Int = 500,
         maxRooms: Int = 100,
@@ -3201,6 +3213,10 @@ struct ServerConfig: Codable {
         sslManager: ServerSSLManagerConfig? = nil
     ) {
         self.serverName = serverName
+        self.serverDisplayName = serverDisplayName
+        self.serverOwnerDisplayName = serverOwnerDisplayName
+        self.serverOwnerGroup = serverOwnerGroup
+        self.serverDisplayMode = serverDisplayMode
         self.serverDescription = serverDescription
         self.maxUsers = maxUsers
         self.maxRooms = maxRooms
@@ -3229,6 +3245,10 @@ struct ServerConfig: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverName = try container.decodeIfPresent(String.self, forKey: .serverName) ?? "VoiceLink"
+        serverDisplayName = try container.decodeIfPresent(String.self, forKey: .serverDisplayName)
+        serverOwnerDisplayName = try container.decodeIfPresent(String.self, forKey: .serverOwnerDisplayName) ?? ""
+        serverOwnerGroup = try container.decodeIfPresent(String.self, forKey: .serverOwnerGroup)
+        serverDisplayMode = try container.decodeIfPresent(String.self, forKey: .serverDisplayMode) ?? "ownerThenDisplayName"
         serverDescription = try container.decodeIfPresent(String.self, forKey: .serverDescription) ?? ""
         maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 500
         maxRooms = try container.decodeIfPresent(Int.self, forKey: .maxRooms) ?? 100

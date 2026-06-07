@@ -1455,6 +1455,7 @@ private struct HomeTab: View {
         guard !query.isEmpty else { return summaries }
         return summaries.filter { server in
             server.name.lowercased().contains(query)
+            || server.ownerGroup.lowercased().contains(query)
             || server.description.lowercased().contains(query)
             || server.baseURL.lowercased().contains(query)
             || server.rooms.contains(where: { room in
@@ -1465,6 +1466,15 @@ private struct HomeTab: View {
                 || room.serverSource.lowercased().contains(query)
             })
         }
+    }
+
+    private var filteredServerSummaryGroups: [(owner: String, servers: [HomeServerSummary])] {
+        let grouped = Dictionary(grouping: filteredServerSummaries) { summary in
+            summary.ownerGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Other Servers" : summary.ownerGroup
+        }
+        return grouped
+            .map { (owner: $0.key, servers: $0.value.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) }
+            .sorted { $0.owner.localizedCaseInsensitiveCompare($1.owner) == .orderedAscending }
     }
 
     private var groupedServerSummaries: [HomeServerSummary] {
@@ -1487,6 +1497,7 @@ private struct HomeTab: View {
             return HomeServerSummary(
                 id: key,
                 name: displayServerName(room: first, fallbackBase: resolvedBase),
+                ownerGroup: displayServerOwnerGroup(room: first, fallbackBase: resolvedBase),
                 description: first.serverDescription.trimmingCharacters(in: .whitespacesAndNewlines),
                 baseURL: resolvedBase,
                 roomCount: sortedRooms.count,
@@ -1497,7 +1508,10 @@ private struct HomeTab: View {
             )
         }
         .sorted { lhs, rhs in
-            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            if lhs.ownerGroup != rhs.ownerGroup {
+                return lhs.ownerGroup.localizedCaseInsensitiveCompare(rhs.ownerGroup) == .orderedAscending
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
     }
 
@@ -1597,8 +1611,12 @@ private struct HomeTab: View {
                         Text("No servers found yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(filteredServerSummaries) { server in
-                            Button {
+                        ForEach(filteredServerSummaryGroups, id: \.owner) { group in
+                            Text(group.owner)
+                                .font(.headline)
+                                .accessibilityAddTraits(.isHeader)
+                                ForEach(group.servers) { server in
+                                    Button {
                                 activeServer = server
                             } label: {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -1617,8 +1635,10 @@ private struct HomeTab: View {
                                 .padding(.vertical, 4)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("\(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
+                            .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
                             .accessibilityHint("Double tap to browse rooms on this server.")
+                        }
+                            }
                         }
                     }
                 }
@@ -1964,6 +1984,7 @@ private struct RoomRow: View {
 private struct HomeServerSummary: Identifiable, Hashable {
     let id: String
     let name: String
+    let ownerGroup: String
     let description: String
     let baseURL: String
     let roomCount: Int
@@ -4502,7 +4523,10 @@ private func fetchVisibleFederationBases(preferredBase: String) async -> [String
                         if !normalized.isEmpty, !discovered.contains(normalized) {
                             discovered.append(normalized)
                         }
-                        if let name = server["name"] as? String, !name.isEmpty {
+                        let displayName = (server["appDisplayName"] as? String)
+                            ?? (server["displayName"] as? String)
+                            ?? (server["name"] as? String)
+                        if let name = displayName, !name.isEmpty {
                             cacheServerDisplayName(name, forBaseURL: normalized, publicURL: server["siteUrl"] as? String)
                         }
                     }
@@ -4580,6 +4604,7 @@ private let serverDisplayNameDefaultsKey = "voicelink.serverDisplayNameMap"
 
 private struct ConfiguredServerPresentation {
     let name: String
+    let ownerGroup: String
     let domain: String
     let description: String
 }
@@ -4595,27 +4620,31 @@ private func configuredServerPresentation(baseURL: String) -> ConfiguredServerPr
     switch host {
     case "voicelinkapp.app", "www.voicelinkapp.app", "64.20.46.178":
         return ConfiguredServerPresentation(
-            name: "VoiceLink Main",
+            name: "VoiceLink - Main (voicelinkapp.app)",
+            ownerGroup: "VoiceLink",
             domain: "voicelinkapp.app",
             description: "Official VoiceLink server."
         )
     case "community.voicelinkapp.app", "www.community.voicelinkapp.app", "64.20.46.179":
         return ConfiguredServerPresentation(
-            name: "VoiceLink Community",
+            name: "VoiceLink - Community (community.voicelinkapp.app)",
+            ownerGroup: "VoiceLink",
             domain: "community.voicelinkapp.app",
             description: "Community server for rooms, testing, and federation."
         )
     case "devine-creations.com", "www.devine-creations.com":
         guard path == "voicelink" || path.isEmpty else { return nil }
         return ConfiguredServerPresentation(
-            name: "DevineCreations VoiceLink from DevineCreations on devine-creations.com",
+            name: "Devine Creations - devine-creations.com",
+            ownerGroup: "Devine Creations",
             domain: "devine-creations.com",
             description: "DevineCreations VoiceLink server for devine-creations.com."
         )
     case "devinecreations.net", "www.devinecreations.net":
         guard path == "voicelink" || path.isEmpty else { return nil }
         return ConfiguredServerPresentation(
-            name: "DevineCreations VoiceLink from DevineCreations on devinecreations.net",
+            name: "Devine Creations - devinecreations.net",
+            ownerGroup: "Devine Creations",
             domain: "devinecreations.net",
             description: "DevineCreations VoiceLink community server for devinecreations.net."
         )
@@ -4689,6 +4718,30 @@ private func displayServerName(baseURL: String) -> String {
         return cached
     }
     return fallbackServerLabel(baseURL: baseURL)
+}
+
+private func displayServerOwnerGroup(room: RoomSummary, fallbackBase: String) -> String {
+    let roomBase = room.serverApiBase.isEmpty ? fallbackBase : room.serverApiBase
+    if let configured = configuredServerPresentation(baseURL: roomBase) {
+        return configured.ownerGroup
+    }
+    let combined = [
+        room.serverTitle,
+        room.serverDomain,
+        room.serverSource,
+        roomBase
+    ].joined(separator: " ").lowercased()
+    if combined.contains("devine") {
+        return "Devine Creations"
+    }
+    if combined.contains("voicelink") {
+        return "VoiceLink"
+    }
+    if let host = URL(string: normalizeBaseURL(roomBase))?.host, !host.isEmpty, !isIPAddressValue(host) {
+        return host.split(separator: ".").suffix(2).joined(separator: ".")
+    }
+    let label = displayServerName(room: room, fallbackBase: fallbackBase)
+    return label.isEmpty ? "Other Servers" : label
 }
 
 private func displayOptionalDescription(_ rawDescription: String) -> String {

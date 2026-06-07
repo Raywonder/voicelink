@@ -499,6 +499,27 @@ struct AdminConfigSection: View {
                     set: { editedConfig = (editedConfig ?? config).with(serverName: $0) }
                 ))
 
+                ConfigTextField(label: "Server Owner Display Name", text: Binding(
+                    get: { editedConfig?.serverOwnerDisplayName ?? config.serverOwnerDisplayName },
+                    set: { editedConfig = (editedConfig ?? config).with(serverOwnerDisplayName: $0) }
+                ))
+
+                Picker("Server List Display", selection: Binding(
+                    get: { editedConfig?.serverDisplayMode ?? config.serverDisplayMode },
+                    set: { editedConfig = (editedConfig ?? config).with(serverDisplayMode: $0) }
+                )) {
+                    Text("Owner, name, and domain").tag("ownerThenDisplayName")
+                    Text("Display name only").tag("displayName")
+                    Text("Domain only").tag("domain")
+                    Text("Owner only").tag("owner")
+                    Text("Owner and domain").tag("ownerDomain")
+                }
+                .pickerStyle(.menu)
+
+                Text("This controls how this server appears in VoiceLink server selection, federation search, and owner-grouped server lists.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+
                 ConfigTextField(label: "Description", text: Binding(
                     get: { editedConfig?.serverDescription ?? config.serverDescription },
                     set: { editedConfig = (editedConfig ?? config).with(serverDescription: $0) }
@@ -3142,7 +3163,9 @@ struct ConfigToggle: View {
 
 // MARK: - ServerConfig Extensions
 extension ServerConfig {
-    func with(serverName: String? = nil, serverDescription: String? = nil, maxUsers: Int? = nil,
+    func with(serverName: String? = nil, serverDisplayName: String?? = nil, serverOwnerDisplayName: String? = nil,
+              serverOwnerGroup: String?? = nil, serverDisplayMode: String? = nil,
+              serverDescription: String? = nil, maxUsers: Int? = nil,
               maxRooms: Int? = nil, maxUsersPerRoom: Int? = nil, lobbyWelcomeMessage: String?? = nil, welcomeMessage: String?? = nil,
               motd: String?? = nil, motdSettings: MOTDSettings? = nil,
               registrationEnabled: Bool? = nil, requireAuth: Bool? = nil,
@@ -3156,6 +3179,10 @@ extension ServerConfig {
               sslManager: ServerSSLManagerConfig?? = nil) -> ServerConfig {
         ServerConfig(
             serverName: serverName ?? self.serverName,
+            serverDisplayName: serverDisplayName ?? self.serverDisplayName,
+            serverOwnerDisplayName: serverOwnerDisplayName ?? self.serverOwnerDisplayName,
+            serverOwnerGroup: serverOwnerGroup ?? self.serverOwnerGroup,
+            serverDisplayMode: serverDisplayMode ?? self.serverDisplayMode,
             serverDescription: serverDescription ?? self.serverDescription,
             maxUsers: maxUsers ?? self.maxUsers,
             maxRooms: maxRooms ?? self.maxRooms,

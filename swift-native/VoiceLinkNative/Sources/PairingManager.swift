@@ -577,7 +577,13 @@ class PairingManager: ObservableObject {
     }
 
     private func serverDisplayName(for install: [String: Any], fallbackURL: String) -> String {
-        let explicitName = String(install["name"] as? String ?? install["serverName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let explicitName = String(
+            install["appDisplayName"] as? String
+            ?? install["displayName"] as? String
+            ?? install["name"] as? String
+            ?? install["serverName"] as? String
+            ?? ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
         if !explicitName.isEmpty {
             return explicitName
         }
