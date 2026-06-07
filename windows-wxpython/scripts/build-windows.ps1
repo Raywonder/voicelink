@@ -2,7 +2,7 @@ param(
     [string]$Python = "",
     [string]$Configuration = "Release",
     [string]$Version = "0.1.0",
-    [string]$Build = "1",
+    [string]$Build = "4",
     [string]$OutputDir = "E:\Downloads\VoiceLinkWX"
 )
 
@@ -74,7 +74,7 @@ $manifest = [ordered]@{
     file_name = $zipName
     portable_url = "/downloads/voicelink/windows/$zipName"
     checksum_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-    release_notes = "VoiceLinkWX $Version.$Build keeps Windows on the wxPython client, adds Client Account and VoiceLink Account sign-in, validates saved sessions before use, discovers browser authentication providers from the server, and falls back to guest room browsing when allowed."
+    release_notes = "VoiceLinkWX $Version.$Build keeps Windows on the wxPython client, improves Client Account and VoiceLink Account sign-in, validates saved sessions before use, discovers browser authentication providers from the server, and falls back to guest room browsing when allowed."
 }
 $manifestPath = Join-Path $OutputDir "voicelink-wxpython-update.json"
 [System.IO.File]::WriteAllText(

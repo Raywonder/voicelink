@@ -1,11 +1,11 @@
-version: 1.0.0.46
+﻿version: 1.0.0.85
 files:
   - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
-    size: 370914559
+    sha512: k3SlmybJcBlTFIZd7XG6XgS9nesDN7MbMc7bes2cFACf+UsLO6dRtJqb82Zj0vL7+KRVPzJe0YhLwqw0Kx5rNQ==
+    size: 366204845
 path: VoiceLinkMacOS.zip
-sha512: 6bgOfN/rgNpsikPQBAQVdCilvOWsJmO7Fq6EBV9tfX/1JmG561pR3lVEyrGZxsnI/EljHvGTvGr8BiAqoHj3lg==
-buildNumber: 46
-releaseDate: "2026-05-08T20:42:45.000Z"
+sha512: k3SlmybJcBlTFIZd7XG6XgS9nesDN7MbMc7bes2cFACf+UsLO6dRtJqb82Zj0vL7+KRVPzJe0YhLwqw0Kx5rNQ==
+buildNumber: 85
+releaseDate: "2026-06-07T07:19:59.000Z"
 releaseNotes: >-
-  Build 46 includes the build 45 server browser and guest room-creation gating fixes, plus direct in-room server sign-in that returns users to the room and announces the signed-in account.
+  Build 85 updates VoiceLink macOS with the latest room browsing, authentication, admin, and audio/session stability fixes from the native desktop tree.

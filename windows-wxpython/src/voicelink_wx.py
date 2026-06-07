@@ -13,6 +13,7 @@ import wx
 
 
 APP_NAME = "VoiceLinkWX"
+APP_VERSION = "0.1.0.4"
 DEFAULT_SERVER = "https://voicelink.devinecreations.net"
 CONFIG_DIR = Path.home() / "AppData" / "Roaming" / "VoiceLinkWX"
 CONFIG_PATH = CONFIG_DIR / "settings.json"
@@ -62,7 +63,7 @@ class RoomRecord:
 class VoiceLinkApi:
     def __init__(self) -> None:
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": f"{APP_NAME}/0.1"})
+        self.session.headers.update({"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         self.base_url = DEFAULT_SERVER
         self.token = ""
 

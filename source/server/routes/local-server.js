@@ -1027,6 +1027,18 @@ class VoiceLinkLocalServer {
                 platform: 'macOS Intel',
                 url: 'https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg'
             },
+            windows_wx_setup: {
+                id: 'windows_wx_setup',
+                label: 'VoiceLink Windows wxPython Installer',
+                platform: 'Windows',
+                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-windows-setup.exe'
+            },
+            windows_wx_portable: {
+                id: 'windows_wx_portable',
+                label: 'VoiceLink Windows wxPython Portable ZIP',
+                platform: 'Windows',
+                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-win-x64-portable.zip'
+            },
             server_targz: {
                 id: 'server_targz',
                 label: 'VoiceLink Server Tarball',
