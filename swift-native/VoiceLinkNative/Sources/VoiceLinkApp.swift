@@ -2259,13 +2259,14 @@ struct MainMenuView: View {
     enum MainBrowserTab: String, CaseIterable, Identifiable {
         case servers = "Servers"
         case federatedRooms = "Federated Rooms"
+        case settings = "Settings"
         var id: String { rawValue }
     }
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var localDiscovery: LocalServerDiscovery
     @ObservedObject private var settingsManager = SettingsManager.shared
     @ObservedObject private var pairingManager = PairingManager.shared
-    @State private var selectedBrowserTab: MainBrowserTab = .federatedRooms
+    @State private var selectedBrowserTab: MainBrowserTab = .servers
     @State private var roomSortOption: RoomSortOption = .activeFirst
     @State private var roomLayoutOption: RoomLayoutOption = .list
     @State private var roomScopeFilter: RoomScopeFilter = .all
@@ -2722,7 +2723,7 @@ struct MainMenuView: View {
                 // Room List
             VStack(alignment: .leading, spacing: 15) {
                 HStack(alignment: .center, spacing: 12) {
-                    Text(selectedBrowserTab == .servers ? "Servers (\(federationServerEntries.count))" : "Federated Rooms (\(roomsForDisplay.count))")
+                    Text(selectedBrowserTab == .servers ? "Servers (\(federationServerEntries.count))" : (selectedBrowserTab == .federatedRooms ? "Federated Rooms (\(roomsForDisplay.count))" : "Settings"))
                         .font(.headline)
                         .foregroundColor(.white)
 
@@ -3008,9 +3009,15 @@ struct MainMenuView: View {
                         }
                     }
                     .tabItem {
-                        Label("Federation", systemImage: "globe")
+                        Label("Federated Rooms", systemImage: "globe")
                     }
                     .tag(MainBrowserTab.federatedRooms)
+
+                    SettingsView()
+                        .tabItem {
+                            Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+                        .tag(MainBrowserTab.settings)
                 }
                 .frame(maxHeight: 470)
                 .focusable()

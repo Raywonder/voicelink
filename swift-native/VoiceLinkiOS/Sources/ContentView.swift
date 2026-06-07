@@ -11,11 +11,22 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            ServersTab(serverURL: $serverURL, roomState: roomState, openProfile: { showProfile = true })
+            HomeTab(
+                serverURL: $serverURL,
+                roomState: roomState,
+                openProfile: { showProfile = true },
+                openServers: { selectedTab = .servers }
+            )
                 .tabItem {
                     Label("Servers", systemImage: "server.rack")
                 }
                 .tag(Tab.servers)
+
+            FederationTab(serverURL: $serverURL, roomState: roomState)
+                .tabItem {
+                    Label("Federated Rooms", systemImage: "globe")
+                }
+                .tag(Tab.federation)
 
             SettingsTab(roomState: roomState, openServers: { selectedTab = .servers })
                 .tabItem {
@@ -39,21 +50,8 @@ struct ContentView: View {
 
 private enum Tab {
     case servers
-    case settings
-}
-
-private enum ServerScreenTab: String, CaseIterable, Identifiable {
-    case servers
     case federation
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .servers: return "Servers"
-        case .federation: return "Federated Rooms"
-        }
-    }
+    case settings
 }
 
 struct IOSDirectMessageTarget: Identifiable, Hashable {
@@ -1372,47 +1370,6 @@ private struct ClientVisibilitySettings: Equatable {
         web: true,
         frontendOpen: true
     )
-}
-
-private struct ServersTab: View {
-    @AppStorage("voicelink.ios.serverScreenTab") private var storedTab = ServerScreenTab.federation.rawValue
-    @Binding var serverURL: String
-    @ObservedObject var roomState: IOSRoomMessagingState
-    let openProfile: () -> Void
-
-    private var selectedTabBinding: Binding<ServerScreenTab> {
-        Binding(
-            get: {
-                ServerScreenTab(rawValue: storedTab) ?? .servers
-            },
-            set: { storedTab = $0.rawValue }
-        )
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("Server Screen", selection: selectedTabBinding) {
-                ForEach(ServerScreenTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding([.horizontal, .top])
-            .accessibilityLabel("Server screen")
-
-            switch selectedTabBinding.wrappedValue {
-            case .servers:
-                HomeTab(
-                    serverURL: $serverURL,
-                    roomState: roomState,
-                    openProfile: openProfile,
-                    openServers: { storedTab = ServerScreenTab.federation.rawValue }
-                )
-            case .federation:
-                FederationTab(serverURL: $serverURL, roomState: roomState)
-            }
-        }
-    }
 }
 
 private struct HomeTab: View {

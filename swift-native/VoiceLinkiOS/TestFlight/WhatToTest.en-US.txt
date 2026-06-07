@@ -1,16 +1,18 @@
-Build 91 focuses on owner-button server browsing.
+Build 92 focuses on the new three-tab VoiceLink navigation.
 
 What changed:
-- Server owners now appear as buttons instead of always-open headings.
-- Each owner button shows how many servers that owner runs, such as VoiceLink (2 servers) or Devine Creations (2 servers).
-- Opening an owner button reveals that owner's servers. This keeps each platform owner's server set together and avoids mixing all servers into one long list.
-- Searching on iOS still exposes matching owner groups so search results are not hidden.
-- User, administrator, and governance docs now describe owner buttons and server-count behavior.
+- Servers is now tab one for server owner buttons, server selection, and search.
+- Federated Rooms is now tab two and shows rooms across available connected servers.
+- Settings is now tab three.
+- iOS no longer hides Federated Rooms inside the Servers screen segmented control.
+- macOS now starts on Servers by default, then offers Federated Rooms and Settings as separate tabs.
+- Server owner buttons still show how many servers each owner runs, such as VoiceLink (2 servers) or Devine Creations (2 servers).
 
 Please test:
-- Open Servers on iOS and confirm VoiceLink and Devine Creations appear as owner buttons with server counts.
-- Open VoiceLink and confirm its servers appear only after opening that owner button.
-- Open Devine Creations and confirm its servers appear only after opening that owner button.
-- On macOS, open the Servers tab and confirm the same owner-button behavior.
+- Open iOS and confirm the root tabs are Servers, Federated Rooms, and Settings in that order.
+- Open Servers and confirm VoiceLink and Devine Creations appear as owner buttons with server counts.
+- Open Federated Rooms and confirm the room list loads without changing the selected server unexpectedly.
+- Open Settings and confirm settings remain available as the third tab.
+- On macOS, confirm the same tab order: Servers, Federated Rooms, Settings.
 - Confirm selecting a server still switches to browsing that server's rooms.
 - Confirm existing room browsing, preview, join, user list, messages, and microphone status still work after the server browser change.
