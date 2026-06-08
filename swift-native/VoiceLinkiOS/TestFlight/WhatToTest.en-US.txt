@@ -1,21 +1,22 @@
-Build 93 focuses on audio stability and VoiceOver user actions.
+Build 94 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
 
 What changed:
-- iOS room audio relay now uses a smaller initial prebuffer and a larger packet queue to reduce join-time buffering while keeping playback stable.
-- VoiceOver actions on iOS people and bot rows are now based on what each row can actually do.
-- The current logged-in user row can still show monitoring and audio controls, but no longer exposes Whisper.
+- Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
+- VoiceOver actions for people and bot rows stay in the active room when showing profile details, direct messages, monitoring, whisper, or audio controls.
+- The user details sheet now shows room state, transmit state, mute/output state, speaking state, bot type, role, authentication provider, and device/client details when available.
+- The current signed-in user row still allows monitoring and audio controls, but does not expose Whisper.
 - Other people expose Whisper only when they have audio available.
 - Text-only bots expose text actions such as profile and direct message without audio controls.
-- Audio bots can expose both text actions and audio-related actions.
-- iOS room message rows now expose Reply and Direct Message actions to improve message handling with VoiceOver.
-- macOS user rows now mirror the same rule that Whisper is hidden for the current user, with explicit VoiceOver actions for direct message, audio controls, and local monitoring.
+- Audio-capable bots can expose both text and audio-related actions.
+- iOS room audio now uses a slightly larger room I/O buffer and a larger relay packet queue to reduce join-time buffering while keeping latency low.
 
 Please test:
 - Join a room on iOS with VoiceOver enabled.
 - Focus your own user row and confirm Monitoring or Audio Controls are available, but Whisper is not.
+- Use the View Profile action and confirm the user details sheet opens without leaving the room or disconnecting.
+- Open and close audio controls from your own row and another user's row and confirm the room remains active.
 - Focus another person with audio and confirm Whisper and audio actions are available.
 - Focus a text-only bot and confirm only text-related actions are offered.
 - Focus an audio-capable bot and confirm both text and audio actions are offered.
-- Send and receive room messages on iOS, then confirm message rows expose Reply and Direct Message actions.
-- Join a room and confirm audio starts with less buffering and no new distortion or clipping.
-- On macOS, confirm your own row does not offer Whisper and still provides local monitoring/audio actions.
+- Join a room and confirm audio starts with less buffering and no new distortion, clipping, or repeated join sounds.
+- Leave the details sheet, People in Room sheet, and audio controls and confirm room messages and users remain visible.
