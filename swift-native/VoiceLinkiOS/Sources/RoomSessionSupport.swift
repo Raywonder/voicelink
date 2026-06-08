@@ -56,6 +56,7 @@ struct RoomSessionView: View {
     @State private var expandedUserAudioControls: Set<String> = []
     @State private var showRoomMessages = false
     @State private var showDirectMessages = false
+    @State private var selectedProfileTarget: IOSDirectMessageTarget?
     @State private var whisperTarget: IOSDirectMessageTarget?
     @State private var monitorTarget: IOSDirectMessageTarget?
     @State private var replyTarget: IOSRoomMessageItem?
@@ -122,7 +123,14 @@ struct RoomSessionView: View {
     }
 
     private var isPresentingAuxiliarySheet: Bool {
-        showDetails || showControls || showPeople || showSettings || showRoomAdmin || showRoomMessages || showDirectMessages
+        showDetails
+            || showControls
+            || showPeople
+            || showSettings
+            || showRoomAdmin
+            || showRoomMessages
+            || showDirectMessages
+            || selectedProfileTarget != nil
     }
 
     var body: some View {
@@ -146,6 +154,9 @@ struct RoomSessionView: View {
             .sheet(isPresented: $showRoomAdmin, onDismiss: handleAuxiliaryInterfaceDismissed) { roomAdminSheet }
             .sheet(isPresented: $showRoomMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { roomMessagesSheet }
             .sheet(isPresented: $showDirectMessages, onDismiss: handleAuxiliaryInterfaceDismissed) { directMessagesSheet }
+            .sheet(item: $selectedProfileTarget, onDismiss: handleAuxiliaryInterfaceDismissed) { target in
+                userProfileSheet(for: target)
+            }
         }
         .onAppear {
             IOSAudioSessionManager.shared.activate(for: .room)
@@ -678,6 +689,89 @@ struct RoomSessionView: View {
         AdminTabView(serverURL: .constant(destination.baseURL))
     }
 
+    private func userProfileSheet(for target: IOSDirectMessageTarget) -> some View {
+        NavigationStack {
+            List {
+                Section("User") {
+                    LabeledContent("Name", value: target.name)
+                    LabeledContent("Identifier", value: target.id)
+                    if isCurrentRoomUser(target) {
+                        LabeledContent("Relation", value: "Current signed-in user")
+                    }
+                    if !target.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        LabeledContent("Role", value: target.role)
+                    }
+                    if !target.authProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        LabeledContent("Authentication", value: target.authProvider)
+                    }
+                }
+
+                Section("Room State") {
+                    LabeledContent("Audio", value: roomAudioStatusLabel(for: target))
+                    LabeledContent("Transmit", value: target.transmitEnabled ? "Allowed" : "Disabled")
+                    LabeledContent("Muted", value: target.isMuted ? "Yes" : "No")
+                    LabeledContent("Output Muted", value: target.isDeafened ? "Yes" : "No")
+                    LabeledContent("Speaking", value: target.isSpeaking ? "Yes" : "No")
+                    if target.isBot {
+                        LabeledContent("Bot Type", value: roomUserBotStatusLabel(for: target) ?? "Bot")
+                    }
+                    if let statusMessage = roomUserStatusMessage(for: target) {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !target.deviceName.isEmpty || !target.deviceType.isEmpty || !target.clientVersion.isEmpty {
+                    Section("Device") {
+                        if !target.deviceName.isEmpty {
+                            LabeledContent("Device", value: target.deviceName)
+                        }
+                        if !target.deviceType.isEmpty {
+                            LabeledContent("Type", value: target.deviceType)
+                        }
+                        if !target.clientVersion.isEmpty {
+                            LabeledContent("Client", value: target.clientVersion)
+                        }
+                    }
+                }
+
+                Section("Actions") {
+                    if canDirectMessageRoomUser(target) {
+                        Button("Direct Message") {
+                            selectedProfileTarget = nil
+                            openDirectMessages(with: target)
+                        }
+                    }
+                    if canMonitorRoomUser(target) {
+                        Button(monitorTarget?.id == target.id ? "Stop Monitoring" : "Start Monitoring") {
+                            toggleMonitorTarget(target)
+                        }
+                    }
+                    if canWhisperToRoomUser(target) {
+                        Button(whisperTarget?.id == target.id ? "Stop Whisper" : "Start Whisper") {
+                            toggleWhisperTarget(target)
+                        }
+                    }
+                    if canShowPerUserAudioControls(for: target) {
+                        Button(isShowingUserAudioControls(for: target) ? "Hide Audio Controls" : "Show Audio Controls") {
+                            toggleUserAudioControls(for: target)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(target.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        selectedProfileTarget = nil
+                    }
+                }
+            }
+        }
+    }
+
     private func roomUserRow(for target: IOSDirectMessageTarget, includeRoleBadges: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 12) {
@@ -887,11 +981,7 @@ struct RoomSessionView: View {
     private func openProfile(for target: IOSDirectMessageTarget) {
         roomState.selectedDirectTarget = target
         roomState.selectedProfileName = target.name
-        NotificationCenter.default.post(
-            name: .iosShowUserProfile,
-            object: nil,
-            userInfo: ["userId": target.id, "userName": target.name]
-        )
+        presentRoomInterface { selectedProfileTarget = target }
         IOSActionSoundPlayer.playConfirm()
     }
 
@@ -1308,9 +1398,9 @@ struct RoomSessionView: View {
     private func roomUserAccessibilityHint(for target: IOSDirectMessageTarget) -> String {
         let actions = roomUserAvailableActionNames(for: target)
         if actions.isEmpty {
-            return "Double tap to open this user's profile."
+            return "Double tap to show this user's details without leaving the room."
         }
-        return "Double tap to open this user's profile. Available actions: \(actions.joined(separator: ", "))."
+        return "Double tap to show this user's details without leaving the room. Available actions: \(actions.joined(separator: ", "))."
     }
 
     private func roomUserAvailableActionNames(for target: IOSDirectMessageTarget) -> [String] {

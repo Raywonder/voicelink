@@ -1116,8 +1116,8 @@ private final class IOSRoomAudioRelayPlayer {
     private var pendingBuffers: [AVAudioPCMBuffer] = []
     private var isPrimedForPlayback = false
     private var scheduledBufferCount = 0
-    private let initialPrebufferPacketCount = 5
-    private let maxPendingBufferCount = 40
+    private let initialPrebufferPacketCount = 6
+    private let maxPendingBufferCount = 60
 
     func startIfNeeded() {
         renderQueue.async { [weak self] in

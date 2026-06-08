@@ -147,7 +147,7 @@ final class IOSAudioSessionManager {
                     options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .allowAirPlay, .mixWithOthers]
                 )
                 try session.setPreferredSampleRate(48_000)
-                try session.setPreferredIOBufferDuration(0.015)
+                try session.setPreferredIOBufferDuration(0.02)
                 if session.maximumInputNumberOfChannels >= 2 {
                     try? session.setPreferredInputNumberOfChannels(2)
                 }
