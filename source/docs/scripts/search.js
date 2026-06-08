@@ -1,5 +1,5 @@
 /**
- * VoiceLink Local Documentation Search
+ * VoiceLink Documentation Search
  * Provides real-time search functionality across all documentation pages
  */
 
@@ -17,21 +17,21 @@ class DocumentationSearch {
                 title: 'Getting Started Guide',
                 url: 'getting-started.html',
                 category: 'Quick Start',
-                description: 'Complete guide to setting up and using VoiceLink Local for the first time',
+                description: 'Complete guide to setting up and using VoiceLink for the first time',
                 keywords: ['setup', 'installation', 'first time', 'beginner', 'start', 'download', 'install']
             },
             {
                 title: 'Server Installation',
                 url: 'server-installation.html',
                 category: 'Server Setup',
-                description: 'How to install and configure VoiceLink Local server on various platforms',
+                description: 'How to install and configure VoiceLink server on various platforms',
                 keywords: ['server', 'install', 'setup', 'linux', 'windows', 'mac', 'vps', 'dedicated', 'hosting']
             },
             {
                 title: 'Desktop Installation',
                 url: 'desktop-installation.html',
                 category: 'Installation',
-                description: 'Installing VoiceLink Local desktop applications',
+                description: 'Installing VoiceLink desktop applications',
                 keywords: ['desktop', 'app', 'install', 'download', 'portable', 'dmg', 'exe', 'appimage']
             },
 
@@ -213,7 +213,7 @@ class DocumentationSearch {
                 title: 'iOS Browser Support',
                 url: 'ios-browser.html',
                 category: 'Platform Support',
-                description: 'Using VoiceLink Local in Safari and Chrome on iOS',
+                description: 'Using VoiceLink in Safari and Chrome on iOS',
                 keywords: ['ios', 'safari', 'chrome', 'iphone', 'ipad', 'browser', 'mobile', 'touch']
             },
             {
@@ -233,11 +233,11 @@ class DocumentationSearch {
 
             // Accessibility
             {
-                title: 'Accessibility Features',
-                url: 'accessibility.html',
+                title: 'Using VoiceLink with VoiceOver',
+                url: 'voiceover-support.html',
                 category: 'Accessibility',
-                description: 'Screen readers, keyboard navigation, and VoiceOver support',
-                keywords: ['accessibility', 'screen reader', 'voiceover', 'keyboard', 'navigation', 'aria', 'disability']
+                description: 'Task-first guidance for VoiceOver, keyboard navigation, room review, and audio controls',
+                keywords: ['accessibility', 'screen reader', 'voiceover', 'keyboard', 'navigation', 'audio controls', 'system messages', 'room users']
             },
 
             // Troubleshooting
@@ -275,7 +275,7 @@ class DocumentationSearch {
                 title: 'Frequently Asked Questions',
                 url: 'faq.html',
                 category: 'Support',
-                description: 'Common questions and answers about VoiceLink Local',
+                description: 'Common questions and answers about VoiceLink',
                 keywords: ['faq', 'questions', 'answers', 'common', 'help', 'frequently asked']
             },
             {

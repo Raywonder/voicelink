@@ -2,6 +2,7 @@ import Foundation
 
 final class LocalAPIBootstrap {
     static let shared = LocalAPIBootstrap()
+    private let localPorts = [3010, 3011, 3012]
 
     private let queue = DispatchQueue(label: "voicelink.local-api-bootstrap")
     private var launchProcess: Process?
@@ -34,25 +35,27 @@ final class LocalAPIBootstrap {
     }
 
     private func probeLocalAPI() -> Bool {
-        for path in ["/api/health", "/health"] {
-            guard let url = URL(string: "http://127.0.0.1:3010\(path)") else { continue }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 1.5
-            request.httpMethod = "GET"
+        for port in localPorts {
+            for path in ["/api/health", "/health"] {
+                guard let url = URL(string: "http://127.0.0.1:\(port)\(path)") else { continue }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 1.5
+                request.httpMethod = "GET"
 
-            let sema = DispatchSemaphore(value: 0)
-            var healthy = false
+                let sema = DispatchSemaphore(value: 0)
+                var healthy = false
 
-            URLSession.shared.dataTask(with: request) { _, response, _ in
-                if let http = response as? HTTPURLResponse, (200..<500).contains(http.statusCode) {
-                    healthy = true
+                URLSession.shared.dataTask(with: request) { _, response, _ in
+                    if let http = response as? HTTPURLResponse, (200..<500).contains(http.statusCode) {
+                        healthy = true
+                    }
+                    sema.signal()
+                }.resume()
+
+                _ = sema.wait(timeout: .now() + 2)
+                if healthy {
+                    return true
                 }
-                sema.signal()
-            }.resume()
-
-            _ = sema.wait(timeout: .now() + 2)
-            if healthy {
-                return true
             }
         }
         return false

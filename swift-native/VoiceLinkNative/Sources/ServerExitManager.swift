@@ -1358,7 +1358,7 @@ class RemoteServerControl: ObservableObject {
             }
         }
 
-        group.notify(queue: .main) {
+        group.notify(queue: DispatchQueue.main) {
             completion(foundIP)
         }
     }
@@ -1496,7 +1496,7 @@ class RemoteServerControl: ObservableObject {
         bodyWithId["commandId"] = commandId
 
         // Set up response listener
-        let observer = NotificationCenter.default.addObserver(forName: .openLinkCommandResponse, object: nil, queue: .main) { [weak self] notification in
+        let observer = NotificationCenter.default.addObserver(forName: .openLinkCommandResponse, object: nil, queue: nil) { [weak self] notification in
             if let response = notification.object as? [String: Any],
                response["commandId"] as? String == commandId {
                 self?.removePendingCommandObserver(commandId)

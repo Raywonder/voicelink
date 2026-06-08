@@ -248,9 +248,10 @@ class iOSAudioProfileManager {
         const config = {
             sampleRate: 48000,
             channelCount: 2, // Stereo
-            echoCancellation: !this.headphonesConnected,
-            noiseSuppression: true,
-            autoGainControl: true,
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            originalAudio: true,
             latencyHint: 'interactive'
         };
 
@@ -269,9 +270,9 @@ class iOSAudioProfileManager {
     getMediaConstraints() {
         return {
             audio: {
-                echoCancellation: !this.headphonesConnected,
-                noiseSuppression: true,
-                autoGainControl: true,
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
                 channelCount: { ideal: 2 }, // Request stereo
                 sampleRate: { ideal: 48000 },
                 sampleSize: { ideal: 16 }

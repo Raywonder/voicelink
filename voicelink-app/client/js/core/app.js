@@ -1904,14 +1904,15 @@ class VoiceLinkApp {
             : 'room-description no-description';
 
         // User count message for accessibility
-        const userCountText = roomData.users === 0
+        const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+        const userCountText = liveUserCount === 0
             ? 'Empty'
-            : roomData.users === 1
+            : liveUserCount === 1
                 ? '1 user'
-                : `${roomData.users} users`;
+                : `${liveUserCount} users`;
 
         // Show peek button only for rooms with active users
-        const showPeekButton = roomData.users > 0;
+        const showPeekButton = liveUserCount > 0;
         const peekButton = showPeekButton ? `
             <button class="peek-room-btn"
                     onclick="event.stopPropagation(); app.peekIntoRoom('${roomData.id}', '${roomData.name}')"
@@ -2252,8 +2253,9 @@ class VoiceLinkApp {
                 roomData.description || 'No description for this room';
 
             // User count
-            const userText = roomData.users === 0 ? 'Empty' :
-                roomData.users === 1 ? '1 user' : `${roomData.users} users`;
+            const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+            const userText = liveUserCount === 0 ? 'Empty' :
+                liveUserCount === 1 ? '1 user' : `${liveUserCount} users`;
             document.getElementById('join-room-users').textContent = `${userText} / ${roomData.maxUsers} max`;
 
             // Privacy label
@@ -4770,7 +4772,7 @@ class VoiceLinkApp {
                     rooms.forEach(room => {
                         const item = this.createAdminListItem(
                             room.name,
-                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
+                            'Users: ' + (room.userCount ?? room.users ?? 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
                             [
                                 { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
                                 { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }

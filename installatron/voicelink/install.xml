@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <id>voicelink</id>
+  <name>VoiceLink Server</name>
+  <version>0.1.0</version>
+  <category>communications</category>
+  <type>php</type>
+  <description>VoiceLink browser UI and server bridge installer.</description>
+</application>

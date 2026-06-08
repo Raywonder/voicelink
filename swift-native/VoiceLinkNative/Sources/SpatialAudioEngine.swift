@@ -13,6 +13,11 @@ class SpatialAudioEngine: ObservableObject {
     private var environmentNode: AVAudioEnvironmentNode?
     private var playerNodes: [String: AVAudioPlayerNode] = [:]
     private var spatialMixers: [String: AVAudioMixerNode] = [:]
+    private var pendingRelayBuffers: [String: [AVAudioPCMBuffer]] = [:]
+    private var primedRelayUsers: Set<String> = []
+    private let initialRelayPrebufferPacketCount = 5
+    private let maxRelayPendingBufferCount = 18
+    private var observers: [NSObjectProtocol] = []
 
     // User positions in 3D space
     @Published var userPositions: [String: SIMD3<Float>] = [:]
@@ -108,6 +113,11 @@ class SpatialAudioEngine: ObservableObject {
     init() {
         setupAudioEngine()
         loadHRTFDatabase()
+        setupObservers()
+    }
+
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: - Setup
@@ -141,6 +151,7 @@ class SpatialAudioEngine: ObservableObject {
         // Attach to engine
         engine.attach(envNode)
         engine.connect(envNode, to: engine.mainMixerNode, format: nil)
+        engine.mainMixerNode.outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
 
         print("[SpatialAudio] Engine configured with HRTF")
     }
@@ -151,6 +162,7 @@ class SpatialAudioEngine: ObservableObject {
         }
 
         if !engine.isRunning {
+            refreshOutputMix()
             try engine.start()
             print("[SpatialAudio] Engine started")
         }
@@ -189,6 +201,7 @@ class SpatialAudioEngine: ObservableObject {
 
             playerNodes[userId] = playerNode
             spatialMixers[userId] = mixerNode
+            applyVolume(for: userId)
 
             // Set default position
             if userPositions[userId] == nil {
@@ -216,6 +229,8 @@ class SpatialAudioEngine: ObservableObject {
             engine.detach(playerNode)
             playerNodes.removeValue(forKey: userId)
         }
+        pendingRelayBuffers.removeValue(forKey: userId)
+        primedRelayUsers.remove(userId)
 
         if let mixerNode = spatialMixers[userId] {
             engine.detach(mixerNode)
@@ -228,8 +243,9 @@ class SpatialAudioEngine: ObservableObject {
     // MARK: - Audio Data Reception
 
     /// Receive and play audio data from a remote user via server relay
-    func receiveAudioData(from userId: String, data: Data, timestamp: Double, sampleRate: Double) {
+    func receiveAudioData(from userId: String, username: String, data: Data, timestamp: Double, sampleRate: Double, channels: Int? = nil) {
         guard let engine = audioEngine, isEnabled else { return }
+        let channelCount = AVAudioChannelCount(max(1, min(channels ?? 1, 2)))
 
         // Ensure player node exists for this user
         if playerNodes[userId] == nil {
@@ -239,7 +255,7 @@ class SpatialAudioEngine: ObservableObject {
             engine.attach(playerNode)
             engine.attach(mixerNode)
 
-            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount)
             if let fmt = format {
                 engine.connect(playerNode, to: mixerNode, format: fmt)
                 engine.connect(mixerNode, to: environmentNode ?? engine.mainMixerNode, format: fmt)
@@ -255,27 +271,93 @@ class SpatialAudioEngine: ObservableObject {
             }
 
             playerNode.play()
+            pendingRelayBuffers[userId] = []
+            primedRelayUsers.remove(userId)
             print("[SpatialAudio] Created player node for user: \(userId)")
         }
 
         // Convert Data to AVAudioPCMBuffer
-        let frameCount = UInt32(data.count) / 4 // 4 bytes per Float32 sample
+        let sampleCount = data.count / MemoryLayout<Float>.size
+        let frameCount = UInt32(sampleCount / max(1, Int(channelCount)))
         guard frameCount > 0 else { return }
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else { return }
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
 
         // Copy audio data into buffer
         data.withUnsafeBytes { ptr in
-            if let baseAddress = ptr.baseAddress, let channelData = buffer.floatChannelData {
-                memcpy(channelData[0], baseAddress, min(data.count, Int(frameCount) * 4))
-                buffer.frameLength = AVAudioFrameCount(frameCount)
+            guard let source = ptr.bindMemory(to: Float.self).baseAddress,
+                  let channelData = buffer.floatChannelData else { return }
+            let frames = Int(frameCount)
+            if channelCount == 1 {
+                memcpy(channelData[0], source, min(data.count, frames * MemoryLayout<Float>.size))
+            } else {
+                for frame in 0..<frames {
+                    for channelIndex in 0..<Int(channelCount) {
+                        channelData[channelIndex][frame] = source[frame * Int(channelCount) + channelIndex]
+                    }
+                }
             }
+            buffer.frameLength = AVAudioFrameCount(frameCount)
         }
 
-        // Schedule buffer for playback
+        // Schedule buffered playback to reduce choppy relay starts during joins and route changes.
         if let playerNode = playerNodes[userId] {
-            playerNode.scheduleBuffer(buffer, completionHandler: nil)
+            applyVolume(for: userId)
+            RecordingManager.shared.addUserAudio(userId: userId, username: username, buffer: buffer)
+            var queue = pendingRelayBuffers[userId] ?? []
+            queue.append(buffer)
+            if queue.count > maxRelayPendingBufferCount {
+                queue.removeFirst(queue.count - maxRelayPendingBufferCount)
+            }
+            if !primedRelayUsers.contains(userId) && queue.count < initialRelayPrebufferPacketCount {
+                pendingRelayBuffers[userId] = queue
+                return
+            }
+            primedRelayUsers.insert(userId)
+            pendingRelayBuffers[userId] = []
+            for queuedBuffer in queue {
+                playerNode.scheduleBuffer(queuedBuffer, completionHandler: nil)
+            }
+            if !playerNode.isPlaying {
+                playerNode.play()
+            }
         }
+    }
+
+    func refreshOutputMix() {
+        let outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
+        audioEngine?.mainMixerNode.outputVolume = outputVolume
+        for userId in spatialMixers.keys {
+            applyVolume(for: userId)
+        }
+    }
+
+    private func setupObservers() {
+        let center = Foundation.NotificationCenter.default
+        observers.append(center.addObserver(forName: Notification.Name.userVolumeChanged, object: nil, queue: nil) { [weak self] note in
+            guard let userId = note.userInfo?["userId"] as? String else { return }
+            DispatchQueue.main.async {
+                self?.applyVolume(for: userId)
+            }
+        })
+        observers.append(center.addObserver(forName: Notification.Name.userMuteChanged, object: nil, queue: nil) { [weak self] note in
+            guard let userId = note.userInfo?["userId"] as? String else { return }
+            DispatchQueue.main.async {
+                self?.applyVolume(for: userId)
+            }
+        })
+        observers.append(center.addObserver(forName: Notification.Name.masterVolumeChanged, object: nil, queue: nil) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.refreshOutputMix()
+            }
+        })
+    }
+
+    private func applyVolume(for userId: String) {
+        guard let mixerNode = spatialMixers[userId] else { return }
+        let userVolume = UserAudioControlManager.shared.effectiveVolume(for: userId)
+        let outputVolume = Float(SettingsManager.shared.effectiveOutputVolume)
+        mixerNode.outputVolume = max(0, min(2, userVolume * outputVolume))
     }
 
     // MARK: - Position Management

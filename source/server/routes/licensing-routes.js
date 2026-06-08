@@ -8,7 +8,12 @@
  */
 
 const express = require('express');
+const path = require('path');
+const { promisify } = require('util');
+const { execFile } = require('child_process');
 const { VoiceLinkLicensing } = require('../services/licensing');
+
+const execFileAsync = promisify(execFile);
 
 class LicensingRoutes {
     constructor(options = {}) {
@@ -35,11 +40,91 @@ class LicensingRoutes {
             apiUrl: options.whmcsApiUrl || process.env.WHMCS_API_URL || 'https://devine-creations.com/includes/api.php',
             identifier: options.whmcsIdentifier || process.env.WHMCS_API_IDENTIFIER,
             secret: options.whmcsSecret || process.env.WHMCS_API_SECRET,
-            accessKey: options.whmcsAccessKey || process.env.WHMCS_ACCESS_KEY
+            accessKey: options.whmcsAccessKey || process.env.WHMCS_ACCESS_KEY,
+            phpBin: options.whmcsPhpBin || process.env.VOICELINK_PHP_BIN || 'php',
+            configPath: options.whmcsConfigPath || process.env.VOICELINK_WHMCS_CONFIG_PATH || ''
         };
 
         this.setupRoutes();
         this.startHubNodeSync();
+    }
+
+    /**
+     * Make a local WHMCS localAPI request when the install is on the same server.
+     */
+    async whmcsLocalApiRequest(action, params = {}) {
+        if (!this.whmcsConfig.configPath) {
+            throw new Error('WHMCS local API bridge is not configured');
+        }
+
+        const helperPath = path.join(__dirname, '../tools/whmcs-local-api.php');
+        const payload = JSON.stringify({ action, params });
+        const { stdout } = await execFileAsync(this.whmcsConfig.phpBin, [helperPath, this.whmcsConfig.configPath, payload], {
+            timeout: 15000,
+            maxBuffer: 1024 * 512
+        });
+        const parsed = JSON.parse(String(stdout || '{}').trim() || '{}');
+        if (parsed?.result !== 'success') {
+            throw new Error(parsed?.message || parsed?.error || 'WHMCS local API request failed');
+        }
+        return parsed;
+    }
+
+    /**
+     * Unified WHMCS request with local same-server fallback.
+     */
+    async whmcsRequest(action, params = {}) {
+        const canUseLocalApi = Boolean(this.whmcsConfig.configPath);
+        const tryLocalApi = async (upstreamError = null) => {
+            if (!canUseLocalApi) {
+                throw upstreamError || new Error('WHMCS local API bridge is not configured');
+            }
+            try {
+                return await this.whmcsLocalApiRequest(action, params);
+            } catch (localError) {
+                if (upstreamError) {
+                    localError.message = `${upstreamError.message}; local fallback failed: ${localError.message}`;
+                }
+                throw localError;
+            }
+        };
+
+        if (!this.whmcsConfig.identifier || !this.whmcsConfig.secret) {
+            if (canUseLocalApi) {
+                return tryLocalApi();
+            }
+            throw new Error('WHMCS not configured');
+        }
+
+        const paramsBody = new URLSearchParams({
+            identifier: this.whmcsConfig.identifier,
+            secret: this.whmcsConfig.secret,
+            action,
+            responsetype: 'json',
+            ...params
+        });
+
+        if (this.whmcsConfig.accessKey) {
+            paramsBody.append('accesskey', this.whmcsConfig.accessKey);
+        }
+
+        const response = await fetch(this.whmcsConfig.apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: paramsBody.toString()
+        });
+
+        const result = await response.json();
+        if (result.result !== 'success') {
+            const error = new Error(result.message || result.error || 'WHMCS request failed');
+            if (String(error.message).toLowerCase().includes('invalid ip')) {
+                return tryLocalApi(error);
+            }
+            throw error;
+        }
+        return result;
     }
 
     /**
@@ -48,34 +133,13 @@ class LicensingRoutes {
      * Supports 2FA if enabled on the WHMCS account
      */
     async validateWhmcsUser(email, sessionToken, twoFactorCode = null) {
-        if (!this.whmcsConfig.identifier || !this.whmcsConfig.secret) {
+        if ((!this.whmcsConfig.identifier || !this.whmcsConfig.secret) && !this.whmcsConfig.configPath) {
             console.warn('[Licensing] WHMCS not configured, skipping auth validation');
             return { valid: false, error: 'WHMCS not configured' };
         }
 
         try {
-            // First, get client details
-            const params = new URLSearchParams({
-                identifier: this.whmcsConfig.identifier,
-                secret: this.whmcsConfig.secret,
-                action: 'GetClientsDetails',
-                email: email,
-                responsetype: 'json'
-            });
-
-            if (this.whmcsConfig.accessKey) {
-                params.append('accesskey', this.whmcsConfig.accessKey);
-            }
-
-            const response = await fetch(this.whmcsConfig.apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: params.toString()
-            });
-
-            const result = await response.json();
+            const result = await this.whmcsRequest('GetClientsDetails', { email });
 
             if (result.result === 'success' && result.client) {
                 const client = result.client;
@@ -129,28 +193,10 @@ class LicensingRoutes {
      */
     async validate2FACode(clientId, code) {
         try {
-            const params = new URLSearchParams({
-                identifier: this.whmcsConfig.identifier,
-                secret: this.whmcsConfig.secret,
-                action: 'ValidateLogin',
+            const result = await this.whmcsRequest('ValidateLogin', {
                 clientid: clientId,
-                twofa: code,
-                responsetype: 'json'
+                twofa: code
             });
-
-            if (this.whmcsConfig.accessKey) {
-                params.append('accesskey', this.whmcsConfig.accessKey);
-            }
-
-            const response = await fetch(this.whmcsConfig.apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                body: params.toString()
-            });
-
-            const result = await response.json();
 
             // WHMCS returns success if 2FA code is valid
             return { valid: result.result === 'success' };

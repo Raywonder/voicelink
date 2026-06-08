@@ -14,6 +14,7 @@ class MessagingManager: ObservableObject {
     @Published var unreadCounts: [String: Int] = [:]              // odId -> unread count
     @Published var totalUnreadCount: Int = 0
     @Published var isTyping: [String: Bool] = [:]                 // odId -> isTyping
+    @Published private(set) var activeRoomId: String?
 
     // MARK: - Types
 
@@ -24,9 +25,11 @@ class MessagingManager: ObservableObject {
         let content: String
         let timestamp: Date
         let type: MessageType
+        let roomId: String?
         var isRead: Bool
         var attachmentId: String?       // For file attachments
         var replyToId: String?          // For replies
+        var mentions: [String]
         var reactions: [String: [String]]  // emoji -> [userIds]
 
         enum MessageType: String, Codable {
@@ -38,16 +41,26 @@ class MessagingManager: ObservableObject {
             case reply
         }
 
-        init(senderId: String, senderName: String, content: String, type: MessageType = .text) {
-            self.id = UUID().uuidString
+        init(
+            id: String = UUID().uuidString,
+            senderId: String,
+            senderName: String,
+            content: String,
+            type: MessageType = .text,
+            timestamp: Date = Date(),
+            roomId: String? = nil
+        ) {
+            self.id = id
             self.senderId = senderId
             self.senderName = senderName
             self.content = content
-            self.timestamp = Date()
+            self.timestamp = timestamp
             self.type = type
+            self.roomId = roomId
             self.isRead = false
             self.attachmentId = nil
             self.replyToId = nil
+            self.mentions = []
             self.reactions = [:]
         }
     }
@@ -75,10 +88,12 @@ class MessagingManager: ObservableObject {
         let username = getCurrentUsername()
 
         let message = ChatMessage(
+            id: UUID().uuidString,
             senderId: userId,
             senderName: username,
             content: content,
-            type: .text
+            type: .text,
+            roomId: activeRoomId
         )
 
         // Add to local messages
@@ -94,7 +109,8 @@ class MessagingManager: ObservableObject {
             senderId: "system",
             senderName: "System",
             content: content,
-            type: .system
+            type: .system,
+            roomId: activeRoomId
         )
         addMessage(message)
     }
@@ -113,7 +129,8 @@ class MessagingManager: ObservableObject {
             senderId: myId,
             senderName: myName,
             content: content,
-            type: .text
+            type: .text,
+            roomId: activeRoomId
         )
 
         // Add to DM thread
@@ -129,6 +146,14 @@ class MessagingManager: ObservableObject {
     /// Get DM thread with a user
     func getDirectMessages(with userId: String) -> [ChatMessage] {
         return directMessages[userId] ?? []
+    }
+
+    func message(withId messageId: String) -> ChatMessage? {
+        messages.first(where: { $0.id == messageId })
+    }
+
+    func threadMessages(for rootMessageId: String) -> [ChatMessage] {
+        messages.filter { $0.id == rootMessageId || $0.replyToId == rootMessageId }
     }
 
     /// Mark DMs as read
@@ -156,9 +181,11 @@ class MessagingManager: ObservableObject {
             senderId: userId,
             senderName: username,
             content: content,
-            type: .reply
+            type: .reply,
+            roomId: activeRoomId
         )
         message.replyToId = messageId
+        message.mentions = extractMentions(from: content)
 
         addMessage(message)
         sendToServer(message, isDirect: false, recipientId: nil)
@@ -224,6 +251,15 @@ class MessagingManager: ObservableObject {
 
     private func addMessage(_ message: ChatMessage) {
         DispatchQueue.main.async {
+            if let roomId = message.roomId,
+               let activeRoomId = self.activeRoomId,
+               roomId != activeRoomId {
+                return
+            }
+            if let existingIndex = self.messages.firstIndex(where: { $0.id == message.id }) {
+                self.messages[existingIndex] = message
+                return
+            }
             self.messages.append(message)
 
             // Trim if too many messages
@@ -254,14 +290,32 @@ class MessagingManager: ObservableObject {
             "type": message.type.rawValue,
             "isDirect": isDirect
         ]
+        if let roomId = message.roomId, !roomId.isEmpty {
+            info["roomId"] = roomId
+        }
         if let recipient = recipientId {
             info["recipientId"] = recipient
         }
         if let replyTo = message.replyToId {
             info["replyToId"] = replyTo
         }
+        if !message.mentions.isEmpty {
+            info["mentions"] = message.mentions
+        }
 
         NotificationCenter.default.post(name: .sendMessageToServer, object: nil, userInfo: info)
+    }
+
+    private func extractMentions(from content: String) -> [String] {
+        let pattern = #"(?<!\w)@([A-Za-z0-9._-]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let range = NSRange(content.startIndex..<content.endIndex, in: content)
+        let mentions = regex.matches(in: content, options: [], range: range).compactMap { match -> String? in
+            guard match.numberOfRanges > 1,
+                  let mentionRange = Range(match.range(at: 1), in: content) else { return nil }
+            return String(content[mentionRange]).lowercased()
+        }
+        return Array(NSOrderedSet(array: mentions)) as? [String] ?? mentions
     }
 
     private func updateTotalUnread() {
@@ -294,30 +348,118 @@ class MessagingManager: ObservableObject {
             name: .userTypingIndicator,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRoomJoinedNotification(_:)),
+            name: .roomJoined,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRoomLeftNotification),
+            name: .roomLeft,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleIncomingBotAudio(_:)),
+            name: .botAudioReceived,
+            object: nil
+        )
     }
 
     @objc private func handleIncomingMessage(_ notification: Notification) {
         guard let data = notification.userInfo,
+              let messageId = data["messageId"] as? String,
               let senderId = data["senderId"] as? String,
-              let senderName = data["senderName"] as? String,
               let content = data["content"] as? String else { return }
 
         let typeRaw = data["type"] as? String ?? "text"
         let type = ChatMessage.MessageType(rawValue: typeRaw) ?? .text
+        let roomId = data["roomId"] as? String
+        let rawSenderName = data["senderName"] as? String ?? data["userName"] as? String ?? "Unknown"
 
-        let message = ChatMessage(
+        if let roomId, let activeRoomId, roomId != activeRoomId {
+            return
+        }
+
+        let resolvedSenderName = type == .system && rawSenderName == "Unknown" ? "VoiceLink" : rawSenderName
+
+        var message = ChatMessage(
+            id: messageId,
             senderId: senderId,
-            senderName: senderName,
+            senderName: resolvedSenderName,
             content: content,
-            type: type
+            type: type,
+            roomId: roomId ?? activeRoomId
         )
+        message.replyToId = data["replyToId"] as? String ?? data["replyTo"] as? String
+        message.attachmentId = data["attachmentId"] as? String
+        message.mentions = (data["mentions"] as? [String] ?? []).map { $0.lowercased() }
 
         addMessage(message)
 
-        // Play incoming sound only for other users' messages.
-        if senderId != getCurrentUserId() {
-            AppSoundManager.shared.playSound(.messageIncoming)
+        let isTranscript = data["transcript"] as? Bool ?? false
+        let isHistorical = data["historical"] as? Bool ?? false
+        if isTranscript,
+           let transcriptRoomId = roomId ?? activeRoomId,
+           !transcriptRoomId.isEmpty {
+            let transcriptUserName = (data["transcriptUserName"] as? String ?? resolvedSenderName).trimmingCharacters(in: .whitespacesAndNewlines)
+            NotificationCenter.default.post(
+                name: .roomTranscriptReceived,
+                object: nil,
+                userInfo: [
+                    "roomId": transcriptRoomId,
+                    "userId": data["transcriptUserId"] as? String ?? senderId,
+                    "userName": transcriptUserName.isEmpty ? "Live Transcript" : transcriptUserName,
+                    "text": content,
+                    "language": data["transcriptLanguage"] as? String ?? ""
+                ]
+            )
         }
+        let loweredContent = content.lowercased()
+        let loweredSenderName = resolvedSenderName.lowercased()
+        let isBotMessage = data["isBot"] as? Bool ?? senderId.lowercased().hasPrefix("bot:")
+            || loweredSenderName.contains("voicelink bot")
+            || loweredSenderName == "voicelink"
+        let isJoinLeaveNotice = type == .system && (
+            loweredContent.contains(" joined the room") ||
+            loweredContent.contains(" left the room")
+        )
+
+        if senderId != getCurrentUserId() && !isTranscript && !isHistorical {
+            if isJoinLeaveNotice {
+                return
+            }
+            if type == .system {
+                AppSoundManager.shared.playSound(.notification)
+            } else if isBotMessage {
+                AppSoundManager.shared.playSound(.messageReceived)
+            } else {
+                AppSoundManager.shared.playSound(.messageIncoming)
+            }
+        }
+    }
+
+    @objc private func handleIncomingBotAudio(_ notification: Notification) {
+        guard let data = notification.userInfo else { return }
+        let text = (data["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        let authProvider = (data["authProvider"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasAudioControls = data["hasAudioControls"] as? Bool ?? false
+        guard hasAudioControls, authProvider == "sapphire_bot" || authProvider == "sophia_bot" else { return }
+
+        let announcement = TTSAnnouncement(
+            type: .user,
+            text: text,
+            effect: .none,
+            delivery: (data["direct"] as? Bool ?? false) ? .direct : .room
+        )
+        TTSManager.shared.queueAnnouncement(announcement)
     }
 
     @objc private func handleIncomingDM(_ notification: Notification) {
@@ -350,6 +492,33 @@ class MessagingManager: ObservableObject {
 
         DispatchQueue.main.async {
             self.isTyping[userId] = typing
+        }
+    }
+
+    @objc private func handleRoomJoinedNotification(_ notification: Notification) {
+        let roomData = notification.object as? [String: Any]
+        let roomId = (roomData?["roomId"] as? String) ?? (roomData?["id"] as? String)
+        DispatchQueue.main.async {
+            if self.activeRoomId != roomId {
+                if let roomId {
+                    self.messages.removeAll { existing in
+                        if let existingRoomId = existing.roomId {
+                            return existingRoomId != roomId
+                        }
+                        return false
+                    }
+                } else {
+                    self.messages.removeAll()
+                }
+            }
+            self.activeRoomId = roomId
+        }
+    }
+
+    @objc private func handleRoomLeftNotification() {
+        DispatchQueue.main.async {
+            self.activeRoomId = nil
+            self.messages.removeAll()
         }
     }
 
@@ -414,6 +583,13 @@ struct ChatBubble: View {
     let isOwnMessage: Bool
     var onReply: (() -> Void)?
     var onReact: ((String) -> Void)?
+    @ObservedObject private var messagingManager = MessagingManager.shared
+    @ObservedObject private var settings = SettingsManager.shared
+
+    private var repliedToMessage: MessagingManager.ChatMessage? {
+        guard let replyToId = message.replyToId else { return nil }
+        return messagingManager.message(withId: replyToId)
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -425,14 +601,14 @@ struct ChatBubble: View {
                     HStack(spacing: 4) {
                         Image(systemName: "arrowshape.turn.up.left")
                             .font(.caption2)
-                        Text("Reply")
+                        Text(replySummaryText)
                             .font(.caption2)
                     }
                     .foregroundColor(.gray)
                 }
 
                 // Sender name (not for own messages)
-                if !isOwnMessage && message.type != .system {
+                if !isOwnMessage {
                     Text(message.senderName)
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -464,9 +640,11 @@ struct ChatBubble: View {
                 }
 
                 // Timestamp
-                Text(formatTime(message.timestamp))
-                    .font(.caption2)
-                    .foregroundColor(.gray)
+                if settings.showMessageTimestamps {
+                    Text(formatTime(message.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
             }
             .contextMenu {
                 Button(action: { onReply?() }) {
@@ -500,6 +678,13 @@ struct ChatBubble: View {
             return .gray
         }
         return isOwnMessage ? .white : .primary
+    }
+
+    private var replySummaryText: String {
+        guard let repliedToMessage else { return "Reply in thread" }
+        let trimmed = repliedToMessage.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = trimmed.isEmpty ? repliedToMessage.senderName : String(trimmed.prefix(48))
+        return "Reply to \(repliedToMessage.senderName): \(preview)"
     }
 
     private func formatTime(_ date: Date) -> String {
@@ -600,9 +785,7 @@ struct ChatView: View {
                 }
                 .onChange(of: messages.count) { _ in
                     if let lastId = messages.last?.id {
-                        withAnimation {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        }
+                        proxy.scrollTo(lastId, anchor: .bottom)
                     }
                 }
             }

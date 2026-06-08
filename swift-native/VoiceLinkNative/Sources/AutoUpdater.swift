@@ -1,36 +1,24 @@
 import Foundation
 import SwiftUI
+import AppKit
+import os
 
-// MARK: - Auto Updater
-// Handles automatic updates from server for macOS
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
-class AutoUpdater: ObservableObject {
+@MainActor
+final class AutoUpdater: NSObject, ObservableObject {
     static let shared = AutoUpdater()
 
-    // Current app version/build from bundle metadata
     static var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
+
     static var buildNumber: Int {
         let raw = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return Int(raw) ?? 1
     }
-
-    // Update server configuration
-    private var downloadBaseURL: String {
-        let current = ServerManager.shared.baseURL ?? APIEndpointResolver.canonicalMainBase
-        return "\(current)/downloads"
-    }
-    private let platform = "macos"
-
-    @Published var updateAvailable: Bool = false
-    @Published var latestVersion: String?
-    @Published var updateURL: URL?
-    @Published var releaseNotes: String?
-    @Published var isDownloading: Bool = false
-    @Published var downloadProgress: Double = 0
-    @Published var lastChecked: Date?
-    @Published var updateState: UpdateState = .idle
 
     enum UpdateState: Equatable {
         case idle
@@ -41,411 +29,137 @@ class AutoUpdater: ObservableObject {
         case error(String)
     }
 
-    private var downloadTask: URLSessionDownloadTask?
-    private var downloadedFileURL: URL?
-    private var lastMetadataURL: String?
-    private var saveDownloadForLater: Bool = false
+    private let logger = Logger(subsystem: "com.devinecreations.voicelink", category: "SparkleUpdater")
+    private let autoCheckKey = "voicelink.sparkle.automaticChecks"
+    private let automaticDownloadKey = "voicelink.sparkle.automaticDownloads"
+    private let manualDownloadURL = URL(string: "https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip")
 
-    init() {
+    @Published var updateAvailable = false
+    @Published var latestVersion: String?
+    @Published var latestBuildNumber: Int?
+    @Published var updateURL: URL?
+    @Published var releaseNotes: String?
+    @Published var isDownloading = false
+    @Published var downloadProgress: Double = 0
+    @Published var lastChecked: Date?
+    @Published var updateState: UpdateState = .idle
+    @Published var installationWarning: String?
+    @Published private(set) var installMode: InstallMode = .applications
+
+    #if canImport(Sparkle)
+    private lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: self,
+        userDriverDelegate: nil
+    )
+    #endif
+
+    override init() {
+        super.init()
         loadLastChecked()
-        // Check for updates on launch (after a short delay)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            self?.checkForUpdates()
-        }
+        refreshInstallMode()
+
+        #if canImport(Sparkle)
+        configureSparkle()
+        #else
+        updateState = .error("Sparkle is not linked in this build.")
+        logger.error("Sparkle unavailable at compile time")
+        #endif
     }
 
-    // MARK: - Version Info
-
     var versionString: String {
-        "v\(AutoUpdater.currentVersion) (Build \(AutoUpdater.buildNumber))"
+        "v\(Self.currentVersion) (Build \(Self.buildNumber))"
     }
 
     var shortVersionString: String {
-        "v\(AutoUpdater.currentVersion)"
+        "v\(Self.currentVersion)"
     }
 
-    // MARK: - Update Check
-
-    func checkForUpdates(silent: Bool = true) {
-        guard updateState != .checking else { return }
-
-        updateState = .checking
-
-        Task {
-            let ymlCandidates = APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL)
-                .map { "\($0)/downloads/latest-mac.yml" }
-
-            var selectedBaseForDownloadPath: String?
-            var yamlString: String?
-            var selectedMetadataURL: String?
-            var lastFailureReason: String?
-
-            for candidate in ymlCandidates {
-                guard let url = URL(string: candidate) else { continue }
-                var request = URLRequest(url: url)
-                request.cachePolicy = .reloadIgnoringLocalCacheData
-                do {
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    guard let http = response as? HTTPURLResponse else {
-                        lastFailureReason = "\(candidate): invalid HTTP response"
-                        continue
-                    }
-                    guard (200...299).contains(http.statusCode) else {
-                        lastFailureReason = "\(candidate): HTTP \(http.statusCode)"
-                        continue
-                    }
-
-                    let body = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-                    let firstLine = body.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-                    if firstLine.hasPrefix("<!doctype") || firstLine.hasPrefix("<html") {
-                        lastFailureReason = "\(candidate): returned HTML, not update YAML"
-                        continue
-                    }
-                    guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        lastFailureReason = "\(candidate): empty response"
-                        continue
-                    }
-
-                    yamlString = body
-                    selectedMetadataURL = candidate
-                    selectedBaseForDownloadPath = candidate.replacingOccurrences(of: "/latest-mac.yml", with: "")
-                    break
-                } catch {
-                    lastFailureReason = "\(candidate): \(error.localizedDescription)"
-                }
-            }
-
-            let finalYamlString = yamlString
-            let finalFailureReason = lastFailureReason
-            let finalDownloadBase = selectedBaseForDownloadPath ?? self.downloadBaseURL
-            let finalMetadataURL = selectedMetadataURL
-
-            await MainActor.run {
-                self.lastChecked = Date()
-                self.saveLastChecked()
-                self.lastMetadataURL = finalMetadataURL
-
-                guard let yaml = finalYamlString else {
-                    if !silent {
-                        self.updateState = .error(finalFailureReason ?? "Failed to check update metadata from /downloads/latest-mac.yml")
-                    } else {
-                        self.updateState = .idle
-                    }
-                    return
-                }
-
-                self.parseUpdateYAML(
-                    yaml,
-                    silent: silent,
-                    resolvedDownloadBaseURL: finalDownloadBase,
-                    metadataURL: finalMetadataURL
-                )
-            }
+    var automaticChecksEnabled: Bool {
+        get {
+            UserDefaults.standard.object(forKey: autoCheckKey) as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: autoCheckKey)
+            #if canImport(Sparkle)
+            updaterController.updater.automaticallyChecksForUpdates = newValue && installMode.supportsAutomaticReplacement
+            updaterController.updater.resetUpdateCycleAfterShortDelay()
+            #endif
         }
     }
 
-    private func parseUpdateYAML(_ yaml: String, silent: Bool, resolvedDownloadBaseURL: String, metadataURL: String?) {
-        var version: String?
-        var path: String?
-        var directFileURL: String?
-        var notes: String?
-        var inReleaseNotes = false
-        var releaseNotesLines: [String] = []
-
-        for rawLine in yaml.components(separatedBy: "\n") {
-            let line = rawLine.replacingOccurrences(of: "\u{FEFF}", with: "")
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if inReleaseNotes {
-                if trimmed.hasPrefix("- ") || trimmed.isEmpty {
-                    releaseNotesLines.append(trimmed)
-                    continue
-                } else if !line.hasPrefix(" ") && !line.hasPrefix("\t") {
-                    inReleaseNotes = false
-                } else {
-                    releaseNotesLines.append(trimmed)
-                    continue
-                }
-            }
-
-            if trimmed.hasPrefix("version:") {
-                version = trimmed.replacingOccurrences(of: "version:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("path:") {
-                path = trimmed.replacingOccurrences(of: "path:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("- url:") {
-                directFileURL = trimmed.replacingOccurrences(of: "- url:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("url:") && directFileURL == nil {
-                directFileURL = trimmed.replacingOccurrences(of: "url:", with: "").trimmingCharacters(in: .whitespaces)
-            } else if trimmed.hasPrefix("releaseNotes:") {
-                inReleaseNotes = true
-            }
+    var automaticDownloadsEnabled: Bool {
+        get {
+            UserDefaults.standard.object(forKey: automaticDownloadKey) as? Bool ?? false
         }
-
-        if !releaseNotesLines.isEmpty {
-            notes = releaseNotesLines.joined(separator: "\n")
+        set {
+            UserDefaults.standard.set(newValue, forKey: automaticDownloadKey)
+            #if canImport(Sparkle)
+            updaterController.updater.automaticallyDownloadsUpdates = newValue && installMode.supportsAutomaticReplacement
+            updaterController.updater.resetUpdateCycleAfterShortDelay()
+            #endif
         }
+    }
 
-        guard let serverVersion = version else {
+    func checkForUpdates(silent: Bool = false) {
+        lastChecked = Date()
+        saveLastChecked()
+        refreshInstallMode()
+
+        #if canImport(Sparkle)
+        guard installMode.supportsSparkleChecks else {
+            let message = installationWarning ?? "Move VoiceLink to Applications before updating."
+            logger.error("Blocked Sparkle update check: \(message, privacy: .public)")
+            updateState = .error(message)
             if !silent {
-                let firstLine = yaml.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "<empty>"
-                let source = metadataURL ?? "unknown source"
-                updateState = .error("Could not parse update metadata from \(source). First line: \(firstLine)")
-            } else {
-                updateState = .idle
+                showMoveToApplicationsAlert(message: message)
             }
             return
         }
 
-        // Parse sha512 hash from YAML
-        var serverHash: String?
-        for line in yaml.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("sha512:") && !trimmed.contains("files:") {
-                serverHash = trimmed.replacingOccurrences(of: "sha512:", with: "").trimmingCharacters(in: .whitespaces)
-                break
-            }
-        }
-
-        // Compare by hash (allows updates even if version stays at 1.0)
-        let installedHash = UserDefaults.standard.string(forKey: "installedBuildHash") ?? ""
-        let hasNewBuild = serverHash != nil && serverHash != installedHash && !installedHash.isEmpty
-
-        // Also check version for fresh installs
-        let hasNewerVersion = isNewerVersion(serverVersion, than: AutoUpdater.currentVersion)
-
-        if hasNewBuild || hasNewerVersion {
-            latestVersion = serverVersion
-            releaseNotes = notes
-
-            if let urlString = directFileURL, !urlString.isEmpty, let absolute = URL(string: urlString) {
-                updateURL = absolute
-            } else if let downloadPath = path, !downloadPath.isEmpty {
-                let normalized = downloadPath.hasPrefix("/") ? String(downloadPath.dropFirst()) : downloadPath
-                updateURL = URL(string: "\(resolvedDownloadBaseURL)/\(normalized)")
-            } else {
-                updateURL = nil
-                if !silent {
-                    updateState = .error("Update metadata is missing download URL/path")
-                    return
-                }
-            }
-
-            updateAvailable = true
-            updateState = .available(version: serverVersion)
-
-            // Store server hash for comparison after install
-            if let hash = serverHash {
-                UserDefaults.standard.set(hash, forKey: "pendingBuildHash")
-            }
-
-            // Post notification
-            NotificationCenter.default.post(name: .updateAvailable, object: serverVersion)
+        logger.info("Starting Sparkle update check. silent=\(silent, privacy: .public)")
+        updateState = .checking
+        if silent {
+            updaterController.updater.checkForUpdatesInBackground()
         } else {
-            // If no installed hash, store current server hash (first run)
-            if installedHash.isEmpty, let hash = serverHash {
-                UserDefaults.standard.set(hash, forKey: "installedBuildHash")
-            }
-            updateAvailable = false
-            updateState = .idle
+            updaterController.checkForUpdates(nil)
         }
+        #else
+        let message = "Sparkle is not linked in this build."
+        updateState = .error(message)
+        logger.error("\(message, privacy: .public)")
+        #endif
     }
-
-    /// Call after successful update to mark new hash as installed
-    func markUpdateInstalled() {
-        if let pendingHash = UserDefaults.standard.string(forKey: "pendingBuildHash") {
-            UserDefaults.standard.set(pendingHash, forKey: "installedBuildHash")
-            UserDefaults.standard.removeObject(forKey: "pendingBuildHash")
-        }
-    }
-
-    private func isNewerVersion(_ new: String, than current: String) -> Bool {
-        let newParts = new.components(separatedBy: ".").compactMap { Int($0) }
-        let currentParts = current.components(separatedBy: ".").compactMap { Int($0) }
-
-        for i in 0..<max(newParts.count, currentParts.count) {
-            let newPart = i < newParts.count ? newParts[i] : 0
-            let currentPart = i < currentParts.count ? currentParts[i] : 0
-
-            if newPart > currentPart {
-                return true
-            } else if newPart < currentPart {
-                return false
-            }
-        }
-        return false
-    }
-
-    // MARK: - Download Update
 
     func downloadUpdate(saveForLater: Bool = false) {
-        guard let downloadURL = updateURL else {
-            updateState = .error("No download URL available")
+        logger.info("Manual download requested; delegating download and install flow to Sparkle")
+        checkForUpdates(silent: false)
+    }
+
+    func openManualDownload() {
+        guard let manualDownloadURL else {
+            updateState = .error("The manual download URL is not configured.")
             return
         }
-
-        saveDownloadForLater = saveForLater
-        isDownloading = true
-        downloadProgress = 0
-        updateState = .downloading
-
-        let session = URLSession(configuration: .default, delegate: DownloadDelegate(updater: self), delegateQueue: nil)
-        downloadTask = session.downloadTask(with: downloadURL)
-        downloadTask?.resume()
+        logger.info("Opening manual update download \(manualDownloadURL.absoluteString, privacy: .public)")
+        NSWorkspace.shared.open(manualDownloadURL)
     }
 
     func cancelDownload() {
-        downloadTask?.cancel()
-        downloadTask = nil
+        logger.info("Cancel requested; Sparkle standard UI owns active download cancellation")
+        updateState = .idle
         isDownloading = false
         downloadProgress = 0
-        updateState = updateAvailable ? .available(version: latestVersion ?? "") : .idle
     }
-
-    // MARK: - Install Update
 
     func installUpdate() {
-        guard let fileURL = downloadedFileURL else {
-            updateState = .error("Update file not found")
-            return
-        }
-
-        // For ZIP files, perform in-place install + relaunch.
-        if fileURL.pathExtension == "zip" {
-            unzipAndInstallInPlace(fileURL)
-        } else {
-            // For DMG/PKG, just open it
-            NSWorkspace.shared.open(fileURL)
-            NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
-        }
+        logger.info("Install requested; Sparkle owns rollback-safe install and relaunch")
+        checkForUpdates(silent: false)
     }
 
-    private func unzipAndInstallInPlace(_ zipURL: URL) {
-        let fileManager = FileManager.default
-        let extractDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("VoiceLink-Update-\(UUID().uuidString)")
-
-        // Clean up previous extraction
-        try? fileManager.removeItem(at: extractDir)
-
-        // Unzip using ditto (preserves permissions and code signing)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-xk", zipURL.path, extractDir.path]
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            if process.terminationStatus == 0 {
-                if let appBundle = findAppBundle(in: extractDir) {
-                    performInPlaceInstall(from: appBundle, originalZipURL: zipURL, extractDirURL: extractDir)
-                } else {
-                    updateState = .error("Could not find app in downloaded archive")
-                }
-            } else {
-                updateState = .error("Failed to extract update (ditto exit \(process.terminationStatus))")
-            }
-        } catch {
-            updateState = .error("Failed to extract update: \(error.localizedDescription)")
-        }
+    func markUpdateInstalled() {
+        logger.info("Sparkle update install completion acknowledged")
     }
-
-    private func findAppBundle(in directory: URL) -> URL? {
-        let fm = FileManager.default
-        if let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
-            if let direct = items.first(where: { $0.pathExtension == "app" }) {
-                return direct
-            }
-        }
-        if let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: nil) {
-            for case let fileURL as URL in enumerator where fileURL.pathExtension == "app" {
-                return fileURL
-            }
-        }
-        return nil
-    }
-
-    private func shellEscape(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private func performInPlaceInstall(from extractedAppURL: URL, originalZipURL: URL?, extractDirURL: URL?) {
-        let fm = FileManager.default
-        let currentAppURL = Bundle.main.bundleURL
-        let targetAppURL: URL
-
-        if currentAppURL.pathExtension == "app" {
-            targetAppURL = currentAppURL
-        } else {
-            targetAppURL = URL(fileURLWithPath: "/Applications/VoiceLink.app")
-        }
-
-        let targetDir = targetAppURL.deletingLastPathComponent()
-        let needsPrivileges = !fm.isWritableFile(atPath: targetDir.path)
-
-        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("voicelink-updater-\(UUID().uuidString).sh")
-        let tmpAppURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("VoiceLink.app.tmp-\(UUID().uuidString)")
-
-        let source = shellEscape(extractedAppURL.path)
-        let target = shellEscape(targetAppURL.path)
-        let targetBackup = shellEscape(targetAppURL.path + ".bak")
-        let tmpApp = shellEscape(tmpAppURL.path)
-        let scriptPath = shellEscape(scriptURL.path)
-        let zipToDelete = originalZipURL != nil ? shellEscape(originalZipURL!.path) : "''"
-        let extractToDelete = extractDirURL != nil ? shellEscape(extractDirURL!.path) : "''"
-
-        let script = """
-#!/bin/bash
-set -e
-sleep 1
-rm -rf \(tmpApp)
-cp -R \(source) \(tmpApp)
-xattr -cr \(tmpApp) || true
-codesign --force --deep --sign - \(tmpApp) || true
-if [ -d \(target) ]; then
-  rm -rf \(targetBackup)
-  mv \(target) \(targetBackup)
-fi
-mv \(tmpApp) \(target)
-open \(target)
-rm -rf \(targetBackup)
-rm -f \(zipToDelete) || true
-rm -rf \(extractToDelete) || true
-rm -f "$0" || true
-"""
-        do {
-            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-        } catch {
-            updateState = .error("Failed to prepare updater script: \(error.localizedDescription)")
-            return
-        }
-
-        do {
-            let process = Process()
-            if needsPrivileges {
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                process.arguments = [
-                    "-e",
-                    "do shell script \"bash \(scriptURL.path.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
-                ]
-            } else {
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", "nohup bash \(scriptPath) >/tmp/voicelink-updater.log 2>&1 &"]
-            }
-            try process.run()
-        } catch {
-            updateState = .error("Failed to launch updater: \(error.localizedDescription)")
-            return
-        }
-
-        markUpdateInstalled()
-        NotificationCenter.default.post(name: .shouldQuitForUpdate, object: nil)
-    }
-
-    // MARK: - Persistence
 
     private func loadLastChecked() {
         if let timestamp = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date {
@@ -457,98 +171,188 @@ rm -f "$0" || true
         UserDefaults.standard.set(lastChecked, forKey: "lastUpdateCheck")
     }
 
-    // MARK: - Download Delegate
-
-    class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
-        weak var updater: AutoUpdater?
-
-        init(updater: AutoUpdater) {
-            self.updater = updater
+    #if canImport(Sparkle)
+    private func configureSparkle() {
+        guard sparklePublicKeyConfigured else {
+            let message = "Sparkle public key is not configured for this build."
+            logger.error("\(message, privacy: .public)")
+            updateState = .error(message)
+            return
         }
 
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            let fileManager = FileManager.default
-            let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("VoiceLink-update-\(UUID().uuidString)")
-
-            // Determine file extension from URL
-            let originalURL = downloadTask.originalRequest?.url
-            let ext = originalURL?.pathExtension ?? "zip"
-            let fileName = "VoiceLink-\(updater?.latestVersion ?? "update").\(ext)"
-            let destinationURL: URL
-            if updater?.saveDownloadForLater == true {
-                destinationURL = downloadsURL.appendingPathComponent(fileName)
-            } else {
-                destinationURL = tempURL.appendingPathExtension(ext)
-            }
-
-            do {
-                if fileManager.fileExists(atPath: destinationURL.path) {
-                    try fileManager.removeItem(at: destinationURL)
-                }
-                if updater?.saveDownloadForLater != true {
-                    try? fileManager.createDirectory(at: tempURL, withIntermediateDirectories: true)
-                }
-
-                try fileManager.moveItem(at: location, to: destinationURL)
-
-                DispatchQueue.main.async {
-                    self.updater?.downloadedFileURL = destinationURL
-                    self.updater?.isDownloading = false
-                    self.updater?.downloadProgress = 1.0
-                    if self.updater?.saveDownloadForLater == true {
-                        self.updater?.updateState = .idle
-                        self.updater?.saveDownloadForLater = false
-                        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
-                    } else {
-                        self.updater?.updateState = .readyToInstall
-                        self.updater?.saveDownloadForLater = false
-                        self.updater?.installUpdate()
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.updater?.updateState = .error("Failed to save update: \(error.localizedDescription)")
-                    self.updater?.isDownloading = false
-                }
+        let updater = updaterController.updater
+        updater.automaticallyChecksForUpdates = automaticChecksEnabled && installMode.supportsAutomaticReplacement
+        updater.automaticallyDownloadsUpdates = automaticDownloadsEnabled && installMode.supportsAutomaticReplacement
+        updater.updateCheckInterval = 60 * 60 * 6
+        updaterController.startUpdater()
+        logger.info("Sparkle updater started")
+        if automaticChecksEnabled, installMode.supportsAutomaticReplacement {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                self?.checkForUpdates(silent: true)
             }
         }
+    }
+    #endif
 
-        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-            let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            DispatchQueue.main.async {
-                self.updater?.downloadProgress = progress
-            }
+    private var sparklePublicKeyConfigured: Bool {
+        let value = Bundle.main.infoDictionary?["SUPublicEDKey"] as? String ?? ""
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func refreshInstallMode() {
+        installMode = currentInstallMode()
+        installationWarning = installMode.notice
+    }
+
+    private func currentInstallMode() -> InstallMode {
+        let bundleURL = Bundle.main.bundleURL.standardizedFileURL
+        let path = bundleURL.path
+        guard bundleURL.pathExtension == "app" else {
+            return .unsupported("VoiceLink is not running from an app bundle. Install VoiceLink in Applications before enabling updates.")
         }
+        if path == "/Applications/VoiceLink.app" {
+            return .applications
+        }
+        if let resourceValues = try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]),
+           resourceValues.volumeIsReadOnly == true {
+            return .diskImage
+        }
+        let parent = bundleURL.deletingLastPathComponent()
+        if FileManager.default.isWritableFile(atPath: parent.path) {
+            return .portable
+        }
+        return .unsupported("VoiceLink is running from a folder that is not writable. Copy it to Applications before enabling updates.")
+    }
 
-        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            if let error = error {
-                DispatchQueue.main.async {
-                    self.updater?.updateState = .error("Download failed: \(error.localizedDescription)")
-                    self.updater?.isDownloading = false
-                    self.updater?.saveDownloadForLater = false
-                }
+    private func showMoveToApplicationsAlert(message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Move VoiceLink to Applications"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    func copyToApplications() {
+        let source = Bundle.main.bundleURL
+        let destination = URL(fileURLWithPath: "/Applications/VoiceLink.app")
+        let fm = FileManager.default
+        logger.info("Copy to Applications requested from \(source.path, privacy: .public)")
+
+        do {
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
             }
+            try fm.copyItem(at: source, to: destination)
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.appendingPathComponent("Contents/MacOS/VoiceLink").path)
+            NSWorkspace.shared.open(destination)
+            NSApp.terminate(nil)
+        } catch {
+            logger.error("Copy to Applications failed: \(error.localizedDescription, privacy: .public)")
+            updateState = .error("Could not copy VoiceLink to Applications: \(error.localizedDescription)")
         }
     }
 }
 
-// MARK: - Notifications
+enum InstallMode: Equatable {
+    case applications
+    case portable
+    case diskImage
+    case unsupported(String)
+
+    var supportsAutomaticReplacement: Bool {
+        self == .applications
+    }
+
+    var supportsSparkleChecks: Bool {
+        self == .applications
+    }
+
+    var notice: String? {
+        switch self {
+        case .applications:
+            return nil
+        case .portable:
+            return "Portable mode: settings are saved in your normal macOS user folders, but automatic self-replacement is disabled outside Applications."
+        case .diskImage:
+            return "You are running from a disk image. Settings will be saved, but automatic updates require copying the app to Applications or another writable folder."
+        case .unsupported(let message):
+            return message
+        }
+    }
+}
+
+#if canImport(Sparkle)
+extension AutoUpdater: SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        refreshInstallMode()
+        if !installMode.supportsSparkleChecks, let warning = installationWarning {
+            logger.error("Sparkle denied update check \(String(describing: updateCheck), privacy: .public): \(warning, privacy: .public)")
+            throw NSError(
+                domain: "com.devinecreations.voicelink.updater",
+                code: 1001,
+                userInfo: [NSLocalizedDescriptionKey: warning]
+            )
+        }
+        logger.info("Sparkle may perform update check \(String(describing: updateCheck), privacy: .public)")
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        latestVersion = item.displayVersionString
+        updateAvailable = true
+        updateState = .available(version: item.displayVersionString)
+        logger.info("Sparkle found update \(item.displayVersionString, privacy: .public)")
+        NotificationCenter.default.post(name: .updateAvailable, object: item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        isDownloading = false
+        downloadProgress = 1
+        updateState = .readyToInstall
+        logger.info("Sparkle downloaded update \(item.displayVersionString, privacy: .public)")
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+        isDownloading = false
+        updateState = .error("Update download failed: \(error.localizedDescription)")
+        logger.error("Sparkle failed to download update \(item.displayVersionString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+    }
+
+    func userDidCancelDownload(_ updater: SPUUpdater) {
+        isDownloading = false
+        updateState = .idle
+        logger.info("User cancelled Sparkle download")
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        userDidMake choice: SPUUserUpdateChoice,
+        forUpdate updateItem: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        logger.info("Sparkle user choice \(String(describing: choice), privacy: .public) for \(updateItem.displayVersionString, privacy: .public)")
+        switch choice {
+        case .install:
+            updateState = .downloading
+        case .skip, .dismiss:
+            updateState = .idle
+        @unknown default:
+            updateState = .idle
+        }
+    }
+}
+#endif
 
 extension Notification.Name {
     static let shouldQuitForUpdate = Notification.Name("shouldQuitForUpdate")
     static let updateAvailable = Notification.Name("updateAvailable")
 }
 
-// MARK: - Update Settings View
-
 struct UpdateSettingsView: View {
     @ObservedObject private var updater = AutoUpdater.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Current Version
             HStack {
                 Image(systemName: "app.badge")
                     .foregroundColor(.blue)
@@ -578,198 +382,92 @@ struct UpdateSettingsView: View {
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(12)
 
-            // Update State
-            switch updater.updateState {
-            case .idle:
-                updateIdleView
-
-            case .checking:
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Checking for updates...")
-                        .foregroundColor(.gray)
-                }
-                .padding()
-
-            case .available(let version):
-                updateAvailableView(version: version)
-
-            case .downloading:
-                downloadingView
-
-            case .readyToInstall:
-                readyToInstallView
-
-            case .error(let message):
-                errorView(message: message)
-            }
-
-            // Last checked
-            if let lastChecked = updater.lastChecked {
-                HStack {
-                    Image(systemName: "clock")
-                        .foregroundColor(.gray)
-                    Text("Last checked: \(lastChecked.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-        .padding()
-    }
-
-    private var updateIdleView: some View {
-        Button(action: {
-            updater.checkForUpdates(silent: false)
-        }) {
-            HStack {
-                Image(systemName: "arrow.clockwise")
-                Text("Check for Updates")
-            }
-        }
-        .buttonStyle(.borderedProminent)
-    }
-
-    private func updateAvailableView(version: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.title2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Version \(version) Available")
-                        .fontWeight(.semibold)
-                    Text("A new version of VoiceLink is ready to download")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-
-            if let notes = updater.releaseNotes {
-                Text("What's New:")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-
-                Text(notes)
+            if let warning = updater.installationWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
                     .font(.caption)
-                    .foregroundColor(.gray)
                     .padding()
-                    .background(Color(NSColor.controlBackgroundColor))
+                    .background(Color.orange.opacity(0.12))
                     .cornerRadius(8)
             }
 
-            HStack {
-                Button(action: {
-                    updater.downloadUpdate(saveForLater: false)
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                        Text("Update Now")
-                    }
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { updater.automaticChecksEnabled },
+                set: { updater.automaticChecksEnabled = $0 }
+            ))
+            .disabled(!updater.installMode.supportsAutomaticReplacement)
+
+            Toggle("Download updates automatically", isOn: Binding(
+                get: { updater.automaticDownloadsEnabled },
+                set: { updater.automaticDownloadsEnabled = $0 }
+            ))
+            .disabled(!updater.installMode.supportsAutomaticReplacement)
+
+            statusView
+
+            if updater.installMode == .diskImage {
+                Button {
+                    updater.copyToApplications()
+                } label: {
+                    Label("Copy to Applications", systemImage: "folder.badge.plus")
                 }
                 .buttonStyle(.borderedProminent)
+            }
 
-                Button(action: {
-                    updater.downloadUpdate(saveForLater: true)
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.down.to.line")
-                        Text("Download for Later")
-                    }
-                }
-                .buttonStyle(.bordered)
-
-                Button("Later") {
-                    updater.updateState = .idle
+            if !updater.installMode.supportsAutomaticReplacement {
+                Button {
+                    updater.openManualDownload()
+                } label: {
+                    Label("Download Latest Version", systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.bordered)
             }
-        }
-        .padding()
-        .background(Color.green.opacity(0.1))
-        .cornerRadius(12)
-    }
 
-    private var downloadingView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Downloading Update...")
-                    .fontWeight(.semibold)
-                Spacer()
-                Text("\(Int(updater.downloadProgress * 100))%")
-                    .foregroundColor(.gray)
-            }
-
-            ProgressView(value: updater.downloadProgress)
-                .progressViewStyle(.linear)
-
-            Button("Cancel") {
-                updater.cancelDownload()
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(12)
-    }
-
-    private var readyToInstallView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.title2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Update Downloaded")
-                        .fontWeight(.semibold)
-                    Text("Click Install and Relaunch to replace this app automatically.")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-
-            Button(action: {
-                updater.installUpdate()
-            }) {
-                HStack {
-                    Image(systemName: "arrow.uturn.forward")
-                    Text("Install and Relaunch")
-                }
+            Button {
+                updater.checkForUpdates(silent: false)
+            } label: {
+                Label("Check for Updates", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(updater.updateState == .checking || !updater.installMode.supportsSparkleChecks)
+
+            if let lastChecked = updater.lastChecked {
+                Label("Last checked: \(lastChecked.formatted(date: .abbreviated, time: .shortened))", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
         }
         .padding()
-        .background(Color.green.opacity(0.1))
-        .cornerRadius(12)
     }
 
-    private func errorView(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    @ViewBuilder
+    private var statusView: some View {
+        switch updater.updateState {
+        case .idle:
+            Text("Sparkle will verify, download, install, and relaunch VoiceLink when an update is available.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        case .checking:
             HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.red)
+                ProgressView().scaleEffect(0.8)
+                Text("Checking for updates...")
             }
-
-            Button(action: {
-                updater.checkForUpdates(silent: false)
-            }) {
-                Text("Try Again")
-            }
-            .buttonStyle(.bordered)
+            .foregroundColor(.secondary)
+        case .available(let version):
+            Label("Version \(version) is available. Continue in the Sparkle update window.", systemImage: "arrow.down.circle.fill")
+                .foregroundColor(.green)
+        case .downloading:
+            Label("Sparkle is downloading or preparing the update.", systemImage: "arrow.down")
+                .foregroundColor(.blue)
+        case .readyToInstall:
+            Label("Sparkle downloaded the update and is ready to install.", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .error(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundColor(.red)
         }
-        .padding()
-        .background(Color.red.opacity(0.1))
-        .cornerRadius(12)
     }
 }
-
-// MARK: - Update Available Banner
 
 struct UpdateAvailableBanner: View {
     @ObservedObject private var updater = AutoUpdater.shared
@@ -777,19 +475,18 @@ struct UpdateAvailableBanner: View {
 
     var body: some View {
         if updater.updateAvailable {
-            Button(action: {
+            Button {
                 showUpdateSheet = true
-            }) {
+            } label: {
                 HStack {
                     Image(systemName: "arrow.down.circle.fill")
-                        .foregroundColor(.white)
-                    Text("Update Available: v\(updater.latestVersion ?? "")")
-                        .foregroundColor(.white)
+                    Text("Update Available")
                         .font(.caption)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .foregroundColor(.white.opacity(0.7))
                 }
+                .foregroundColor(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.green)
@@ -798,7 +495,7 @@ struct UpdateAvailableBanner: View {
             .buttonStyle(.plain)
             .sheet(isPresented: $showUpdateSheet) {
                 UpdateSettingsView()
-                    .frame(minWidth: 400, minHeight: 300)
+                    .frame(minWidth: 520, minHeight: 360)
             }
         }
     }

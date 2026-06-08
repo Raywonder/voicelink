@@ -1,18 +1,11 @@
-url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-version: 1.0
-build: 22
+﻿version: 1.0.0.88
 files:
-  - url: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-    sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-    size: 154968360
-path: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-sha512: E2Lseq5pQU/UP3XpW9Xp/5KRxVP9O3TovCHIVaEnEJ7zyo6t9zO6+3GQSof1xsddQxV+cKHCcLTAyJWTdBjeYQ==
-releaseDate: '2026-02-24T01:47:06.000Z'
-releaseNotes: |
-  VoiceLink macOS Update (Internal Build 22)
-  - Fixed monitor freeze path by blocking local monitor while room audio is active.
-  - Room settings are now separate from app settings and open room administration.
-  - Room action sheet join now executes real room join flow.
-  - Updated macOS release package and checksum manifests.
-mirrorURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
-copyPartyURL: https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip
+  - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
+    sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
+    size: 366204867
+path: VoiceLinkMacOS.zip
+sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
+buildNumber: 88
+releaseDate: "2026-06-07T08:27:03.000Z"
+releaseNotes: >-
+  Build 88 updates VoiceLink macOS with the latest room browsing, authentication, admin module-management, and audio/session stability fixes from the native desktop tree.

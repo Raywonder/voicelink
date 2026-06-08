@@ -11,20 +11,35 @@ A comprehensive voice chat application with native desktop clients (not Electron
 - Features not implemented for web must be hidden for web users.
 - New feature work should target desktop first, then web support where practical.
 
-## Latest macOS Native Update (Build 20, 2026-02-23)
+## Latest macOS Native Update (2026-03-20)
 
-- Startup no longer plays the default macOS fallback system tone when welcome audio is unavailable.
-- Missing UI sounds now download in the background with a non-blocking in-app notice.
-- Added reminder behavior for pending sound downloads on subsequent launches.
-- Added built-in self-test scheduler and admin controls under Admin -> Self Tests.
-- Added admin login fallback for `datboydommo@layor8.space`.
+- Reconfirmed current macOS native source compiles successfully.
+- Replaced the stale local `/Applications/VoiceLink.app` with a current-source rebuild for live regression testing.
+- Restored desktop audio behavior on the live macOS app:
+  - startup and UI sounds are back
+  - local monitoring/input-monitor path is working again
+  - monitoring also works again while joined to rooms
+  - current source still includes real CoreAudio device detection and selection
+  - input/output sliders now apply an internal `+15%` gain boost so mid-range values are less underpowered
+- Added user-facing audio recovery controls:
+  - `Audio` menu -> `Restart Audio Services`
+  - Settings -> Audio -> `Refresh Device List`
+  - Settings -> Audio -> `Restart Audio Services`
+- Confirmed the macOS admin UI is wired to real backend routes for:
+  - admin status
+  - connected users
+  - kick
+  - ban
+  - transmit enable/disable
+  - role updates
 
-## Current Implementation Status (Audit: 2026-02-11)
+## Current Implementation Status (Audit: 2026-03-20)
 
 - Active native desktop source is currently maintained in `../voicelink-local/swift-native/VoiceLinkNative/Sources` and `../voicelink-local/windows-native/VoiceLinkNative`.
 - This repo currently still contains Electron build/runtime scripts in `package.json` for legacy compatibility and web-runtime packaging paths.
-- In this repo, `swift-native/VoiceLinkNative` currently contains build artifacts and packaged outputs, not full source files.
-- In this repo, `windows-native/VoiceLinkNative` currently contains build output/intermediate files, not full source files.
+- In this repo, `swift-native/VoiceLinkNative/Sources` is the authoritative macOS desktop source tree.
+- `swift-native/VoiceLinkNative/VoiceLink.app` is a tracked local app bundle snapshot used for rebuild/install validation, but it is not the source of truth over `Sources`.
+- `swift-native/VoiceLinkNative/build-temp` and `swift-native/VoiceLinkNative/VoiceLink-release.app` are stale artifact trees and must not be used as authoritative recovery paths.
 
 ## Desktop + API Parity Checklist
 
@@ -55,7 +70,7 @@ Status labels:
 
 - `[ ]` Populate real tests under `tests/unit`, `tests/integration`, and `tests/e2e` (currently scaffold dirs)
 - `[ ]` Remove stale artifact-only native trees from git tracking or replace with source-of-truth code
-- `[ ]` Keep release docs aligned with ZIP-first macOS distribution policy
+- `[x]` Keep release docs aligned with current macOS ZIP/pkg distribution policy and in-app audio recovery behavior
 
 ## Features
 
@@ -141,10 +156,17 @@ Download the latest release for your platform:
 #### 🍎 **macOS**
 - **Primary distribution artifact**: `VoiceLinkMacOS.zip`
 - **Compatibility alias artifact**: `VoiceLink-macOS.zip`
-- **Public download URL**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
+- **Public download URL**: `https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip`
 - **Updater manifest**: `swift-native/VoiceLinkNative/latest-mac.yml`
 - **Server updater manifest**: `swift-native/VoiceLinkNative/latest-mac.server.yml`
 - **Installation**: Extract ZIP, place `VoiceLink.app` in `/Applications`, launch.
+- **Recovery controls in app**: Use `Audio` menu or Settings -> Audio to refresh devices or restart macOS audio services if device lists come up empty after reboot or route changes.
+
+### Server Directory Display
+
+VoiceLink clients group server selection by owner. Each owner appears as a button that shows the number of servers currently listed for that owner, for example `VoiceLink (2 servers)` or `Devine Creations (2 servers)`. Users open that owner button to show the servers behind it.
+
+Server owners can configure the owner display name, public server display name, and display mode from the server administration settings. The server API exposes this metadata through discovery so macOS, iOS, federation search, and public directory views use the same owner grouping and searchable labels.
 
 #### 🪟 **Windows**
 - Windows desktop is currently not released for production users in this channel.

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Help</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>VoiceLink Help</h1>
+                <p class="subtitle">Task-first documentation for VoiceOver, keyboard, and desktop users.</p>
+                <nav class="header-nav" aria-label="Documentation navigation">
+                    <a href="../client/index.html" class="nav-link">Back to App</a>
+                    <a href="getting-started.html" class="nav-link">Getting Started</a>
+                    <a href="voiceover-support.html" class="nav-link">VoiceOver Support</a>
+                </nav>
+            </div>
+        </header>
+
+        <section id="search" class="search-section">
+            <div class="search-container">
+                <h2>Find Help</h2>
+                <label for="search-input">Search documentation</label>
+                <input type="text" id="search-input" placeholder="Search documentation">
+                <div id="search-results" class="search-results" aria-live="polite"></div>
+            </div>
+        </section>
+
+        <main class="content" id="main-content">
+            <div class="content-wrapper">
+                <section class="article-intro" aria-labelledby="help-overview">
+                    <h2 id="help-overview">Start with the task you need to complete</h2>
+                    <p>VoiceLink documentation is organized around the actions people actually take in the app. Start with the guide that matches what you need right now, then move to the more detailed pages only if you need them.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="top-guides">
+                    <h2 id="top-guides">Top Guides</h2>
+                    <div class="quick-start-grid">
+                        <div class="quick-card">
+                            <h3>Get connected</h3>
+                            <p>Install the app, choose a server, and join your first room.</p>
+                            <a href="getting-started.html" class="btn-primary">Open Getting Started</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Use VoiceOver</h3>
+                            <p>Read the task-first accessibility guide for room lists, messages, and controls.</p>
+                            <a href="voiceover-support.html" class="btn-primary">Open VoiceOver Guide</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Manage rooms</h3>
+                            <p>Learn how room details, room access, and room audio settings are organized.</p>
+                            <a href="room-management.html" class="btn-primary">Open Room Guide</a>
+                        </div>
+                        <div class="quick-card">
+                            <h3>Fix a problem</h3>
+                            <p>Use the troubleshooting section in each guide before sending diagnostics.</p>
+                            <a href="authentication.html" class="btn-primary">Open Troubleshooting</a>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="article-section" aria-labelledby="common-tasks">
+                    <h2 id="common-tasks">Common Tasks</h2>
+                    <div class="support-grid">
+                        <article class="support-card">
+                            <h3>Join Main or Community</h3>
+                            <p>Use the server list to choose the correct server, then activate a room row to open details, preview media, or join.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Check who is in a room</h3>
+                            <p>Open room details or join the room, then move to the user list and message area to confirm users, bots, and system messages.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Adjust audio safely</h3>
+                            <p>Open the room controls or user actions menu to change monitoring, mute, volume, or room background media without leaving the room.</p>
+                        </article>
+                        <article class="support-card">
+                            <h3>Send diagnostics</h3>
+                            <p>Open Settings, choose diagnostics or bug reporting, and send a short description of the issue after reproducing it once.</p>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="article-section" aria-labelledby="recommended-reading">
+                    <h2 id="recommended-reading">Recommended Reading Order</h2>
+                    <ol>
+                        <li>Read <a href="getting-started.html">Getting Started</a> if you are new to VoiceLink or switching devices.</li>
+                        <li>Read <a href="voiceover-support.html">Using VoiceLink with VoiceOver</a> if you rely on VoiceOver, keyboard navigation, or spoken status updates.</li>
+                        <li>Read <a href="room-management.html">Room Management</a> if you create rooms, moderate rooms, or manage room media.</li>
+                        <li>Read <a href="authentication.html">Authentication</a> if you need to sign in, reconnect, or work with more than one server.</li>
+                    </ol>
+                </section>
+
+                <section class="article-section" aria-labelledby="support-close">
+                    <h2 id="support-close">Contact and Feedback</h2>
+                    <p>If the guide for your task does not match what the app says, send diagnostics from the app and include the server name, room name, and the exact label of the control that did not behave as expected.</p>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="scripts/search.js"></script>
+    <script src="scripts/docs.js"></script>
+</body>
+</html>

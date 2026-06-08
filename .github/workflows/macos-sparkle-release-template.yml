@@ -1,0 +1,73 @@
+name: macOS Sparkle Release Template
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: CFBundleShortVersionString
+        required: true
+        default: 1.0.0
+      app_build:
+        description: Numeric CFBundleVersion
+        required: true
+      upload_artifact:
+        description: Upload generated zip/appcast artifacts
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  sparkle-release:
+    runs-on: macos-14
+    env:
+      APP_NAME: VoiceLink
+      PRODUCT_NAME: VoiceLinkNative
+      BUNDLE_ID: com.devinecreations.voicelink
+      APP_VERSION: ${{ inputs.app_version }}
+      APP_BUILD: ${{ inputs.app_build }}
+      APPCAST_URL: https://voicelinkapp.app/downloads/voicelink/appcast.xml
+      DOWNLOAD_BASE_URL: https://voicelinkapp.app/downloads/voicelink
+      BUILD_ARCHS: x86_64
+      SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+      SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Import signing certificate
+        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Build Sparkle release artifacts
+        run: swift-native/VoiceLinkNative/scripts/macos_sparkle_release.sh
+
+      - name: Upload artifacts
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-sparkle-release-${{ inputs.app_build }}
+          path: |
+            swift-native/VoiceLinkNative/build/sparkle-release/*.zip
+            swift-native/VoiceLinkNative/build/sparkle-release/appcast/appcast.xml
+            swift-native/VoiceLinkNative/build/sparkle-release/*.app
+          retention-days: 14

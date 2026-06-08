@@ -16,18 +16,41 @@ node_modules/
 # Temporary files
 *.log
 *.tmp
+.env
+*.env.local
 
 # Local runtime state (admin-manageable via UI/API)
+data/local-auth-users.json
 data/rooms.json
+data/scheduler/
+data/uploads/
+voicelink-app/data/deploy.json
+server/tools/__pycache__/
+source/server/tools/__pycache__/
+__pycache__/
+*.pyc
 
 # Large archives
 releases.zip
 *.tar.gz
+releases/
 
 # Build outputs
 build/
 dist/
 *.zip
+*.pkg
+*.pkg.sha256
+*.dmg
+*.dmg.sha256
+swift-native/VoiceLinkNative/VoiceLink.app/
+swift-native/VoiceLinkNative/VoiceLink-release.app/
+swift-native/VoiceLinkNative/build-temp/
+swift-native/VoiceLinkNative/build-universal/
+swift-native/VoiceLinkNative/release-artifacts/
+swift-native/*/.build/
+swift-native/*/build/
+swift-native/*/*.dSYM/
 
 # Windows build artifacts
 windows-native/obj/
@@ -39,3 +62,7 @@ windows-native/VoiceLinkNative/bin/
 source/assets/sounds/ambience/*.wav
 source/assets/sounds/ambience/*.flac
 source/assets/sounds/ambience/*.mp3
+
+# Local Python/AI runtime environments
+server/.venv*/
+source/server/.venv*/

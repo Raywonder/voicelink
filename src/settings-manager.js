@@ -138,6 +138,7 @@ class RobustSettingsManager {
 
             // UI settings
             startMinimized: false,
+            startupBehaviorConfigured: false,
             hideToTrayOnClose: true,
             keepInMenubar: true,
             theme: 'system',

@@ -756,13 +756,13 @@ class RoomManager: ObservableObject {
     }
 
     private func setupNotifications() {
-        NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: nil) { [weak self] _ in
             // Recalculate capacity when Mastodon account loads
             self?.serverRoomCapacity = self?.calculatedServerCapacity ?? 50
             self?.saveRooms()
         }
 
-        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: nil) { [weak self] _ in
             self?.serverRoomCapacity = self?.calculatedServerCapacity ?? 50
             self?.saveRooms()
         }

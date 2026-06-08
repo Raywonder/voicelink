@@ -111,6 +111,68 @@ class SupportTicketSystem {
         return `TKT-${dateStr}-${random}`;
     }
 
+    sanitizeMetadataValue(value) {
+        if (typeof value === 'string') {
+            return value.trim().slice(0, 500);
+        }
+        if (typeof value === 'number' || typeof value === 'boolean') {
+            return value;
+        }
+        if (Array.isArray(value)) {
+            return value.slice(0, 20).map(item => this.sanitizeMetadataValue(item));
+        }
+        if (value && typeof value === 'object') {
+            return this.sanitizeTicketMetadata(value);
+        }
+        return '';
+    }
+
+    sanitizeTicketMetadata(metadata = {}) {
+        const clean = {};
+        Object.entries(metadata || {}).forEach(([key, value]) => {
+            if (typeof key !== 'string') return;
+            const normalizedKey = key.trim().slice(0, 80);
+            if (!normalizedKey) return;
+            if (/token|secret|password|passphrase|key|authorization|cookie/i.test(normalizedKey)) {
+                return;
+            }
+            clean[normalizedKey] = this.sanitizeMetadataValue(value);
+        });
+        return clean;
+    }
+
+    getTicketScope(data = {}) {
+        const metadata = this.sanitizeTicketMetadata(data.metadata || {});
+        const pick = (...values) => values
+            .map(value => (typeof value === 'string' ? value.trim() : ''))
+            .find(Boolean) || '';
+
+        return {
+            metadata,
+            channel: pick(data.channel, metadata.channel, 'voicelink'),
+            serverUrl: pick(data.serverUrl, data.serverURL, metadata.serverUrl, metadata.serverURL, metadata.serverBaseURL),
+            serverName: pick(data.serverName, metadata.serverName, metadata.serverLabel),
+            roomId: pick(data.roomId, data.roomID, metadata.roomId, metadata.roomID),
+            roomName: pick(data.roomName, metadata.roomName),
+            sourceContext: pick(data.sourceContext, metadata.sourceContext)
+        };
+    }
+
+    ticketMatchesScope(ticket, options = {}) {
+        const matchString = (actual, expected) => {
+            const expectedValue = String(expected || '').trim().toLowerCase();
+            if (!expectedValue) return true;
+            return String(actual || '').trim().toLowerCase() === expectedValue;
+        };
+
+        return matchString(ticket.serverUrl, options.serverUrl || options.serverURL)
+            && matchString(ticket.serverName, options.serverName)
+            && matchString(ticket.roomId, options.roomId || options.roomID)
+            && matchString(ticket.roomName, options.roomName)
+            && matchString(ticket.channel, options.channel)
+            && matchString(ticket.sourceContext, options.sourceContext);
+    }
+
     /**
      * Create a new support ticket
      */
@@ -123,11 +185,13 @@ class SupportTicketSystem {
             description,
             category = 'general',
             priority = TICKET_PRIORITY.MEDIUM,
+            channel = 'voicelink',
             attachments = []
         } = data;
 
         const ticketId = this.generateTicketId();
         const now = Date.now();
+        const scope = this.getTicketScope({ ...data, channel });
 
         const ticket = {
             id: ticketId,
@@ -138,6 +202,13 @@ class SupportTicketSystem {
             description,
             category,
             priority,
+            channel: scope.channel,
+            metadata: scope.metadata,
+            serverUrl: scope.serverUrl,
+            serverName: scope.serverName,
+            roomId: scope.roomId,
+            roomName: scope.roomName,
+            sourceContext: scope.sourceContext,
             status: TICKET_STATUS.OPEN,
             assignedTo: null,
             attachments,
@@ -171,6 +242,12 @@ class SupportTicketSystem {
             subject,
             category,
             priority,
+            channel: scope.channel,
+            serverUrl: scope.serverUrl,
+            serverName: scope.serverName,
+            roomId: scope.roomId,
+            roomName: scope.roomName,
+            sourceContext: scope.sourceContext,
             status: ticket.status,
             assignedTo: null,
             createdAt: now,
@@ -223,6 +300,8 @@ class SupportTicketSystem {
             indexEntry.status = ticket.status;
             indexEntry.priority = ticket.priority;
             indexEntry.assignedTo = ticket.assignedTo;
+            indexEntry.externalTicket = ticket.externalTicket || null;
+            indexEntry.externalSync = ticket.metadata?.externalSync || null;
             indexEntry.updatedAt = ticket.updatedAt;
             this.saveTicketIndex();
         }
@@ -414,6 +493,7 @@ class SupportTicketSystem {
         if (status) {
             tickets = tickets.filter(t => t.status === status);
         }
+        tickets = tickets.filter(t => this.ticketMatchesScope(t, options));
 
         tickets.sort((a, b) => b.updatedAt - a.updatedAt);
         return tickets.slice(offset, offset + limit);
@@ -455,6 +535,7 @@ class SupportTicketSystem {
         if (category) {
             tickets = tickets.filter(t => t.category === category);
         }
+        tickets = tickets.filter(t => this.ticketMatchesScope(t, options));
 
         tickets.sort((a, b) => {
             // Sort by priority first (urgent > high > medium > low)

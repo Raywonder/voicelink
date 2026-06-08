@@ -690,8 +690,9 @@ class VoiceLinkApp {
             // Check for auto-minimize setting (but always show in dev mode)
             const autoMinimizeOnStart = this.settings.get('autoMinimizeOnStart', false);
             const startMinimized = this.settings.get('startMinimized', false);
+            const startupBehaviorConfigured = this.settings.get('startupBehaviorConfigured', false);
 
-            if ((autoMinimizeOnStart || startMinimized) && !this.isDev) {
+            if (startupBehaviorConfigured && (autoMinimizeOnStart || startMinimized) && !this.isDev) {
                 // Start minimized to tray (but not in dev mode)
                 if (!this.hasShownTrayNotification) {
                     this.showNotification('VoiceLink started in menubar. Server is ready for connections.');
@@ -1147,6 +1148,9 @@ class VoiceLinkApp {
 
         ipcMain.handle('set-setting', (event, key, value) => {
             this.settings.set(key, value);
+            if (key === 'autoMinimizeOnStart' || key === 'startMinimized') {
+                this.settings.set('startupBehaviorConfigured', true);
+            }
             this.updateTrayMenu(); // Update tray menu when settings change
             return true;
         });

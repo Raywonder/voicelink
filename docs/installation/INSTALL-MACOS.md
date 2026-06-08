@@ -10,8 +10,8 @@
 ## Download Options
 
 ### Universal Build (Apple Silicon + Intel)
-- **Primary ZIP**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLinkMacOS.zip`
-- **Alias ZIP**: `https://voicelink.devinecreations.net/downloads/voicelink/VoiceLink-macOS.zip`
+- **Primary ZIP**: `https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip`
+- **Alias ZIP**: `https://voicelinkapp.app/downloads/voicelink/VoiceLink-macOS.zip`
 
 ## Installation Methods
 
@@ -29,7 +29,7 @@ On first launch, macOS may show a security warning:
 
 1. **If you see "VoiceLink cannot be opened"**:
    - Go to **System Preferences** → **Security & Privacy**
-   - Click **"Open Anyway"** next to the VoiceLink Local message
+   - Click **"Open Anyway"** next to the VoiceLink message
    - Click **"Open"** in the confirmation dialog
 
 2. **Alternative method**:
@@ -53,7 +53,7 @@ VoiceLink requires microphone access:
 
 ### Professional Audio Interfaces
 For best results with professional audio interfaces:
-- Install manufacturer drivers before launching VoiceLink Local
+- Install manufacturer drivers before launching VoiceLink
 - Configure buffer sizes in your audio interface control panel
 - Use aggregate devices for multiple audio interfaces
 
@@ -68,7 +68,24 @@ For best results with professional audio interfaces:
 - **Check microphone permissions** in System Preferences
 - **Verify audio interface** is properly connected and recognized
 - **Try different sample rates** in Audio MIDI Setup
-- **Restart audio services**: `sudo launchctl stop com.apple.audio.coreaudiod && sudo launchctl start com.apple.audio.coreaudiod`
+- **Monitoring in rooms is supported again** in the current macOS build
+- **Input/output sliders include an internal `+15%` gain boost** to keep mid-range levels usable
+- **Use the built-in recovery tools first**:
+  - `Audio` menu -> `Refresh Audio Devices`
+  - `Audio` menu -> `Restart Audio Services`
+  - Settings -> Audio -> `Refresh Device List`
+  - Settings -> Audio -> `Restart Audio Services`
+- **If you still need Terminal recovery**: `sudo killall coreaudiod`
+
+### Empty Device List After Reboot or Route Changes
+If VoiceLink shows only `Default` for input/output devices:
+
+1. Open the app's `Audio` menu
+2. Choose `Refresh Audio Devices`
+3. If devices are still missing, choose `Restart Audio Services`
+4. Re-open Settings -> Audio and confirm the input/output pickers repopulate
+
+If macOS itself still reports no devices after the restart, the issue is OS-side rather than VoiceLink-specific.
 
 ### Performance Issues
 - **Close other audio applications** that might conflict
@@ -94,6 +111,7 @@ VoiceLink supports advanced audio routing. See the main documentation for detail
 - VST plugin configuration
 - 3D spatial audio settings
 - Professional audio workflows
+- CoreAudio device selection from the in-app Audio menu and Settings panel
 
 ### Command Line Options
 Launch with custom settings:

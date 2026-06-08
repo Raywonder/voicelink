@@ -1,0 +1,7 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+
+# Serve canonical static download pages instead of falling into the client app shell.
+RewriteRule ^client/downloads-enhanced\.html$ downloads-enhanced.html [L]
+RewriteRule ^client/downloads\.html$ downloads.html [L]
+</IfModule>

@@ -46,9 +46,15 @@ class AudioEngine {
         this.settings = {
             inputVolume: 1.0,
             outputVolume: 1.0,
-            noiseSuppression: true,
-            echoCancellation: true,
-            autoGainControl: true
+            sampleRate: 48000,
+            channels: 2,
+            codec: 'opus',
+            preferredCodec: 'opus',
+            audioMode: 'original',
+            noiseSuppression: false,
+            echoCancellation: false,
+            autoGainControl: false,
+            originalAudio: true
         };
 
         this.init();
@@ -186,9 +192,10 @@ class AudioEngine {
                     volume: 1.0,
                     muted: false,
                     processing: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        originalAudio: true
                     }
                 });
             });
@@ -225,8 +232,8 @@ class AudioEngine {
                 echoCancellation: this.settings.echoCancellation,
                 noiseSuppression: this.settings.noiseSuppression,
                 autoGainControl: this.settings.autoGainControl,
-                sampleRate: 48000,
-                channelCount: 1
+                sampleRate: this.settings.sampleRate,
+                channelCount: this.settings.channels
             },
             video: false
         };
@@ -554,8 +561,8 @@ class AudioEngine {
                             noiseSuppression: false,
                             autoGainControl: false,
                             latency: 0.01, // Request low latency
-                            sampleRate: 48000,
-                            channelCount: 1
+                            sampleRate: this.settings.sampleRate,
+                            channelCount: this.settings.channels
                         }
                     });
                     this.micTestStream = testStream; // Store separately so we can clean it up
@@ -912,8 +919,8 @@ class AudioEngine {
                         echoCancellation: this.inputSettings.get(inputType).processing.echoCancellation,
                         noiseSuppression: this.inputSettings.get(inputType).processing.noiseSuppression,
                         autoGainControl: this.inputSettings.get(inputType).processing.autoGainControl,
-                        sampleRate: 48000,
-                        channelCount: 1
+                        sampleRate: this.settings.sampleRate,
+                        channelCount: this.settings.channels
                     },
                     video: false
                 };

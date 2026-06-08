@@ -21,6 +21,7 @@ namespace VoiceLinkNative.Services
         private string _connectedServer = "";
         private string _serverStatus = "Disconnected";
         private CancellationTokenSource? _domainRecoveryCts;
+        private CancellationTokenSource? _backendRefreshCts;
 
         public const string MainServerUrl = "https://voicelink.devinecreations.net";
         public const string LocalServerUrl = "http://localhost:3010";
@@ -78,7 +79,7 @@ namespace VoiceLinkNative.Services
             _socket = new SocketIOClient.SocketIO(serverUrl, new SocketIOOptions
             {
                 Reconnection = true,
-                ReconnectionAttempts = 10,
+                ReconnectionAttempts = int.MaxValue,
                 ReconnectionDelay = 1000
             });
 
@@ -90,6 +91,7 @@ namespace VoiceLinkNative.Services
                 OnPropertyChanged(nameof(IsConnected));
                 Connected?.Invoke(this, EventArgs.Empty);
                 StartDomainRecoveryMonitor(serverUrl);
+                StartBackendRefreshMonitor();
                 // Request rooms on connect
                 _socket.EmitAsync("get-rooms");
             };
@@ -98,6 +100,7 @@ namespace VoiceLinkNative.Services
             {
                 Console.WriteLine("Disconnected from server");
                 StopDomainRecoveryMonitor();
+                StopBackendRefreshMonitor();
                 ServerStatus = "Disconnected";
                 OnPropertyChanged(nameof(IsConnected));
                 Disconnected?.Invoke(this, EventArgs.Empty);
@@ -175,6 +178,7 @@ namespace VoiceLinkNative.Services
         {
             _socket?.DisconnectAsync();
             StopDomainRecoveryMonitor();
+            StopBackendRefreshMonitor();
             ServerStatus = "Disconnected";
             ConnectedServer = "";
             OnPropertyChanged(nameof(IsConnected));
@@ -336,6 +340,48 @@ namespace VoiceLinkNative.Services
                 _domainRecoveryCts.Cancel();
                 _domainRecoveryCts.Dispose();
                 _domainRecoveryCts = null;
+            }
+        }
+
+        private void StartBackendRefreshMonitor()
+        {
+            StopBackendRefreshMonitor();
+            _backendRefreshCts = new CancellationTokenSource();
+            var token = _backendRefreshCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(30), token);
+                        if (token.IsCancellationRequested || _socket == null || !_socket.Connected)
+                        {
+                            continue;
+                        }
+
+                        await _socket.EmitAsync("get-rooms");
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Keep the current connection alive; a later tick can recover.
+                    }
+                }
+            }, token);
+        }
+
+        private void StopBackendRefreshMonitor()
+        {
+            if (_backendRefreshCts != null)
+            {
+                _backendRefreshCts.Cancel();
+                _backendRefreshCts.Dispose();
+                _backendRefreshCts = null;
             }
         }
 

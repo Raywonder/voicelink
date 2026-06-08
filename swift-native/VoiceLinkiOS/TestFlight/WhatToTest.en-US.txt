@@ -1,30 +1,22 @@
-VoiceLink TestFlight Build 28
+Build 94 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
 
-This is a very important build to test.
+What changed:
+- Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
+- VoiceOver actions for people and bot rows stay in the active room when showing profile details, direct messages, monitoring, whisper, or audio controls.
+- The user details sheet now shows room state, transmit state, mute/output state, speaking state, bot type, role, authentication provider, and device/client details when available.
+- The current signed-in user row still allows monitoring and audio controls, but does not expose Whisper.
+- Other people expose Whisper only when they have audio available.
+- Text-only bots expose text actions such as profile and direct message without audio controls.
+- Audio-capable bots can expose both text and audio-related actions.
+- iOS room audio now uses a slightly larger room I/O buffer and a larger relay packet queue to reduce join-time buffering while keeping latency low.
 
-Primary focus for this build:
-- Join a room and confirm audio starts cleanly instead of buffering, chopping, or staying silent.
-- Watch device performance while opening the app and joining a room, including heat, battery drain, and general responsiveness.
-- Confirm microphone audio works after joining and that preview audio stops cleanly when the room opens.
-- Sign in with a normal VoiceLink account and confirm login stays on VoiceLink's internal auth path.
-- Join as a guest with a typed name and confirm the room opens correctly.
-- Confirm the app still uses the two-tab layout: Main and Settings.
-- Confirm the Profile sheet shows signed-in account state for logged-in users and Sign In / Device Pair actions for guests.
-- Confirm room activity and people lists update from the current room.
-- Open Support from Settings and confirm it goes to VoiceLink internal support first while WHMCS remains unavailable.
-
-Also verify:
-- Web frontend links open correctly from iOS.
-- Privacy, terms, and support pages load from the public VoiceLink site.
-- Guests do not see admin-only controls.
-- Returning to the app after backgrounding does not leave it stuck or blank.
-- If audio fails, include whether it buffered forever, chopped briefly, or never started at all.
-- If the phone gets warm, include how quickly that happened and whether it was only on open or also after joining a room.
-
-Please include in reports:
-- device model and iOS version
-- build number 28
-- server used
-- exact steps
-- expected result vs actual result
-- screenshot or screen recording if available
+Please test:
+- Join a room on iOS with VoiceOver enabled.
+- Focus your own user row and confirm Monitoring or Audio Controls are available, but Whisper is not.
+- Use the View Profile action and confirm the user details sheet opens without leaving the room or disconnecting.
+- Open and close audio controls from your own row and another user's row and confirm the room remains active.
+- Focus another person with audio and confirm Whisper and audio actions are available.
+- Focus a text-only bot and confirm only text-related actions are offered.
+- Focus an audio-capable bot and confirm both text and audio actions are offered.
+- Join a room and confirm audio starts with less buffering and no new distortion, clipping, or repeated join sounds.
+- Leave the details sheet, People in Room sheet, and audio controls and confirm room messages and users remain visible.

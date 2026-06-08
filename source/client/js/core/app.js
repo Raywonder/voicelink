@@ -1,5 +1,5 @@
 /**
- * VoiceLink Local Application
+ * VoiceLink Application
  * Main application controller
  */
 
@@ -24,6 +24,8 @@ class VoiceLinkApp {
         this.lastEscapePressAt = 0;
         this.escapeDoublePressWindowMs = 1300;
         this.escapeMenuOpen = false;
+        this.lastFocusedTrigger = null;
+        this.authModalKeydownHandler = null;
 
         // Audio playback management
         this.currentAudio = null;
@@ -124,7 +126,7 @@ class VoiceLinkApp {
 
     routeStartupExperience() {
         this.startServerStatusMonitoring();
-        if (this.shouldShowStartupAuthGate()) {
+        if (this.shouldShowStartupAuthGate() && document.getElementById('startup-auth-screen')) {
             this.showScreen('startup-auth-screen');
         } else {
             this.showScreen('main-menu');
@@ -237,6 +239,7 @@ class VoiceLinkApp {
                 </div>
             </section>
         `;
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         const close = () => {
@@ -699,6 +702,7 @@ class VoiceLinkApp {
         const existingNameField = document.getElementById('user-name');
         const rememberedName = this.currentUser?.displayName
             || this.currentUser?.username
+            || localStorage.getItem('voicelink_guest_display_name')
             || localStorage.getItem('voicelink_support_name')
             || localStorage.getItem('username')
             || '';
@@ -708,6 +712,12 @@ class VoiceLinkApp {
         }
         if (existingNameField && rememberedName) {
             existingNameField.value = rememberedName;
+        }
+
+        if (!this.currentUser && !rememberedName) {
+            this.showScreen('join-room-screen');
+            setTimeout(() => existingNameField?.focus(), 200);
+            return;
         }
 
         setTimeout(() => {
@@ -1277,6 +1287,7 @@ class VoiceLinkApp {
         `;
 
         overlay.appendChild(content);
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         document.getElementById('multi-device-join-btn')?.addEventListener('click', () => {
@@ -1947,8 +1958,9 @@ class VoiceLinkApp {
             this.sendChatMessage();
         });
 
-        document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
+        document.getElementById('chat-input')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
                 this.sendChatMessage();
             }
         });
@@ -2182,9 +2194,11 @@ class VoiceLinkApp {
         overlay.id = 'escape-options-menu';
         overlay.className = 'modal';
         overlay.style.display = 'flex';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
         overlay.innerHTML = `
             <div class="modal-content" style="${isIOSMenu ? 'max-width: 560px; width: 94%; border-radius: 18px 18px 0 0; margin-top: auto; margin-bottom: 0; padding-bottom: calc(1rem + var(--safe-area-inset-bottom, 0px));' : 'max-width: 420px; width: 90%;'}">
-                <h3 style="margin-top:0;">Navigation Menu</h3>
+                <h3 id="escape-menu-title" style="margin-top:0;">Navigation Menu</h3>
                 <p style="opacity:.8; margin-top:0;">${isIOSMenu ? 'Tap an option below.' : 'Double Escape opened this menu. Press Escape to close.'}</p>
                 <div class="button-group" id="escape-options-actions"></div>
             </div>
@@ -2205,6 +2219,7 @@ class VoiceLinkApp {
             }
         });
 
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
     }
 
@@ -2221,8 +2236,25 @@ class VoiceLinkApp {
         });
 
         // Show target screen
-        document.getElementById(screenId)?.classList.add('active');
+        const targetScreen = document.getElementById(screenId);
+        targetScreen?.classList.add('active');
         this.ui.currentScreen = screenId;
+        const focusTarget = targetScreen?.querySelector('h1, h2, [data-screen-focus]') || targetScreen;
+        if (focusTarget && typeof focusTarget.focus === 'function') {
+            if (!focusTarget.hasAttribute('tabindex')) {
+                focusTarget.setAttribute('tabindex', '-1');
+            }
+            setTimeout(() => focusTarget.focus(), 0);
+        }
+
+        const politeRegion = document.getElementById('app-status-live');
+        const label = targetScreen?.querySelector('h1, h2')?.textContent?.trim() || screenId.replace(/-/g, ' ');
+        if (politeRegion) {
+            politeRegion.textContent = '';
+            setTimeout(() => {
+                politeRegion.textContent = `${label} screen opened`;
+            }, 10);
+        }
 
         console.log('Switched to screen:', screenId);
     }
@@ -3561,6 +3593,10 @@ class VoiceLinkApp {
             return;
         }
 
+        if (!this.currentUser && userName.trim()) {
+            localStorage.setItem('voicelink_guest_display_name', userName.trim());
+        }
+
         try {
             // Initialize WebRTC manager
             this.webrtcManager = new WebRTCManager(
@@ -3953,6 +3989,7 @@ class VoiceLinkApp {
             </div>
         `;
 
+        overlay.setAttribute('aria-labelledby','escape-menu-title');
         document.body.appendChild(overlay);
 
         // Animate progress bar
@@ -4234,6 +4271,7 @@ class VoiceLinkApp {
         if (message && this.socket) {
             this.socket.emit('chat-message', { message });
             input.value = '';
+            input.style.height = '';
         }
     }
 
@@ -4256,6 +4294,7 @@ class VoiceLinkApp {
         }
 
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
+        const previewMarkup = this.buildChatLinkPreviewMarkup(message);
 
         messageElement.innerHTML = `
             <div class="message-header">
@@ -4263,6 +4302,7 @@ class VoiceLinkApp {
                 <span class="timestamp">${timestamp}</span>
             </div>
             <div class="message-text">${this.formatChatMessage(message.message)}</div>
+            ${previewMarkup}
         `;
 
         chatMessages.appendChild(messageElement);
@@ -4288,13 +4328,56 @@ class VoiceLinkApp {
 
     formatChatMessage(value) {
         const escaped = this.escapeHtml(value || '');
-        return escaped
+        const tokens = [];
+        let formatted = escaped
             .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, title, url) => {
                 const safeTitle = this.escapeHtml(title);
                 const safeUrl = this.escapeHtml(url);
-                return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`;
+                const token = `__VL_MD_LINK_${tokens.length}__`;
+                tokens.push(`<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>`);
+                return token;
+            })
+            .replace(/\b((?:https?:\/\/|www\.)[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>"']*)?)/gi, (match) => {
+                if (match.includes('@')) {
+                    return match;
+                }
+                const trimmed = match.replace(/[),.!?;:]+$/g, '');
+                const suffix = match.slice(trimmed.length);
+                if (!trimmed) {
+                    return match;
+                }
+                const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+                const safeHref = this.escapeHtml(href);
+                const safeLabel = this.escapeHtml(trimmed);
+                return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>${suffix}`;
             })
             .replace(/\n/g, '<br>');
+
+        tokens.forEach((tokenValue, index) => {
+            formatted = formatted.replace(`__VL_MD_LINK_${index}__`, tokenValue);
+        });
+        return formatted;
+    }
+
+    buildChatLinkPreviewMarkup(message = {}) {
+        const preview = message?.linkPreview || null;
+        if (!preview?.url) {
+            return '';
+        }
+
+        const safeUrl = this.escapeHtml(preview.url);
+        const safeTitle = this.escapeHtml(preview.title || preview.host || preview.url);
+        const safeHost = this.escapeHtml(preview.host || '');
+        const description = String(preview.description || '').trim();
+        const safeDescription = this.escapeHtml(description.length > 220 ? `${description.slice(0, 220)}...` : description);
+
+        return `
+            <div class="message-link-preview">
+                <a class="message-link-preview__title" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>
+                ${safeHost ? `<div class="message-link-preview__host">${safeHost}</div>` : ''}
+                ${safeDescription ? `<p class="message-link-preview__description">${safeDescription}</p>` : ''}
+            </div>
+        `;
     }
 
     playUiSound(filename, volume = 0.6) {
@@ -4443,7 +4526,7 @@ class VoiceLinkApp {
 
     showError(message) {
         console.error('Error:', message);
-        alert(`Error: ${message}`); // In a real app, use a proper modal
+        this.showNotification(String(message || 'Unknown error'), 'error');
     }
 
     showSuccess(message) {
@@ -4453,6 +4536,20 @@ class VoiceLinkApp {
 
     // Simple notification system without dialogs
     showNotification(message, type = 'info') {
+        const politeRegion = document.getElementById('app-status-live');
+        const alertRegion = document.getElementById('app-alert-live');
+        if (type === 'error' && alertRegion) {
+            alertRegion.textContent = '';
+            setTimeout(() => {
+                alertRegion.textContent = message;
+            }, 10);
+        } else if (politeRegion) {
+            politeRegion.textContent = '';
+            setTimeout(() => {
+                politeRegion.textContent = message;
+            }, 10);
+        }
+
         // Create notification element
         const notification = document.createElement('div');
         notification.style.cssText = `
@@ -5149,7 +5246,7 @@ class VoiceLinkApp {
     }
 
     applySavedIdentityPreferences() {
-        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || '').trim();
+        const displayName = (document.getElementById('auth-display-name')?.value || localStorage.getItem('voicelink_auth_display_name') || localStorage.getItem('voicelink_guest_display_name') || '').trim();
         const mastodonHandle = (document.getElementById('auth-preferred-mastodon-handle')?.value || localStorage.getItem('voicelink_auth_preferred_mastodon_handle') || '').trim();
         const joinNameInput = document.getElementById('user-name');
         const whmcsMastodonHandleInput = document.getElementById('whmcs-mastodon-handle');
@@ -5462,14 +5559,7 @@ class VoiceLinkApp {
         document.querySelectorAll('.auth-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const tabId = tab.dataset.tab;
-                // Update tab active state
-                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                // Update content visibility
-                document.querySelectorAll('.auth-tab-content').forEach(content => {
-                    content.classList.remove('active');
-                });
-                document.getElementById(`${tabId}-tab`)?.classList.add('active');
+                this.setActiveAuthTab(tabId);
             });
         });
 
@@ -5588,23 +5678,70 @@ class VoiceLinkApp {
     showMastodonLoginModal(tabId = 'local-login') {
         const modal = document.getElementById('mastodon-login-modal');
         if (modal) {
+            this.lastFocusedTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             modal.style.display = 'flex';
             this.setActiveAuthTab(tabId);
+            this.syncAuthModalSignedInState();
+            this.activateAuthModalFocusManagement();
+            const closeBtn = document.getElementById('close-login-modal');
+            if (closeBtn) {
+                setTimeout(() => closeBtn.focus(), 0);
+            }
+        }
+    }
+
+    syncAuthModalSignedInState() {
+        const user = this.currentUser || window.mastodonAuth?.getUser() || null;
+        const modal = document.getElementById('mastodon-login-modal');
+        if (!modal) return;
+
+        let summary = document.getElementById('auth-modal-signed-in-summary');
+        if (!summary) {
+            summary = document.createElement('div');
+            summary.id = 'auth-modal-signed-in-summary';
+            summary.className = 'auth-status-card';
+            summary.setAttribute('aria-live', 'polite');
+            const tabs = modal.querySelector('.auth-tabs');
+            tabs?.parentNode?.insertBefore(summary, tabs.nextSibling);
+        }
+
+        const accountForms = [
+            document.getElementById('local-login-form'),
+            document.getElementById('whmcs-login-form')
+        ];
+
+        if (user) {
+            const displayName = user.displayName || user.username || user.email || 'Client Account';
+            summary.textContent = `Signed in as ${displayName}. Sign out before entering another username or email.`;
+            summary.hidden = false;
+            accountForms.forEach(form => {
+                if (form) form.hidden = true;
+            });
+        } else {
+            summary.hidden = true;
+            accountForms.forEach(form => {
+                if (form) form.hidden = false;
+            });
         }
     }
 
     setActiveAuthTab(tabId) {
-        document.querySelectorAll('.auth-tab').forEach(tab => {
-            if (tab.dataset.tab === tabId) {
-                tab.classList.add('active');
-            } else {
-                tab.classList.remove('active');
-            }
+        const tabs = Array.from(document.querySelectorAll('.auth-tab'));
+        tabs.forEach(tab => {
+            const isActive = tab.dataset.tab === tabId;
+            tab.classList.toggle('active', isActive);
+            tab.setAttribute('aria-selected', String(isActive));
+            tab.setAttribute('tabindex', isActive ? '0' : '-1');
         });
         document.querySelectorAll('.auth-tab-content').forEach(content => {
-            content.classList.remove('active');
+            const isActive = content.id === `${tabId}-tab`;
+            content.classList.toggle('active', isActive);
+            if (isActive) {
+                content.removeAttribute('hidden');
+            } else {
+                content.setAttribute('hidden', 'hidden');
+            }
         });
-        document.getElementById(`${tabId}-tab`)?.classList.add('active');
     }
 
     hideMastodonLoginModal() {
@@ -5612,10 +5749,86 @@ class VoiceLinkApp {
         if (modal) {
             modal.style.display = 'none';
         }
+        this.deactivateAuthModalFocusManagement();
         // Hide code entry section
         const codeEntry = document.getElementById('oauth-code-entry');
         if (codeEntry) {
             codeEntry.style.display = 'none';
+        }
+        if (this.lastFocusedTrigger && typeof this.lastFocusedTrigger.focus === 'function') {
+            setTimeout(() => this.lastFocusedTrigger.focus(), 0);
+        }
+        this.lastFocusedTrigger = null;
+    }
+
+    getFocusableElements(container) {
+        if (!container) return [];
+        return Array.from(container.querySelectorAll(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => element.offsetParent !== null);
+    }
+
+    activateAuthModalFocusManagement() {
+        const modal = document.getElementById('mastodon-login-modal');
+        const dialog = modal?.querySelector('.modal-content.auth-modal');
+        if (!modal || !dialog) return;
+
+        this.deactivateAuthModalFocusManagement();
+
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.hideMastodonLoginModal();
+                return;
+            }
+
+            const tabs = Array.from(dialog.querySelectorAll('.auth-tab'));
+            const currentTabIndex = tabs.findIndex((tab) => tab.getAttribute('aria-selected') === 'true');
+            if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && tabs.length > 1 && tabs.includes(document.activeElement)) {
+                event.preventDefault();
+                const delta = event.key === 'ArrowRight' ? 1 : -1;
+                const nextIndex = (currentTabIndex + delta + tabs.length) % tabs.length;
+                const nextTab = tabs[nextIndex];
+                this.setActiveAuthTab(nextTab.dataset.tab);
+                nextTab.focus();
+                return;
+            }
+
+            if (event.key !== 'Tab') return;
+
+            const focusable = this.getFocusableElements(dialog);
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        this.authModalKeydownHandler = handleKeydown;
+        modal.addEventListener('keydown', handleKeydown);
+        modal.addEventListener('click', this.handleAuthModalBackdropClick);
+    }
+
+    deactivateAuthModalFocusManagement() {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (!modal) return;
+        if (this.authModalKeydownHandler) {
+            modal.removeEventListener('keydown', this.authModalKeydownHandler);
+            this.authModalKeydownHandler = null;
+        }
+        modal.removeEventListener('click', this.handleAuthModalBackdropClick);
+    }
+
+    handleAuthModalBackdropClick = (event) => {
+        const modal = document.getElementById('mastodon-login-modal');
+        if (event.target === modal) {
+            this.hideMastodonLoginModal();
         }
     }
 
@@ -6011,7 +6224,7 @@ class VoiceLinkApp {
             if (loginPrompt) loginPrompt.style.display = 'block';
             if (userInfo) userInfo.style.display = 'none';
             if (!this.isNativeApp() && !this.currentRoom && this.ui.currentScreen !== 'loading-screen') {
-                this.showScreen('startup-auth-screen');
+                this.showScreen(document.getElementById('startup-auth-screen') ? 'startup-auth-screen' : 'main-menu');
             }
 
             // Hide admin controls
@@ -6048,6 +6261,7 @@ class VoiceLinkApp {
         }
         if (authLinkMastodonBtn) authLinkMastodonBtn.disabled = !user;
         if (authLinkWalletBtn) authLinkWalletBtn.disabled = !user;
+        this.syncAuthModalSignedInState();
     }
 
     async checkForAppUpdates() {
@@ -6533,6 +6747,90 @@ class VoiceLinkApp {
         const requireAuthRow = this.createCheckboxRow('Require Authentication', 'admin-require-auth');
         settingsCard.appendChild(requireAuthRow);
 
+        const securitySection = document.createElement('div');
+        securitySection.className = 'setting-row';
+        securitySection.innerHTML = `
+            <label style="display:block;margin-top:10px;font-weight:600;">Cloudflare Link Security</label>
+            <p style="margin:6px 0 10px;color:#9ca3af;line-height:1.5;">
+                Generate room, file, and invite links through Cloudflare when primary links are unavailable or when you want alternate delivery paths.
+            </p>
+            <label><input type="checkbox" id="admin-cf-enabled"> Enable Cloudflare link generation</label>
+            <label style="display:block;margin-top:8px;">Link Mode:</label>
+            <select id="admin-cf-mode">
+                <option value="fallback">Fallback only</option>
+                <option value="primary">Primary link host</option>
+                <option value="hybrid">Hybrid primary and fallback</option>
+            </select>
+            <label style="display:block;margin-top:8px;">Cloudflare Base URL:</label>
+            <input type="url" id="admin-cf-base-url" placeholder="https://links.example.workers.dev">
+            <label style="display:block;margin-top:8px;">Room Path Prefix:</label>
+            <input type="text" id="admin-cf-room-path-prefix" value="/rooms">
+            <label style="display:block;margin-top:8px;">File Path Prefix:</label>
+            <input type="text" id="admin-cf-file-path-prefix" value="/files">
+            <label style="display:block;margin-top:8px;">Invite Path Prefix:</label>
+            <input type="text" id="admin-cf-invite-path-prefix" value="/invite">
+            <label style="display:block;margin-top:8px;">Human Check Mode:</label>
+            <select id="admin-cf-human-check-mode">
+                <option value="checkbox">Accessible checkbox</option>
+                <option value="turnstile">Cloudflare Turnstile</option>
+                <option value="hybrid">Checkbox and Turnstile</option>
+            </select>
+            <label style="display:block;margin-top:8px;">Turnstile Site Key:</label>
+            <input type="text" id="admin-cf-turnstile-site-key" placeholder="Optional public site key">
+            <label style="display:block;margin-top:8px;">Zone ID:</label>
+            <input type="text" id="admin-cf-zone-id" placeholder="Optional Cloudflare zone id">
+            <label style="display:block;margin-top:8px;">Account ID:</label>
+            <input type="text" id="admin-cf-account-id" placeholder="Optional Cloudflare account id">
+            <label style="display:block;margin-top:8px;">Signed Link Token Parameter:</label>
+            <input type="text" id="admin-cf-token-param" value="token">
+            <label style="display:block;margin-top:8px;">Default Link Expiry (seconds):</label>
+            <input type="number" id="admin-cf-default-expiry" min="60" step="60" value="3600">
+            <div style="display:grid;gap:8px;margin-top:10px;">
+                <label><input type="checkbox" id="admin-cf-generate-room-links"> Generate room links</label>
+                <label><input type="checkbox" id="admin-cf-generate-file-links"> Generate file links</label>
+                <label><input type="checkbox" id="admin-cf-generate-invite-links"> Generate invite links</label>
+                <label><input type="checkbox" id="admin-cf-use-primary-links"> Use Cloudflare links as the primary URL when possible</label>
+                <label><input type="checkbox" id="admin-cf-use-fallback-links"> Use Cloudflare links when primary URLs fail</label>
+                <label><input type="checkbox" id="admin-cf-sign-links"> Sign generated Cloudflare links</label>
+            </div>
+        `;
+        settingsCard.appendChild(securitySection);
+
+        const downloadSection = document.createElement('div');
+        downloadSection.className = 'setting-row';
+        downloadSection.innerHTML = `
+            <label style="display:block;margin-top:10px;font-weight:600;">Download Delivery</label>
+            <p style="margin:6px 0 10px;color:#9ca3af;line-height:1.5;">
+                Control whether direct VoiceLink downloads, emailed download links, and emailed TestFlight invites stay enabled for public and future account-linked flows.
+            </p>
+            <div style="display:grid;gap:8px;margin-top:10px;">
+                <label><input type="checkbox" id="admin-download-direct-enabled"> Enable direct downloads</label>
+                <label><input type="checkbox" id="admin-download-email-links-enabled"> Enable emailed download links</label>
+                <label><input type="checkbox" id="admin-download-testflight-enabled"> Enable emailed TestFlight invites</label>
+                <label><input type="checkbox" id="admin-download-authenticated-enabled"> Enable authenticated account downloads</label>
+                <label><input type="checkbox" id="admin-download-whmcs-enabled"> Enable WHMCS client-account downloads</label>
+                <label><input type="checkbox" id="admin-download-voicelink-account-enabled"> Enable VoiceLink login downloads</label>
+                <label><input type="checkbox" id="admin-download-referral-enabled"> Enable user referral download invites</label>
+                <label for="admin-download-referral-token-mode">Referral token mode:</label>
+                <select id="admin-download-referral-token-mode" aria-label="Referral token mode">
+                    <option value="single-use">Single use</option>
+                    <option value="reusable-until-expiry">Reusable until expiry</option>
+                    <option value="rotating">Rotating; new token required after use</option>
+                </select>
+                <label for="admin-download-referral-expiry-hours">Referral link expiry hours:</label>
+                <input type="number" id="admin-download-referral-expiry-hours" min="1" value="72">
+                <label for="admin-download-referral-max-uses">Reusable token max uses:</label>
+                <input type="number" id="admin-download-referral-max-uses" min="1" value="1">
+                <label for="admin-download-referral-license-delay-hours">License eligibility delay hours:</label>
+                <input type="number" id="admin-download-referral-license-delay-hours" min="0" value="72">
+                <label><input type="checkbox" id="admin-download-referral-rotate-after-use"> Rotate referral token after use</label>
+                <label><input type="checkbox" id="admin-download-require-human-verification"> Require human verification for public email requests</label>
+                <label><input type="checkbox" id="admin-download-log-source-context"> Log source context for download and invite requests</label>
+                <label><input type="checkbox" id="admin-download-notify-admin"> Send admin notification emails for download and invite email requests</label>
+            </div>
+        `;
+        settingsCard.appendChild(downloadSection);
+
         const dbSection = document.createElement('div');
         dbSection.className = 'setting-row';
         dbSection.innerHTML = `
@@ -6928,6 +7226,51 @@ class VoiceLinkApp {
             const requireAuthEl = document.getElementById('admin-require-auth');
             if (maxRoomsEl && settings.maxRooms != null) maxRoomsEl.value = settings.maxRooms;
             if (requireAuthEl) requireAuthEl.checked = !!settings.requireAuth;
+
+            const cloudflareLinks = settings.securitySettings?.cloudflareLinks || {};
+            const downloadDelivery = settings.securitySettings?.downloadDelivery || {};
+            const setValue = (id, value, fallback = '') => {
+                const el = document.getElementById(id);
+                if (el) el.value = value ?? fallback;
+            };
+            const setChecked = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.checked = !!value;
+            };
+            setChecked('admin-cf-enabled', cloudflareLinks.enabled);
+            setValue('admin-cf-mode', cloudflareLinks.mode, 'fallback');
+            setValue('admin-cf-base-url', cloudflareLinks.baseUrl, '');
+            setValue('admin-cf-room-path-prefix', cloudflareLinks.roomPathPrefix, '/rooms');
+            setValue('admin-cf-file-path-prefix', cloudflareLinks.filePathPrefix, '/files');
+            setValue('admin-cf-invite-path-prefix', cloudflareLinks.invitePathPrefix, '/invite');
+            setValue('admin-cf-human-check-mode', cloudflareLinks.humanCheckMode, 'checkbox');
+            setValue('admin-cf-turnstile-site-key', cloudflareLinks.turnstileSiteKey, '');
+            setValue('admin-cf-zone-id', cloudflareLinks.zoneId, '');
+            setValue('admin-cf-account-id', cloudflareLinks.accountId, '');
+            setValue('admin-cf-token-param', cloudflareLinks.tokenParam, 'token');
+            setValue('admin-cf-default-expiry', cloudflareLinks.defaultExpirySeconds, 3600);
+            setChecked('admin-cf-generate-room-links', cloudflareLinks.generateRoomLinks !== false);
+            setChecked('admin-cf-generate-file-links', cloudflareLinks.generateFileLinks !== false);
+            setChecked('admin-cf-generate-invite-links', cloudflareLinks.generateInviteLinks !== false);
+            setChecked('admin-cf-use-primary-links', cloudflareLinks.useForPrimaryLinks === true);
+            setChecked('admin-cf-use-fallback-links', cloudflareLinks.useWhenPrimaryFails !== false);
+            setChecked('admin-cf-sign-links', cloudflareLinks.signLinks === true);
+            setChecked('admin-download-direct-enabled', downloadDelivery.enableDirectDownloads !== false);
+            setChecked('admin-download-email-links-enabled', downloadDelivery.enableDownloadLinkEmail !== false);
+            setChecked('admin-download-testflight-enabled', downloadDelivery.enableTestFlightEmail !== false);
+            setChecked('admin-download-authenticated-enabled', downloadDelivery.enableAuthenticatedDownloads !== false);
+            setChecked('admin-download-whmcs-enabled', downloadDelivery.enableWhmcsClientDownloads !== false);
+            setChecked('admin-download-voicelink-account-enabled', downloadDelivery.enableVoiceLinkAccountDownloads !== false);
+            const referralInvites = downloadDelivery.referralInvites || {};
+            setChecked('admin-download-referral-enabled', referralInvites.enabled !== false);
+            setValue('admin-download-referral-token-mode', referralInvites.tokenMode, 'single-use');
+            setValue('admin-download-referral-expiry-hours', referralInvites.expiryHours, 72);
+            setValue('admin-download-referral-max-uses', referralInvites.maxUses, 1);
+            setValue('admin-download-referral-license-delay-hours', referralInvites.licenseDelayHours, 72);
+            setChecked('admin-download-referral-rotate-after-use', referralInvites.rotateAfterUse !== false);
+            setChecked('admin-download-require-human-verification', downloadDelivery.requireHumanVerification !== false);
+            setChecked('admin-download-log-source-context', downloadDelivery.logSourceContext !== false);
+            setChecked('admin-download-notify-admin', downloadDelivery.notifyAdminOnEmailRequests !== false);
 
             const db = settings.database || {};
             const provider = db.provider || 'sqlite';
@@ -7659,6 +8002,48 @@ class VoiceLinkApp {
             const settings = {
                 maxRooms: document.getElementById('admin-max-rooms')?.value,
                 requireAuth: document.getElementById('admin-require-auth')?.checked,
+                securitySettings: {
+                    requireAuth: document.getElementById('admin-require-auth')?.checked,
+                    cloudflareLinks: {
+                        enabled: !!document.getElementById('admin-cf-enabled')?.checked,
+                        mode: document.getElementById('admin-cf-mode')?.value || 'fallback',
+                        baseUrl: document.getElementById('admin-cf-base-url')?.value?.trim() || '',
+                        roomPathPrefix: document.getElementById('admin-cf-room-path-prefix')?.value?.trim() || '/rooms',
+                        filePathPrefix: document.getElementById('admin-cf-file-path-prefix')?.value?.trim() || '/files',
+                        invitePathPrefix: document.getElementById('admin-cf-invite-path-prefix')?.value?.trim() || '/invite',
+                        humanCheckMode: document.getElementById('admin-cf-human-check-mode')?.value || 'checkbox',
+                        turnstileSiteKey: document.getElementById('admin-cf-turnstile-site-key')?.value?.trim() || '',
+                        zoneId: document.getElementById('admin-cf-zone-id')?.value?.trim() || '',
+                        accountId: document.getElementById('admin-cf-account-id')?.value?.trim() || '',
+                        tokenParam: document.getElementById('admin-cf-token-param')?.value?.trim() || 'token',
+                        defaultExpirySeconds: Number(document.getElementById('admin-cf-default-expiry')?.value || 3600),
+                        generateRoomLinks: !!document.getElementById('admin-cf-generate-room-links')?.checked,
+                        generateFileLinks: !!document.getElementById('admin-cf-generate-file-links')?.checked,
+                        generateInviteLinks: !!document.getElementById('admin-cf-generate-invite-links')?.checked,
+                        useForPrimaryLinks: !!document.getElementById('admin-cf-use-primary-links')?.checked,
+                        useWhenPrimaryFails: !!document.getElementById('admin-cf-use-fallback-links')?.checked,
+                        signLinks: !!document.getElementById('admin-cf-sign-links')?.checked
+                    },
+                    downloadDelivery: {
+                        enableDirectDownloads: !!document.getElementById('admin-download-direct-enabled')?.checked,
+                        enableDownloadLinkEmail: !!document.getElementById('admin-download-email-links-enabled')?.checked,
+                        enableTestFlightEmail: !!document.getElementById('admin-download-testflight-enabled')?.checked,
+                        enableAuthenticatedDownloads: !!document.getElementById('admin-download-authenticated-enabled')?.checked,
+                        enableWhmcsClientDownloads: !!document.getElementById('admin-download-whmcs-enabled')?.checked,
+                        enableVoiceLinkAccountDownloads: !!document.getElementById('admin-download-voicelink-account-enabled')?.checked,
+                        referralInvites: {
+                            enabled: !!document.getElementById('admin-download-referral-enabled')?.checked,
+                            tokenMode: document.getElementById('admin-download-referral-token-mode')?.value || 'single-use',
+                            expiryHours: Number(document.getElementById('admin-download-referral-expiry-hours')?.value || 72),
+                            maxUses: Number(document.getElementById('admin-download-referral-max-uses')?.value || 1),
+                            licenseDelayHours: Number(document.getElementById('admin-download-referral-license-delay-hours')?.value || 72),
+                            rotateAfterUse: !!document.getElementById('admin-download-referral-rotate-after-use')?.checked
+                        },
+                        requireHumanVerification: !!document.getElementById('admin-download-require-human-verification')?.checked,
+                        logSourceContext: !!document.getElementById('admin-download-log-source-context')?.checked,
+                        notifyAdminOnEmailRequests: !!document.getElementById('admin-download-notify-admin')?.checked
+                    }
+                },
                 database: {
                     enabled: !!document.getElementById('admin-db-enabled')?.checked,
                     provider: document.getElementById('admin-db-provider')?.value || 'sqlite',

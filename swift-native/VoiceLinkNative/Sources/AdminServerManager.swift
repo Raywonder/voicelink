@@ -6,17 +6,68 @@ import SwiftUI
 class AdminServerManager: ObservableObject {
     static let shared = AdminServerManager()
 
+    struct ManagementTarget: Identifiable, Hashable {
+        enum Kind: String {
+            case connected
+            case linked
+            case owned
+            case managed
+            case trusted
+        }
+
+        let id: String
+        let name: String
+        let url: String
+        let kind: Kind
+        let isDefault: Bool
+
+        var kindLabel: String {
+            switch kind {
+            case .connected:
+                return "Current"
+            case .linked:
+                return "Linked"
+            case .owned:
+                return "Owned"
+            case .managed:
+                return "Cluster"
+            case .trusted:
+                return "Trusted"
+            }
+        }
+
+        var displayLabel: String {
+            "\(name) (\(kindLabel))"
+        }
+    }
+
     @Published var isAdmin: Bool = false
     @Published var adminRole: AdminRole = .none
+    @Published var managementTargets: [ManagementTarget] = []
+    @Published var selectedManagementTargetID: String = "connected"
+    @Published var manageAllLinkedServers: Bool = false
     @Published var serverConfig: ServerConfig?
     @Published var advancedServerSettings: AdvancedServerSettings?
     @Published var connectedUsers: [AdminUserInfo] = []
+    @Published var recentUserLogins: [AdminRecentUserLogin] = []
+    @Published var searchableUsers: [AdminUserSearchEntry] = []
     @Published var serverRooms: [AdminRoomInfo] = []
     @Published var supportSessions: [AdminSupportSessionInfo] = []
+    @Published var sharedAuthGroups: [AdminSharedAuthGroup] = []
     @Published var serverStats: ServerStats?
     @Published var availableModules: [AdminModuleInfo] = []
     @Published var serverLogLines: [String] = []
     @Published var serverLogSource: String?
+    @Published var serverStatsError: String?
+    @Published var schedulerStatus: ServerSchedulerStatus?
+    @Published var schedulerTasks: [ServerSchedulerTask] = []
+    @Published var schedulerLogs: [ServerSchedulerLogEntry] = []
+    @Published var schedulerError: String?
+    @Published var mastodonBots: [MastodonBotAccount] = []
+    @Published var mastodonBotError: String?
+    @Published var authProviderStatus: AuthProviderStatusResponse?
+    @Published var authProviderStatusError: String?
+    @Published var sharedAuthGroupsError: String?
     @Published var databaseStatus: DatabaseAdminStatus?
     @Published var moduleCategories: [String: String] = [:]
     @Published var modulesLoading: Bool = false
@@ -24,19 +75,52 @@ class AdminServerManager: ObservableObject {
     @Published var deploymentManagerStatus: DeploymentManagerStatus?
     @Published var deploymentTransports: [DeploymentTransportInfo] = []
     @Published var deploymentActionMessage: String?
+    @Published var serviceActionMessage: String?
     @Published var databaseActionMessage: String?
     @Published var isLoading: Bool = false
     @Published var error: String?
 
     private var currentServerURL: String = ""
     private var authToken: String?
+    private var secureTransportRecoveryTask: Task<Void, Never>?
     private var canManageUsersEffective: Bool { isAdmin || adminRole.canManageUsers }
     private var canManageRoomsEffective: Bool { isAdmin || adminRole.canManageRooms }
     private var canManageConfigEffective: Bool { isAdmin || adminRole.canManageConfig }
+    private var selectedManagementTarget: ManagementTarget? {
+        managementTargets.first(where: { $0.id == selectedManagementTargetID })
+    }
+
+    private func adminEndpointCandidates(preferred: String? = nil) -> [String] {
+        let explicitBases = [
+            preferred,
+            currentServerURL,
+            ServerManager.shared.baseURL
+        ]
+
+        var candidates: [String] = []
+        for base in explicitBases {
+            let normalized = APIEndpointResolver.normalize(base ?? "")
+            guard !normalized.isEmpty else { continue }
+            candidates.append(normalized)
+        }
+
+        var expanded: [String] = []
+        for candidate in candidates {
+            expanded.append(contentsOf: APIEndpointResolver.transportFallbackCandidates(for: candidate))
+        }
+
+        if expanded.isEmpty {
+            expanded = APIEndpointResolver.remoteMainBaseCandidates(preferred: preferred)
+        }
+
+        var seen = Set<String>()
+        return expanded.filter { seen.insert($0).inserted }
+    }
 
     enum AdminRole: String, Codable {
         case none = "none"
         case moderator = "moderator"
+        case roomManager = "room-manager"
         case admin = "admin"
         case owner = "owner"
 
@@ -45,7 +129,7 @@ class AdminServerManager: ObservableObject {
         }
 
         var canManageRooms: Bool {
-            self == .admin || self == .owner
+            self == .roomManager || self == .admin || self == .owner
         }
 
         var canManageServer: Bool {
@@ -57,12 +141,151 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func refreshManagementTargets() {
+        var targets: [ManagementTarget] = []
+        var seen = Set<String>()
+
+        func appendTarget(id: String, name: String, url: String, kind: ManagementTarget.Kind, isDefault: Bool = false) {
+            let normalized = APIEndpointResolver.normalize(url)
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { return }
+            targets.append(ManagementTarget(id: id, name: name, url: normalized, kind: kind, isDefault: isDefault))
+        }
+
+        if let connected = ServerManager.shared.baseURL, !connected.isEmpty {
+            let connectedName = ServerManager.shared.connectedServer.trimmingCharacters(in: .whitespacesAndNewlines)
+            appendTarget(
+                id: "connected",
+                name: connectedName.isEmpty ? "Current Connected Server" : connectedName,
+                url: connected,
+                kind: .connected,
+                isDefault: true
+            )
+        }
+
+        for server in PairingManager.shared.linkedServers {
+            appendTarget(id: "linked:\(server.id)", name: server.name, url: server.url, kind: .linked)
+        }
+
+        for server in PairingManager.shared.ownedServers {
+            appendTarget(id: "owned:\(server.id)", name: server.name, url: server.url, kind: .owned)
+        }
+
+        for server in SettingsManager.shared.managedFederationServers {
+            appendTarget(
+                id: "managed:\(server.id)",
+                name: server.name,
+                url: server.url,
+                kind: .managed
+            )
+        }
+
+        for trustedURL in normalizedTrustedServerTargets {
+            let fallbackName = URL(string: trustedURL)?.host ?? trustedURL
+            appendTarget(
+                id: "trusted:\(trustedURL)",
+                name: fallbackName,
+                url: trustedURL,
+                kind: .trusted
+            )
+        }
+
+        if targets.isEmpty {
+            appendTarget(id: "canonical-main", name: "VoiceLink", url: APIEndpointResolver.canonicalMainBase, kind: .connected, isDefault: true)
+        }
+
+        managementTargets = targets
+        if !managementTargets.contains(where: { $0.id == selectedManagementTargetID }) {
+            selectedManagementTargetID = managementTargets.first?.id ?? "connected"
+        }
+    }
+
+    func selectManagementTarget(_ targetID: String, token: String?) async {
+        refreshManagementTargets()
+        selectedManagementTargetID = targetID
+        guard let target = selectedManagementTarget else { return }
+        await checkAdminStatus(serverURL: target.url, token: token)
+    }
+
+    var allLinkedScopeSummary: String {
+        let count = managementTargets.count
+        return "Shared cluster overview across \(count) managed server\(count == 1 ? "" : "s")"
+    }
+
+    var canManageMultipleTargets: Bool {
+        managementTargets.count > 1
+    }
+
+    var selectedManagementTargetName: String {
+        selectedManagementTarget?.name ?? "Current Connected Server"
+    }
+
+    private var normalizedTrustedServerTargets: [String] {
+        let trusted = SettingsManager.shared.visibleManagedFederationServers.map(\.url)
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return trusted.filter { seen.insert($0).inserted }
+    }
+
+    private func updateSecureTransportRecoveryState() {
+        let normalizedCurrent = APIEndpointResolver.normalize(currentServerURL)
+        guard !normalizedCurrent.isEmpty else {
+            secureTransportRecoveryTask?.cancel()
+            secureTransportRecoveryTask = nil
+            return
+        }
+
+        let currentScheme = URLComponents(string: normalizedCurrent)?.scheme?.lowercased()
+        guard currentScheme == "http",
+              let secureCandidate = APIEndpointResolver.preferredSecureCandidate(for: normalizedCurrent),
+              secureCandidate != normalizedCurrent else {
+            secureTransportRecoveryTask?.cancel()
+            secureTransportRecoveryTask = nil
+            return
+        }
+
+        if let existing = secureTransportRecoveryTask, !existing.isCancelled {
+            return
+        }
+
+        secureTransportRecoveryTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                guard !Task.isCancelled else { return }
+                guard self.currentServerURL == normalizedCurrent else { return }
+
+                var request = URLRequest(url: APIEndpointResolver.url(base: secureCandidate, path: "/api/admin/status")!)
+                request.timeoutInterval = 6
+                if let token = self.authToken {
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+                request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+                do {
+                    let (_, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          httpResponse.statusCode == 200 else {
+                        continue
+                    }
+                    self.currentServerURL = secureCandidate
+                    self.secureTransportRecoveryTask?.cancel()
+                    self.secureTransportRecoveryTask = nil
+                    return
+                } catch {
+                    continue
+                }
+            }
+        }
+    }
+
     // MARK: - Check Admin Status
 
     func checkAdminStatus(serverURL: String, token: String?) async {
         self.currentServerURL = APIEndpointResolver.normalize(serverURL)
         self.authToken = token
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: currentServerURL)
+        refreshManagementTargets()
+        let candidates = adminEndpointCandidates(preferred: currentServerURL)
+        let fallbackRole = AdminRole(rawValue: AuthenticationManager.shared.currentUser?.role?.lowercased() ?? "")
 
         for base in candidates {
             guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/status") else {
@@ -87,7 +310,17 @@ class AdminServerManager: ObservableObject {
                     if let roleStr = json["role"] as? String {
                         adminRole = AdminRole(rawValue: roleStr) ?? .none
                     }
+                    let permissions = json["permissions"] as? [String: Any]
+                    let serverCanManageRooms = (json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] as? Bool) ?? isAdmin
+                    if serverCanManageRooms && !adminRole.canManageRooms {
+                        adminRole = .roomManager
+                    }
+                    if adminRole == .none, let fallbackRole {
+                        adminRole = fallbackRole
+                        isAdmin = fallbackRole == .admin || fallbackRole == .owner
+                    }
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     return
                 }
             } catch {
@@ -95,8 +328,13 @@ class AdminServerManager: ObservableObject {
             }
         }
 
-        isAdmin = false
-        adminRole = .none
+        if let fallbackRole {
+            adminRole = fallbackRole
+            isAdmin = fallbackRole == .admin || fallbackRole == .owner
+        } else {
+            isAdmin = false
+            adminRole = .none
+        }
     }
 
     // MARK: - Fetch Server Config
@@ -107,7 +345,7 @@ class AdminServerManager: ObservableObject {
         error = nil
         defer { isLoading = false }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
@@ -130,7 +368,10 @@ class AdminServerManager: ObservableObject {
                 }
                 if httpResponse.statusCode == 200 {
                     serverConfig = try decoder.decode(ServerConfig.self, from: data)
+                    CopyPartyManager.shared.applyServerFileSharingConfig(serverConfig?.fileSharing)
+                    mergeBuiltInModules()
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     error = nil
                     return
                 }
@@ -150,7 +391,7 @@ class AdminServerManager: ObservableObject {
     func fetchAdvancedServerSettings() async {
         guard canManageConfigEffective else { return }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -173,6 +414,7 @@ class AdminServerManager: ObservableObject {
                 if httpResponse.statusCode == 200 {
                     advancedServerSettings = try decoder.decode(AdvancedServerSettings.self, from: data)
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     error = nil
                     return
                 }
@@ -181,11 +423,14 @@ class AdminServerManager: ObservableObject {
                     if advancedServerSettings == nil {
                         advancedServerSettings = AdvancedServerSettings(
                             maxRooms: serverConfig?.maxRooms ?? 100,
+                            welcomeMessage: serverConfig?.welcomeMessage,
+                            lobbyWelcomeMessage: serverConfig?.lobbyWelcomeMessage,
                             requireAuth: serverConfig?.requireAuth ?? false,
                             database: DatabaseConfig()
                         )
                     }
                     currentServerURL = base
+                    updateSecureTransportRecoveryState()
                     return
                 }
             } catch {
@@ -202,75 +447,96 @@ class AdminServerManager: ObservableObject {
 
     func updateServerConfig(_ config: ServerConfig) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/config") else {
-            error = "Invalid server config URL"
-            return false
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let encoder = JSONEncoder()
-            request.httpBody = try encoder.encode(config)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to update server config"
-                return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/config") else {
+                continue
             }
 
-            serverConfig = config
-            NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let encoder = JSONEncoder()
+                request.httpBody = try encoder.encode(config)
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                serverConfig = config
+                NotificationCenter.default.post(name: .serverConfigurationChanged, object: config)
+                return true
+            } catch {
+                self.error = error.localizedDescription
+                continue
+            }
         }
+
+        error = error ?? "Failed to update server config"
+        return false
     }
 
     func updateAdvancedServerSettings(_ settings: AdvancedServerSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/settings") else {
-            error = "Invalid advanced settings URL"
-            return false
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        do {
-            let encoder = JSONEncoder()
-            request.httpBody = try encoder.encode(settings)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                error = "Failed to update advanced server settings"
-                return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/settings") else {
+                continue
             }
 
-            advancedServerSettings = settings
-            return true
-        } catch {
-            self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
-            return false
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let encoder = JSONEncoder()
+                request.httpBody = try encoder.encode(settings)
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                advancedServerSettings = settings
+                if let current = serverConfig {
+                    serverConfig = current.with(
+                        maxRooms: settings.maxRooms,
+                        lobbyWelcomeMessage: settings.lobbyWelcomeMessage,
+                        welcomeMessage: settings.welcomeMessage,
+                        requireAuth: settings.requireAuth
+                    )
+                }
+                NotificationCenter.default.post(name: .serverConfigurationChanged, object: serverConfig)
+                return true
+            } catch {
+                self.error = "Failed to update advanced server settings: \(error.localizedDescription)"
+                continue
+            }
         }
+
+        error = error ?? "Failed to update advanced server settings"
+        return false
     }
 
     func fetchDatabaseStatus() async {
@@ -281,7 +547,7 @@ class AdminServerManager: ObservableObject {
         }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 6
+        request.timeoutInterval = 15
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -360,7 +626,7 @@ class AdminServerManager: ObservableObject {
 
     func fetchConnectedUsers() async {
         guard canManageUsersEffective else { return }
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -386,6 +652,110 @@ class AdminServerManager: ObservableObject {
                 currentServerURL = base
                 return
             } catch {
+                continue
+            }
+        }
+    }
+
+    func fetchRecentUserLogins(limit: Int = 50) async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/users/recent-logins?limit=\(limit)") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                let envelope = try decoder.decode(AdminRecentUserLoginEnvelope.self, from: data)
+                recentUserLogins = envelope.users
+                currentServerURL = base
+                return
+            } catch {
+                continue
+            }
+        }
+    }
+
+    func searchUsers(query: String = "", limit: Int = 100) async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/users/search?q=\(encodedQuery)&limit=\(limit)") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+
+                let envelope = try decoder.decode(AdminUserSearchEnvelope.self, from: data)
+                searchableUsers = envelope.users
+                currentServerURL = base
+                return
+            } catch {
+                continue
+            }
+        }
+    }
+
+    func fetchSharedAuthGroups() async {
+        guard canManageUsersEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        let decoder = JSONDecoder()
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/shared-auth/groups") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    continue
+                }
+                let envelope = try decoder.decode(AdminSharedAuthGroupsEnvelope.self, from: data)
+                sharedAuthGroups = envelope.groups
+                sharedAuthGroupsError = nil
+                currentServerURL = base
+                return
+            } catch {
+                sharedAuthGroupsError = error.localizedDescription
                 continue
             }
         }
@@ -439,6 +809,30 @@ class AdminServerManager: ObservableObject {
             body["duration"] = duration
         }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    func setUserTransmitEnabled(_ userId: String, enabled: Bool) async -> Bool {
+        guard canManageUsersEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/users/\(userId)/transmit") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 6
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["enabled": enabled])
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -629,12 +1023,15 @@ class AdminServerManager: ObservableObject {
         let payload: [String: Any] = [
             "name": room.name,
             "description": room.description,
+            "welcomeMessage": room.welcomeMessage ?? "",
             "maxUsers": room.maxUsers,
             "visibility": room.visibility ?? (room.isPrivate ? "private" : "public"),
             "accessType": room.accessType ?? (room.isPrivate ? "private" : "public"),
             "roomType": room.accessType ?? (room.isPrivate ? "private" : "public"),
             "enabled": room.enabled ?? true,
             "locked": room.locked ?? false,
+            "recordingAllowed": room.recordingAllowed ?? (serverConfig?.recordingEnabled ?? false),
+            "accessPin": room.accessPin ?? "",
             "hidden": room.hidden ?? false,
             "isDefault": room.isDefault ?? false
         ]
@@ -646,25 +1043,24 @@ class AdminServerManager: ObservableObject {
                 if let idx = serverRooms.firstIndex(where: { $0.id == room.id }) {
                     serverRooms[idx] = room
                 }
+                let mergedCurrentRoom = ServerManager.shared.rooms.first(where: { $0.id == room.id }).map(Room.init(from:)) ?? Room(
+                    id: room.id,
+                    name: room.name,
+                    description: room.description,
+                    welcomeMessage: room.welcomeMessage,
+                    userCount: room.userCount,
+                    isPrivate: (room.visibility ?? (room.isPrivate ? "private" : "public")).localizedCaseInsensitiveContains("private"),
+                    isLocked: room.locked ?? false,
+                    recordingAllowed: room.recordingAllowed ?? (serverConfig?.recordingEnabled ?? false),
+                    maxUsers: room.maxUsers,
+                    createdBy: room.createdBy,
+                    createdAt: room.createdAt,
+                    hostServerName: room.hostServerName,
+                    hostServerOwner: room.hostServerOwner
+                )
                 NotificationCenter.default.post(
                     name: .roomConfigurationChanged,
-                    object: Room(
-                        id: room.id,
-                        name: room.name,
-                        description: room.description,
-                        userCount: room.userCount,
-                        isPrivate: (room.visibility ?? (room.isPrivate ? "private" : "public")).localizedCaseInsensitiveContains("private"),
-                        maxUsers: room.maxUsers,
-                        createdBy: room.createdBy,
-                        createdByRole: nil,
-                        roomType: nil,
-                        createdAt: room.createdAt,
-                        uptimeSeconds: nil,
-                        lastActiveUsername: nil,
-                        lastActivityAt: nil,
-                        hostServerName: room.hostServerName,
-                        hostServerOwner: room.hostServerOwner
-                    )
+                    object: mergedCurrentRoom
                 )
                 return true
             }
@@ -829,8 +1225,9 @@ class AdminServerManager: ObservableObject {
     // MARK: - Server Stats
 
     func fetchServerStats() async {
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
+        var lastFailure: String?
 
         for base in candidates {
             guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/stats") else {
@@ -847,26 +1244,43 @@ class AdminServerManager: ObservableObject {
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let httpResponse = response as? HTTPURLResponse else {
+                    lastFailure = "The server stats response was invalid."
                     continue
                 }
                 if httpResponse.statusCode == 200 {
                     serverStats = try decoder.decode(ServerStats.self, from: data)
+                    serverStatsError = nil
                     currentServerURL = base
                     return
                 }
+                if let fallbackStats = await fetchPublicServerStats(from: base) {
+                    serverStats = fallbackStats
+                    serverStatsError = nil
+                    currentServerURL = base
+                    return
+                }
+                lastFailure = "VoiceLink could not load server stats from the connected server (\(httpResponse.statusCode))."
             } catch {
+                if let fallbackStats = await fetchPublicServerStats(from: base) {
+                    serverStats = fallbackStats
+                    serverStatsError = nil
+                    currentServerURL = base
+                    return
+                }
+                lastFailure = "VoiceLink could not load server stats from the connected server yet. \(error.localizedDescription)"
                 continue
             }
         }
 
         serverStats = nil
+        serverStatsError = lastFailure ?? "VoiceLink could not load server stats from the connected server right now."
     }
 
-    func fetchServerLogs() async {
-        guard canManageConfigEffective else { return }
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/logs") else {
-            return
-        }
+    private func fetchPublicServerStats(from base: String) async -> ServerStats? {
+        guard var components = URLComponents(string: base) else { return nil }
+        components.path = "/api/rooms"
+        components.queryItems = [URLQueryItem(name: "source", value: "app")]
+        guard let url = components.url else { return nil }
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 6
@@ -878,15 +1292,385 @@ class AdminServerManager: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return
+                  (200..<300).contains(httpResponse.statusCode),
+                  let rawRooms = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return nil
             }
-            serverLogSource = json["source"] as? String
-            serverLogLines = (json["lines"] as? [String]) ?? []
+
+            let rooms = rawRooms.map { Self.adminRoom(from: $0, defaultSource: Self.sourceLabel(from: base)) }
+            let activeUsers = rooms.reduce(0) { $0 + $1.userCount }
+            let activeRooms = rooms.filter { $0.userCount > 0 }.count
+            return ServerStats(
+                totalUsers: activeUsers,
+                activeUsers: activeUsers,
+                totalRooms: rooms.count,
+                activeRooms: activeRooms,
+                uptime: 0,
+                peakUsers: activeUsers,
+                messagesPerMinute: 0,
+                bandwidthUsage: 0
+            )
         } catch {
-            self.error = "Failed to fetch server logs: \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    func fetchServerLogs() async {
+        guard canManageConfigEffective else { return }
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        var lastFailure: String?
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/logs") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 6
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastFailure = "The server log response was invalid."
+                    continue
+                }
+                guard httpResponse.statusCode == 200,
+                      let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    lastFailure = "Server logs returned HTTP \(httpResponse.statusCode)."
+                    continue
+                }
+                serverLogSource = json["source"] as? String
+                serverLogLines = (json["lines"] as? [String]) ?? []
+                currentServerURL = base
+                updateSecureTransportRecoveryState()
+                error = nil
+                return
+            } catch {
+                lastFailure = "Failed to fetch server logs from \(base): \(error.localizedDescription)"
+            }
+        }
+
+        self.error = lastFailure ?? "Failed to fetch server logs from the selected server."
+    }
+
+    // MARK: - Server Scheduler
+
+    func fetchServerSchedulerStatus() async {
+        guard canManageConfigEffective else { return }
+
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        var lastFailure: String?
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/scheduler/status") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastFailure = "The scheduler response was invalid."
+                    continue
+                }
+                guard httpResponse.statusCode == 200 else {
+                    lastFailure = "Unable to load scheduler status (\(httpResponse.statusCode))."
+                    continue
+                }
+
+                let decoded = try JSONDecoder().decode(ServerSchedulerStatusResponse.self, from: data)
+                schedulerStatus = decoded.status
+                schedulerTasks = decoded.tasks
+                schedulerLogs = decoded.logs
+                schedulerError = nil
+                currentServerURL = base
+                return
+            } catch {
+                lastFailure = "Unable to load scheduler status: \(error.localizedDescription)"
+            }
+        }
+
+        schedulerStatus = nil
+        schedulerTasks = []
+        schedulerLogs = []
+        schedulerError = lastFailure ?? "Unable to load scheduler status right now."
+    }
+
+    func runServerSchedulerTask(_ taskId: String) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/scheduler/tasks/\(taskId)/run") else {
+            schedulerError = "Invalid scheduler task URL."
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                schedulerError = "Unable to run scheduler task right now."
+                return false
+            }
+            await fetchServerSchedulerStatus()
+            return true
+        } catch {
+            schedulerError = "Unable to run scheduler task: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func updateServerSchedulerTask(_ taskId: String, enabled: Bool? = nil, intervalSeconds: Int? = nil) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/scheduler/tasks/\(taskId)") else {
+            schedulerError = "Invalid scheduler task URL."
+            return false
+        }
+
+        var payload: [String: Any] = [:]
+        if let enabled {
+            payload["enabled"] = enabled
+        }
+        if let intervalSeconds {
+            payload["intervalSeconds"] = intervalSeconds
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                schedulerError = "Unable to update scheduler task right now."
+                return false
+            }
+            await fetchServerSchedulerStatus()
+            return true
+        } catch {
+            schedulerError = "Unable to update scheduler task: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func restartAllAIEndpoints(services: [String] = []) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/services/restart-all-ai") else {
+            serviceActionMessage = "Invalid AI endpoint restart URL."
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["services": services])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (json["success"] as? Bool) == true else {
+                serviceActionMessage = "Unable to restart AI endpoints right now."
+                return false
+            }
+
+            let serviceList = json["services"] as? [String] ?? services
+            let message = json["message"] as? String ?? "Restart requested."
+            if serviceList.isEmpty {
+                serviceActionMessage = message
+            } else {
+                serviceActionMessage = "\(message) \(serviceList.joined(separator: ", "))"
+            }
+            currentServerURL = effectiveServerURL
+            return true
+        } catch {
+            serviceActionMessage = "Unable to restart AI endpoints: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    // MARK: - Mastodon Bot Accounts
+
+    func fetchMastodonBots() async {
+        guard canManageConfigEffective else { return }
+
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        var lastFailure: String?
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/mastodon/bots") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    lastFailure = "Unable to load Mastodon bot accounts."
+                    continue
+                }
+
+                mastodonBots = try JSONDecoder().decode([MastodonBotAccount].self, from: data)
+                mastodonBotError = nil
+                currentServerURL = base
+                return
+            } catch {
+                lastFailure = "Unable to load Mastodon bot accounts: \(error.localizedDescription)"
+            }
+        }
+
+        mastodonBots = []
+        mastodonBotError = lastFailure
+    }
+
+    func registerMastodonBot(instanceURL: String, accessToken: String) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/mastodon/bots") else {
+            mastodonBotError = "Invalid Mastodon bot registration URL."
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "instanceUrl": instanceURL,
+            "accessToken": accessToken
+        ])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                mastodonBotError = "The Mastodon bot response was invalid."
+                return false
+            }
+            guard httpResponse.statusCode == 200 else {
+                mastodonBotError = String(data: data, encoding: .utf8) ?? "Failed to register Mastodon bot."
+                return false
+            }
+
+            mastodonBotError = nil
+            await fetchMastodonBots()
+            return true
+        } catch {
+            mastodonBotError = "Failed to register Mastodon bot: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func removeMastodonBot(instanceURL: String) async -> Bool {
+        guard canManageConfigEffective else { return false }
+        let encoded = instanceURL.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? instanceURL
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/mastodon/bots/\(encoded)") else {
+            mastodonBotError = "Invalid Mastodon bot removal URL."
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 8
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                mastodonBotError = "Failed to remove Mastodon bot."
+                return false
+            }
+
+            mastodonBotError = nil
+            await fetchMastodonBots()
+            return true
+        } catch {
+            mastodonBotError = "Failed to remove Mastodon bot: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func fetchAuthProviderStatus() async {
+        guard canManageConfigEffective else { return }
+
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
+        var lastFailure: String?
+
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/admin/auth-status") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    lastFailure = "Unable to load auth provider status."
+                    continue
+                }
+
+                authProviderStatus = try JSONDecoder().decode(AuthProviderStatusResponse.self, from: data)
+                authProviderStatusError = nil
+                currentServerURL = base
+                return
+            } catch {
+                lastFailure = "Unable to load auth provider status: \(error.localizedDescription)"
+            }
+        }
+
+        authProviderStatus = nil
+        authProviderStatusError = lastFailure
     }
 
     // MARK: - Background Streams
@@ -973,7 +1757,7 @@ class AdminServerManager: ObservableObject {
     func fetchAPISyncSettings() async -> APISyncSettings? {
         guard canManageConfigEffective else { return nil }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
         let decoder = JSONDecoder()
 
         for base in candidates {
@@ -1036,7 +1820,7 @@ class AdminServerManager: ObservableObject {
     func fetchFederationSettings() async -> FederationSettings? {
         guard canManageConfigEffective else { return nil }
 
-        let candidates = APIEndpointResolver.apiBaseCandidates(preferred: effectiveServerURL)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
         for base in candidates {
             guard let url = APIEndpointResolver.url(base: base, path: "/api/federation/status") else {
@@ -1062,7 +1846,7 @@ class AdminServerManager: ObservableObject {
                 }
 
                 currentServerURL = base
-                return FederationSettings(
+                return normalizedFederationSettings(FederationSettings(
                     enabled: json["enabled"] as? Bool ?? false,
                     allowIncoming: json["allowIncoming"] as? Bool ?? true,
                     allowOutgoing: json["allowOutgoing"] as? Bool ?? true,
@@ -1073,7 +1857,7 @@ class AdminServerManager: ObservableObject {
                     maintenanceModeEnabled: json["maintenanceModeEnabled"] as? Bool ?? false,
                     autoHandoffEnabled: json["autoHandoffEnabled"] as? Bool ?? false,
                     handoffTargetServer: json["handoffTargetServer"] as? String
-                )
+                ))
             } catch {
                 continue
             }
@@ -1084,40 +1868,49 @@ class AdminServerManager: ObservableObject {
 
     func updateFederationSettings(_ settings: FederationSettings) async -> Bool {
         guard canManageConfigEffective else { return false }
+        let normalizedSettings = normalizedFederationSettings(settings)
+        let candidates = adminEndpointCandidates(preferred: effectiveServerURL)
 
-        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/federation/settings") else {
-            return false
+        for base in candidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/federation/settings") else {
+                continue
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.timeoutInterval = 6
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token = authToken {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+            let payload: [String: Any] = [
+                "enabled": normalizedSettings.enabled,
+                "mode": (normalizedSettings.allowIncoming && normalizedSettings.allowOutgoing) ? "mesh" : (normalizedSettings.allowOutgoing ? "spoke" : "standalone"),
+                "globalFederation": normalizedSettings.enabled,
+                "roomApprovalRequired": normalizedSettings.requireApproval,
+                "trustedServers": normalizedSettings.trustedServers,
+                "allowIncoming": normalizedSettings.allowIncoming,
+                "allowOutgoing": normalizedSettings.allowOutgoing,
+                "maintenanceModeEnabled": normalizedSettings.maintenanceModeEnabled,
+                "autoHandoffEnabled": normalizedSettings.autoHandoffEnabled,
+                "handoffTargetServer": normalizedSettings.handoffTargetServer as Any
+            ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    currentServerURL = base
+                    updateSecureTransportRecoveryState()
+                    return true
+                }
+            } catch {
+                continue
+            }
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = 6
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = authToken {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
-
-        let payload: [String: Any] = [
-            "enabled": settings.enabled,
-            "mode": (settings.allowIncoming && settings.allowOutgoing) ? "mesh" : (settings.allowOutgoing ? "spoke" : "standalone"),
-            "globalFederation": settings.enabled,
-            "roomApprovalRequired": settings.requireApproval,
-            "trustedServers": settings.trustedServers,
-            "allowIncoming": settings.allowIncoming,
-            "allowOutgoing": settings.allowOutgoing,
-            "maintenanceModeEnabled": settings.maintenanceModeEnabled,
-            "autoHandoffEnabled": settings.autoHandoffEnabled,
-            "handoffTargetServer": settings.handoffTargetServer as Any
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
+        return false
     }
 
     // MARK: - Deployment Manager
@@ -1274,10 +2067,12 @@ class AdminServerManager: ObservableObject {
     func fetchAvailableModules(sortBy: String = "recommended", category: String? = nil) async {
         modulesLoading = true
         defer { modulesLoading = false }
+        let cacheBust = String(Int(Date().timeIntervalSince1970))
 
         var components = URLComponents(string: "\(effectiveServerURL)/api/modules")
         components?.queryItems = [
-            URLQueryItem(name: "sortBy", value: sortBy)
+            URLQueryItem(name: "sortBy", value: sortBy),
+            URLQueryItem(name: "cb", value: cacheBust)
         ]
         if let category, !category.isEmpty {
             components?.queryItems?.append(URLQueryItem(name: "category", value: category))
@@ -1323,17 +2118,22 @@ class AdminServerManager: ObservableObject {
                 merged.enabled = existing.enabled
                 return merged
             }
+            mergeBuiltInModules()
         } catch {
             self.error = "Failed to fetch module catalog: \(error.localizedDescription)"
         }
     }
 
     func fetchInstalledModules() async {
-        guard let url = URL(string: "\(effectiveServerURL)/api/modules/installed") else {
+        guard var components = URLComponents(string: "\(effectiveServerURL)/api/modules/installed") else {
             error = "Invalid server URL"
             return
         }
-
+        components.queryItems = [URLQueryItem(name: "cb", value: String(Int(Date().timeIntervalSince1970)))]
+        guard let url = components.url else {
+            error = "Invalid server URL"
+            return
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = 6
         if let token = authToken {
@@ -1377,6 +2177,7 @@ class AdminServerManager: ObservableObject {
                     return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
                 }
             }
+            mergeBuiltInModules()
         } catch {
             self.error = "Failed to fetch installed modules: \(error.localizedDescription)"
         }
@@ -1444,6 +2245,20 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func installAllMissingModules() async -> Bool {
+        await postBulkModuleAction(
+            endpoint: "install-missing",
+            successPrefix: "Installed missing modules"
+        )
+    }
+
+    func updateAllModules() async -> Bool {
+        await postBulkModuleAction(
+            endpoint: "update-all",
+            successPrefix: "Updated installed modules"
+        )
+    }
+
     func saveModuleConfig(_ moduleId: String, jsonText: String) async -> Bool {
         guard let url = URL(string: "\(effectiveServerURL)/api/modules/\(moduleId)/config") else {
             error = "Invalid server URL"
@@ -1496,6 +2311,388 @@ class AdminServerManager: ObservableObject {
         }
     }
 
+    func fetchVoiceLinkFlexPBXHoldMediaStatus() async -> VoiceLinkFlexPBXHoldMediaStatus? {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/voicelink-flexpbx/hold-media") else {
+            error = "Invalid server URL"
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to fetch FlexPBX hold media status"
+                return nil
+            }
+            return try JSONDecoder().decode(VoiceLinkFlexPBXHoldMediaEnvelope.self, from: data).holdMedia
+        } catch {
+            self.error = "Failed to fetch FlexPBX hold media status: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func saveVoiceLinkFlexPBXHoldMedia(_ holdMedia: VoiceLinkFlexPBXHoldMediaStatus) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/voicelink-flexpbx/hold-media") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        let payload = holdMedia.asRequestPayload
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to save FlexPBX hold media settings"
+                return false
+            }
+            moduleActionMessage = "Saved FlexPBX hold media settings"
+            return true
+        } catch {
+            self.error = "Failed to save FlexPBX hold media settings: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func syncVoiceLinkFlexPBXHoldMedia() async -> VoiceLinkFlexPBXHoldMediaSyncResult? {
+        guard let url = URL(string: "\(effectiveServerURL)/api/modules/voicelink-flexpbx/hold-media/sync") else {
+            error = "Invalid server URL"
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to sync FlexPBX hold media"
+                return nil
+            }
+            let result = try JSONDecoder().decode(VoiceLinkFlexPBXHoldMediaSyncResult.self, from: data)
+            moduleActionMessage = result.success ? "Synced FlexPBX hold media" : "FlexPBX hold media sync returned warnings"
+            return result
+        } catch {
+            self.error = "Failed to sync FlexPBX hold media: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func fetchSSLManagerStatus() async -> ServerSSLManagerConfig? {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/ssl-manager/status") else {
+            error = "Invalid SSL manager URL"
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to fetch SSL manager status"
+                return nil
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            mergeBuiltInModules()
+            return envelope.sslManager
+        } catch {
+            self.error = "Failed to fetch SSL manager status: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func updateSSLManager(_ sslManager: ServerSSLManagerConfig) async -> Bool {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: "/api/admin/ssl-manager") else {
+            error = "Invalid SSL manager URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(ServerSSLManagerUpdateRequest(sslManager: sslManager))
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to update SSL manager"
+                return false
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            moduleActionMessage = "Saved SSL manager settings"
+            mergeBuiltInModules()
+            return true
+        } catch {
+            self.error = "Failed to update SSL manager: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func autodetectSSLManager() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/autodetect", successPrefix: "Auto-detected SSL settings")
+    }
+
+    func renewSSLManagerCertificates() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/renew", successPrefix: "SSL renew completed")
+    }
+
+    func reloadSSLManagerServices() async -> Bool {
+        await performSSLManagerAction(path: "/api/admin/ssl-manager/reload", successPrefix: "Web server reload completed")
+    }
+
+    func fetchConfigBackups() async -> [ServerConfigBackup] {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/backups") else {
+            error = "Invalid server URL"
+            return []
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to fetch server backups"
+                return []
+            }
+            return try JSONDecoder().decode(ServerConfigBackupsEnvelope.self, from: data).backups
+        } catch {
+            self.error = "Failed to fetch server backups: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    func createConfigBackup(label: String?, includeFederationSnapshot: Bool, includeLinkedServers: Bool) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/backup") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+
+        let payload: [String: Any] = [
+            "label": label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            "includeFederationSnapshot": includeFederationSnapshot,
+            "includeLinkedServers": includeLinkedServers
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to create server backup"
+                return false
+            }
+            if let result = try? JSONDecoder().decode(ServerConfigBackupCreateResponse.self, from: data) {
+                moduleActionMessage = "Created backup: \(result.filename)"
+            } else {
+                moduleActionMessage = "Created server backup"
+            }
+            return true
+        } catch {
+            self.error = "Failed to create server backup: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func restoreConfigBackup(filename: String) async -> Bool {
+        guard let url = URL(string: "\(effectiveServerURL)/api/config/restore") else {
+            error = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["filename": filename], options: [])
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                error = "Failed to restore server backup"
+                return false
+            }
+            moduleActionMessage = "Restored backup: \(filename)"
+            await fetchServerConfig()
+            return true
+        } catch {
+            self.error = "Failed to restore server backup: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func postBulkModuleAction(endpoint: String, successPrefix: String) async -> Bool {
+        let targets: [ManagementTarget]
+        if manageAllLinkedServers {
+            refreshManagementTargets()
+            targets = managementTargets
+        } else if let selected = selectedManagementTarget {
+            targets = [selected]
+        } else {
+            targets = [
+                ManagementTarget(
+                    id: "current",
+                    name: selectedManagementTargetName,
+                    url: effectiveServerURL,
+                    kind: .connected,
+                    isDefault: true
+                )
+            ]
+        }
+
+        var changedTotal = 0
+        var successCount = 0
+        var failures: [String] = []
+
+        for target in targets {
+            let result = await postBulkModuleActionToTarget(
+                endpoint: endpoint,
+                target: target,
+                applyToCluster: manageAllLinkedServers
+            )
+            if result.ok {
+                successCount += 1
+                changedTotal += result.changed
+            } else {
+                failures.append("\(target.name): \(result.error)")
+            }
+        }
+
+        await refreshModulesCenter()
+        if failures.isEmpty {
+            let scope = manageAllLinkedServers && targets.count > 1
+                ? " across \(targets.count) managed servers"
+                : ""
+            moduleActionMessage = changedTotal > 0
+                ? "\(successPrefix)\(scope): \(changedTotal) changed."
+                : "\(successPrefix)\(scope): already current."
+            return true
+        }
+
+        if successCount > 0 {
+            moduleActionMessage = "\(successPrefix): \(successCount) server\(successCount == 1 ? "" : "s") updated, \(failures.count) failed."
+            error = failures.first
+            return false
+        }
+
+        error = failures.first ?? "Bulk module action failed"
+        return false
+    }
+
+    private func postBulkModuleActionToTarget(
+        endpoint: String,
+        target: ManagementTarget,
+        applyToCluster: Bool
+    ) async -> (ok: Bool, changed: Int, error: String) {
+        let targetBase = preferredAdminBase(for: target.url)
+        guard let url = URL(string: "\(targetBase)/api/modules/bulk/\(endpoint)") else {
+            error = "Invalid server URL"
+            return (false, 0, "Invalid server URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "applyToCluster": applyToCluster
+        ], options: [])
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return (false, 0, "Invalid module action response")
+            }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let serverError = payload["error"] as? String {
+                    return (false, 0, serverError)
+                } else {
+                    return (false, 0, "Bulk module action failed (\(httpResponse.statusCode))")
+                }
+            }
+
+            guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return (true, 0, "")
+            }
+
+            if let success = payload["success"] as? Bool, success == false {
+                let failures = (payload["failed"] as? [[String: Any]]) ?? []
+                let firstFailure = failures.compactMap { $0["error"] as? String }.first
+                return (false, 0, firstFailure ?? (payload["error"] as? String) ?? "Bulk module action failed")
+            }
+
+            let installedCount = (payload["installed"] as? [Any])?.count ?? 0
+            let updatedCount = (payload["updated"] as? [Any])?.count ?? 0
+            let changedCount = max(installedCount, updatedCount)
+            return (true, changedCount, "")
+        } catch {
+            return (false, 0, error.localizedDescription)
+        }
+    }
+
     private func postModuleAction(moduleId: String, endpoint: String, body: [String: Any]) async -> Bool {
         guard let url = URL(string: "\(effectiveServerURL)/api/modules/\(moduleId)/\(endpoint)") else {
             error = "Invalid server URL"
@@ -1536,10 +2733,13 @@ class AdminServerManager: ObservableObject {
 
     private var effectiveServerURL: String {
         if !currentServerURL.isEmpty {
-            return currentServerURL
+            return preferredAdminBase(for: currentServerURL)
+        }
+        if let selected = selectedManagementTarget?.url, !selected.isEmpty {
+            return preferredAdminBase(for: selected)
         }
         if let connected = ServerManager.shared.baseURL, !connected.isEmpty {
-            return connected
+            return preferredAdminBase(for: connected)
         }
         return APIEndpointResolver.canonicalMainBase
     }
@@ -1554,6 +2754,42 @@ class AdminServerManager: ObservableObject {
             return host
         }
         return APIEndpointResolver.normalize(base)
+    }
+
+    private func preferredAdminBase(for base: String) -> String {
+        APIEndpointResolver.preferredSecureCandidate(for: base) ?? APIEndpointResolver.normalize(base)
+    }
+
+    private var managedDefaultTrustedServers: [String] {
+        let urls = SettingsManager.shared.visibleManagedFederationServers.map(\.url)
+        var seen = Set<String>()
+        return urls
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func normalizedTrustedServers(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        return urls
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func normalizedFederationSettings(_ settings: FederationSettings) -> FederationSettings {
+        var normalized = settings
+        normalized.trustedServers = normalizedTrustedServers(settings.trustedServers)
+        normalized.blockedServers = normalizedTrustedServers(settings.blockedServers)
+
+        if normalized.enabled && normalized.trustedServers.isEmpty {
+            normalized.trustedServers = managedDefaultTrustedServers
+        }
+
+        if let handoff = normalized.handoffTargetServer {
+            let trimmed = APIEndpointResolver.normalize(handoff)
+            normalized.handoffTargetServer = trimmed.isEmpty ? nil : trimmed
+        }
+
+        return normalized
     }
 
     nonisolated private static func adminRoom(from dict: [String: Any], defaultSource: String) -> AdminRoomInfo {
@@ -1603,7 +2839,7 @@ class AdminServerManager: ObservableObject {
             isPrivate: (dict["isPrivate"] as? Bool) ?? false,
             maxUsers: (dict["maxUsers"] as? Int) ?? 50,
             userCount: usersValue,
-            createdBy: dict["createdBy"] as? String,
+            createdBy: (dict["createdBy"] as? String) ?? (dict["ownerUsername"] as? String) ?? (dict["owner"] as? String),
             createdAt: Self.parseDate(dict["createdAt"] ?? dict["created"]),
             isPermanent: (dict["isDefault"] as? Bool) ?? false,
             backgroundStream: nil,
@@ -1611,10 +2847,16 @@ class AdminServerManager: ObservableObject {
             accessType: dict["accessType"] as? String,
             hidden: dict["hidden"] as? Bool,
             locked: dict["locked"] as? Bool,
+            recordingAllowed: (dict["recordingAllowed"] as? Bool) ?? (dict["allowRecording"] as? Bool) ?? (dict["recordingEnabled"] as? Bool),
+            accessPin: dict["accessPin"] as? String,
+            hasAccessPin: dict["hasAccessPin"] as? Bool,
             enabled: dict["enabled"] as? Bool,
             isDefault: dict["isDefault"] as? Bool,
             hostServerName: resolvedHostServerName ?? defaultSource,
-            hostServerOwner: dict["hostServerOwner"] as? String,
+            hostServerOwner: (dict["hostServerOwner"] as? String)
+                ?? (dict["serverOwner"] as? String)
+                ?? (dict["ownerUsername"] as? String)
+                ?? (dict["createdBy"] as? String),
             serverSource: resolvedServerSource,
             updatedBy: (dict["updatedBy"] as? String) ?? (dict["lastUpdatedBy"] as? String),
             updatedAt: Self.parseDate(dict["updatedAt"] ?? dict["lastUpdated"]),
@@ -1681,18 +2923,26 @@ class AdminServerManager: ObservableObject {
     }
 
     nonisolated private static func parseDate(_ value: Any?) -> Date? {
+        func dateFromTimestamp(_ raw: TimeInterval) -> Date {
+            let seconds = raw > 1_000_000_000_000 ? raw / 1000 : raw
+            return Date(timeIntervalSince1970: seconds)
+        }
+
         switch value {
         case let date as Date:
             return date
         case let timeInterval as TimeInterval:
-            return Date(timeIntervalSince1970: timeInterval)
+            return dateFromTimestamp(timeInterval)
         case let intValue as Int:
-            return Date(timeIntervalSince1970: TimeInterval(intValue))
+            return dateFromTimestamp(TimeInterval(intValue))
         case let stringValue as String:
             let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
             if let parsed = ISO8601DateFormatter().date(from: trimmed) {
                 return parsed
+            }
+            if let timestamp = TimeInterval(trimmed) {
+                return dateFromTimestamp(timestamp)
             }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1780,6 +3030,79 @@ class AdminServerManager: ObservableObject {
         )
     }
 
+    private func mergeBuiltInModules() {
+        var mergedById = Dictionary(uniqueKeysWithValues: availableModules.map { ($0.id, $0) })
+        let sslManager = serverConfig?.sslManager ?? ServerSSLManagerConfig()
+        let configData = (try? JSONEncoder().encode(sslManager)) ?? Data("{}".utf8)
+        let configJSON = (try? JSONSerialization.jsonObject(with: configData))
+            .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.prettyPrinted, .sortedKeys]) }
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+        mergedById["ssl-manager"] = AdminModuleInfo(
+            id: "ssl-manager",
+            name: "SSL Manager",
+            description: "Manage certificates, sync live SSL paths, and control renew or reload actions for this server.",
+            version: "builtin",
+            category: "security",
+            installed: true,
+            enabled: sslManager.enabled,
+            recommended: true,
+            popular: true,
+            dependencies: [],
+            features: ["ssl", "certificates", "renewal", "reverse-proxy"],
+            configJSON: configJSON
+        )
+
+        availableModules = Array(mergedById.values).sorted { lhs, rhs in
+            if lhs.installed != rhs.installed {
+                return lhs.installed && !rhs.installed
+            }
+            if lhs.recommended != rhs.recommended {
+                return lhs.recommended && !rhs.recommended
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func performSSLManagerAction(path: String, successPrefix: String) async -> Bool {
+        guard let url = APIEndpointResolver.url(base: effectiveServerURL, path: path) else {
+            error = "Invalid SSL manager action URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(getClientId(), forHTTPHeaderField: "X-Client-ID")
+        request.httpBody = Data("{}".utf8)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                error = "Invalid SSL manager response"
+                return false
+            }
+            let envelope = try JSONDecoder().decode(ServerSSLManagerActionEnvelope.self, from: data)
+            if var current = serverConfig {
+                current.sslManager = envelope.sslManager
+                serverConfig = current
+            }
+            mergeBuiltInModules()
+            if envelope.success {
+                moduleActionMessage = envelope.message?.isEmpty == false ? envelope.message : successPrefix
+                return true
+            }
+            error = envelope.message ?? "SSL manager action failed"
+            return false
+        } catch {
+            self.error = "Failed SSL manager action: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func getClientId() -> String {
         if let clientId = UserDefaults().string(forKey: "clientId") {
             return clientId
@@ -1790,10 +3113,19 @@ class AdminServerManager: ObservableObject {
     }
 }
 
+extension Notification.Name {
+    static let serverConfigurationChanged = Notification.Name("serverConfigurationChanged")
+    static let roomConfigurationChanged = Notification.Name("roomConfigurationChanged")
+}
+
 // MARK: - Models
 
 struct ServerConfig: Codable {
     var serverName: String
+    var serverDisplayName: String?
+    var serverOwnerDisplayName: String
+    var serverOwnerGroup: String?
+    var serverDisplayMode: String
     var serverDescription: String
     var maxUsers: Int
     var maxRooms: Int
@@ -1808,13 +3140,22 @@ struct ServerConfig: Codable {
     var maxGuestDuration: Int?
     var enableRateLimiting: Bool
     var serverVisibility: ServerVisibilityConfig
+    var serverDiscoveryReveal: ServerDiscoveryRevealConfig
     var handoffPromptMode: String
     var messageSettings: MessageSettings
+    var authSettings: ServerAuthSettingsConfig
     var backgroundStreams: BackgroundStreamsConfig?
     var pushover: PushoverConfig?
+    var recordingEnabled: Bool
+    var fileSharing: ServerFileSharingConfig?
+    var sslManager: ServerSSLManagerConfig?
 
     enum CodingKeys: String, CodingKey {
         case serverName
+        case serverDisplayName
+        case serverOwnerDisplayName
+        case serverOwnerGroup
+        case serverDisplayMode
         case serverDescription
         case maxUsers
         case maxRooms
@@ -1829,14 +3170,23 @@ struct ServerConfig: Codable {
         case maxGuestDuration
         case enableRateLimiting
         case serverVisibility
+        case serverDiscoveryReveal
         case handoffPromptMode
         case messageSettings
+        case authSettings
         case backgroundStreams
         case pushover
+        case recordingEnabled
+        case fileSharing
+        case sslManager
     }
 
     init(
         serverName: String = "VoiceLink",
+        serverDisplayName: String? = nil,
+        serverOwnerDisplayName: String = "",
+        serverOwnerGroup: String? = nil,
+        serverDisplayMode: String = "ownerThenDisplayName",
         serverDescription: String = "",
         maxUsers: Int = 500,
         maxRooms: Int = 100,
@@ -1851,12 +3201,22 @@ struct ServerConfig: Codable {
         maxGuestDuration: Int? = nil,
         enableRateLimiting: Bool = true,
         serverVisibility: ServerVisibilityConfig = ServerVisibilityConfig(),
+        serverDiscoveryReveal: ServerDiscoveryRevealConfig = ServerDiscoveryRevealConfig(),
         handoffPromptMode: String = "serverRecommended",
         messageSettings: MessageSettings = MessageSettings(),
+        authSettings: ServerAuthSettingsConfig = ServerAuthSettingsConfig(),
         backgroundStreams: BackgroundStreamsConfig? = nil,
-        pushover: PushoverConfig? = nil
+        pushover: PushoverConfig? = nil,
+        recordingEnabled: Bool = false
+        ,
+        fileSharing: ServerFileSharingConfig? = nil,
+        sslManager: ServerSSLManagerConfig? = nil
     ) {
         self.serverName = serverName
+        self.serverDisplayName = serverDisplayName
+        self.serverOwnerDisplayName = serverOwnerDisplayName
+        self.serverOwnerGroup = serverOwnerGroup
+        self.serverDisplayMode = serverDisplayMode
         self.serverDescription = serverDescription
         self.maxUsers = maxUsers
         self.maxRooms = maxRooms
@@ -1871,15 +3231,24 @@ struct ServerConfig: Codable {
         self.maxGuestDuration = maxGuestDuration
         self.enableRateLimiting = enableRateLimiting
         self.serverVisibility = serverVisibility
+        self.serverDiscoveryReveal = serverDiscoveryReveal
         self.handoffPromptMode = handoffPromptMode
         self.messageSettings = messageSettings
+        self.authSettings = authSettings
         self.backgroundStreams = backgroundStreams
         self.pushover = pushover
+        self.recordingEnabled = recordingEnabled
+        self.fileSharing = fileSharing
+        self.sslManager = sslManager
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverName = try container.decodeIfPresent(String.self, forKey: .serverName) ?? "VoiceLink"
+        serverDisplayName = try container.decodeIfPresent(String.self, forKey: .serverDisplayName)
+        serverOwnerDisplayName = try container.decodeIfPresent(String.self, forKey: .serverOwnerDisplayName) ?? ""
+        serverOwnerGroup = try container.decodeIfPresent(String.self, forKey: .serverOwnerGroup)
+        serverDisplayMode = try container.decodeIfPresent(String.self, forKey: .serverDisplayMode) ?? "ownerThenDisplayName"
         serverDescription = try container.decodeIfPresent(String.self, forKey: .serverDescription) ?? ""
         maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 500
         maxRooms = try container.decodeIfPresent(Int.self, forKey: .maxRooms) ?? 100
@@ -1894,10 +3263,193 @@ struct ServerConfig: Codable {
         maxGuestDuration = try container.decodeIfPresent(Int.self, forKey: .maxGuestDuration)
         enableRateLimiting = try container.decodeIfPresent(Bool.self, forKey: .enableRateLimiting) ?? true
         serverVisibility = try container.decodeIfPresent(ServerVisibilityConfig.self, forKey: .serverVisibility) ?? ServerVisibilityConfig()
+        serverDiscoveryReveal = try container.decodeIfPresent(ServerDiscoveryRevealConfig.self, forKey: .serverDiscoveryReveal) ?? ServerDiscoveryRevealConfig()
         handoffPromptMode = try container.decodeIfPresent(String.self, forKey: .handoffPromptMode) ?? "serverRecommended"
         messageSettings = try container.decodeIfPresent(MessageSettings.self, forKey: .messageSettings) ?? MessageSettings()
+        authSettings = try container.decodeIfPresent(ServerAuthSettingsConfig.self, forKey: .authSettings) ?? ServerAuthSettingsConfig()
         backgroundStreams = try container.decodeIfPresent(BackgroundStreamsConfig.self, forKey: .backgroundStreams)
         pushover = try container.decodeIfPresent(PushoverConfig.self, forKey: .pushover)
+        recordingEnabled = try container.decodeIfPresent(Bool.self, forKey: .recordingEnabled) ?? false
+        fileSharing = try container.decodeIfPresent(ServerFileSharingConfig.self, forKey: .fileSharing)
+        sslManager = try container.decodeIfPresent(ServerSSLManagerConfig.self, forKey: .sslManager)
+    }
+}
+
+struct ServerAuthSettingsConfig: Codable, Equatable {
+    var internalProviderEnabled: Bool
+    var whmcsProviderEnabled: Bool
+    var wordpressProviderEnabled: Bool
+    var composrProviderEnabled: Bool
+    var sharedMemberAuthEnabled: Bool
+    var sharedMemberAuthMode: String
+    var sharedMemberAuthProviders: [String]
+    var allowWhmcsFallback: Bool
+    var allowMastodonApprovalDelivery: Bool
+    var requireSecondDeviceApproval: Bool
+    var notifyAdminsOnLoginAttempts: Bool
+    var notifyAdminsOnLoginSuccess: Bool
+    var notifyAdminsOnLoginFailure: Bool
+    var notifyAdminsOnGeneratedLoginLogs: Bool
+    var mirrorLoginAlertsToMainChat: Bool
+    var allowedTwoFactorMethods: [String]
+
+    init(
+        internalProviderEnabled: Bool = true,
+        whmcsProviderEnabled: Bool = true,
+        wordpressProviderEnabled: Bool = true,
+        composrProviderEnabled: Bool = true,
+        sharedMemberAuthEnabled: Bool = false,
+        sharedMemberAuthMode: String = "group",
+        sharedMemberAuthProviders: [String] = ["voicelink", "composr"],
+        allowWhmcsFallback: Bool = true,
+        allowMastodonApprovalDelivery: Bool = true,
+        requireSecondDeviceApproval: Bool = false,
+        notifyAdminsOnLoginAttempts: Bool = true,
+        notifyAdminsOnLoginSuccess: Bool = true,
+        notifyAdminsOnLoginFailure: Bool = true,
+        notifyAdminsOnGeneratedLoginLogs: Bool = true,
+        mirrorLoginAlertsToMainChat: Bool = false,
+        allowedTwoFactorMethods: [String] = ["totp", "email", "sms", "voice", "passkey", "backup"]
+    ) {
+        self.internalProviderEnabled = internalProviderEnabled
+        self.whmcsProviderEnabled = whmcsProviderEnabled
+        self.wordpressProviderEnabled = wordpressProviderEnabled
+        self.composrProviderEnabled = composrProviderEnabled
+        self.sharedMemberAuthEnabled = sharedMemberAuthEnabled
+        self.sharedMemberAuthMode = sharedMemberAuthMode
+        self.sharedMemberAuthProviders = sharedMemberAuthProviders
+        self.allowWhmcsFallback = allowWhmcsFallback
+        self.allowMastodonApprovalDelivery = allowMastodonApprovalDelivery
+        self.requireSecondDeviceApproval = requireSecondDeviceApproval
+        self.notifyAdminsOnLoginAttempts = notifyAdminsOnLoginAttempts
+        self.notifyAdminsOnLoginSuccess = notifyAdminsOnLoginSuccess
+        self.notifyAdminsOnLoginFailure = notifyAdminsOnLoginFailure
+        self.notifyAdminsOnGeneratedLoginLogs = notifyAdminsOnGeneratedLoginLogs
+        self.mirrorLoginAlertsToMainChat = mirrorLoginAlertsToMainChat
+        self.allowedTwoFactorMethods = allowedTwoFactorMethods
+    }
+}
+
+struct ServerFileSharingConfig: Codable, Equatable {
+    var enabled: Bool
+    var uploadRoot: String?
+    var smb: ServerSMBAccessConfig?
+    var copyParty: ServerCopyPartyAccessConfig?
+}
+
+struct ServerSMBAccessConfig: Codable, Equatable {
+    var enabled: Bool
+    var username: String?
+    var hostnames: [String]?
+    var local: ServerSMBLayerConfig?
+    var central: ServerSMBLayerConfig?
+    var preferredShareKey: String?
+    var preferredShareName: String?
+    var shares: [String: String]?
+    var appShareMap: [String: String]?
+}
+
+struct ServerSMBLayerConfig: Codable, Equatable {
+    var enabled: Bool?
+    var hostnames: [String]?
+    var preferredShareKey: String?
+    var preferredShareName: String?
+}
+
+struct ServerCopyPartyAccessConfig: Codable, Equatable {
+    var primaryServer: String
+    var alternativeServers: [String]?
+    var externalShareBaseURL: String?
+}
+
+struct ServerSSLManagerEnvelope: Codable, Hashable {
+    let success: Bool
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerUpdateRequest: Codable, Hashable {
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerActionEnvelope: Codable, Hashable {
+    let success: Bool
+    let message: String?
+    let sslManager: ServerSSLManagerConfig
+}
+
+struct ServerSSLManagerConfig: Codable, Equatable, Hashable {
+    var enabled: Bool
+    var provider: String
+    var mode: String
+    var controlPanel: String
+    var autoRenew: Bool
+    var syncToReverseProxy: Bool
+    var domains: [String]
+    var certificatePath: String?
+    var privateKeyPath: String?
+    var chainPath: String?
+    var acmeWebRoot: String?
+    var acmeEmail: String?
+    var renewCommand: String?
+    var reloadCommand: String?
+    var notes: String?
+    var status: String
+    var certificatePresent: Bool
+    var privateKeyPresent: Bool
+    var chainPresent: Bool
+    var availableTools: [String]
+    var supportedManagers: [String]
+    var internalManagerAvailable: Bool
+    var detectedAt: String?
+
+    init(
+        enabled: Bool = true,
+        provider: String = "auto",
+        mode: String = "auto",
+        controlPanel: String = "none",
+        autoRenew: Bool = true,
+        syncToReverseProxy: Bool = true,
+        domains: [String] = [],
+        certificatePath: String? = nil,
+        privateKeyPath: String? = nil,
+        chainPath: String? = nil,
+        acmeWebRoot: String? = nil,
+        acmeEmail: String? = nil,
+        renewCommand: String? = nil,
+        reloadCommand: String? = nil,
+        notes: String? = nil,
+        status: String = "unknown",
+        certificatePresent: Bool = false,
+        privateKeyPresent: Bool = false,
+        chainPresent: Bool = false,
+        availableTools: [String] = [],
+        supportedManagers: [String] = [],
+        internalManagerAvailable: Bool = true,
+        detectedAt: String? = nil
+    ) {
+        self.enabled = enabled
+        self.provider = provider
+        self.mode = mode
+        self.controlPanel = controlPanel
+        self.autoRenew = autoRenew
+        self.syncToReverseProxy = syncToReverseProxy
+        self.domains = domains
+        self.certificatePath = certificatePath
+        self.privateKeyPath = privateKeyPath
+        self.chainPath = chainPath
+        self.acmeWebRoot = acmeWebRoot
+        self.acmeEmail = acmeEmail
+        self.renewCommand = renewCommand
+        self.reloadCommand = reloadCommand
+        self.notes = notes
+        self.status = status
+        self.certificatePresent = certificatePresent
+        self.privateKeyPresent = privateKeyPresent
+        self.chainPresent = chainPresent
+        self.availableTools = availableTools
+        self.supportedManagers = supportedManagers
+        self.internalManagerAvailable = internalManagerAvailable
+        self.detectedAt = detectedAt
     }
 }
 
@@ -1906,12 +3458,16 @@ struct ServerVisibilityConfig: Codable, Equatable {
     var ios: Bool
     var web: Bool
     var frontendOpen: Bool
+    var listedInDirectory: Bool
+    var allowDirectReveal: Bool
 
-    init(desktop: Bool = true, ios: Bool = true, web: Bool = true, frontendOpen: Bool = true) {
+    init(desktop: Bool = true, ios: Bool = true, web: Bool = true, frontendOpen: Bool = true, listedInDirectory: Bool = true, allowDirectReveal: Bool = true) {
         self.desktop = desktop
         self.ios = ios
         self.web = web
         self.frontendOpen = frontendOpen
+        self.listedInDirectory = listedInDirectory
+        self.allowDirectReveal = allowDirectReveal
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1919,6 +3475,8 @@ struct ServerVisibilityConfig: Codable, Equatable {
         case ios
         case web
         case frontendOpen
+        case listedInDirectory
+        case allowDirectReveal
     }
 
     init(from decoder: Decoder) throws {
@@ -1927,6 +3485,55 @@ struct ServerVisibilityConfig: Codable, Equatable {
         ios = try container.decodeIfPresent(Bool.self, forKey: .ios) ?? true
         web = try container.decodeIfPresent(Bool.self, forKey: .web) ?? true
         frontendOpen = try container.decodeIfPresent(Bool.self, forKey: .frontendOpen) ?? true
+        listedInDirectory = try container.decodeIfPresent(Bool.self, forKey: .listedInDirectory) ?? true
+        allowDirectReveal = try container.decodeIfPresent(Bool.self, forKey: .allowDirectReveal) ?? true
+    }
+}
+
+struct ServerDiscoveryRevealConfig: Codable, Equatable {
+    var staticCodes: [String]
+    var rotatingCode: ServerRotatingRevealCodeConfig
+
+    init(staticCodes: [String] = [], rotatingCode: ServerRotatingRevealCodeConfig = ServerRotatingRevealCodeConfig()) {
+        self.staticCodes = staticCodes
+        self.rotatingCode = rotatingCode
+    }
+}
+
+struct ServerRotatingRevealCodeConfig: Codable, Equatable {
+    var enabled: Bool
+    var seed: String
+    var seedConfigured: Bool?
+    var intervalMinutes: Int
+    var length: Int
+    var acceptPreviousWindow: Bool
+
+    init(enabled: Bool = false, seed: String = "", seedConfigured: Bool? = nil, intervalMinutes: Int = 60, length: Int = 8, acceptPreviousWindow: Bool = true) {
+        self.enabled = enabled
+        self.seed = seed
+        self.seedConfigured = seedConfigured
+        self.intervalMinutes = intervalMinutes
+        self.length = length
+        self.acceptPreviousWindow = acceptPreviousWindow
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case seed
+        case seedConfigured
+        case intervalMinutes
+        case length
+        case acceptPreviousWindow
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        seed = try container.decodeIfPresent(String.self, forKey: .seed) ?? ""
+        seedConfigured = try container.decodeIfPresent(Bool.self, forKey: .seedConfigured)
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 60
+        length = try container.decodeIfPresent(Int.self, forKey: .length) ?? 8
+        acceptPreviousWindow = try container.decodeIfPresent(Bool.self, forKey: .acceptPreviousWindow) ?? true
     }
 }
 
@@ -1994,17 +3601,29 @@ struct MOTDSettings: Codable, Equatable {
 
 struct AdvancedServerSettings: Codable, Equatable {
     var maxRooms: Int
+    var welcomeMessage: String?
+    var lobbyWelcomeMessage: String?
     var requireAuth: Bool
     var database: DatabaseConfig
 
     enum CodingKeys: String, CodingKey {
         case maxRooms
+        case welcomeMessage
+        case lobbyWelcomeMessage
         case requireAuth
         case database
     }
 
-    init(maxRooms: Int = 100, requireAuth: Bool = false, database: DatabaseConfig = DatabaseConfig()) {
+    init(
+        maxRooms: Int = 100,
+        welcomeMessage: String? = nil,
+        lobbyWelcomeMessage: String? = nil,
+        requireAuth: Bool = false,
+        database: DatabaseConfig = DatabaseConfig()
+    ) {
         self.maxRooms = maxRooms
+        self.welcomeMessage = welcomeMessage
+        self.lobbyWelcomeMessage = lobbyWelcomeMessage
         self.requireAuth = requireAuth
         self.database = database
     }
@@ -2012,6 +3631,8 @@ struct AdvancedServerSettings: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         maxRooms = try container.decodeIfPresent(Int.self, forKey: .maxRooms) ?? 100
+        welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
+        lobbyWelcomeMessage = try container.decodeIfPresent(String.self, forKey: .lobbyWelcomeMessage)
         requireAuth = try container.decodeIfPresent(Bool.self, forKey: .requireAuth) ?? false
         database = try container.decodeIfPresent(DatabaseConfig.self, forKey: .database) ?? DatabaseConfig()
     }
@@ -2217,7 +3838,7 @@ struct DatabaseAdminStatus: Codable, Equatable {
     }
 }
 
-struct BackgroundStreamsConfig: Codable {
+struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
     var enabled: Bool
     var streams: [BackgroundStreamConfig]
     var defaultVolume: Int
@@ -2286,16 +3907,21 @@ struct BackgroundStreamsConfig: Codable {
     }
 }
 
-struct BackgroundStreamConfig: Codable, Identifiable {
+struct BackgroundStreamConfig: Codable, Identifiable, Equatable, Hashable {
     var id: String
     var name: String
+    var sourceType: String?
     var url: String
     var streamUrl: String
+    var uploadPath: String?
+    var localFilePath: String?
+    var clientRelayUserId: String?
     var volume: Int
     var hidden: Bool
     var autoPlay: Bool
     var rooms: [String]?
     var roomPatterns: [String]?
+    var excludedRooms: [String]?
 }
 
 struct AdminUserInfo: Codable, Identifiable {
@@ -2309,9 +3935,150 @@ struct AdminUserInfo: Codable, Identifiable {
     let role: String
     var isMuted: Bool
     var isDeafened: Bool
+    var transmitEnabled: Bool?
     let ipAddress: String?
     let authMethod: String?
+    let authProvider: String?
     let email: String?
+    let linkedAuthMethods: [AdminLinkedAuthMethod]?
+    let sharedAuthMode: String?
+}
+
+struct AdminRecentUserLoginEnvelope: Codable {
+    let success: Bool
+    let count: Int
+    let users: [AdminRecentUserLogin]
+}
+
+struct AdminRecentUserLogin: Codable, Identifiable {
+    let id: String
+    let socketId: String?
+    let userId: String?
+    let username: String?
+    let displayName: String?
+    let clientType: String?
+    let clientVersion: String?
+    let deviceName: String?
+    let authMethod: String?
+    let roomId: String?
+    let roomName: String?
+    let ipAddress: String?
+    let loggedInAt: String?
+
+    var displayLabel: String {
+        displayName?.isEmpty == false ? displayName! : (username?.isEmpty == false ? username! : "Unknown user")
+    }
+
+    var clientLabel: String {
+        [clientType, clientVersion.map { "build \($0)" }, deviceName.map { "on \($0)" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+}
+
+struct AdminUserSearchEnvelope: Codable {
+    let success: Bool
+    let query: String?
+    let count: Int
+    let users: [AdminUserSearchEntry]
+}
+
+struct AdminUserSearchEntry: Codable, Identifiable {
+    let rawId: String?
+    let socketId: String?
+    let userId: String?
+    let odId: String?
+    let accountId: String?
+    let username: String?
+    let displayName: String?
+    let email: String?
+    let clientType: String?
+    let clientVersion: String?
+    let deviceName: String?
+    let currentRoom: String?
+    let roomName: String?
+    let authMethod: String?
+    let authProvider: String?
+    let role: String?
+    let source: String?
+    let connected: Bool?
+
+    var id: String {
+        rawId ?? socketId ?? userId ?? accountId ?? email ?? username ?? displayName ?? "unknown-user"
+    }
+
+    var displayLabel: String {
+        displayName?.isEmpty == false ? displayName! : (username?.isEmpty == false ? username! : (email ?? "Unknown user"))
+    }
+
+    var clientLabel: String {
+        [clientType, clientVersion.map { "build \($0)" }, deviceName.map { "on \($0)" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rawId = "id"
+        case socketId
+        case userId
+        case odId
+        case accountId
+        case username
+        case displayName
+        case email
+        case clientType
+        case clientVersion
+        case deviceName
+        case currentRoom
+        case roomName
+        case authMethod
+        case authProvider
+        case role
+        case source
+        case connected
+    }
+}
+
+struct AdminLinkedAuthMethod: Codable, Hashable {
+    let provider: String
+    let externalId: String?
+    let email: String?
+    let username: String?
+    let displayName: String?
+}
+
+struct AdminSharedAuthGroupsEnvelope: Codable {
+    let success: Bool
+    let groups: [AdminSharedAuthGroup]
+}
+
+struct AdminSharedAuthGroup: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let mode: String
+    let providers: [String]
+    let source: String
+    let externalGroupId: String?
+    let externalSite: String?
+    let createdAt: String
+    let updatedAt: String
+    let members: [AdminSharedAuthMember]
+    let memberCount: Int
+}
+
+struct AdminSharedAuthMember: Codable, Identifiable, Hashable {
+    let id: String
+    let localUserId: String?
+    let email: String?
+    let username: String?
+    let displayName: String
+    let provider: String
+    let externalMemberId: String?
+    let roles: [String]
+    let aliases: [String]
+    let createdAt: String
+    let updatedAt: String
 }
 
 struct AdminRoomInfo: Codable, Identifiable {
@@ -2325,10 +4092,14 @@ struct AdminRoomInfo: Codable, Identifiable {
     var createdAt: Date?
     var isPermanent: Bool
     var backgroundStream: String?
+    var welcomeMessage: String?
     var visibility: String?
     var accessType: String?
     var hidden: Bool?
     var locked: Bool?
+    var recordingAllowed: Bool?
+    var accessPin: String?
+    var hasAccessPin: Bool?
     var enabled: Bool?
     var isDefault: Bool?
     var hostServerName: String?
@@ -2342,6 +4113,7 @@ struct AdminRoomInfo: Codable, Identifiable {
         case id
         case name
         case description
+        case metadata
         case isPrivate
         case maxUsers
         case userCount
@@ -2349,10 +4121,14 @@ struct AdminRoomInfo: Codable, Identifiable {
         case createdAt
         case isPermanent
         case backgroundStream
+        case welcomeMessage
         case visibility
         case accessType
         case hidden
         case locked
+        case recordingAllowed
+        case accessPin
+        case hasAccessPin
         case enabled
         case isDefault
         case hostServerName
@@ -2363,30 +4139,139 @@ struct AdminRoomInfo: Codable, Identifiable {
         case previousNames
     }
 
+    private struct RoomMetadata: Codable {
+        let description: String?
+        let roomDescription: String?
+        let room_description: String?
+        let details: String?
+        let topic: String?
+        let about: String?
+        let summary: String?
+        let subtitle: String?
+
+        var resolvedDescription: String? {
+            [
+                description,
+                roomDescription,
+                room_description,
+                details,
+                topic,
+                about,
+                summary,
+                subtitle
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(description, forKey: .description)
+        try container.encode(isPrivate, forKey: .isPrivate)
+        try container.encode(maxUsers, forKey: .maxUsers)
+        try container.encode(userCount, forKey: .userCount)
+        try container.encodeIfPresent(createdBy, forKey: .createdBy)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encode(isPermanent, forKey: .isPermanent)
+        try container.encodeIfPresent(backgroundStream, forKey: .backgroundStream)
+        try container.encodeIfPresent(welcomeMessage, forKey: .welcomeMessage)
+        try container.encodeIfPresent(visibility, forKey: .visibility)
+        try container.encodeIfPresent(accessType, forKey: .accessType)
+        try container.encodeIfPresent(hidden, forKey: .hidden)
+        try container.encodeIfPresent(locked, forKey: .locked)
+        try container.encodeIfPresent(recordingAllowed, forKey: .recordingAllowed)
+        try container.encodeIfPresent(accessPin, forKey: .accessPin)
+        try container.encodeIfPresent(hasAccessPin, forKey: .hasAccessPin)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encodeIfPresent(isDefault, forKey: .isDefault)
+        try container.encodeIfPresent(hostServerName, forKey: .hostServerName)
+        try container.encodeIfPresent(hostServerOwner, forKey: .hostServerOwner)
+        try container.encodeIfPresent(serverSource, forKey: .serverSource)
+        try container.encodeIfPresent(updatedBy, forKey: .updatedBy)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try container.encode(previousNames, forKey: .previousNames)
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled Room"
-        description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
+        let explicitDescription = try container.decodeIfPresent(String.self, forKey: .description)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let metadataDescription = try container.decodeIfPresent(RoomMetadata.self, forKey: .metadata)?.resolvedDescription
+        description = explicitDescription?.isEmpty == false ? explicitDescription! : (metadataDescription ?? "")
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         maxUsers = try container.decodeIfPresent(Int.self, forKey: .maxUsers) ?? 50
         userCount = try container.decodeIfPresent(Int.self, forKey: .userCount) ?? 0
         createdBy = try container.decodeIfPresent(String.self, forKey: .createdBy)
-        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        createdAt = Self.decodeFlexibleDate(from: container, forKey: .createdAt)
         isPermanent = try container.decodeIfPresent(Bool.self, forKey: .isPermanent) ?? false
         backgroundStream = try container.decodeIfPresent(String.self, forKey: .backgroundStream)
+        welcomeMessage = try container.decodeIfPresent(String.self, forKey: .welcomeMessage)
         visibility = try container.decodeIfPresent(String.self, forKey: .visibility)
         accessType = try container.decodeIfPresent(String.self, forKey: .accessType)
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden)
         locked = try container.decodeIfPresent(Bool.self, forKey: .locked)
+        recordingAllowed = try container.decodeIfPresent(Bool.self, forKey: .recordingAllowed)
+        accessPin = try container.decodeIfPresent(String.self, forKey: .accessPin)
+        hasAccessPin = try container.decodeIfPresent(Bool.self, forKey: .hasAccessPin)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
         isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault)
         hostServerName = try container.decodeIfPresent(String.self, forKey: .hostServerName)
         hostServerOwner = try container.decodeIfPresent(String.self, forKey: .hostServerOwner)
         serverSource = try container.decodeIfPresent(String.self, forKey: .serverSource)
         updatedBy = try container.decodeIfPresent(String.self, forKey: .updatedBy)
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+        updatedAt = Self.decodeFlexibleDate(from: container, forKey: .updatedAt)
         previousNames = try container.decodeIfPresent([String].self, forKey: .previousNames) ?? []
+    }
+
+    private static func decodeFlexibleDate(from container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Date? {
+        func parseLocalDate(_ value: Any?) -> Date? {
+            func dateFromTimestamp(_ raw: TimeInterval) -> Date {
+                let seconds = raw > 1_000_000_000_000 ? raw / 1000 : raw
+                return Date(timeIntervalSince1970: seconds)
+            }
+            switch value {
+            case let date as Date:
+                return date
+            case let raw as TimeInterval:
+                return dateFromTimestamp(raw)
+            case let raw as Int:
+                return dateFromTimestamp(TimeInterval(raw))
+            case let raw as String:
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                if let parsed = ISO8601DateFormatter().date(from: trimmed) {
+                    return parsed
+                }
+                if let timestamp = TimeInterval(trimmed) {
+                    return dateFromTimestamp(timestamp)
+                }
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                return formatter.date(from: trimmed)
+            default:
+                return nil
+            }
+        }
+
+        if let date = try? container.decodeIfPresent(Date.self, forKey: key) {
+            return date
+        }
+        if let rawString = try? container.decodeIfPresent(String.self, forKey: key) {
+            return parseLocalDate(rawString)
+        }
+        if let rawDouble = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return parseLocalDate(rawDouble)
+        }
+        if let rawInt = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return parseLocalDate(rawInt)
+        }
+        return nil
     }
 
     init(
@@ -2400,10 +4285,14 @@ struct AdminRoomInfo: Codable, Identifiable {
         createdAt: Date?,
         isPermanent: Bool,
         backgroundStream: String?,
+        welcomeMessage: String? = nil,
         visibility: String? = nil,
         accessType: String? = nil,
         hidden: Bool? = nil,
         locked: Bool? = nil,
+        recordingAllowed: Bool? = nil,
+        accessPin: String? = nil,
+        hasAccessPin: Bool? = nil,
         enabled: Bool? = nil,
         isDefault: Bool? = nil,
         hostServerName: String? = nil,
@@ -2423,10 +4312,14 @@ struct AdminRoomInfo: Codable, Identifiable {
         self.createdAt = createdAt
         self.isPermanent = isPermanent
         self.backgroundStream = backgroundStream
+        self.welcomeMessage = welcomeMessage
         self.visibility = visibility
         self.accessType = accessType
         self.hidden = hidden
         self.locked = locked
+        self.recordingAllowed = recordingAllowed
+        self.accessPin = accessPin
+        self.hasAccessPin = hasAccessPin
         self.enabled = enabled
         self.isDefault = isDefault
         self.hostServerName = hostServerName
@@ -2523,6 +4416,38 @@ struct ServerStats: Codable {
     let peakUsers: Int
     let messagesPerMinute: Double
     let bandwidthUsage: Double
+
+    init(
+        totalUsers: Int,
+        activeUsers: Int,
+        totalRooms: Int,
+        activeRooms: Int,
+        uptime: Int,
+        peakUsers: Int,
+        messagesPerMinute: Double,
+        bandwidthUsage: Double
+    ) {
+        self.totalUsers = totalUsers
+        self.activeUsers = activeUsers
+        self.totalRooms = totalRooms
+        self.activeRooms = activeRooms
+        self.uptime = uptime
+        self.peakUsers = peakUsers
+        self.messagesPerMinute = messagesPerMinute
+        self.bandwidthUsage = bandwidthUsage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalUsers = try container.decodeIfPresent(Int.self, forKey: .totalUsers) ?? 0
+        activeUsers = try container.decodeIfPresent(Int.self, forKey: .activeUsers) ?? 0
+        totalRooms = try container.decodeIfPresent(Int.self, forKey: .totalRooms) ?? 0
+        activeRooms = try container.decodeIfPresent(Int.self, forKey: .activeRooms) ?? 0
+        uptime = try container.decodeIfPresent(Int.self, forKey: .uptime) ?? 0
+        peakUsers = try container.decodeIfPresent(Int.self, forKey: .peakUsers) ?? activeUsers
+        messagesPerMinute = try container.decodeIfPresent(Double.self, forKey: .messagesPerMinute) ?? 0
+        bandwidthUsage = try container.decodeIfPresent(Double.self, forKey: .bandwidthUsage) ?? 0
+    }
 }
 
 struct APISyncSettings: Codable {
@@ -2742,180 +4667,4 @@ struct APISyncSettings: Codable {
         snapshotIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .snapshotIntervalSeconds) ?? 180
         routingProfiles = try container.decodeIfPresent([APISyncRoutingProfile].self, forKey: .routingProfiles) ?? []
     }
-}
-
-struct APISyncRoutingProfile: Codable, Identifiable, Hashable {
-    var id: UUID
-    var label: String
-    var targetServer: String
-    var targetType: String
-    var installPath: String?
-    var manualAddress: String?
-    var actions: [String]
-
-    init(
-        id: UUID = UUID(),
-        label: String = "Routing Profile",
-        targetServer: String = "",
-        targetType: String = "domain",
-        installPath: String? = nil,
-        manualAddress: String? = nil,
-        actions: [String] = ["start"]
-    ) {
-        self.id = id
-        self.label = label
-        self.targetServer = targetServer
-        self.targetType = targetType
-        self.installPath = installPath
-        self.manualAddress = manualAddress
-        self.actions = Array(actions.prefix(4))
-    }
-}
-
-struct FederationSettings: Codable {
-    var enabled: Bool
-    var allowIncoming: Bool
-    var allowOutgoing: Bool
-    var trustedServers: [String]
-    var blockedServers: [String]
-    var autoAcceptTrusted: Bool
-    var requireApproval: Bool
-    var maintenanceModeEnabled: Bool
-    var autoHandoffEnabled: Bool
-    var handoffTargetServer: String?
-}
-
-struct AdminModuleInfo: Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-    let version: String
-    let category: String
-    var installed: Bool
-    var enabled: Bool
-    let recommended: Bool
-    let popular: Bool
-    let dependencies: [String]
-    let features: [String]
-    let configJSON: String
-}
-
-struct DeploymentManagerStatus: Codable {
-    let enabled: Bool
-    let supportsFreshInstall: Bool
-    let supportsExistingInstallUpdate: Bool
-    let supportsRemoteBootstrap: Bool
-    let supportedTransports: [DeploymentTransportInfo]
-    let mailConfigured: Bool
-    let defaultOwnerEmailTemplateEnabled: Bool
-}
-
-struct DeploymentTransportInfo: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let description: String
-}
-
-struct DeploymentTransportsResponse: Codable {
-    let transports: [DeploymentTransportInfo]
-}
-
-struct DeploymentPackageRequest: Codable {
-    var preset: String?
-    var sanitize: Bool
-    var ownerEmail: String?
-    var targetLabel: String?
-    var targetServerUrl: String?
-    var linkedToMain: Bool
-    var trustedServers: [String]
-    var extraConfig: DeploymentExtraConfig
-}
-
-struct DeploymentExtraConfig: Codable {
-    var server: [String: String]
-    var federation: [String: String]
-
-    init(server: [String: String] = [:], federation: [String: String] = [:]) {
-        self.server = server
-        self.federation = federation
-    }
-}
-
-struct DeploymentPackageResponse: Codable {
-    let success: Bool
-    let bundleId: String
-    let bundleName: String
-    let zipPath: String
-    let manifest: DeploymentManifest
-}
-
-struct DeploymentManifest: Codable {
-    let id: String
-    let createdAt: String
-    let targetLabel: String?
-    let targetServerUrl: String?
-    let ownerEmail: String?
-}
-
-struct DeploymentExecutionRequest: Codable {
-    var packageOptions: DeploymentPackageRequest
-    var target: DeploymentTargetRequest
-    var bootstrap: Bool
-}
-
-struct DeploymentTargetRequest: Codable {
-    var transport: String
-    var host: String?
-    var port: Int?
-    var remotePath: String?
-    var uploadUrl: String?
-    var username: String?
-    var password: String?
-    var method: String?
-    var insecure: Bool
-    var apiBaseUrl: String?
-    var apiToken: String?
-    var sharedSecret: String?
-    var trustedServers: [String]?
-    var restartAfterBootstrap: Bool?
-    var restartUrl: String?
-    var restartMethod: String?
-}
-
-struct DeploymentExecutionResponse: Codable {
-    let success: Bool
-    let bundleId: String
-    let bundleName: String
-    let upload: DeploymentUploadResponse
-    let bootstrap: DeploymentBootstrapResponse?
-    let restart: DeploymentRestartResponse?
-}
-
-struct DeploymentUploadResponse: Codable {
-    let success: Bool
-    let transport: String
-    let remoteUrl: String
-}
-
-struct DeploymentBootstrapResponse: Codable {
-    let success: Bool
-}
-
-struct DeploymentRestartResponse: Codable {
-    let success: Bool?
-    let skipped: Bool?
-    let reason: String?
-    let error: String?
-}
-
-struct DeploymentOwnerEmailRequest: Codable {
-    var recipient: String
-    var subject: String?
-    var bundleName: String?
-    var remoteUrl: String?
-    var apiBaseUrl: String?
-}
-
-struct DeploymentSimpleResponse: Codable {
-    let success: Bool
 }

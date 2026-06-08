@@ -1,4 +1,4 @@
-# VoiceLink Local - Linux Installation Guide
+# VoiceLink - Linux Installation Guide
 
 ## System Requirements
 
@@ -12,7 +12,7 @@
 ## Download Options
 
 ### AppImage (Universal - Recommended)
-- **AppImage**: [VoiceLink Local-1.0.0.AppImage](../releases/VoiceLink%20Local-1.0.0.AppImage) (351MB)
+- **AppImage**: [VoiceLink-1.0.0.AppImage](../releases/VoiceLink%20Local-1.0.0.AppImage) (351MB)
 - Works on any Linux distribution with glibc 2.27+
 
 ### Debian/Ubuntu Package
@@ -48,7 +48,7 @@ sudo mv VoiceLink\ Local-1.0.0.AppImage /opt/voicelink-local.appimage
 cat > ~/.local/share/applications/voicelink-local.desktop << EOF
 [Desktop Entry]
 Type=Application
-Name=VoiceLink Local
+Name=VoiceLink
 Comment=P2P Voice Chat with 3D Audio
 Exec=/opt/voicelink-local.appimage
 Icon=voicelink-local
@@ -100,7 +100,7 @@ For other distributions or manual installation:
 
 ### PulseAudio (Default for most distributions)
 
-VoiceLink Local works with PulseAudio out of the box:
+VoiceLink works with PulseAudio out of the box:
 
 ```bash
 # Check PulseAudio is running
@@ -137,7 +137,7 @@ For low-latency professional audio:
    jackd -d alsa -r 48000 -p 128 -n 2
    ```
 
-3. **Launch** VoiceLink Local after JACK is running
+3. **Launch** VoiceLink after JACK is running
 
 ### ALSA (Low-level configuration)
 
@@ -177,10 +177,10 @@ arecord -f S16_LE -r 44100 -c 2 -d 5 test.wav
 
 ### Firewall Configuration
 
-Allow VoiceLink Local through firewall:
+Allow VoiceLink through firewall:
 ```bash
 # UFW (Ubuntu)
-sudo ufw allow 'VoiceLink Local'
+sudo ufw allow 'VoiceLink'
 
 # FirewallD (Fedora/CentOS)
 sudo firewall-cmd --permanent --add-port=3000-65535/tcp
@@ -196,7 +196,7 @@ sudo iptables -A INPUT -p udp --dport 3000:65535 -j ACCEPT
 
 ### GNOME
 
-VoiceLink Local integrates with GNOME's audio controls and notifications.
+VoiceLink integrates with GNOME's audio controls and notifications.
 
 ### KDE Plasma
 

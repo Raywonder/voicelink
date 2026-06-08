@@ -1,39 +1,121 @@
 param(
-    [string]$Version = "1.0.0"
+    [string]$Version = "1.0.0",
+    [string]$Build = "48"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-SignTool {
+    $preferredPaths = @(
+        "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe",
+        "C:\Program Files\Windows Kits\10\bin\x64\signtool.exe"
+    )
+    foreach ($path in $preferredPaths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    $resolved = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($resolved) {
+        return $resolved.Source
+    }
+    return $null
+}
+
+function Sign-Artifact {
+    param(
+        [string]$FilePath
+    )
+
+    $signTool = Resolve-SignTool
+    if (-not $signTool) {
+        Write-Warning "signtool.exe not found; skipping Windows code signing."
+        return
+    }
+
+    $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+
+    if ($env:WINDOWS_CODESIGN_PFX -and $env:WINDOWS_CODESIGN_PASSWORD) {
+        & $signTool sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $env:WINDOWS_CODESIGN_PFX /p $env:WINDOWS_CODESIGN_PASSWORD $FilePath
+    } elseif ($env:WINDOWS_CODESIGN_THUMBPRINT) {
+        & $signTool sign /fd SHA256 /tr $timestampUrl /td SHA256 /sha1 $env:WINDOWS_CODESIGN_THUMBPRINT $FilePath
+    } else {
+        Write-Host "No Windows code-signing identity configured; skipping signing for $FilePath"
+        return
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool.exe failed while signing $FilePath"
+    }
+}
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Project = Join-Path $Root "VoiceLinkNative/VoiceLinkNative.csproj"
 $PublishDir = Join-Path $Root "publish/win-x64"
 $DistDir = Join-Path $Root "dist"
-$WixMsi = Join-Path $Root "installer/wix/VoiceLink.msi.wxs"
-$WixBundle = Join-Path $Root "installer/wix/VoiceLink.bundle.wxs"
+$InnoScript = Join-Path $Root "installer/inno/VoiceLink.iss"
 
 New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
 
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    throw "dotnet SDK is required. Install .NET 8 SDK first."
+$PreferredDotnet = "C:\Program Files\dotnet\dotnet.exe"
+$Dotnet = $null
+if (Test-Path $PreferredDotnet) {
+    $Dotnet = @{ Source = $PreferredDotnet }
+} else {
+    $ResolvedDotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($ResolvedDotnet) {
+        $Dotnet = @{ Source = $ResolvedDotnet.Source }
+    } else {
+        throw "dotnet SDK is required. Install .NET 8 SDK first."
+    }
 }
 
-if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-    dotnet tool install --global wix
+$SdkList = & $Dotnet.Source --list-sdks
+if (-not $SdkList) {
+    throw "The resolved dotnet binary does not have any SDKs available."
 }
 
-$env:Path = "$env:USERPROFILE\.dotnet\tools;$env:Path"
+if (-not (Test-Path $InnoScript)) {
+    throw "Inno Setup script not found at $InnoScript"
+}
 
-wix extension add WixToolset.UI.wixext | Out-Null
-wix extension add WixToolset.Bal.wixext | Out-Null
+$Iscc = Get-Command iscc -ErrorAction SilentlyContinue
+if (-not $Iscc) {
+    $FallbackIscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    if (Test-Path $FallbackIscc) {
+        $Iscc = @{ Source = $FallbackIscc }
+    } else {
+        throw "Inno Setup Compiler (ISCC.exe) is required. Install Inno Setup 6 first."
+    }
+}
 
-dotnet restore $Project
-dotnet publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true
+& $Dotnet.Source restore $Project
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet restore failed."
+}
+& $Dotnet.Source publish $Project -c Release -r win-x64 --self-contained true -o $PublishDir /p:PublishSingleFile=true /p:FileVersion="$Version.$Build" /p:InformationalVersion="$Version+$Build"
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet publish failed."
+}
 
-$MsiOut = Join-Path $DistDir "VoiceLinkNative-$Version-win-x64.msi"
-$ExeOut = Join-Path $DistDir "VoiceLinkNative-$Version-setup.exe"
+$PortableOut = Join-Path $DistDir "VoiceLink-$Version-windows-portable.exe"
+$SetupOut = Join-Path $DistDir "VoiceLink-$Version-windows-setup.exe"
 
-wix build $WixMsi -arch x64 -d Version=$Version -o $MsiOut
-wix build $WixBundle -arch x64 -ext WixToolset.Bal.wixext -d Version=$Version -o $ExeOut
+Copy-Item (Join-Path $PublishDir "VoiceLinkNative.exe") $PortableOut -Force
+
+& $Iscc.Source "/DMyAppVersion=$Version" "/DPublishDir=$PublishDir" "/DOutputDir=$DistDir" $InnoScript
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup build failed."
+}
+
+Sign-Artifact -FilePath $PortableOut
+Sign-Artifact -FilePath $SetupOut
+
+$PortableHash = (Get-FileHash $PortableOut -Algorithm SHA256).Hash.ToLowerInvariant()
+$SetupHash = (Get-FileHash $SetupOut -Algorithm SHA256).Hash.ToLowerInvariant()
+
+Set-Content -Path "$PortableOut.sha256" -Value "$PortableHash  $(Split-Path $PortableOut -Leaf)"
+Set-Content -Path "$SetupOut.sha256" -Value "$SetupHash  $(Split-Path $SetupOut -Leaf)"
 
 Write-Host "Built artifacts:" -ForegroundColor Green
-Get-Item $MsiOut, $ExeOut | Select-Object FullName, Length, LastWriteTime
+Get-Item $PortableOut, $SetupOut, "$PortableOut.sha256", "$SetupOut.sha256" | Select-Object FullName, Length, LastWriteTime

@@ -8,6 +8,7 @@ const API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 const DEFAULT_LOCALE = 'en-US';
 const DEFAULT_WAIT_SECONDS = 20;
 const DEFAULT_WAIT_ATTEMPTS = 30;
+const DEFAULT_BETA_GROUP_NAME = 'Pioneers';
 
 function parseArgs(argv) {
   const args = {};
@@ -232,6 +233,73 @@ async function upsertBetaLocalization(token, { buildId, locale, notes }) {
   return { action: 'created', id: created?.data?.id };
 }
 
+async function findBetaGroupByName(token, { appId, betaGroupName }) {
+  const groups = await apiRequest(token, '/betaGroups', {
+    query: {
+      'filter[app]': appId,
+      limit: 200
+    }
+  });
+  return (groups?.data || []).find((group) => group?.attributes?.name === betaGroupName) || null;
+}
+
+async function attachBuildToBetaGroup(token, { buildId, groupId }) {
+  try {
+    await apiRequest(token, `/betaGroups/${groupId}/relationships/builds`, {
+      method: 'POST',
+      body: {
+        data: [
+          {
+            type: 'builds',
+            id: buildId
+          }
+        ]
+      }
+    });
+    return 'attached';
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (message.includes('409') || message.toLowerCase().includes('already')) {
+      return 'already-attached';
+    }
+    throw error;
+  }
+}
+
+async function ensureExternalBetaReviewSubmission(token, { buildId }) {
+  try {
+    await apiRequest(token, '/betaAppReviewSubmissions', {
+      method: 'POST',
+      body: {
+        data: {
+          type: 'betaAppReviewSubmissions',
+          relationships: {
+            build: {
+              data: {
+                type: 'builds',
+                id: buildId
+              }
+            }
+          }
+        }
+      }
+    });
+    return 'submitted';
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (message.includes('409') || message.toLowerCase().includes('already')) {
+      return 'already-submitted';
+    }
+    if (message.includes('INVALID_QC_STATE')) {
+      return 'already-submitted-or-approved';
+    }
+    if (message.includes('ENTITY_ERROR.ATTRIBUTE.INVALID') || message.toLowerCase().includes('beta app review')) {
+      return 'not-required';
+    }
+    throw error;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const scriptDir = __dirname;
@@ -241,6 +309,7 @@ async function main() {
   const locale = args.locale || process.env.ASC_LOCALE || DEFAULT_LOCALE;
   const waitAttempts = Number(args['wait-attempts'] || process.env.ASC_WAIT_ATTEMPTS || DEFAULT_WAIT_ATTEMPTS);
   const waitSeconds = Number(args['wait-seconds'] || process.env.ASC_WAIT_SECONDS || DEFAULT_WAIT_SECONDS);
+  const betaGroupName = args['beta-group-name'] || process.env.ASC_BETA_GROUP_NAME || DEFAULT_BETA_GROUP_NAME;
 
   const pbxproj = readFileRequired(pbxprojPath, 'Xcode project');
   const bundleId = args['bundle-id'] || process.env.ASC_APP_BUNDLE_ID || extractPbxprojValue(pbxproj, 'PRODUCT_BUNDLE_IDENTIFIER');
@@ -269,6 +338,20 @@ async function main() {
   const build = await findBuild(token, { appId, version, buildNumber, waitAttempts, waitSeconds });
   const result = await upsertBetaLocalization(token, { buildId: build.id, locale, notes });
   console.log(`TestFlight notes ${result.action} for build resource ${build.id} (${locale})`);
+
+  if (betaGroupName) {
+    const betaGroup = await findBetaGroupByName(token, { appId, betaGroupName });
+    if (!betaGroup?.id) {
+      throw new Error(`Beta group ${betaGroupName} not found for ${bundleId}`);
+    }
+    const attachState = await attachBuildToBetaGroup(token, {
+      buildId: build.id,
+      groupId: betaGroup.id
+    });
+    console.log(`Build ${version} (${buildNumber}) ${attachState} to beta group ${betaGroupName}`);
+    const reviewState = await ensureExternalBetaReviewSubmission(token, { buildId: build.id });
+    console.log(`External beta review ${reviewState} for build ${version} (${buildNumber})`);
+  }
 }
 
 main().catch((error) => {

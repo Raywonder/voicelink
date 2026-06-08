@@ -14,7 +14,8 @@ class MastodonOAuthManager {
         // Suggested instances
         this.suggestedInstances = [
             { url: 'https://md.tappedin.fm', name: 'TappedIn' },
-            { url: 'https://mastodon.devinecreations.net', name: 'DevineCreations' }
+            { url: 'https://mastodon.devinecreations.net', name: 'DevineCreations' },
+            { url: 'https://layer8.space', name: 'Layer8 in Space' }
         ];
 
         // OAuth scopes needed
@@ -78,15 +79,65 @@ class MastodonOAuthManager {
         localStorage.removeItem('voicelink_mastodon_session');
     }
 
+    getBrowserBasePath() {
+        const path = window.location?.pathname || '/';
+        const mountPoints = ['/voicelink-node/', '/voicelink/'];
+        for (const mount of mountPoints) {
+            const trimmed = mount.replace(/\/$/, '');
+            if (path === trimmed || path.startsWith(mount)) {
+                return trimmed;
+            }
+        }
+        return '';
+    }
+
+    getRedirectUri() {
+        if (window.nativeAPI) {
+            return 'urn:ietf:wg:oauth:2.0:oob';
+        }
+        return `${window.location.origin}${this.getBrowserBasePath()}/oauth/callback`;
+    }
+
+    /**
+     * Normalize user-entered Mastodon-compatible instance names.
+     */
+    normalizeInstanceUrl(instanceUrl) {
+        let value = String(instanceUrl || '').trim();
+        if (!value) {
+            throw new Error('Enter a Mastodon instance, for example layer8.space');
+        }
+
+        value = value.replace(/^@+/, '');
+        if (value.includes('@')) {
+            value = value.split('@').filter(Boolean).pop() || value;
+        }
+        value = value.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+
+        const aliases = {
+            layor8: 'layer8.space',
+            layer8: 'layer8.space',
+            tappedin: 'md.tappedin.fm',
+            devinecreations: 'mastodon.devinecreations.net'
+        };
+        value = aliases[value] || value;
+
+        if (!value.includes('.') || /\s/.test(value)) {
+            throw new Error('Enter the full Mastodon instance domain, for example layer8.space');
+        }
+
+        const normalized = `https://${value}`;
+        try {
+            return new URL(normalized).origin;
+        } catch (err) {
+            throw new Error('Enter a valid Mastodon instance domain.');
+        }
+    }
+
     /**
      * Register VoiceLink as an OAuth app on the instance
      */
     async registerApp(instanceUrl) {
-        // Normalize instance URL
-        instanceUrl = instanceUrl.replace(/\/$/, '');
-        if (!instanceUrl.startsWith('http')) {
-            instanceUrl = 'https://' + instanceUrl;
-        }
+        instanceUrl = this.normalizeInstanceUrl(instanceUrl);
 
         // Check if we already have credentials for this instance
         const savedApps = JSON.parse(localStorage.getItem('voicelink_mastodon_apps') || '{}');
@@ -97,11 +148,7 @@ class MastodonOAuthManager {
             return { clientId: this.clientId, clientSecret: this.clientSecret };
         }
 
-        // Determine redirect URI based on environment
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'  // Out-of-band for native apps
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         try {
             const response = await fetch(`${instanceUrl}/api/v1/apps`, {
@@ -110,10 +157,10 @@ class MastodonOAuthManager {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    client_name: 'VoiceLink Local',
+                    client_name: 'VoiceLink',
                     redirect_uris: redirectUri,
                     scopes: this.scopes,
-                    website: 'https://voicelink.devinecreations.net'
+                    website: 'https://voicelinkapp.app'
                 })
             });
 
@@ -147,10 +194,7 @@ class MastodonOAuthManager {
     async startAuth(instanceUrl) {
         await this.registerApp(instanceUrl);
 
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         // Generate state for CSRF protection
         const state = this.generateState();
@@ -193,10 +237,7 @@ class MastodonOAuthManager {
             }
         }
 
-        const isNativeApp = !!window.nativeAPI;
-        const redirectUri = isNativeApp
-            ? 'urn:ietf:wg:oauth:2.0:oob'
-            : `${window.location.origin}/oauth/callback`;
+        const redirectUri = this.getRedirectUri();
 
         // Exchange code for token
         const response = await fetch(`${this.instanceUrl}/oauth/token`, {

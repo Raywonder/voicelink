@@ -9,7 +9,8 @@ set -e
 VERSION="1.0.0"
 PACKAGE_NAME="voicelink-server-${VERSION}"
 BUILD_DIR="/tmp/voicelink-build"
-SOURCE_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 OUTPUT_DIR="${SOURCE_DIR}/releases"
 
 echo "Building VoiceLink package v${VERSION}..."
@@ -23,6 +24,12 @@ mkdir -p "$OUTPUT_DIR"
 echo "Copying source files..."
 cp -r "$SOURCE_DIR/server" "$BUILD_DIR/$PACKAGE_NAME/"
 cp -r "$SOURCE_DIR/client" "$BUILD_DIR/$PACKAGE_NAME/"
+if [ -d "$SOURCE_DIR/source/server" ]; then
+    cp -r "$SOURCE_DIR/source/server/." "$BUILD_DIR/$PACKAGE_NAME/server/"
+fi
+if [ -d "$SOURCE_DIR/source/client" ]; then
+    cp -r "$SOURCE_DIR/source/client/." "$BUILD_DIR/$PACKAGE_NAME/client/"
+fi
 cp -r "$SOURCE_DIR/source/assets" "$BUILD_DIR/$PACKAGE_NAME/assets" 2>/dev/null || mkdir -p "$BUILD_DIR/$PACKAGE_NAME/assets"
 cp "$SOURCE_DIR/package.json" "$BUILD_DIR/$PACKAGE_NAME/"
 cp "$SOURCE_DIR/package-lock.json" "$BUILD_DIR/$PACKAGE_NAME/" 2>/dev/null || true
@@ -35,6 +42,13 @@ mkdir -p "$BUILD_DIR/$PACKAGE_NAME/data"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/docs/public"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/docs/authenticated"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME/logs"
+
+# Copy documentation used by installed server docs and owner/admin setup flows.
+if [ -d "$SOURCE_DIR/docs" ]; then
+    cp -r "$SOURCE_DIR/docs/." "$BUILD_DIR/$PACKAGE_NAME/docs/public/"
+fi
+cp "$SOURCE_DIR/README.md" "$BUILD_DIR/$PACKAGE_NAME/docs/README.md" 2>/dev/null || true
+cp "$SOURCE_DIR/voicelink-governance.md" "$BUILD_DIR/$PACKAGE_NAME/docs/voicelink-governance.md" 2>/dev/null || true
 
 # Remove dev files
 find "$BUILD_DIR/$PACKAGE_NAME" -name "*.test.js" -delete
@@ -78,7 +92,7 @@ Docs sync automatically from the main server.
 ## Support
 
 - GitHub: https://github.com/devinecreations/voicelink
-- Main Server: https://voicelink.devinecreations.net
+- Main Server: https://voicelinkapp.app
 README
 
 # Create tarball
@@ -106,5 +120,5 @@ echo "  Tarball: $OUTPUT_DIR/${PACKAGE_NAME}.tar.gz"
 [ -f "$OUTPUT_DIR/${PACKAGE_NAME}.zip" ] && echo "  Zip:     $OUTPUT_DIR/${PACKAGE_NAME}.zip"
 echo ""
 echo "To install on a new server:"
-echo "  curl -sL https://voicelink.devinecreations.net/releases/latest.tar.gz | tar xz"
+echo "  curl -sL https://voicelinkapp.app/downloads/voicelink/latest.tar.gz | tar xz"
 echo "  cd $PACKAGE_NAME && ./install.sh"

@@ -64,11 +64,12 @@ class DefaultRoomsInterface {
         const modal = document.createElement('dialog');
         modal.id = 'default-rooms-modal';
         modal.className = 'default-rooms-modal';
+        modal.setAttribute('aria-modal','true');
 
         modal.innerHTML = `
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>🏢 Default Rooms Manager</h2>
+                    <h2 id="default-rooms-title">🏢 Default Rooms Manager</h2>
                     <button class="close-btn" onclick="this.closest('dialog').close()">&times;</button>
                 </div>
 
@@ -161,6 +162,7 @@ class DefaultRoomsInterface {
         `;
 
         document.body.appendChild(modal);
+        modal.setAttribute('aria-labelledby','default-rooms-title');
         this.modalElement = modal;
 
         // Setup modal event listeners
@@ -211,6 +213,24 @@ class DefaultRoomsInterface {
         this.updateStatus();
 
         this.modalElement.showModal();
+        // Move focus into dialog and trap focus
+        const modal = this.modalElement;
+        const firstFocusable = modal.querySelector('.close-btn, button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (firstFocusable && typeof firstFocusable.focus === 'function') {
+            firstFocusable.focus();
+        }
+        const trap = (e) => {
+            if (e.key !== 'Tab') return;
+            const focusable = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+                .filter(el => !el.hasAttribute('disabled'));
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        };
+        modal.addEventListener('keydown', trap);
+        modal.addEventListener('close', () => modal.removeEventListener('keydown', trap), { once: true });
         this.isOpen = true;
     }
 

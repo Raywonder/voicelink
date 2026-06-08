@@ -211,6 +211,13 @@ class JellyfinServiceManager extends EventEmitter {
 
             const args = processInfo.config.command.split(' ');
             const command = args.shift();
+            let finished = false;
+
+            const finish = (result) => {
+                if (finished) return;
+                finished = true;
+                resolve(result);
+            };
 
             const child = spawn(command, args, {
                 user: processInfo.config.user,
@@ -220,9 +227,18 @@ class JellyfinServiceManager extends EventEmitter {
             });
 
             child.unref();
+            child.on('error', (error) => {
+                this.log(`Failed to start ${name}: ${error.message}`);
+                processInfo.status = 'stopped';
+                this.emit('processStartFailed', name, error);
+                finish(false);
+            });
 
             // Wait a moment to check if process started successfully
             setTimeout(async () => {
+                if (finished) {
+                    return;
+                }
                 const runningProcesses = await this.discoverProcesses();
                 const started = runningProcesses.find(p => p.pid === child.pid);
                 
@@ -238,11 +254,11 @@ class JellyfinServiceManager extends EventEmitter {
                     
                     this.log(`Successfully started ${name} (PID: ${child.pid})`);
                     this.emit('processStarted', name, child.pid);
-                    resolve(true);
+                    finish(true);
                 } else {
                     this.log(`Failed to start ${name}`);
                     this.emit('processStartFailed', name);
-                    resolve(false);
+                    finish(false);
                 }
             }, 2000);
         });

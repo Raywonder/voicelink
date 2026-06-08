@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 /// File Transfer Manager for VoiceLink
 /// Handles file uploads, downloads, and transfers between users
@@ -189,6 +190,64 @@ class FileTransferManager: ObservableObject {
     /// Send a file to a specific user
     func sendFileToDirect(url: URL, recipientId: String, recipientName: String) {
         sendFile(url: url, recipientId: recipientId, recipientName: recipientName)
+    }
+
+    func shareJustBeamItToRoom() {
+        presentJustBeamItPrompt(recipientId: nil, recipientName: nil)
+    }
+
+    func shareJustBeamItToDirect(recipientId: String, recipientName: String) {
+        presentJustBeamItPrompt(recipientId: recipientId, recipientName: recipientName)
+    }
+
+    private func presentJustBeamItPrompt(recipientId: String?, recipientName: String?) {
+        DispatchQueue.main.async {
+            let justBeamItURL = URL(string: "https://www.justbeamit.com/")!
+            NSWorkspace.shared.open(justBeamItURL)
+
+            let alert = NSAlert()
+            alert.messageText = recipientName.map { "Send via JustBeamIt to \($0)" } ?? "Send via JustBeamIt to Room"
+            alert.informativeText = "JustBeamIt will open in your browser. Drop the file there, create a link, keep that browser window open, then paste the link below. The link is single-transfer and expires after about 10 minutes."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Send Link")
+            alert.addButton(withTitle: "Cancel")
+
+            let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+            input.placeholderString = "https://www.justbeamit.com/..."
+            input.setAccessibilityLabel("JustBeamIt transfer link")
+            alert.accessoryView = input
+
+            let response = alert.runModal()
+            guard response == .alertFirstButtonReturn else { return }
+            let rawLink = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard self.isValidJustBeamItLink(rawLink) else {
+                self.showError("Paste a valid JustBeamIt link before sending.")
+                return
+            }
+
+            let message = [
+                "JustBeamIt file transfer link: \(rawLink)",
+                "Open the link and choose Download. This link is single-transfer, expires after about 10 minutes, and the sender must keep their JustBeamIt browser window open until the transfer finishes."
+            ].joined(separator: "\n")
+
+            if let recipientId, let recipientName {
+                MessagingManager.shared.sendDirectMessage(to: recipientId, username: recipientName, content: message)
+                MessagingManager.shared.sendSystemMessage("JustBeamIt transfer link sent to \(recipientName). Keep the browser window open until they finish downloading.")
+            } else {
+                MessagingManager.shared.sendRoomMessage(message)
+                MessagingManager.shared.sendSystemMessage("JustBeamIt transfer link sent to the room. Keep the browser window open until the transfer finishes.")
+            }
+        }
+    }
+
+    private func isValidJustBeamItLink(_ value: String) -> Bool {
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              ["https", "http"].contains(scheme),
+              let host = components.host?.lowercased() else {
+            return false
+        }
+        return host == "justbeamit.com" || host == "www.justbeamit.com"
     }
 
     private func sendFile(url: URL, recipientId: String?, recipientName: String?) {
@@ -747,6 +806,14 @@ struct FileTransfersPanel: View {
                     Label("Send File", systemImage: "paperclip")
                 }
                 .buttonStyle(.bordered)
+
+                Button(action: {
+                    transferManager.shareJustBeamItToRoom()
+                }) {
+                    Label("JustBeamIt Link", systemImage: "bolt.horizontal.circle")
+                }
+                .buttonStyle(.bordered)
+                .help("Open JustBeamIt and send a temporary single-transfer link to the room.")
 
                 Spacer()
 

@@ -100,7 +100,7 @@ class SyncManager: ObservableObject {
             group.leave()
         }
 
-        group.notify(queue: .main) { [weak self] in
+        group.notify(queue: DispatchQueue.main) { [weak self] in
             self?.isSyncing = false
             self?.lastSyncDate = Date()
             self?.saveLastSyncDate()
@@ -367,19 +367,19 @@ class SyncManager: ObservableObject {
         }
 
         // Listen for specific events that should trigger sync
-        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .membershipLevelChanged, object: nil, queue: nil) { [weak self] _ in
             self?.syncMembershipData { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .trustScoreChanged, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .trustScoreChanged, object: nil, queue: nil) { [weak self] _ in
             self?.syncTrustScore { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .serverLinked, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .serverLinked, object: nil, queue: nil) { [weak self] _ in
             self?.syncLinkedDevices { _ in }
         }
 
-        NotificationCenter.default.addObserver(forName: .walletConnected, object: nil, queue: .main) { [weak self] _ in
+        NotificationCenter.default.addObserver(forName: .walletConnected, object: nil, queue: nil) { [weak self] _ in
             self?.syncWalletData { _ in }
         }
     }

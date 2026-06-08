@@ -1,6 +1,107 @@
 import SwiftUI
 import Foundation
 
+enum BackgroundMediaAssignmentScope {
+    case currentRoom
+    case allRooms
+    case selectedRooms
+}
+
+struct BackgroundMediaRoomPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let availableRooms: [AdminRoomInfo]
+    let applyLabel: String
+    let onApply: (Set<String>) -> Void
+
+    @State private var selectedRoomIDs: Set<String>
+
+    init(
+        title: String,
+        availableRooms: [AdminRoomInfo],
+        initiallySelectedRoomIDs: Set<String>,
+        applyLabel: String,
+        onApply: @escaping (Set<String>) -> Void
+    ) {
+        self.title = title
+        self.availableRooms = availableRooms
+        self.applyLabel = applyLabel
+        self.onApply = onApply
+        _selectedRoomIDs = State(initialValue: initiallySelectedRoomIDs)
+    }
+
+    private var sortedRooms: [AdminRoomInfo] {
+        availableRooms.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Choose which rooms should use this background media assignment.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+
+                List(sortedRooms) { room in
+                    Toggle(
+                        isOn: Binding(
+                            get: { selectedRoomIDs.contains(room.id) },
+                            set: { isOn in
+                                if isOn {
+                                    selectedRoomIDs.insert(room.id)
+                                } else {
+                                    selectedRoomIDs.remove(room.id)
+                                }
+                            }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(room.name)
+                            if !room.description.isEmpty {
+                                Text(room.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel("Use background media in \(room.name)")
+                }
+                .frame(minHeight: 260)
+
+                HStack {
+                    Button("Select All") {
+                        selectedRoomIDs = Set(sortedRooms.map(\.id))
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Clear") {
+                        selectedRoomIDs.removeAll()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(applyLabel) {
+                        onApply(selectedRoomIDs)
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedRoomIDs.isEmpty)
+                }
+            }
+            .padding()
+            .navigationTitle(title)
+        }
+        .frame(minWidth: 460, minHeight: 420)
+    }
+}
+
 /// Room Action Menu - Shows available actions for a room
 /// Displayed when joining a room or clicking room name
 struct RoomActionMenu: View {
@@ -10,6 +111,8 @@ struct RoomActionMenu: View {
 
     @ObservedObject var serverManager = ServerManager.shared
     @ObservedObject var adminManager = AdminServerManager.shared
+    @ObservedObject private var authManager = AuthenticationManager.shared
+    @ObservedObject private var pairingManager = PairingManager.shared
     @ObservedObject var whisperManager = WhisperModeManager.shared
     @ObservedObject var audioControl = UserAudioControlManager.shared
     @ObservedObject var roomLockManager = RoomLockManager.shared
@@ -17,6 +120,14 @@ struct RoomActionMenu: View {
     @State private var isPeeking = false
     @State private var selectedUser: RoomUser?
     @State private var roomMediaStatusText: String = "Checking..."
+    @State private var roomMediaActionStatus: String?
+    @State private var pendingBackgroundMediaStream: BackgroundStreamConfig?
+    @State private var showBackgroundMediaScopeDialog = false
+    @State private var showBackgroundMediaRoomPicker = false
+    @State private var showAccountSignInSheet = false
+    @State private var pendingBackgroundMediaApplyLabel = "Apply to Selected Rooms"
+    @State private var pendingBackgroundMediaSelectionTitle = "Choose Rooms"
+    @State private var preselectedBackgroundMediaRoomIDs: Set<String> = []
 
     // Room features (from server settings)
     var roomFeatures: RoomFeatures {
@@ -25,7 +136,7 @@ struct RoomActionMenu: View {
             whisperEnabled: true,
             peekEnabled: room.userCount > 0 || settings.allowPreviewWhenMediaActive,
             spatialAudioEnabled: true,
-            recordingAllowed: false,
+            recordingAllowed: room.recordingAllowed,
             voiceEffectsEnabled: true,
             pttRequired: false,
             canLockRoom: roomLockManager.canCurrentUserLock,
@@ -41,6 +152,29 @@ struct RoomActionMenu: View {
         adminManager.isAdmin || adminManager.adminRole.canManageRooms || roomFeatures.canLockRoom
     }
 
+    private var canOpenServerAdministration: Bool {
+        let currentRole = authManager.currentUser?.role?.lowercased()
+        return adminManager.isAdmin
+            || adminManager.adminRole.canManageConfig
+            || adminManager.adminRole.canManageServer
+            || currentRole == "admin"
+            || currentRole == "owner"
+    }
+
+    private var canManageBackgroundMedia: Bool {
+        adminManager.isAdmin || adminManager.adminRole.canManageConfig || adminManager.adminRole.canManageRooms
+    }
+
+    private var isAuthenticatedUser: Bool {
+        authManager.authState == .authenticated && authManager.currentUser != nil
+    }
+
+    private var activeRoomServerURL: String {
+        let configured = (serverManager.baseURL ?? serverManager.connectedServer)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return configured.isEmpty ? ServerManager.mainServer : normalizedServerURL(configured)
+    }
+
     private var roomJoinStatusText: String {
         isInRoom ? "Joined" : "Not Joined"
     }
@@ -50,6 +184,77 @@ struct RoomActionMenu: View {
             return "Enable Preview in This Room"
         }
         return "Disable Preview in This Room"
+    }
+
+    private var roomWelcomeMessage: String? {
+        let trimmed = room.welcomeMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var roomUsersForLocalAudioControl: [RoomUser] {
+        serverManager.currentRoomUsers.filter { user in
+            guard let currentUser = authManager.currentUser else { return true }
+            return user.id.caseInsensitiveCompare(currentUser.id) != .orderedSame
+                && user.username.caseInsensitiveCompare(currentUser.username) != .orderedSame
+        }
+    }
+
+    private var availableBackgroundStreams: [BackgroundStreamConfig] {
+        guard adminManager.serverConfig?.backgroundStreams?.enabled != false else { return [] }
+        let streams = adminManager.serverConfig?.backgroundStreams?.streams ?? []
+        return streams
+            .filter { stream in
+                let url = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? stream.url : stream.streamUrl
+                return !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var currentBackgroundStreamName: String? {
+        if let title = serverManager.currentRoomMedia?.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
+        guard let activeURL = serverManager.currentRoomMedia?.streamURL.trimmingCharacters(in: .whitespacesAndNewlines),
+              !activeURL.isEmpty else { return nil }
+        return availableBackgroundStreams.first(where: {
+            normalizedStreamURL(for: $0).trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(activeURL) == .orderedSame
+        })?.name
+    }
+
+    private var assignedBackgroundStream: BackgroundStreamConfig? {
+        availableBackgroundStreams.first(where: isStreamAssignedToRoom(_:))
+    }
+
+    private var configuredBackgroundMediaFadeDuration: TimeInterval {
+        let fadeMilliseconds = adminManager.serverConfig?.backgroundStreams?.fadeInDuration ?? 1500
+        return max(Double(fadeMilliseconds) / 1000.0, 0.05)
+    }
+
+    private var switchableServers: [(name: String, url: String, isCurrent: Bool)] {
+        var ordered: [(name: String, url: String, isCurrent: Bool)] = []
+        var seen = Set<String>()
+
+        func append(name: String, rawURL: String) {
+            let normalized = normalizedServerURL(rawURL)
+            guard !normalized.isEmpty, !seen.contains(normalized) else { return }
+            seen.insert(normalized)
+            ordered.append((
+                name: name,
+                url: normalized,
+                isCurrent: normalized == normalizedServerURL(serverManager.baseURL ?? "")
+            ))
+        }
+
+        for managed in settings.managedFederationServers where !managed.isHidden {
+            append(name: managed.name, rawURL: managed.url)
+        }
+        for linked in pairingManager.linkedServers {
+            append(name: linked.name, rawURL: linked.url)
+        }
+
+        return ordered
     }
 
     var body: some View {
@@ -80,7 +285,7 @@ struct RoomActionMenu: View {
                     .font(.caption)
                     .foregroundColor(.gray)
 
-                if !room.description.isEmpty {
+                if settings.showRoomDescriptions && !room.description.isEmpty {
                     Text("- \(room.description)")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -99,11 +304,15 @@ struct RoomActionMenu: View {
                 roomDetailRow(label: "Your Access", value: viewerAccessLabel)
                 roomDetailRow(label: "Join Status", value: roomJoinStatusText)
                 roomDetailRow(label: "Media Status", value: roomMediaStatusText)
-                roomDetailRow(label: "Room Controls", value: canManageRoomActions ? "Manage Allowed" : "View Only")
+                roomDetailRow(label: "Room Controls", value: roomControlsStatusLabel)
                 roomDetailRow(label: "Total Users", value: "\(room.userCount)/\(room.maxUsers)")
                 roomDetailRow(label: "Uptime", value: roomUptimeLabel)
                 roomDetailRow(label: "Last User", value: room.lastActiveUsername ?? "No activity yet")
                 roomDetailRow(label: "Last Activity", value: roomLastActivityLabel)
+                roomDetailRow(label: "Lock Status", value: room.isLocked ? "Locked" : "Unlocked")
+                if let lockedBy = room.lockedBy?.trimmingCharacters(in: .whitespacesAndNewlines), !lockedBy.isEmpty {
+                    roomDetailRow(label: "Locked By", value: lockedBy)
+                }
                 if let hostedFrom = room.hostedFromLine {
                     roomDetailRow(label: "Hosted From", value: hostedFrom)
                 }
@@ -115,202 +324,242 @@ struct RoomActionMenu: View {
             .padding(.horizontal)
             .padding(.top, 8)
 
-            // Actions
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    // Peek into room (if not already in room)
+            if let roomWelcomeMessage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Room Welcome")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.85))
+                    Text(StatusManager.shared.attributedMessage(roomWelcomeMessage))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .textSelection(.enabled)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
                     if !isInRoom && roomFeatures.peekEnabled {
-                        ActionMenuItem(
-                            icon: "eye.fill",
-                            label: isPeeking ? "Stop Peeking" : "Peek Into Room",
-                            shortcut: "Cmd+P",
-                            description: "Preview room audio (5-20 sec)",
-                            isActive: isPeeking
-                        ) {
+                        Button(isPeeking ? "Stop Preview" : "Preview") {
                             togglePeek()
+                            isPresented = false
                         }
+                        .buttonStyle(.bordered)
                     }
 
-                    // Whisper mode (if in room)
-                    if isInRoom && roomFeatures.whisperEnabled {
-                        ActionMenuSection(title: "Whisper To") {
-                            ForEach(serverManager.currentRoomUsers) { user in
-                                ActionMenuItem(
-                                    icon: whisperManager.whisperTargetUserId == user.odId ? "ear.fill" : "ear",
-                                    label: user.username,
-                                    shortcut: nil,
-                                    description: "Hold Enter to whisper",
-                                    isActive: whisperManager.whisperTargetUserId == user.odId
-                                ) {
-                                    if whisperManager.whisperTargetUserId == user.odId {
-                                        whisperManager.clearWhisperTarget()
-                                    } else {
-                                        whisperManager.setWhisperTarget(userId: user.odId, username: user.username)
+                    Button(isInRoom ? "Leave Room" : "Join Room") {
+                        NotificationCenter.default.post(
+                            name: isInRoom ? .roomActionLeave : .roomActionJoin,
+                            object: isInRoom ? nil : room
+                        )
+                        isPresented = false
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if isInRoom && !isAuthenticatedUser {
+                        Button("Sign In") {
+                            showAccountSignInSheet = true
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Sign in to this room server")
+                        .accessibilityHint("Opens sign-in for the server that hosts the current room.")
+                    }
+                }
+
+                if isInRoom {
+                    Button("Report a Bug") {
+                        NotificationCenter.default.post(name: .openBugReport, object: nil)
+                        isPresented = false
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if isInRoom {
+                    EscortMeButton(roomId: room.id)
+                }
+
+                if isInRoom && !switchableServers.isEmpty {
+                    Menu {
+                        ForEach(switchableServers, id: \.url) { server in
+                            Button {
+                                NotificationCenter.default.post(
+                                    name: .roomActionSwitchServer,
+                                    object: [
+                                        "room": room,
+                                        "serverURL": server.url
+                                    ]
+                                )
+                                isPresented = false
+                            } label: {
+                                if server.isCurrent {
+                                    Label(server.name, systemImage: "checkmark")
+                                } else {
+                                    Text(server.name)
+                                }
+                            }
+                            .disabled(server.isCurrent)
+                        }
+                    } label: {
+                        Label("Switch Servers", systemImage: "arrow.triangle.branch")
+                    }
+                }
+
+                if isInRoom {
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Room Audio")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white.opacity(0.9))
+
+                        HStack {
+                            Text("Master Output")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+
+                            Slider(
+                                value: Binding(
+                                    get: { Double(audioControl.masterVolume) },
+                                    set: { audioControl.masterVolume = Float($0) }
+                                ),
+                                in: 0...2.0
+                            )
+
+                            Text("\(Int(audioControl.masterVolume * 100))%")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .frame(width: 42)
+                        }
+
+                        if serverManager.currentRoomMedia?.active == true {
+                            HStack {
+                                Text("Room Media")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(serverManager.currentRoomMediaVolume) },
+                                        set: { serverManager.setCurrentRoomMediaVolume(Float($0)) }
+                                    ),
+                                    in: 0...1.5
+                                )
+
+                                Text("\(Int(serverManager.currentRoomMediaVolume * 100))%")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .frame(width: 42)
+                            }
+
+                            HStack(spacing: 10) {
+                                Button(serverManager.isCurrentRoomMediaMuted ? "Unmute Room Media" : "Mute Room Media") {
+                                    serverManager.toggleCurrentRoomMediaMuted()
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Stop Room Media Here") {
+                                    stopRoomMediaForCurrentRoom()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+
+                        if !roomUsersForLocalAudioControl.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("User Audio")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+
+                                VStack(spacing: 6) {
+                                    ForEach(roomUsersForLocalAudioControl) { user in
+                                        InlineUserVolumeControl(userId: user.odId)
                                     }
                                 }
                             }
                         }
                     }
+                }
 
-                    // User volume controls (if in room)
-                    if isInRoom {
-                        ActionMenuSection(title: "User Volumes") {
-                            ForEach(serverManager.currentRoomUsers) { user in
-                                UserVolumeMenuItem(user: user)
+                if canManageRoomActions || canOpenServerAdministration {
+                    Divider()
+
+                    if canManageBackgroundMedia {
+                        Menu {
+                            Button("No Background Media") {
+                                presentBackgroundMediaSelectionOptions(for: nil)
                             }
+
+                            if !availableBackgroundStreams.isEmpty {
+                                Divider()
+
+                                ForEach(availableBackgroundStreams) { stream in
+                                    Button {
+                                        presentBackgroundMediaSelectionOptions(for: stream)
+                                    } label: {
+                                        if isStreamAssignedToRoom(stream) {
+                                            Label(stream.name, systemImage: "checkmark")
+                                        } else {
+                                            Text(stream.name)
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label("Room Background Media", systemImage: "music.note.list")
+                        }
+
+                        if let roomMediaActionStatus, !roomMediaActionStatus.isEmpty {
+                            Text(roomMediaActionStatus)
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                        } else if let assignedBackgroundStream {
+                            Text("Assigned stream: \(assignedBackgroundStream.name)")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
+                        } else if let currentBackgroundStreamName, !currentBackgroundStreamName.isEmpty {
+                            Text("Current room stream: \(currentBackgroundStreamName)")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
                         }
                     }
 
-                    Divider().padding(.vertical, 8)
-
-                    // Spatial audio toggle
-                    if roomFeatures.spatialAudioEnabled {
-                        ActionMenuItem(
-                            icon: "cube.transparent",
-                            label: "3D Spatial Audio",
-                            shortcut: "Cmd+3",
-                            description: "Position users in 3D space",
-                            isToggle: true,
-                            isToggled: settings.spatialAudioEnabled
-                        ) {
-                            settings.spatialAudioEnabled.toggle()
-                            settings.saveSettings()
-                        }
-                    }
-
-                    // Voice effects
-                    if roomFeatures.voiceEffectsEnabled {
-                        ActionMenuItem(
-                            icon: "waveform.circle",
-                            label: "Voice Effects",
-                            shortcut: nil,
-                            description: "Apply audio effects"
-                        ) {
-                            NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                NotificationCenter.default.post(name: .openAudioSettings, object: nil)
-                            }
+                    if canOpenServerAdministration {
+                        Button("Server Administration") {
+                            NotificationCenter.default.post(name: .openServerAdministration, object: nil)
                             isPresented = false
                         }
                     }
 
-                    ActionMenuItem(
-                        icon: "music.note.house",
-                        label: "Open Jukebox",
-                        shortcut: "Cmd+J",
-                        description: "Manage and play room media"
-                    ) {
-                        NotificationCenter.default.post(name: .openRoomJukebox, object: nil)
-                        isPresented = false
-                    }
-
-                    // PTT mode
-                    if roomFeatures.pttRequired {
-                        ActionMenuItem(
-                            icon: "hand.raised.fill",
-                            label: "Push-to-Talk Mode",
-                            shortcut: "Space",
-                            description: "Hold Space to transmit",
-                            isActive: true
-                        ) {
-                            // PTT is required, can't toggle
-                        }
-                        .disabled(true)
-                    }
-
-                    Divider().padding(.vertical, 8)
-
-                    // Room lock/unlock (if owner/admin and in room)
-                    if isInRoom && roomFeatures.canLockRoom {
-                        ActionMenuItem(
-                            icon: roomLockManager.isRoomLocked ? "lock.fill" : "lock.open.fill",
-                            label: roomLockManager.isRoomLocked ? "Unlock Room" : "Lock Room",
-                            shortcut: "Cmd+Opt+L",
-                            description: roomLockManager.isRoomLocked ?
-                                "Locked by \(roomLockManager.lockedByUsername ?? "owner")" :
-                                "Prevent new users from joining",
-                            isActive: roomLockManager.isRoomLocked
-                        ) {
-                            roomLockManager.toggleLock()
-                        }
-                    }
-
-                    // Show lock indicator if locked (for non-owners)
-                    if isInRoom && roomLockManager.isRoomLocked && !roomFeatures.canLockRoom {
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock.fill")
-                                .foregroundColor(.orange)
-                            Text("Room locked by \(roomLockManager.lockedByUsername ?? "owner")")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                    }
-
-                    // Room settings (if owner/admin)
-                    ActionMenuItem(
-                        icon: "gearshape",
-                        label: "Room Settings",
-                        shortcut: "Cmd+Opt+S",
-                        description: "Configure this room only"
-                    ) {
-                        NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
-                        isPresented = false
-                    }
-
-                    ActionMenuItem(
-                        icon: "gear",
-                        label: "Application Settings",
-                        shortcut: "Cmd+,",
-                        description: "Open app-wide settings"
-                    ) {
-                        NotificationCenter.default.post(name: .urlOpenSettings, object: nil)
-                        isPresented = false
-                    }
-
                     if canManageRoomActions {
-                        ActionMenuItem(
-                            icon: "slider.horizontal.3",
-                            label: "Open Room Administration",
-                            shortcut: nil,
-                            description: "Manage room permissions and metadata"
-                        ) {
+                        Button("Room Administration") {
                             NotificationCenter.default.post(name: .roomActionOpenSettings, object: room)
                             isPresented = false
                         }
+                    }
 
-                        ActionMenuItem(
-                            icon: "plus.circle",
-                            label: "Create New Room",
-                            shortcut: nil,
-                            description: "Create another room"
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionCreate, object: nil)
-                            isPresented = false
-                        }
-
-                        ActionMenuItem(
-                            icon: "trash",
-                            label: "Delete This Room",
-                            shortcut: nil,
-                            description: "Remove this room from server",
-                            isDestructive: true
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionDelete, object: room)
-                            isPresented = false
+                    if canManageRoomActions {
+                        if roomLockManager.isRoomLocked {
+                            Button("Unlock Room") {
+                                roomLockManager.unlockRoom()
+                                isPresented = false
+                            }
+                        } else {
+                            Menu {
+                                ForEach(RoomLockManager.LockDurationPreset.allCases) { preset in
+                                    Button(preset.title) {
+                                        roomLockManager.lockRoom(duration: preset.duration)
+                                        isPresented = false
+                                    }
+                                }
+                            } label: {
+                                Label("Lock Room", systemImage: "lock.fill")
+                            }
                         }
                     }
 
                     if canManageRoomActions {
-                        ActionMenuItem(
-                            icon: roomPreviewOverride == false ? "eye" : "eye.slash",
-                            label: roomPreviewEnabledText,
-                            shortcut: nil,
-                            description: roomPreviewOverride == false
-                                ? "Allow room audio preview for this room"
-                                : "Block room audio preview for this room"
-                        ) {
+                        Button(roomPreviewEnabledText) {
                             if roomPreviewOverride == false {
                                 settings.setRoomPreviewOverride(roomId: room.id, enabled: nil)
                             } else {
@@ -321,67 +570,252 @@ struct RoomActionMenu: View {
                             }
                         }
                     }
-
-                    if isInRoom {
-                        ActionMenuItem(
-                            icon: "rectangle.portrait.and.arrow.right",
-                            label: "Restore Minimized Room",
-                            shortcut: "Shift+Cmd+R",
-                            description: "Return to your minimized room"
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionRestore, object: nil)
-                            isPresented = false
-                        }
-                    }
-
-                    // Leave room (if in room)
-                    if isInRoom {
-                        ActionMenuItem(
-                            icon: "rectangle.compress.vertical",
-                            label: "Minimize Room",
-                            shortcut: "Cmd+Opt+M",
-                            description: "Keep connected and return to menu"
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionMinimize, object: nil)
-                            isPresented = false
-                        }
-
-                        ActionMenuItem(
-                            icon: "arrow.left.circle",
-                            label: "Leave Room",
-                            shortcut: "Cmd+W",
-                            description: nil,
-                            isDestructive: true
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionLeave, object: nil)
-                            isPresented = false
-                        }
-                    }
-
-                    // Join room (if not in room)
-                    if !isInRoom {
-                        ActionMenuItem(
-                            icon: "arrow.right.circle.fill",
-                            label: "Join Room",
-                            shortcut: "Return",
-                            description: nil,
-                            isPrimary: true
-                        ) {
-                            NotificationCenter.default.post(name: .roomActionJoin, object: room)
-                            isPresented = false
-                        }
-                    }
                 }
-                .padding()
+
+                Divider()
             }
+            .padding()
         }
         .frame(width: 320)
         .background(Color(white: 0.15))
         .cornerRadius(12)
         .shadow(radius: 20)
         .onAppear {
+            refreshAdminCapabilities()
             refreshRoomMediaStatus()
         }
+        .confirmationDialog(
+            pendingBackgroundMediaStream == nil ? "Clear Background Media" : "Apply Background Media",
+            isPresented: $showBackgroundMediaScopeDialog,
+            titleVisibility: .visible
+        ) {
+            Button("This Room Only") {
+                applyPendingBackgroundMediaSelection(scope: .currentRoom)
+            }
+            Button("All Rooms") {
+                applyPendingBackgroundMediaSelection(scope: .allRooms)
+            }
+            Button("Choose Rooms...") {
+                pendingBackgroundMediaSelectionTitle = pendingBackgroundMediaStream == nil
+                    ? "Clear Background Media in Rooms"
+                    : "Choose Rooms for \(pendingBackgroundMediaStream?.name ?? "Background Media")"
+                pendingBackgroundMediaApplyLabel = pendingBackgroundMediaStream == nil
+                    ? "Clear in Selected Rooms"
+                    : "Apply to Selected Rooms"
+                showBackgroundMediaRoomPicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(pendingBackgroundMediaStream == nil
+                 ? "Choose where to clear the current background media assignment."
+                 : "Choose where to start \(pendingBackgroundMediaStream?.name ?? "the selected stream").")
+        }
+        .sheet(isPresented: $showBackgroundMediaRoomPicker) {
+            BackgroundMediaRoomPickerSheet(
+                title: pendingBackgroundMediaSelectionTitle,
+                availableRooms: adminManager.serverRooms,
+                initiallySelectedRoomIDs: preselectedBackgroundMediaRoomIDs,
+                applyLabel: pendingBackgroundMediaApplyLabel
+            ) { selectedRoomIDs in
+                applyBackgroundMediaSelection(pendingBackgroundMediaStream, roomIDs: Array(selectedRoomIDs))
+            }
+        }
+        .sheet(isPresented: $showAccountSignInSheet) {
+            AccountPasswordAuthView(
+                isPresented: $showAccountSignInSheet,
+                serverURL: activeRoomServerURL,
+                initialProvider: .local
+            ) {
+                handleAccountSignInSuccess()
+            }
+        }
+    }
+
+    private func handleAccountSignInSuccess() {
+        refreshAdminCapabilities()
+
+        let user = authManager.currentUser
+        let username = user?.username.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = user?.displayName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawMention = username.isEmpty ? (displayName.isEmpty ? "you" : displayName) : username
+        let mention = rawMention == "you" || rawMention.hasPrefix("@") ? rawMention : "@\(rawMention)"
+        let message = "\(mention) signed in to this server."
+
+        MessagingManager.shared.sendSystemMessage(message)
+        AccessibilityManager.shared.announceStatus("Signed in to \(room.name).")
+        isPresented = false
+    }
+
+    private func refreshAdminCapabilities() {
+        let configuredServerURL = (serverManager.baseURL ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        let serverURL = configuredServerURL.isEmpty ? ServerManager.mainServer : configuredServerURL
+        let token = authManager.currentUser?.accessToken
+        Task {
+            await adminManager.checkAdminStatus(serverURL: serverURL, token: token)
+            await adminManager.fetchServerConfig()
+        }
+    }
+
+    private func isStreamAssignedToRoom(_ stream: BackgroundStreamConfig) -> Bool {
+        let roomId = room.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomName = room.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excludedRooms = (stream.excludedRooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if excludedRooms.contains(roomId) {
+            return false
+        }
+        let explicitRooms = (stream.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if explicitRooms.contains(roomId) {
+            return true
+        }
+        return (stream.roomPatterns ?? []).contains { pattern in
+            roomNameMatchesPattern(roomName, pattern: pattern)
+        }
+    }
+
+    private func normalizedStreamURL(for stream: BackgroundStreamConfig) -> String {
+        let primary = stream.streamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty { return primary }
+        return stream.url.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizedServerURL(_ rawURL: String) -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let candidate = trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        return candidate.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+    }
+
+    private func roomNameMatchesPattern(_ roomName: String, pattern: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: pattern)
+            .replacingOccurrences(of: "\\*", with: ".*")
+        let expression = "^\(escaped)$"
+        return roomName.range(of: expression, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private func allAssignableRoomIDs() -> [String] {
+        let ids = adminManager.serverRooms.map(\.id).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if ids.isEmpty {
+            return [room.id]
+        }
+        return Array(Set(ids)).sorted()
+    }
+
+    private func presentBackgroundMediaSelectionOptions(for selectedStream: BackgroundStreamConfig?) {
+        pendingBackgroundMediaStream = selectedStream
+        preselectedBackgroundMediaRoomIDs = [room.id]
+        showBackgroundMediaScopeDialog = true
+    }
+
+    private func applyPendingBackgroundMediaSelection(scope: BackgroundMediaAssignmentScope) {
+        switch scope {
+        case .currentRoom:
+            applyBackgroundMediaSelection(pendingBackgroundMediaStream, roomIDs: [room.id])
+        case .allRooms:
+            applyBackgroundMediaSelection(pendingBackgroundMediaStream, roomIDs: allAssignableRoomIDs())
+        case .selectedRooms:
+            showBackgroundMediaRoomPicker = true
+        }
+    }
+
+    private func applyBackgroundMediaSelection(_ selectedStream: BackgroundStreamConfig?, roomIDs: [String]) {
+        guard canManageBackgroundMedia else { return }
+        guard var config = adminManager.serverConfig?.backgroundStreams else {
+            roomMediaActionStatus = "Load server media settings first."
+            return
+        }
+
+        let normalizedRoomIDs = Array(Set(roomIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
+        guard !normalizedRoomIDs.isEmpty else {
+            roomMediaActionStatus = "Choose at least one room."
+            return
+        }
+
+        config.streams = config.streams.map { stream in
+            var updated = stream
+            var rooms = (updated.rooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
+            var excludedRooms = (updated.excludedRooms ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !normalizedRoomIDs.contains($0) }
+            if let selectedStream, updated.id == selectedStream.id {
+                rooms.append(contentsOf: normalizedRoomIDs)
+                updated.autoPlay = true
+            } else {
+                excludedRooms.append(contentsOf: normalizedRoomIDs)
+            }
+            updated.rooms = rooms.isEmpty ? nil : Array(Set(rooms)).sorted()
+            updated.excludedRooms = excludedRooms.isEmpty ? nil : Array(Set(excludedRooms)).sorted()
+            return updated
+        }
+
+        let roomTargetLabel: String = normalizedRoomIDs.count == 1
+            ? "1 room"
+            : "\(normalizedRoomIDs.count) rooms"
+        roomMediaActionStatus = selectedStream == nil
+            ? "Clearing background media in \(roomTargetLabel)..."
+            : "Starting \(selectedStream?.name ?? "selected stream") in \(roomTargetLabel)..."
+
+        Task {
+            let success = await adminManager.updateBackgroundStreamsConfig(config)
+            await MainActor.run {
+                if success {
+                    roomMediaActionStatus = selectedStream == nil
+                        ? "Background media cleared for \(roomTargetLabel)."
+                        : "Background media updated for \(roomTargetLabel)."
+                    serverManager.setRoomMediaFadeDuration(configuredBackgroundMediaFadeDuration)
+                    serverManager.stopCurrentRoomMedia()
+                    if selectedStream != nil {
+                        serverManager.refreshRoomMedia(for: room.id)
+                    }
+                    Task {
+                        await adminManager.fetchServerConfig()
+                    }
+                    refreshRoomMediaStatus()
+                } else {
+                    roomMediaActionStatus = "Unable to update room background media."
+                }
+            }
+        }
+    }
+
+    private func stopRoomMediaForCurrentRoom() {
+        guard isInRoom else {
+            serverManager.stopCurrentRoomMedia()
+            refreshRoomMediaStatus()
+            return
+        }
+
+        if canManageBackgroundMedia, assignedBackgroundStream != nil {
+            roomMediaActionStatus = "Stopping room background media..."
+            applyBackgroundMediaSelection(nil, roomIDs: [room.id])
+        }
+
+        stopActiveRoomStreamOnServer()
+        serverManager.stopCurrentRoomMedia()
+        refreshRoomMediaStatus()
+    }
+
+    private func stopActiveRoomStreamOnServer() {
+        let trimmedServerURL = (serverManager.baseURL ?? ServerManager.mainServer)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        guard !trimmedServerURL.isEmpty,
+              let url = URL(string: "\(normalizedServerURL(trimmedServerURL))/api/jellyfin/stop-stream") else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authManager.currentUser?.accessToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["roomId": room.id])
+
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            DispatchQueue.main.async {
+                self.serverManager.refreshRoomMedia(for: self.room.id)
+                self.refreshRoomMediaStatus()
+            }
+        }.resume()
     }
 
     private func togglePeek() {
@@ -448,6 +882,22 @@ struct RoomActionMenu: View {
         return "Standard Access"
     }
 
+    private var roomControlsStatusLabel: String {
+        if canOpenServerAdministration && canManageRoomActions {
+            return "Server Admin + Room Controls"
+        }
+        if canOpenServerAdministration {
+            return "Server Admin Access"
+        }
+        if canManageRoomActions {
+            return "Room Controls Allowed"
+        }
+        if isAuthenticatedUser {
+            return "Member Access"
+        }
+        return "Guest Access"
+    }
+
     private var roomUptimeLabel: String {
         if let uptimeSeconds = room.uptimeSeconds {
             return formatDuration(seconds: uptimeSeconds)
@@ -456,12 +906,12 @@ struct RoomActionMenu: View {
             let seconds = max(0, Int(Date().timeIntervalSince(createdAt)))
             return formatDuration(seconds: seconds)
         }
-        return "Unknown"
+        return room.userCount > 0 ? "Active now" : "Standing by"
     }
 
     private var roomLastActivityLabel: String {
         guard let lastActivityAt = room.lastActivityAt else {
-            return "Unknown"
+            return "No activity yet"
         }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
@@ -495,11 +945,26 @@ struct RoomActionMenu: View {
     }
 
     private func refreshRoomMediaStatus() {
+        if serverManager.activeRoomId == room.id {
+            if serverManager.isCurrentRoomMediaPlaying {
+                let title = currentBackgroundStreamName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                roomMediaStatusText = title.isEmpty ? "Broadcasting in room" : "Broadcasting in room (\(title))"
+            } else {
+                roomMediaStatusText = assignedBackgroundStream == nil ? "Stopped in room" : "Assigned but stopped"
+            }
+            return
+        }
+
+        if let assignedBackgroundStream {
+            roomMediaStatusText = "Assigned (\(assignedBackgroundStream.name))"
+            return
+        }
+
         roomMediaStatusText = "Checking..."
         guard let base = serverManager.baseURL,
               let encoded = room.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "\(base)/api/jellyfin/room-stream/\(encoded)") else {
-            roomMediaStatusText = "Unknown"
+            roomMediaStatusText = "Idle"
             return
         }
 
@@ -507,7 +972,7 @@ struct RoomActionMenu: View {
             guard let data,
                   let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 DispatchQueue.main.async {
-                    self.roomMediaStatusText = "Unknown"
+                    self.roomMediaStatusText = self.assignedBackgroundStream == nil ? "Idle" : self.roomMediaStatusText
                 }
                 return
             }
@@ -543,12 +1008,45 @@ struct RoomFeatures {
 class RoomLockManager: ObservableObject {
     static let shared = RoomLockManager()
 
+    enum LockDurationPreset: String, CaseIterable, Identifiable {
+        case untilUnlocked = "untilUnlocked"
+        case fifteenMinutes = "15m"
+        case oneHour = "1h"
+        case eightHours = "8h"
+        case oneDay = "1d"
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .untilUnlocked: return "Until Unlocked"
+            case .fifteenMinutes: return "15 Minutes"
+            case .oneHour: return "1 Hour"
+            case .eightHours: return "8 Hours"
+            case .oneDay: return "24 Hours"
+            }
+        }
+
+        var duration: TimeInterval? {
+            switch self {
+            case .untilUnlocked: return nil
+            case .fifteenMinutes: return 15 * 60
+            case .oneHour: return 60 * 60
+            case .eightHours: return 8 * 60 * 60
+            case .oneDay: return 24 * 60 * 60
+            }
+        }
+    }
+
     @Published var isRoomLocked = false
     @Published var lockedByUserId: String?
     @Published var lockedByUsername: String?
     @Published var canCurrentUserLock = false
+    @Published var lockDurationPreset: LockDurationPreset = .untilUnlocked
+    @Published var lockedUntil: Date?
 
     private var keyMonitor: Any?
+    private var scheduledUnlockWorkItem: DispatchWorkItem?
 
     init() {
         setupKeyboardShortcut()
@@ -564,12 +1062,14 @@ class RoomLockManager: ObservableObject {
     // MARK: - Lock Control
 
     /// Lock the current room (if user has permission)
-    func lockRoom() {
+    func lockRoom(duration: TimeInterval? = nil) {
         guard canCurrentUserLock, !isRoomLocked else { return }
 
         isRoomLocked = true
         lockedByUserId = getCurrentUserId()
         lockedByUsername = getCurrentUsername()
+        lockedUntil = duration.map { Date().addingTimeInterval($0) }
+        scheduleUnlockIfNeeded(after: duration)
 
         // Play lock sound
         AppSoundManager.shared.playSound(.toggleOn)
@@ -581,7 +1081,9 @@ class RoomLockManager: ObservableObject {
             userInfo: [
                 "locked": true,
                 "userId": lockedByUserId ?? "",
-                "username": lockedByUsername ?? ""
+                "username": lockedByUsername ?? "",
+                "durationSeconds": duration as Any,
+                "lockedUntil": lockedUntil?.timeIntervalSince1970 as Any
             ]
         )
 
@@ -602,6 +1104,9 @@ class RoomLockManager: ObservableObject {
         isRoomLocked = false
         lockedByUserId = nil
         lockedByUsername = nil
+        lockedUntil = nil
+        scheduledUnlockWorkItem?.cancel()
+        scheduledUnlockWorkItem = nil
 
         // Play unlock sound
         AppSoundManager.shared.playSound(.toggleOff)
@@ -621,8 +1126,21 @@ class RoomLockManager: ObservableObject {
         if isRoomLocked {
             unlockRoom()
         } else {
-            lockRoom()
+            lockRoom(duration: lockDurationPreset.duration)
         }
+    }
+
+    private func scheduleUnlockIfNeeded(after duration: TimeInterval?) {
+        scheduledUnlockWorkItem?.cancel()
+        scheduledUnlockWorkItem = nil
+        guard let duration, duration > 0 else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async {
+                self?.unlockRoom()
+            }
+        }
+        scheduledUnlockWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: workItem)
     }
 
     // MARK: - Keyboard Shortcut (Cmd+Opt+L)

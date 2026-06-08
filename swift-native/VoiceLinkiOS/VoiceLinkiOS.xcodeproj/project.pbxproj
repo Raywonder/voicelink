@@ -1,0 +1,476 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		024F568F1CDE23C88AC62016 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F6ECE07FFABA6AE4F943B11 /* ContentView.swift */; };
+		1B18E699B24E8FD5112C028C /* VoiceLinkiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59301F020CE2C73C1E1F583D /* VoiceLinkiOSApp.swift */; };
+		1D92A0C4D2514C4AB8E17B62 /* IOSActionSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B0A9AFD8C4140C9A45A7F63 /* IOSActionSoundPlayer.swift */; };
+		1ED92A0C4D2514C4AB8E17B62 /* IOSNativeRoomSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ED92A0C4D2514C4AB8E17B63 /* IOSNativeRoomSocketClient.swift */; };
+		21AFAB335A1E4D5EA6A42B2C /* IOSPushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC65E6A90677845451CC112 /* IOSPushNotificationManager.swift */; };
+		23E2DF558CE2712A3E7B5FC8 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 8D6B7A1CFE4FF1D93AE9D20B /* SocketIO */; };
+		33F475501CE2EA83CEEC8245 /* VoiceLinkWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8861C94C91CBB3E2B8CA35 /* VoiceLinkWebView.swift */; };
+		3AED5777934296894163D731 /* RoomSessionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF735D3150C8F6E46C9DB116 /* RoomSessionSupport.swift */; };
+		6A4F2C1D4B8E100100000001 /* intro-connected.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000011 /* intro-connected.m4a */; };
+		6A4F2C1D4B8E100100000002 /* join-son.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000012 /* join-son.m4a */; };
+		6A4F2C1D4B8E100100000003 /* notification.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000013 /* notification.m4a */; };
+		6A4F2C1D4B8E100100000004 /* error.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000014 /* error.mp3 */; };
+		6A4F2C1D4B8E100100000005 /* voicelink1.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000015 /* voicelink1.m4a */; };
+		6A4F2C1D4B8E100100000006 /* voicelink2.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000016 /* voicelink2.m4a */; };
+		6A4F2C1D4B8E100100000007 /* voicelink3.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000017 /* voicelink3.m4a */; };
+		6A4F2C1D4B8E100100000008 /* voicelink4.m4a in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000018 /* voicelink4.m4a */; };
+		6A4F2C1D4B8E100100000009 /* button-click.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000019 /* button-click.wav */; };
+		6A4F2C1D4B8E10010000000A /* success.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001A /* success.wav */; };
+		6A4F2C1D4B8E10010000000B /* whoosh_fast2.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001B /* whoosh_fast2.wav */; };
+		6A4F2C1D4B8E10010000000C /* user-join.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001C /* user-join.wav */; };
+		6A4F2C1D4B8E10010000000D /* user-leave.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001D /* user-leave.wav */; };
+		6A4F2C1D4B8E10010000000E /* your-sound-test.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001E /* your-sound-test.wav */; };
+		6A4F2C1D4B8E10010000000F /* notification.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E10010000001F /* notification.wav */; };
+		6A4F2C1D4B8E100100000020 /* whoosh_fast1.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000024 /* whoosh_fast1.wav */; };
+		6A4F2C1D4B8E100100000021 /* whoosh_slow1.wav in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000025 /* whoosh_slow1.wav */; };
+		6A4F2C1D4B8E100100000022 /* Peek-In-To-Room-Raised-Fast.flac in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000026 /* Peek-In-To-Room-Raised-Fast.flac */; };
+		6A4F2C1D4B8E100100000023 /* Peek-Out-Of-Room-Blinds-Lowered-Fast.flac in Resources */ = {isa = PBXBuildFile; fileRef = 6A4F2C1D4B8E100100000027 /* Peek-Out-Of-Room-Blinds-Lowered-Fast.flac */; };
+		D54839C777C8F57C43BEEFE1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 638C3850D668F3D7DFCE88FF /* Assets.xcassets */; };
+		F184D4A593D42BE04650A11C /* IOSDiagnosticsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 522263D164403F94A66B22F3 /* IOSDiagnosticsManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2F6ECE07FFABA6AE4F943B11 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1ED92A0C4D2514C4AB8E17B63 /* IOSNativeRoomSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNativeRoomSocketClient.swift; sourceTree = "<group>"; };
+		522263D164403F94A66B22F3 /* IOSDiagnosticsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticsManager.swift; sourceTree = "<group>"; };
+		59301F020CE2C73C1E1F583D /* VoiceLinkiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLinkiOSApp.swift; sourceTree = "<group>"; };
+		5A8861C94C91CBB3E2B8CA35 /* VoiceLinkWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLinkWebView.swift; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000011 /* intro-connected.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "intro-connected.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000012 /* join-son.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "join-son.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000013 /* notification.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "notification.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000014 /* error.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = "error.mp3"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000015 /* voicelink1.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "voicelink1.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000016 /* voicelink2.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "voicelink2.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000017 /* voicelink3.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "voicelink3.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000018 /* voicelink4.m4a */ = {isa = PBXFileReference; lastKnownFileType = audio.mp4; path = "voicelink4.m4a"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000019 /* button-click.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "button-click.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001A /* success.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "success.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001B /* whoosh_fast2.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "whoosh_fast2.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001C /* user-join.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "user-join.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001D /* user-leave.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "user-leave.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001E /* your-sound-test.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "your-sound-test.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E10010000001F /* notification.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "notification.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000024 /* whoosh_fast1.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "whoosh_fast1.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000025 /* whoosh_slow1.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "whoosh_slow1.wav"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000026 /* Peek-In-To-Room-Raised-Fast.flac */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Peek-In-To-Room-Raised-Fast.flac"; sourceTree = "<group>"; };
+		6A4F2C1D4B8E100100000027 /* Peek-Out-Of-Room-Blinds-Lowered-Fast.flac */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Peek-Out-Of-Room-Blinds-Lowered-Fast.flac"; sourceTree = "<group>"; };
+		8B0A9AFD8C4140C9A45A7F63 /* IOSActionSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSActionSoundPlayer.swift; sourceTree = "<group>"; };
+		7BC65E6A90677845451CC112 /* IOSPushNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSPushNotificationManager.swift; sourceTree = "<group>"; };
+		638C3850D668F3D7DFCE88FF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DBF1FDFE469AD841400D550F /* VoiceLinkiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VoiceLinkiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF735D3150C8F6E46C9DB116 /* RoomSessionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomSessionSupport.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C998319CF839959C0F4EF4B2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23E2DF558CE2712A3E7B5FC8 /* SocketIO in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		00F4D5B77A7786FF215B48BF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DBF1FDFE469AD841400D550F /* VoiceLinkiOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		3AB5ECD6D54EF12AA7BAD168 = {
+			isa = PBXGroup;
+			children = (
+				C10171BD89BBA0D2921976E2 /* Resources */,
+				AB963637BF196F79DE0BAC67 /* Sources */,
+				00F4D5B77A7786FF215B48BF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AB963637BF196F79DE0BAC67 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				2F6ECE07FFABA6AE4F943B11 /* ContentView.swift */,
+				8B0A9AFD8C4140C9A45A7F63 /* IOSActionSoundPlayer.swift */,
+				1ED92A0C4D2514C4AB8E17B63 /* IOSNativeRoomSocketClient.swift */,
+				522263D164403F94A66B22F3 /* IOSDiagnosticsManager.swift */,
+				7BC65E6A90677845451CC112 /* IOSPushNotificationManager.swift */,
+				EF735D3150C8F6E46C9DB116 /* RoomSessionSupport.swift */,
+				59301F020CE2C73C1E1F583D /* VoiceLinkiOSApp.swift */,
+				5A8861C94C91CBB3E2B8CA35 /* VoiceLinkWebView.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		B1A5B3C44D8E100100000001 /* Sounds */ = {
+			isa = PBXGroup;
+			children = (
+				6A4F2C1D4B8E100100000011 /* intro-connected.m4a */,
+				6A4F2C1D4B8E100100000012 /* join-son.m4a */,
+				6A4F2C1D4B8E100100000013 /* notification.m4a */,
+				6A4F2C1D4B8E100100000014 /* error.mp3 */,
+				6A4F2C1D4B8E100100000015 /* voicelink1.m4a */,
+				6A4F2C1D4B8E100100000016 /* voicelink2.m4a */,
+				6A4F2C1D4B8E100100000017 /* voicelink3.m4a */,
+				6A4F2C1D4B8E100100000018 /* voicelink4.m4a */,
+				6A4F2C1D4B8E100100000019 /* button-click.wav */,
+				6A4F2C1D4B8E10010000001A /* success.wav */,
+				6A4F2C1D4B8E100100000024 /* whoosh_fast1.wav */,
+				6A4F2C1D4B8E10010000001B /* whoosh_fast2.wav */,
+				6A4F2C1D4B8E100100000025 /* whoosh_slow1.wav */,
+				6A4F2C1D4B8E10010000001C /* user-join.wav */,
+				6A4F2C1D4B8E10010000001D /* user-leave.wav */,
+				6A4F2C1D4B8E10010000001E /* your-sound-test.wav */,
+				6A4F2C1D4B8E10010000001F /* notification.wav */,
+				6A4F2C1D4B8E100100000026 /* Peek-In-To-Room-Raised-Fast.flac */,
+				6A4F2C1D4B8E100100000027 /* Peek-Out-Of-Room-Blinds-Lowered-Fast.flac */,
+			);
+			path = Sounds;
+			sourceTree = "<group>";
+		};
+		C10171BD89BBA0D2921976E2 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				638C3850D668F3D7DFCE88FF /* Assets.xcassets */,
+				B1A5B3C44D8E100100000001 /* Sounds */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		834C8BDCB7F30B055BDCC92E /* VoiceLinkiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 13C4A0F93A972F13AA495669 /* Build configuration list for PBXNativeTarget "VoiceLinkiOS" */;
+			buildPhases = (
+				3DB53D10203286B19E381639 /* Sources */,
+				757D97043EDBAB12D410D64F /* Resources */,
+				C998319CF839959C0F4EF4B2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VoiceLinkiOS;
+			packageProductDependencies = (
+				8D6B7A1CFE4FF1D93AE9D20B /* SocketIO */,
+			);
+			productName = VoiceLinkiOS;
+			productReference = DBF1FDFE469AD841400D550F /* VoiceLinkiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5BB6696D301A52CAE84E1FAF /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					834C8BDCB7F30B055BDCC92E = {
+						DevelopmentTeam = G5232LU4Z7;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = BCCA5024FEC1631768151E11 /* Build configuration list for PBXProject "VoiceLinkiOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 3AB5ECD6D54EF12AA7BAD168;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D596ED35A43E148B12D85993 /* XCRemoteSwiftPackageReference "socket.io-client-swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 00F4D5B77A7786FF215B48BF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				834C8BDCB7F30B055BDCC92E /* VoiceLinkiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		757D97043EDBAB12D410D64F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A4F2C1D4B8E100100000001 /* intro-connected.m4a in Resources */,
+				6A4F2C1D4B8E100100000002 /* join-son.m4a in Resources */,
+				6A4F2C1D4B8E100100000003 /* notification.m4a in Resources */,
+				6A4F2C1D4B8E100100000004 /* error.mp3 in Resources */,
+				6A4F2C1D4B8E100100000005 /* voicelink1.m4a in Resources */,
+				6A4F2C1D4B8E100100000006 /* voicelink2.m4a in Resources */,
+				6A4F2C1D4B8E100100000007 /* voicelink3.m4a in Resources */,
+				6A4F2C1D4B8E100100000008 /* voicelink4.m4a in Resources */,
+				6A4F2C1D4B8E100100000009 /* button-click.wav in Resources */,
+				6A4F2C1D4B8E10010000000A /* success.wav in Resources */,
+				6A4F2C1D4B8E10010000000B /* whoosh_fast2.wav in Resources */,
+				6A4F2C1D4B8E10010000000C /* user-join.wav in Resources */,
+				6A4F2C1D4B8E10010000000D /* user-leave.wav in Resources */,
+				6A4F2C1D4B8E10010000000E /* your-sound-test.wav in Resources */,
+				6A4F2C1D4B8E10010000000F /* notification.wav in Resources */,
+				6A4F2C1D4B8E100100000020 /* whoosh_fast1.wav in Resources */,
+				6A4F2C1D4B8E100100000021 /* whoosh_slow1.wav in Resources */,
+				6A4F2C1D4B8E100100000022 /* Peek-In-To-Room-Raised-Fast.flac in Resources */,
+				6A4F2C1D4B8E100100000023 /* Peek-Out-Of-Room-Blinds-Lowered-Fast.flac in Resources */,
+				D54839C777C8F57C43BEEFE1 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3DB53D10203286B19E381639 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				024F568F1CDE23C88AC62016 /* ContentView.swift in Sources */,
+				1D92A0C4D2514C4AB8E17B62 /* IOSActionSoundPlayer.swift in Sources */,
+				1ED92A0C4D2514C4AB8E17B62 /* IOSNativeRoomSocketClient.swift in Sources */,
+				F184D4A593D42BE04650A11C /* IOSDiagnosticsManager.swift in Sources */,
+				21AFAB335A1E4D5EA6A42B2C /* IOSPushNotificationManager.swift in Sources */,
+				3AED5777934296894163D731 /* RoomSessionSupport.swift in Sources */,
+				33F475501CE2EA83CEEC8245 /* VoiceLinkWebView.swift in Sources */,
+				1B18E699B24E8FD5112C028C /* VoiceLinkiOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		395EF52A5D72E22139FD591C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 93;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = G5232LU4Z7;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.devinecreations.voicelink;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		3C2FA1D7CD3F067F9D401CF7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 93;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = G5232LU4Z7;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.devinecreations.voicelink;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		80BC734640E7CF34A53A8886 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Resources/VoiceLink.entitlements;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_NAME = VoiceLink;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D05145F75B05772CBA6CDFA8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_ENTITLEMENTS = Resources/VoiceLink.entitlements;
+				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = G5232LU4Z7;
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_NAME = VoiceLink;
+				PROVISIONING_PROFILE_SPECIFIER = VoiceLink;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		13C4A0F93A972F13AA495669 /* Build configuration list for PBXNativeTarget "VoiceLinkiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				80BC734640E7CF34A53A8886 /* Debug */,
+				D05145F75B05772CBA6CDFA8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BCCA5024FEC1631768151E11 /* Build configuration list for PBXProject "VoiceLinkiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C2FA1D7CD3F067F9D401CF7 /* Debug */,
+				395EF52A5D72E22139FD591C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D596ED35A43E148B12D85993 /* XCRemoteSwiftPackageReference "socket.io-client-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 16.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8D6B7A1CFE4FF1D93AE9D20B /* SocketIO */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D596ED35A43E148B12D85993 /* XCRemoteSwiftPackageReference "socket.io-client-swift" */;
+			productName = SocketIO;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 5BB6696D301A52CAE84E1FAF /* Project object */;
+}

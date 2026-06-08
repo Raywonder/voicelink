@@ -680,7 +680,8 @@ class MediaStreamingInterface {
             { name: 'BBC Radio 1', url: 'http://bbcmedia.ic.llnwd.net/stream/bbcmedia_radio1_mf_p', type: 'bbc' },
             { name: 'NPR News', url: 'https://npr-ice.streamguys1.com/live.mp3', type: 'news' },
             { name: 'Classical KUSC', url: 'https://kusc-ice.streamguys1.com/kusc-128-mp3', type: 'classical' },
-            { name: 'Jazz24', url: 'https://live.wostreaming.net/direct/ppm-jazz24mp3-ibc3', type: 'jazz' }
+            { name: 'Jazz24', url: 'https://live.wostreaming.net/direct/ppm-jazz24mp3-ibc3', type: 'jazz' },
+            { name: 'Soul Food Radio', url: 'http://s23.myradiostream.com:9372/;', type: 'soul' }
         ];
 
         popularContainer.innerHTML = popularStreams.map(stream => `

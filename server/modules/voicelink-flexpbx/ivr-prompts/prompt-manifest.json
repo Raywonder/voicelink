@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "voicePack": "voicelink-ivr-core",
+  "intendedUse": [
+    "voicelink-mini-ivr",
+    "flexpbx-main-ivr",
+    "voice-otp-call-flow"
+  ],
+  "recordingNotes": {
+    "masterFormat": "48kHz 24-bit mono WAV",
+    "telephonyExports": [
+      "16kHz mono WAV",
+      "8kHz mono WAV"
+    ],
+    "style": "clear, neutral, concise",
+    "ttsEngine": "Piper voices for all fallback and dynamic IVR speech; uploaded cloned voices optional"
+  },
+  "prompts": [
+    {
+      "file": "vl_welcome.wav",
+      "category": "greeting",
+      "text": "Welcome to VoiceLink."
+    },
+    {
+      "file": "vl_voice_verification_intro.wav",
+      "category": "otp",
+      "text": "This is your VoiceLink verification call."
+    },
+    {
+      "file": "vl_this_call_is_for.wav",
+      "category": "otp",
+      "text": "This call is for."
+    },
+    {
+      "file": "vl_person_name_unavailable.wav",
+      "category": "otp",
+      "text": "the intended account holder."
+    },
+    {
+      "file": "vl_voice_verification_no_email.wav",
+      "category": "otp",
+      "text": "You chose phone verification instead of email."
+    },
+    {
+      "file": "vl_your_code_is.wav",
+      "category": "otp",
+      "text": "Your verification code is."
+    },
+    {
+      "file": "vl_code_repeating.wav",
+      "category": "otp",
+      "text": "I will repeat that code."
+    },
+    {
+      "file": "vl_enter_code_now.wav",
+      "category": "otp",
+      "text": "Please enter the code in the VoiceLink app now."
+    },
+    {
+      "file": "vl_code_valid_for_minutes.wav",
+      "category": "otp",
+      "text": "You have this many minutes to enter the code before it expires."
+    },
+    {
+      "file": "vl_press_1_repeat_2_slow_3_wrong_person.wav",
+      "category": "otp",
+      "text": "Press 1 to hear the code again. Press 2 to hear it more slowly. Press 3 if you are not the intended person."
+    },
+    {
+      "file": "vl_stay_on_the_line.wav",
+      "category": "otp",
+      "text": "Stay on the line while we wait for the code to be entered."
+    },
+    {
+      "file": "vl_waiting_for_code.wav",
+      "category": "otp",
+      "text": "We are still waiting for your code to be entered."
+    },
+    {
+      "file": "vl_code_accepted.wav",
+      "category": "otp",
+      "text": "Your code was accepted. You may hang up now."
+    },
+    {
+      "file": "vl_code_expired.wav",
+      "category": "otp",
+      "text": "This code has expired. Please request a new code."
+    },
+    {
+      "file": "vl_wrong_person_reported.wav",
+      "category": "otp",
+      "text": "We will stop using this number for verification and notify support if needed."
+    },
+    {
+      "file": "vl_if_not_you_ignore.wav",
+      "category": "otp",
+      "text": "If you did not request this code, you can ignore this call."
+    },
+    {
+      "file": "vl_repeat_request.wav",
+      "category": "otp",
+      "text": "To hear the code again, press one."
+    },
+    {
+      "file": "vl_goodbye.wav",
+      "category": "ending",
+      "text": "Thank you. Goodbye."
+    },
+    {
+      "file": "vl_invalid_entry.wav",
+      "category": "error",
+      "text": "Sorry, that was not a valid entry."
+    },
+    {
+      "file": "vl_try_again.wav",
+      "category": "error",
+      "text": "Please try again."
+    },
+    {
+      "file": "vl_transfer_to_main_menu.wav",
+      "category": "routing",
+      "text": "Please hold while we transfer you to the main menu."
+    },
+    {
+      "file": "vl_support_line_intro.wav",
+      "category": "routing",
+      "text": "You have reached the VoiceLink support and verification line."
+    },
+    {
+      "file": "vl_us_number_only.wav",
+      "category": "error",
+      "text": "Phone verification is currently available for supported United States numbers only."
+    },
+    {
+      "file": "vl_contact_support.wav",
+      "category": "error",
+      "text": "If you need help, please contact support."
+    },
+    {
+      "file": "vl_digit_0.wav",
+      "category": "digit",
+      "text": "zero"
+    },
+    {
+      "file": "vl_digit_1.wav",
+      "category": "digit",
+      "text": "one"
+    },
+    {
+      "file": "vl_digit_2.wav",
+      "category": "digit",
+      "text": "two"
+    },
+    {
+      "file": "vl_digit_3.wav",
+      "category": "digit",
+      "text": "three"
+    },
+    {
+      "file": "vl_digit_4.wav",
+      "category": "digit",
+      "text": "four"
+    },
+    {
+      "file": "vl_digit_5.wav",
+      "category": "digit",
+      "text": "five"
+    },
+    {
+      "file": "vl_digit_6.wav",
+      "category": "digit",
+      "text": "six"
+    },
+    {
+      "file": "vl_digit_7.wav",
+      "category": "digit",
+      "text": "seven"
+    },
+    {
+      "file": "vl_digit_8.wav",
+      "category": "digit",
+      "text": "eight"
+    },
+    {
+      "file": "vl_digit_9.wav",
+      "category": "digit",
+      "text": "nine"
+    },
+    {
+      "file": "vl_pause_short.wav",
+      "category": "utility",
+      "text": "short pause marker only, no spoken content"
+    },
+    {
+      "file": "vl_pause_medium.wav",
+      "category": "utility",
+      "text": "medium pause marker only, no spoken content"
+    }
+  ]
+}

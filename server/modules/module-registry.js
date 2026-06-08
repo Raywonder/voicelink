@@ -15,7 +15,8 @@ const CATEGORIES = {
     INTEGRATION: 'integration',
     SUPPORT: 'support',
     MEDIA: 'media',
-    ANALYTICS: 'analytics'
+    ANALYTICS: 'analytics',
+    OPERATIONS: 'operations'
 };
 
 // Available modules registry
@@ -99,6 +100,19 @@ const AVAILABLE_MODULES = {
                 emailOnNewTicket: true,
                 emailOnReply: true,
                 emailOnClose: true
+            },
+            externalSync: {
+                provider: 'auto',
+                mode: 'builtin-first',
+                syncDevineCreationsDomains: true,
+                syncDomains: [
+                    'devine-creations.com',
+                    'devinecreations.net',
+                    'voicelinkapp.app',
+                    'community.voicelinkapp.app'
+                ],
+                whmcsDepartmentId: '',
+                supportedProviders: ['builtin', 'whmcs']
             }
         }
     },
@@ -200,7 +214,198 @@ const AVAILABLE_MODULES = {
         ],
         defaultConfig: {
             enabled: false,
-            webhooks: []
+            hostedBasePath: '/api/webhooks/incoming',
+            outboundWebhooks: [],
+            hostedEndpoints: [
+                {
+                    id: 'general-chat',
+                    name: 'General Chat Hosted Webhook',
+                    slug: 'general-chat',
+                    enabled: true,
+                    allowAnonymous: false,
+                    eventType: 'general_chat_message',
+                    deliveryMode: 'room-message',
+                    roomName: 'General Chat',
+                    secret: ''
+                }
+            ],
+            delivery: {
+                timeoutMs: 8000,
+                retries: 2,
+                maxLogEntries: 200
+            }
+        }
+    },
+
+    'internal-scheduler': {
+        id: 'internal-scheduler',
+        name: 'Internal Scheduler',
+        description: 'Self-management scheduler for config sync, module reconciliation, health probes, and maintenance tasks',
+        version: '1.0.0',
+        category: CATEGORIES.OPERATIONS,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Minute-based self-management jobs',
+            'Primary-to-community config sync',
+            'Required module reconcile',
+            'Admin-visible task status and logs',
+            'Manual run and interval controls',
+            'Audit trail for automated maintenance'
+        ],
+        defaultConfig: {
+            enabled: true,
+            jobs: {
+                communityConfigSync: { enabled: true, intervalSeconds: 1800 },
+                moduleGovernanceReconcile: { enabled: true, intervalSeconds: 900 }
+            }
+        }
+    },
+
+    'media-rooms': {
+        id: 'media-rooms',
+        name: 'Media Rooms',
+        description: 'Room media libraries, ambience assets, stream sources, and background media controls',
+        version: '1.0.0',
+        category: CATEGORIES.MEDIA,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Room ambience and media source catalog',
+            'Per-room stream and playlist defaults',
+            'Asset discovery from approved media paths',
+            'Library scan and cache policies',
+            'Shared room media controls'
+        ],
+        defaultConfig: {
+            enabled: true,
+            allowRoomMedia: true,
+            allowAmbientLoops: true,
+            allowLiveStreams: true,
+            maxRoomAssets: 200,
+            scanOnStartup: true,
+            sourcePaths: [],
+            mediaPaths: []
+        }
+    },
+
+    'updater': {
+        id: 'updater',
+        name: 'Updater',
+        description: 'Channel-aware update checks, admin alerts, and staged package application for VoiceLink installs',
+        version: '1.0.0',
+        category: CATEGORIES.OPERATIONS,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'Automatic update checks',
+            'Admin alert feed for pending updates',
+            'Per-category enable and disable rules',
+            'Manual apply support',
+            'Release channel preferences'
+        ],
+        defaultConfig: {
+            enabled: true,
+            autoCheck: true,
+            checkIntervalMinutes: 60,
+            allowPreRelease: false,
+            preferredChannel: 'stable',
+            categories: {
+                app: true,
+                server: true,
+                modules: true
+            }
+        }
+    },
+
+    'deployment-manager': {
+        id: 'deployment-manager',
+        name: 'Deployment Manager',
+        description: 'Package, upload, bootstrap, and monitor remote VoiceLink installs from the admin UI',
+        version: '1.0.0',
+        category: CATEGORIES.OPERATIONS,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: ['internal-scheduler'],
+        configurable: true,
+        features: [
+            'Package server and desktop payloads',
+            'Remote deploy over SFTP, SMB, HTTP, or HTTPS',
+            'Remote bootstrap and owner notification',
+            'Deployment watchdog checks',
+            'History and transport status'
+        ],
+        defaultConfig: {
+            enabled: true,
+            transports: {
+                sftp: true,
+                smb: false,
+                http: true,
+                https: true
+            },
+            watchdog: {
+                enabled: true,
+                intervalMinutes: 30
+            },
+            autoEmailOwner: true
+        }
+    },
+
+    'openlink-bridge': {
+        id: 'openlink-bridge',
+        name: 'OpenLink Bridge',
+        description: 'Install, connect, and govern OpenLink from VoiceLink while keeping OpenLink itself as a separate linked module',
+        version: '1.1.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: true,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'OpenLink install and link settings from the Modules Center',
+            'Voice fallback room bridge policy',
+            'Admin approval and override workflow for linked OpenLink sessions',
+            'Auto-detect local OpenLink installs and service endpoints',
+            'Linked domain, admin UI, API, and signaling endpoint controls',
+            'Supports external OpenLink installs without bundling OpenLink into VoiceLink'
+        ],
+        defaultConfig: {
+            enabled: false,
+            moduleMode: 'external-linked',
+            autoDetectInstalled: true,
+            installState: 'not-installed',
+            installSource: 'repo',
+            installPath: '',
+            installerPath: '',
+            repoPath: '',
+            appBundlePath: '',
+            adminUIUrl: 'https://openlink.tappedin.fm',
+            apiBaseUrl: 'https://openlink.tappedin.fm/api',
+            signalingUrl: 'wss://openlink.tappedin.fm',
+            defaultDomain: 'openlink.tappedin.fm',
+            sharedSecret: '',
+            linkedVoiceLinkServerId: '',
+            allowAdminControl: true,
+            allowRemoteInstall: true,
+            voiceFallbackRoomsEnabled: true,
+            requireAdminApprovalForEntry: true,
+            allowAdminOverride: true,
+            notifyBeforeAdminOverride: true,
+            showActiveRoomsInAdminOverview: true,
+            roomDurationMinutes: 1440,
+            overrideWindowSeconds: 180,
+            defaultDomain: 'openlink.tappedin.fm'
         }
     },
 
@@ -378,6 +583,93 @@ const AVAILABLE_MODULES = {
             },
             cacheTTL: 300000
         }
+    },
+
+    'voicelink-flexpbx': {
+        id: 'voicelink-flexpbx',
+        name: 'VoiceLink FlexPBX Bridge',
+        description: 'Room-aware telephony helpers, voice OTP delivery, and PBX-aware call actions for VoiceLink',
+        version: '1.0.0',
+        category: CATEGORIES.INTEGRATION,
+        author: 'VoiceLink',
+        recommended: true,
+        popular: false,
+        dependencies: [],
+        configurable: true,
+        features: [
+            'US voice OTP fallback when email is unavailable',
+            'Room telephony capability checks for admins and moderators',
+            'FlexPBX API call initiation helpers',
+            'Per-room or per-server outbound policy controls',
+            'Call audit trail for verification and support flows',
+            'Optional VoiceLink-managed hold media assignment and PBX MOH sync'
+        ],
+        defaultConfig: {
+            enabled: true,
+            pbxApiUrl: 'https://pbx.devinecreations.net/api',
+            apiKey: '',
+            defaultExtension: '2000',
+            allowedRoomRoles: ['admin', 'moderator'],
+            holdMedia: {
+                enabled: true,
+                optionalSource: true,
+                autoReload: true,
+                allowedSourceTypes: ['server-stream', 'room-background', 'room-stream', 'room-mix'],
+                globalAssignment: {
+                    enabled: false,
+                    sourceType: 'server-stream',
+                    sourceId: 'server-default',
+                    mohClass: 'voicelink-global',
+                    targetIds: ['community-pbx']
+                },
+                roomAssignments: {},
+                pbxTargets: [
+                    {
+                        id: 'community-pbx',
+                        name: 'Community PBX',
+                        apiUrl: 'https://pbx.devinecreations.net/api',
+                        enabled: true
+                    },
+                    {
+                        id: 'dev-pbx',
+                        name: 'Development PBX',
+                        apiUrl: 'https://flexpbx.devinecreations.net/api',
+                        enabled: true
+                    }
+                ]
+            },
+            otpVoice: {
+                enabled: true,
+                usOnly: true,
+                expiryMinutes: 10,
+                maxAttemptsPerHour: 5,
+                fromExtension: '2000',
+                endpoint: 'textnow-calling.php',
+                messageTemplate: 'Hello from VoiceLink. Your verification code is {code}. This code expires in {expiryMinutes} minutes.'
+            },
+            voiceEngine: {
+                provider: 'piper',
+                defaultVoice: 'piper-female',
+                allowClonedVoice: true,
+                allowRecordedName: true,
+                selectionMode: 'prefer-recorded-name'
+            },
+            promptTextOverrides: {
+                otpMessageTemplate: 'Hello from VoiceLink. Your verification code is {code}. This code expires in {expiryMinutes} minutes.',
+                verificationIntro: 'This is your VoiceLink verification call.',
+                callIsFor: 'This call is for.',
+                personNameUnavailable: 'This call is for the intended VoiceLink user.',
+                codeIntro: 'Your verification code is.',
+                codeValidForMinutes: 'You have this many minutes to enter the code before it expires.',
+                stayOnTheLine: 'Stay on the line while we wait for your code to be entered.',
+                waitingForCode: 'We are still waiting for your code to be entered.',
+                repeatOptions: 'Press 1 to repeat the code, press 2 to hear it more slowly, or press 3 if you are not the intended person.',
+                wrongPersonPrompt: 'If you are not the intended person, press 3 and we will stop calling this number for verification.',
+                codeAccepted: 'Your code was accepted. You may hang up now.',
+                codeExpired: 'This code has expired. Please request a new code.',
+                wrongPersonReported: 'We will stop using this number for verification and notify support if needed.'
+            }
+        }
     }
 };
 
@@ -386,6 +678,7 @@ class ModuleRegistry {
         this.configDir = configDir || path.join(__dirname, '../../data');
         this.modulesConfigFile = path.join(this.configDir, 'modules.json');
         this.installedModules = this.loadInstalledModules();
+        this.ensureDefaultInstalledModules();
     }
 
     loadInstalledModules() {
@@ -407,6 +700,35 @@ class ModuleRegistry {
             console.error('[ModuleRegistry] Error loading modules config:', e.message);
         }
         return { installed: {}, installOrder: [] };
+    }
+
+    ensureDefaultInstalledModules() {
+        const skipped = new Set(
+            String(process.env.VOICELINK_SKIP_DEFAULT_MODULES || '')
+                .split(',')
+                .map((entry) => entry.trim())
+                .filter(Boolean)
+        );
+        const defaultModuleIds = ['support-system'];
+        let changed = false;
+
+        for (const moduleId of defaultModuleIds) {
+            if (skipped.has(moduleId)) continue;
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module || this.installedModules.installed[moduleId]) continue;
+            this.installedModules.installed[moduleId] = {
+                installedAt: Date.now(),
+                config: { ...module.defaultConfig, enabled: true }
+            };
+            this.installedModules.installOrder.push(moduleId);
+            changed = true;
+            console.log(`[ModuleRegistry] Auto-installed default module: ${module.name}`);
+        }
+
+        if (changed) {
+            this.installedModules.installOrder = Array.from(new Set(this.installedModules.installOrder));
+            this.saveInstalledModules();
+        }
     }
 
     saveInstalledModules() {
@@ -525,6 +847,68 @@ class ModuleRegistry {
     }
 
     /**
+     * Install every available module that is not currently installed.
+     * Dependencies are resolved locally before dependents are attempted.
+     */
+    installMissingModules(options = {}) {
+        const policy = options.policy || {};
+        const revoked = new Set(Array.isArray(policy.revoked) ? policy.revoked : []);
+        const customConfigById = options.customConfigById && typeof options.customConfigById === 'object'
+            ? options.customConfigById
+            : {};
+        const pending = Object.keys(AVAILABLE_MODULES)
+            .filter(id => !this.installedModules.installed[id])
+            .filter(id => !revoked.has(id));
+        const actions = [];
+        const failed = [];
+        const skipped = Object.keys(AVAILABLE_MODULES)
+            .filter(id => revoked.has(id))
+            .map(id => ({ moduleId: id, reason: 'revoked-by-policy' }));
+
+        let madeProgress = true;
+        while (pending.length && madeProgress) {
+            madeProgress = false;
+            for (let index = pending.length - 1; index >= 0; index -= 1) {
+                const moduleId = pending[index];
+                const module = AVAILABLE_MODULES[moduleId];
+                const dependencies = Array.isArray(module.dependencies) ? module.dependencies : [];
+                const unresolved = dependencies.filter(dep => !this.installedModules.installed[dep]);
+                if (unresolved.length) continue;
+
+                const result = this.installModule(moduleId, customConfigById[moduleId] || {});
+                actions.push({
+                    moduleId,
+                    action: 'install',
+                    success: !!result.success,
+                    error: result.error || null
+                });
+                if (!result.success) {
+                    failed.push({ moduleId, error: result.error || 'Install failed' });
+                }
+                pending.splice(index, 1);
+                madeProgress = true;
+            }
+        }
+
+        for (const moduleId of pending) {
+            const module = AVAILABLE_MODULES[moduleId];
+            const dependencies = Array.isArray(module.dependencies) ? module.dependencies : [];
+            failed.push({
+                moduleId,
+                error: `Missing dependency: ${dependencies.filter(dep => !this.installedModules.installed[dep]).join(', ') || 'unknown'}`
+            });
+        }
+
+        return {
+            success: failed.length === 0,
+            installed: actions.filter(entry => entry.success).map(entry => entry.moduleId),
+            actions,
+            skipped,
+            failed
+        };
+    }
+
+    /**
      * Uninstall a module
      */
     uninstallModule(moduleId) {
@@ -562,6 +946,65 @@ class ModuleRegistry {
         this.saveInstalledModules();
 
         return { success: true, config: this.installedModules.installed[moduleId].config };
+    }
+
+    /**
+     * Reconcile installed module records with the current module catalog defaults.
+     * This preserves admin customizations while adding new default keys and cleaning install order.
+     */
+    updateInstalledModules(options = {}) {
+        const policy = options.policy || {};
+        const revoked = new Set(Array.isArray(policy.revoked) ? policy.revoked : []);
+        const actions = [];
+        const skipped = [];
+        let changed = false;
+
+        for (const moduleId of Object.keys(this.installedModules.installed)) {
+            const module = AVAILABLE_MODULES[moduleId];
+            if (!module) {
+                skipped.push({ moduleId, reason: 'not-in-current-catalog' });
+                continue;
+            }
+
+            const installed = this.installedModules.installed[moduleId];
+            const currentConfig = installed.config && typeof installed.config === 'object' ? installed.config : {};
+            const nextConfig = {
+                ...module.defaultConfig,
+                ...currentConfig
+            };
+            if (revoked.has(moduleId)) {
+                nextConfig.enabled = false;
+            }
+
+            const before = JSON.stringify(currentConfig);
+            const after = JSON.stringify(nextConfig);
+            if (before !== after) {
+                installed.config = nextConfig;
+                installed.updatedAt = Date.now();
+                changed = true;
+                actions.push({ moduleId, action: 'reconcile', success: true });
+            } else {
+                actions.push({ moduleId, action: 'check', success: true, changed: false });
+            }
+        }
+
+        const dedupedOrder = Array.from(new Set(this.installedModules.installOrder))
+            .filter(id => this.installedModules.installed[id]);
+        if (dedupedOrder.length !== this.installedModules.installOrder.length) {
+            this.installedModules.installOrder = dedupedOrder;
+            changed = true;
+        }
+
+        if (changed) {
+            this.saveInstalledModules();
+        }
+
+        return {
+            success: true,
+            updated: actions.filter(entry => entry.action === 'reconcile').map(entry => entry.moduleId),
+            actions,
+            skipped
+        };
     }
 
     /**

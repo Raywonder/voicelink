@@ -4,12 +4,14 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>VoiceLink</string>
 	<key>CFBundleExecutable</key>
-	<string>VoiceLinkNative</string>
+	<string>VoiceLink</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>net.devinecreations.voicelink</string>
+	<string>com.devinecreations.voicelink</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -17,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.5</string>
+	<string>1.0.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,11 +34,43 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>92</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsForMedia</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>VoiceLink needs camera access for video and profile features when enabled.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
@@ -45,15 +79,15 @@
 	<string>VoiceLink needs access to your local network to connect to voice servers.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>VoiceLink needs access to your microphone for voice chat.</string>
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>VoiceLink needs Desktop folder access for file send and receive operations.</string>
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>VoiceLink needs Documents folder access for file send and receive operations.</string>
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>VoiceLink needs Downloads folder access to save received files and import media.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>VoiceLink needs network volume access for file transfers and shared media libraries.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>VoiceLink needs removable volume access for file transfers and media playback.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://voicelinkapp.app/downloads/voicelink/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>1i1XfpOWGVnGczAWcXLl5BP6WT7Qqzu573pjAl+nPbA=</string>
 </dict>
 </plist>

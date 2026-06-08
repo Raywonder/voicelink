@@ -1,14 +1,14 @@
 # macOS Build Instructions - VoiceLink Native
 
-## Current Status: Ready for Native Build
+## Current Status: Active Native Source / Rebuild Required For Public Artifacts
 
 ### 📋 Project State
 - ✅ Source code updated with latest fixes
 - ✅ Project structure cleaned and organized
-- ✅ Build artifacts removed (.build/, DerivedData/)
-- ✅ Archives created for old versions
-- ✅ Server updated with media playback fixes
-- ✅ Cross-device coordination established
+- ✅ Current `swift-native/VoiceLinkNative/Sources` compiles locally with `swift build`
+- ✅ Current-source app was reinstalled locally for regression validation on 2026-03-20
+- ✅ Live local macOS test confirmed restored audio/sound behavior
+- ⚠️ Public macOS artifacts still need a fresh universal release rebuild from current source before replacement
 
 ### 🍎 Build Objective
 Create/update macOS native app ZIP artifacts used by updater and downloads:
@@ -27,13 +27,17 @@ Create/update macOS native app ZIP artifacts used by updater and downloads:
 
 ### Build Steps
 
+#### 0. Use The Correct Source Of Truth
+- Treat `swift-native/VoiceLinkNative/Sources` as the authoritative macOS source.
+- Do not recover behavior from:
+  - `swift-native/VoiceLinkNative/build-temp`
+  - `swift-native/VoiceLinkNative/VoiceLink-release.app`
+- `swift-native/VoiceLinkNative/VoiceLink.app` may be used as the local rebuilt bundle snapshot, but source changes must come from `Sources`.
+
 #### 1. Open Project in Xcode
 ```bash
-# Navigate to project
-cd /mnt/c/Users/40493/dev/apps/voicelink-local/swift-native/
-
-# Open in Xcode
-open VoiceLinkNative.xcodeproj
+# Navigate to package
+cd ~/dev/apps/voicelink-local/swift-native/VoiceLinkNative
 ```
 
 #### 2. Configure Build Settings
@@ -108,15 +112,16 @@ Update manifests:
 ### Post-Build Verification
 - [ ] ZIP archive contains VoiceLink.app bundle
 - [ ] App launches without errors on macOS
+- [ ] `Audio` menu shows `Refresh Audio Devices` and `Restart Audio Services`
+- [ ] Settings -> Audio shows `Refresh Device List` and `Restart Audio Services`
+- [ ] Device list repopulates after refresh/restart when CoreAudio was empty
 - [ ] "Account" menu appears in menu bar
-- [ ] Can click "Login with Mastodon"
-- [ ] Enter Mastodon instance (e.g., mastodon.social)
-- [ ] Browser opens with OAuth authorization page
-- [ ] After approving, app shows logged-in state
-- [ ] User name and handle displayed in main menu
-- [ ] Can create room as authenticated user
-- [ ] Can logout successfully
-- [ ] Credentials persist across app restarts
+- [ ] Admin-capable account can open `Server Administration`
+- [ ] Admin user actions reach backend: kick / ban / role / transmit
+- [ ] Startup welcome sound plays when enabled
+- [ ] Input monitoring and room audio both function in the rebuilt app
+- [ ] Input monitoring still works while actively joined to a room
+- [ ] Input/output sliders apply the internal `+15%` gain boost correctly without changing the visible slider percentage
 
 ### Distribution Testing
 - [ ] ZIP can be downloaded and extracted
@@ -129,20 +134,30 @@ Update manifests:
 ## 🔄 Known Issues & Solutions
 
 ### "Command CodeSign failed"
-**Issue:** Xcode cannot sign the app  
+**Issue:** Xcode cannot sign the app
 **Solution:** Disable code signing in Build Settings, or add Apple Developer account
 
 ### "The app is damaged and can't be opened"
-**Issue:** macOS Gatekeeper blocks unsigned app  
+**Issue:** macOS Gatekeeper blocks unsigned app
 **Solution:** Run `xattr -cr VoiceLink.app` to remove quarantine attribute
 
 ### "Xcode won't archive"
-**Issue:** Build cache corruption  
+**Issue:** Build cache corruption
 **Solution:** Clean build folder (Cmd+Shift+K) and try again
 
 ### "Authorization code exchange fails"
-**Issue:** Network or server connectivity  
+**Issue:** Network or server connectivity
 **Solution:** Check internet connection and verify Mastodon instance URL
+
+### "No audio devices were detected"
+**Issue:** macOS CoreAudio is temporarily exposing an empty device list after reboot or route changes
+**Solution:** Use the app's built-in recovery path first:
+- `Audio` menu -> `Refresh Audio Devices`
+- `Audio` menu -> `Restart Audio Services`
+- Settings -> Audio -> `Refresh Device List`
+- Settings -> Audio -> `Restart Audio Services`
+
+If the OS still reports no devices after that, resolve the macOS audio stack before replacing public artifacts.
 
 ---
 
@@ -174,12 +189,12 @@ curl -I https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-m
 
 ## 📋 Next Steps After macOS Build
 
-1. **Upload** ZIP archive to server filedump
-2. **Update** auto-updater API with new version
-3. **Restart** PM2 service to apply changes
-4. **Test** download and installation
-5. **Update** OPENCODE_STATUS.md with completion
-6. **Coordinate** with Windows device for final sync
+1. **Archive/export** the fresh universal macOS app from current source
+2. **Update** ZIP/pkg artifacts and checksum files
+3. **Upload** validated artifacts to the server
+4. **Update** `latest-mac.yml` and `latest-mac.server.yml`
+5. **Verify** download/install and audio recovery controls on a clean machine
+6. **Only then** replace public release files
 
 ---
 
@@ -206,6 +221,6 @@ curl -I https://devinecreations.net/uploads/filedump/voicelink/VoiceLink-1.0.0-m
 
 ---
 
-**Build Date:** 2026-01-23  
-**Target:** VoiceLink Native v1.0.0 macOS  
+**Build Date:** 2026-01-23
+**Target:** VoiceLink Native v1.0.0 macOS
 **Priority:** HIGH - Complete native app migration

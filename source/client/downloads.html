@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceLink Downloads - Desktop Apps & VoiceLink Web Access</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+
+        .downloads-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin: 40px 0;
+        }
+
+        .download-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .download-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .platform-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .download-card h2 {
+            font-size: 1.8em;
+            margin-bottom: 15px;
+        }
+
+        .version {
+            background: rgba(255, 255, 255, 0.2);
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+        }
+
+        .features {
+            list-style: none;
+            margin: 20px 0;
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+
+        .features li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+            color: #4ade80;
+        }
+
+        .download-button {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+            color: #fff;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: bold;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
+        }
+
+        .download-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(74, 222, 128, 0.4);
+        }
+
+        .download-button[aria-disabled="true"] {
+            opacity: 0.78;
+        }
+
+        .download-button.secondary {
+            background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+            margin-top: 10px;
+        }
+
+        .web-client-card {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(139, 92, 246, 0.3) 100%);
+            border-color: rgba(139, 92, 246, 0.5);
+        }
+        .donation-card {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, rgba(0, 112, 186, 0.22) 0%, rgba(0, 48, 135, 0.28) 100%);
+            border-color: rgba(96, 165, 250, 0.45);
+        }
+        .donation-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            margin-top: 20px;
+        }
+        .testflight-request {
+            margin-top: 20px;
+            display: grid;
+            gap: 12px;
+            text-align: left;
+        }
+        .testflight-request label {
+            font-weight: 700;
+        }
+        .testflight-request-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: stretch;
+        }
+        .testflight-request input[type="email"],
+        .testflight-request select {
+            flex: 1 1 220px;
+            min-height: 48px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: rgba(15, 23, 42, 0.65);
+            color: #fff;
+        }
+        .testflight-request select {
+            appearance: none;
+        }
+        .testflight-request input:focus-visible,
+        .testflight-request button:focus-visible {
+            outline: 3px solid #ffffff;
+            outline-offset: 2px;
+        }
+        .testflight-request-help,
+        .testflight-request-status {
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+        .testflight-request-status {
+            min-height: 1.5em;
+            color: #d1fae5;
+        }
+        .testflight-human {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .testflight-human input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+        }
+        .testflight-honeypot {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .info-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 30px 0;
+            border-left: 4px solid #4ade80;
+        }
+
+        .info-section h3 {
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+
+        .info-section p {
+            line-height: 1.6;
+            opacity: 0.9;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            opacity: 0.8;
+            font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+
+            .downloads-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎙️ VoiceLink Downloads</h1>
+            <p class="subtitle">P2P Voice Chat with 3D Spatial Audio</p>
+        </header>
+
+        <div class="info-section">
+            <h2>Open VoiceLink Web</h2>
+            <p>
+                Use VoiceLink Web when you want to sign in from a browser before installing a desktop app.
+                The main web client opens directly to login options, and the .dev site is available for current VoiceLink guidance.
+            </p>
+            <p>
+                <a href="https://voicelinkapp.app/client/?open=login" class="download-button" style="display:inline-block;width:auto;min-width:220px;">Open Web Login</a>
+                <a href="https://voicelinkapp.app/client/?open=client-portal" class="download-button secondary" style="display:inline-block;width:auto;min-width:220px;">Client Account Login</a>
+                <a href="https://voicelink.dev/" class="download-button secondary" style="display:inline-block;width:auto;min-width:220px;">VoiceLink .dev Site</a>
+            </p>
+        </div>
+
+        <div class="info-section">
+            <h2>Get or Connect a VoiceLink Server</h2>
+            <p>
+                Create or use a Devine Creations client account when you want your own VoiceLink server, an account-linked domain,
+                or help connecting a server you already downloaded. Ticket support requests are accepted.
+            </p>
+            <p>
+                <a href="https://devine-creations.com/clientarea.php" class="download-button" style="display:inline-block;width:auto;min-width:220px;">Open Client Portal</a>
+                <a href="https://devine-creations.com/submitticket.php" class="download-button secondary" style="display:inline-block;width:auto;min-width:220px;">Open a Support Ticket</a>
+            </p>
+            <p>
+                If you already downloaded the server package, extract it and run the included installer from the server folder.
+                For Docker or managed installs, keep the server URL and account-linked domain handy, then use the client portal or a ticket to finish linking.
+            </p>
+        </div>
+
+        <div class="downloads-grid">
+            <!-- macOS Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🍎</span>
+                <h2>macOS Native</h2>
+                <span class="version">Current macOS release</span>
+                <ul class="features">
+                    <li>SwiftUI native interface</li>
+                    <li>3D spatial audio engine</li>
+                    <li>Multi-channel audio support</li>
+                    <li>Push-to-talk (PTT)</li>
+                    <li>Jellyfin media integration</li>
+                    <li>Auto-updates built-in</li>
+                    <li>Best local desktop accessibility path on macOS</li>
+                </ul>
+                <a href="#email-download-link"
+                   class="download-button" data-request-download="macos_zip">
+                    Email macOS Signed ZIP Link
+                </a>
+                <a href="#email-download-link"
+                   class="download-button secondary" data-request-download="macos_pkg">
+                    Email macOS PKG Link
+                </a>
+                <a href="#email-download-link"
+                   class="download-button secondary" data-request-download="macos_intel_pkg">
+                    Email Intel PKG Link
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (VoiceLinkMacOS.zip)
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-macOS.zip.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (VoiceLink-macOS.zip)
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos.pkg.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (macOS PKG)
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (Intel PKG)
+                </a>
+            </div>
+
+            <!-- Windows Native App -->
+            <div class="download-card">
+                <span class="platform-icon">🪟</span>
+                <h2>Windows Native</h2>
+                <span class="version">v0.1.0.4</span>
+                <ul class="features">
+                    <li>wxPython Windows desktop client</li>
+                    <li>Installs under Program Files</li>
+                    <li>Client Account and VoiceLink Account sign-in</li>
+                    <li>Server room browsing with guest fallback where allowed</li>
+                </ul>
+                <a href="/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-windows-setup.exe"
+                   class="download-button"
+                   data-download-id="windows_wx_setup">
+                    Download Windows Installer
+                </a>
+                <a href="/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-win-x64-portable.zip"
+                   class="download-button secondary"
+                   data-download-id="windows_wx_portable">
+                    Download Portable ZIP
+                </a>
+            </div>
+
+            <div class="download-card">
+                <span class="platform-icon">📱</span>
+                <h2>iPhone and iPad</h2>
+                <span class="version">TestFlight</span>
+                <ul class="features">
+                    <li>Current iOS preview channel</li>
+                    <li>Get the current Apple TestFlight link by email</li>
+                    <li>Native desktop downloads above remain the best local desktop path</li>
+                </ul>
+                <form class="testflight-request" data-testflight-form data-source-page="client-downloads">
+                    <label for="client-downloads-testflight-email">Email for the iOS TestFlight invite</label>
+                    <div class="testflight-request-row">
+                        <input id="client-downloads-testflight-email" name="email" type="email" autocomplete="email" required aria-describedby="client-downloads-testflight-help">
+                        <button class="download-button" type="submit" style="width: auto; min-width: 240px; margin-top: 0;">
+                            Email TestFlight Link
+                        </button>
+                    </div>
+                    <div class="testflight-human">
+                        <input id="client-downloads-testflight-human" name="humanConfirmed" type="checkbox" required>
+                        <label for="client-downloads-testflight-human">I am requesting this invite for myself.</label>
+                    </div>
+                    <div class="testflight-honeypot" aria-hidden="true">
+                        <label for="client-downloads-testflight-company">Leave this field empty</label>
+                        <input id="client-downloads-testflight-company" name="company" type="text" tabindex="-1" autocomplete="off">
+                    </div>
+                    <p id="client-downloads-testflight-help" class="testflight-request-help">VoiceLink will email the current iOS preview link to the address you enter here.</p>
+                    <p class="testflight-request-status" aria-live="polite" aria-atomic="true"></p>
+                </form>
+            </div>
+
+            <div class="download-card">
+                <span class="platform-icon">🖥️</span>
+                <h2>VoiceLink Server</h2>
+                <span class="version">Current server installer</span>
+                <ul class="features">
+                    <li>Full VoiceLink local server package</li>
+                    <li>Includes `server`, `client`, assets, and installer</li>
+                    <li>Best path for Linux or VPS deployment</li>
+                    <li>Run `install.sh` after extract to complete setup</li>
+                </ul>
+                <a href="#email-download-link"
+                   class="download-button" data-request-download="server_targz">
+                    Email Server Tarball Link
+                </a>
+                <a href="#email-download-link"
+                   class="download-button secondary" data-request-download="server_zip">
+                    Email Server ZIP Link
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/voicelink-server-1.0.0.tar.gz.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (Server Tarball)
+                </a>
+                <a href="https://voicelinkapp.app/downloads/voicelink/voicelink-server-1.0.0.zip.sha256"
+                   class="download-button secondary" download>
+                    SHA256 Checksum (Server ZIP)
+                </a>
+            </div>
+
+            <!-- Web Client -->
+            <div class="download-card web-client-card">
+                <span class="platform-icon">🌐</span>
+                <h2>VoiceLink Web Access</h2>
+                <span class="version">Universal</span>
+                <p style="margin: 20px 0; line-height: 1.6; font-size: 1.1em;">
+                    Access VoiceLink directly from your browser without installing anything.
+                    Works on any device with a modern web browser, with native desktop downloads above for better local desktop access and assistive technology support.
+                </p>
+                <ul class="features" style="columns: 2;">
+                    <li>No installation required</li>
+                    <li>Cross-platform support</li>
+                    <li>WebRTC P2P audio</li>
+                    <li>Spatial audio (WebAudio)</li>
+                    <li>Room creation & joining</li>
+                    <li>Text chat support</li>
+                    <li>Auto-port detection</li>
+                    <li>Mobile-friendly UI</li>
+                </ul>
+                <a href="https://voicelinkapp.app/"
+                   class="download-button">
+                    Launch VoiceLink Web Access
+                </a>
+            </div>
+
+            <div class="download-card donation-card">
+                <span class="platform-icon">💖</span>
+                <h2>Support VoiceLink</h2>
+                <span class="version">PayPal</span>
+                <p style="margin: 20px 0; line-height: 1.6; font-size: 1.05em;">
+                    Help keep VoiceLink free and the servers running. Choose a donation amount below, or send directly to
+                    <strong>PayPal@raywonderis.me</strong>.
+                </p>
+                <div class="donation-actions">
+                    <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=10"
+                       class="download-button">
+                        Donate $10
+                    </a>
+                    <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=25"
+                       class="download-button">
+                        Donate $25
+                    </a>
+                    <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD&amount=50"
+                       class="download-button">
+                        Donate $50
+                    </a>
+                    <a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=PayPal%40raywonderis.me&currency_code=USD"
+                       class="download-button secondary">
+                        Custom Amount
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Sections -->
+        <div class="info-section" id="email-download-link">
+            <h3>Email a Download Link</h3>
+            <form class="testflight-request" data-download-link-form data-source-page="client-downloads" style="margin-top: 18px;">
+                <label for="client-link-email">Email address</label>
+                <div class="testflight-request-row">
+                    <input id="client-link-email" name="email" type="email" autocomplete="email" required aria-describedby="client-link-help">
+                    <select id="client-link-target" name="downloadId" aria-label="Choose a VoiceLink download" required>
+                        <option value="macos_zip">VoiceLink macOS ZIP</option>
+                        <option value="macos_pkg">VoiceLink macOS PKG Installer</option>
+                        <option value="macos_intel_pkg">VoiceLink macOS Intel PKG Installer</option>
+                        <option value="windows_wx_setup">VoiceLink Windows Installer</option>
+                        <option value="windows_wx_portable">VoiceLink Windows Portable ZIP</option>
+                        <option value="server_targz">VoiceLink Server Tarball</option>
+                        <option value="server_zip">VoiceLink Server ZIP</option>
+                        <option value="web_access">VoiceLink Web Access</option>
+                    </select>
+                    <button class="download-button secondary" type="submit" style="width: auto; min-width: 240px; margin-top: 0;">
+                        Email Download Link
+                    </button>
+                </div>
+                <div class="testflight-human">
+                    <input id="client-link-human" name="humanConfirmed" type="checkbox" required>
+                    <label for="client-link-human">I am requesting this download link for myself.</label>
+                </div>
+                <div class="testflight-honeypot" aria-hidden="true">
+                    <label for="client-link-company">Leave this field empty</label>
+                    <input id="client-link-company" name="company" type="text" tabindex="-1" autocomplete="off">
+                </div>
+                <p id="client-link-help" class="testflight-request-help">Choose the app or server package here. VoiceLink sends the selected download link by email instead of starting an anonymous download from the card buttons above.</p>
+                <p class="testflight-request-status" aria-live="polite" aria-atomic="true"></p>
+            </form>
+        </div>
+
+        <div class="info-section">
+            <h3>📋 System Requirements</h3>
+            <p>
+                <strong>macOS:</strong> macOS 11.0 (Big Sur) or later, Apple Silicon or Intel processor<br>
+                <strong>Web:</strong> Chrome 90+, Firefox 88+, Safari 14+, or Edge 90+
+            </p>
+        </div>
+
+        <div class="info-section">
+            <h3>🔄 Auto-Updates</h3>
+            <p>
+                All native applications (v1.0+) include automatic update checking. The app will
+                notify you when a new version is available and allow you to download and install
+                updates directly from the app menu. You can check for updates manually at any time
+                via the app's update settings.
+            </p>
+        </div>
+
+        <div class="info-section">
+            <h3>🚀 Key Features</h3>
+            <p>
+                VoiceLink provides peer-to-peer voice communication with advanced 3D spatial audio,
+                allowing you to hear participants positioned around you in virtual space. Features
+                include push-to-talk, whisper mode, Jellyfin media synchronization, TTS announcements,
+                and automatic port detection for seamless connectivity. Both local and federated
+                server modes are supported for flexible deployment options.
+            </p>
+        </div>
+
+        <footer>
+            <p>© 2026 VoiceLink | VoiceLink v1.0.x | <a href="https://voicelinkapp.app/" style="color: #4ade80;">voicelinkapp.app</a></p>
+            <p style="margin-top: 10px;">For support: <a href="mailto:support@voicelinkapp.app" style="color: #4ade80;">support@voicelinkapp.app</a></p>
+        </footer>
+    </div>
+    <script>
+        (() => {
+            const endpoint = 'https://voicelinkapp.app/api/downloads/testflight-request';
+            const downloadLinkEndpoint = 'https://voicelinkapp.app/api/downloads/email-link';
+            document.querySelectorAll('[data-request-download]').forEach((link) => {
+                link.addEventListener('click', () => {
+                    const requestedDownloadId = link.getAttribute('data-request-download') || '';
+                    const targetSelect = document.getElementById('client-link-target');
+                    const targetEmail = document.getElementById('client-link-email');
+                    const status = document.querySelector('[data-download-link-form] .testflight-request-status');
+                    if (targetSelect && requestedDownloadId) {
+                        targetSelect.value = requestedDownloadId;
+                    }
+                    if (status) {
+                        status.textContent = 'Enter your email and confirm the request. VoiceLink will send this download link instead of starting an anonymous download.';
+                        status.style.color = '#dbeafe';
+                    }
+                    targetEmail?.focus();
+                });
+            });
+            const forms = document.querySelectorAll('[data-testflight-form]');
+            const downloadForms = document.querySelectorAll('[data-download-link-form]');
+            forms.forEach((form) => {
+                const emailInput = form.querySelector('input[name="email"]');
+                const submitButton = form.querySelector('button[type="submit"]');
+                const status = form.querySelector('.testflight-request-status');
+                const humanCheckbox = form.querySelector('input[name="humanConfirmed"]');
+                const honeypot = form.querySelector('input[name="company"]');
+                form.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    if (!emailInput || !submitButton || !status || !humanCheckbox) return;
+                    status.textContent = 'Sending request...';
+                    status.style.color = '#dbeafe';
+                    submitButton.disabled = true;
+                    try {
+                        const response = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: emailInput.value,
+                                humanConfirmed: humanCheckbox.checked,
+                                company: honeypot ? honeypot.value : '',
+                                sourcePage: form.dataset.sourcePage || 'client-downloads'
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || data.success === false) {
+                            throw new Error(data.error || 'Unable to submit your request right now.');
+                        }
+                        status.textContent = data.message || 'The current TestFlight link was emailed to you.';
+                        status.style.color = data.delivered ? '#d1fae5' : '#fde68a';
+                        form.reset();
+                    } catch (error) {
+                        status.textContent = `${error.message} You can also email support@voicelinkapp.app for manual access.`;
+                        status.style.color = '#fecaca';
+                    } finally {
+                        submitButton.disabled = false;
+                    }
+                });
+            });
+            downloadForms.forEach((form) => {
+                const emailInput = form.querySelector('input[name="email"]');
+                const downloadSelect = form.querySelector('select[name="downloadId"]');
+                const submitButton = form.querySelector('button[type="submit"]');
+                const status = form.querySelector('.testflight-request-status');
+                const humanCheckbox = form.querySelector('input[name="humanConfirmed"]');
+                const honeypot = form.querySelector('input[name="company"]');
+                form.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    if (!emailInput || !downloadSelect || !submitButton || !status || !humanCheckbox) return;
+                    status.textContent = 'Sending download link request...';
+                    status.style.color = '#dbeafe';
+                    submitButton.disabled = true;
+                    try {
+                        const response = await fetch(downloadLinkEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: emailInput.value,
+                                downloadId: downloadSelect.value,
+                                humanConfirmed: humanCheckbox.checked,
+                                company: honeypot ? honeypot.value : '',
+                                sourcePage: form.dataset.sourcePage || 'client-downloads',
+                                sourceChannel: 'public'
+                            })
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || data.success === false) {
+                            throw new Error(data.error || 'Unable to submit your download request right now.');
+                        }
+                        status.textContent = data.message || 'The selected download link was emailed to you.';
+                        status.style.color = data.delivered ? '#d1fae5' : '#fde68a';
+                        form.reset();
+                    } catch (error) {
+                        status.textContent = `${error.message} You can also use the direct download buttons on this page.`;
+                        status.style.color = '#fecaca';
+                    } finally {
+                        submitButton.disabled = false;
+                    }
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

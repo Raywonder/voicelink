@@ -139,7 +139,7 @@
                                                       RowBackground="{StaticResource SurfaceBrush}"
                                                       AlternatingRowBackground="#20ffffff"
                                                       GridLinesVisibility="None"
-                                                      AutomationProperties.Name="Users list">
+                                                      AutomationProperties.Name="Connected users list">
                                                 <DataGrid.Columns>
                                                     <DataGridTextColumn Header="Username" Binding="{Binding Username}" Width="*"/>
                                                     <DataGridTextColumn Header="Email" Binding="{Binding Email}" Width="*"/>

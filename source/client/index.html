@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceLink Local - P2P Voice Chat</title>
+    <title>VoiceLink Web Access - Browser Voice Chat</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
@@ -13,8 +13,8 @@
         <!-- Loading Screen -->
         <div id="loading-screen" class="screen active">
             <div class="loading-content">
-                <h1>🎙️ VoiceLink Local</h1>
-                <p>Initializing P2P voice chat system...</p>
+                <h1>🎙️ VoiceLink</h1>
+                <p>Opening VoiceLink Web Access...</p>
                 <div class="loading-spinner"></div>
             </div>
         </div>
@@ -22,8 +22,8 @@
         <!-- Main Menu -->
         <div id="main-menu" class="screen">
             <div class="menu-header">
-                <h1>🎙️ VoiceLink Local</h1>
-                <p>Advanced P2P Voice Chat with 3D Audio</p>
+                <h1>🎙️ VoiceLink</h1>
+                <p>Browser voice chat with rooms, account login, and quick guest access</p>
             </div>
 
             <div id="authelia-auth-section" class="auth-section">
@@ -225,7 +225,7 @@
                     <h3>Text Chat</h3>
                     <div id="chat-messages" class="chat-messages"></div>
                     <div class="chat-input-container">
-                        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                        <textarea id="chat-input" placeholder="Type a message..." maxlength="500" rows="1" aria-label="Message"></textarea>
                         <button id="send-message-btn">Send</button>
                     </div>
                 </div>

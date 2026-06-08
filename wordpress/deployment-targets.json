@@ -1,0 +1,205 @@
+{
+  "supportedSites": [
+    {
+      "id": "wordpress",
+      "label": "WordPress",
+      "pluginSlug": "voicelink-wordpress",
+      "pluginPath": "wordpress/voicelink-wordpress",
+      "installPathPattern": "wp-content/plugins/voicelink-wordpress",
+      "preserveSiteRootByDefault": true,
+      "createPages": [
+        "voicelink",
+        "voicelink-downloads",
+        "voicelink-server-setup",
+        "voicelink-help"
+      ],
+      "shortcodes": [
+        "voicelink_app",
+        "voicelink_downloads",
+        "voicelink_docs",
+        "voicelink_server_setup"
+      ],
+      "detectFiles": [
+        "wp-config.php",
+        "wp-content/plugins",
+        "wp-json"
+      ],
+      "notes": [
+        "Use side-by-side deployment by default.",
+        "Do not replace the existing WordPress home page unless the owner explicitly selects root replacement.",
+        "Expose current site and user context through the plugin REST bridge for VoiceLink onboarding."
+      ]
+    },
+    {
+      "id": "composr",
+      "label": "Composr CMS",
+      "pluginSlug": "voicelink-composr",
+      "pluginPath": "composr/voicelink-composr",
+      "installPathPattern": "sources_custom/voicelink",
+      "preserveSiteRootByDefault": true,
+      "pageTargets": [
+        "pages/modules_custom",
+        "pages/comcode_custom",
+        "pages/html_custom",
+        "site/pages/modules_custom",
+        "site/pages/comcode_custom",
+        "site/pages/html_custom",
+        "pg/modules_custom",
+        "pg/comcode_custom",
+        "pg/html_custom",
+        "site/pg/modules_custom",
+        "site/pg/comcode_custom",
+        "site/pg/html_custom",
+        "pages/modules",
+        "pages/comcode",
+        "pages/html"
+      ],
+      "storageTargets": [
+        "uploads/website_specific/voicelink",
+        "uploads/filedump/voicelink",
+        "exports/voicelink",
+        "imports/voicelink"
+      ],
+      "createPages": [
+        "VoiceLink",
+        "VoiceLink Downloads",
+        "VoiceLink Server Setup",
+        "VoiceLink Help"
+      ],
+      "shortcodes": [],
+      "detectFiles": [
+        "info.php",
+        "sources",
+        "sources_custom",
+        "pages"
+      ],
+      "notes": [
+        "Treat /home/<user>/public_html as the active Composr root and preserve it by default.",
+        "If the real Composr root is nested under /home/<user>/public_html/*, detect that child root first instead of assuming the parent is the site root.",
+        "Deploy VoiceLink beside the CMS or through linked pages and custom sources, not by replacing the entire site root unless explicitly chosen.",
+        "Expose logged-in Composr member identity, email, and mapped VoiceLink role through a bridge endpoint so owned servers can attach to existing VoiceLink identities.",
+        "Use Composr page paths such as pages/*/*, pg/*/*, site/pages/*, and html_custom/html where needed so VoiceLink pages still render properly even on minimal Composr installs.",
+        "If Composr chat is installed, public VoiceLink rooms may map to Composr chat rooms; otherwise VoiceLink falls back to its own room chat module.",
+        "Import Composr groups, clubs, private topics, and direct-message relationships so private VoiceLink access can follow existing Composr membership rules."
+      ]
+    },
+    {
+      "id": "whmcs",
+      "label": "WHMCS",
+      "pluginSlug": "voicelink-whmcs",
+      "pluginPath": "whmcs/voicelink-whmcs",
+      "installPathPattern": "modules/addons/voicelink-whmcs",
+      "preserveSiteRootByDefault": true,
+      "pageTargets": [
+        "modules/addons/voicelink-whmcs",
+        "templates/voicelink",
+        "templates/six/voicelink",
+        "templates/twenty-one/voicelink",
+        "templates/orderforms/voicelink"
+      ],
+      "storageTargets": [
+        "attachments/voicelink",
+        "downloads/voicelink",
+        "templates_c/voicelink",
+        "modules/addons/voicelink-whmcs/backups",
+        "modules/addons/voicelink-whmcs/imports",
+        "modules/addons/voicelink-whmcs/exports"
+      ],
+      "createPages": [
+        "VoiceLink Client Portal",
+        "VoiceLink Downloads",
+        "VoiceLink Server Setup",
+        "VoiceLink Help"
+      ],
+      "shortcodes": [],
+      "detectFiles": [
+        "configuration.php",
+        "init.php",
+        "clientarea.php",
+        "admin"
+      ],
+      "notes": [
+        "Treat /home/<user>/public_html or the detected WHMCS root as a billing and client portal integration target, not a disposable webroot.",
+        "Preserve the existing WHMCS site root by default and add VoiceLink through addon, template, hook, and client-area entry points.",
+        "Expose linked client, admin, owned-domain, and service identity context so VoiceLink can attach the install to an existing VoiceLink owner instead of creating a duplicate user.",
+        "Use WHMCS client, admin, service, and owned-domain records for VoiceLink account linking, licensing, owned-server detection, and notifications."
+      ]
+    },
+    {
+      "id": "cpanel",
+      "label": "cPanel Account",
+      "pluginSlug": "voicelink-cpanel",
+      "pluginPath": "cpanel/voicelink-cpanel",
+      "installPathPattern": "apps/voicelink or public_html/voicelink",
+      "preserveSiteRootByDefault": true,
+      "pageTargets": [
+        "public_html/voicelink",
+        "apps/voicelink",
+        ".cpanel",
+        ".trash"
+      ],
+      "storageTargets": [
+        "public_html/uploads/voicelink",
+        "public_html/shared/voicelink",
+        "files/voicelink",
+        "backups/voicelink",
+        "apps/voicelink/server-backup"
+      ],
+      "createPages": [
+        "VoiceLink",
+        "VoiceLink Downloads",
+        "VoiceLink Help"
+      ],
+      "shortcodes": [],
+      "detectFiles": [
+        ".cpanel",
+        "public_html",
+        "mail",
+        "etc"
+      ],
+      "notes": [
+        "Treat the cPanel account as a managed hosting root that can expose file manager, database, backup, and domain-management capabilities to VoiceLink.",
+        "Prefer side-by-side deployment under apps or a dedicated web subpath instead of replacing the main site root.",
+        "Allow VoiceLink to reuse cPanel-owned home paths, domains, databases, and file-sharing directories when linking installs to the same owner identity.",
+        "Use cPanel File Manager style paths for VoiceLink shared files and admin upload actions when supported."
+      ]
+    },
+    {
+      "id": "installatron",
+      "label": "Installatron Application",
+      "pluginSlug": "voicelink-installatron",
+      "pluginPath": "installatron/voicelink",
+      "installPathPattern": "installatron/voicelink",
+      "preserveSiteRootByDefault": true,
+      "pageTargets": [
+        ".well-known/voicelink.json",
+        "installatron/voicelink",
+        "public_html/voicelink"
+      ],
+      "storageTargets": [
+        "storage/install-registration.json",
+        "storage/installatron",
+        "installatron/voicelink/files",
+        "installatron/voicelink/hooks"
+      ],
+      "createPages": [
+        "VoiceLink Install Status",
+        "VoiceLink License Status",
+        "VoiceLink Domain Binding"
+      ],
+      "shortcodes": [],
+      "detectFiles": [
+        ".well-known/voicelink.json",
+        "installatron",
+        "install.xml",
+        "installatron/voicelink/install.xml"
+      ],
+      "notes": [
+        "Treat Installatron as a deployment lifecycle and package-management layer around the existing VoiceLink browser UI.",
+        "Preserve the app/webroot by default and sync Installatron install metadata, .well-known domain binding, and WHMCS license status into the browser and desktop admin UI.",
+        "Expose app install status, license validation, and path binding through shared API routes so browser UI and desktop admin management stay aligned.",
+        "Keep ACME .well-known challenge files untouched while publishing /.well-known/voicelink.json for install discovery."
+      ]
+    }
+  ]
+}

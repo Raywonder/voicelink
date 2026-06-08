@@ -102,7 +102,7 @@ class AudioTestManager {
                 urls.push(`sounds/${variant}`);
                 urls.push(`/api/sounds/${encoded}`);
                 urls.push(`/downloads/voicelink/sounds/${encoded}`);
-                urls.push(`https://voicelink.devinecreations.net/downloads/voicelink/sounds/${encoded}`);
+                urls.push(`https://voicelinkapp.app/downloads/voicelink/sounds/${encoded}`);
             }
             return urls;
         };

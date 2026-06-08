@@ -86,11 +86,23 @@ class MediaRoomsModule {
             }
         };
 
-        // Media paths - check multiple locations
-        this.mediaPaths = [
-            '/home/dom/apps/media',
-            '/home/devinecr/apps/media'
+        const configuredMediaPaths = [
+            ...(Array.isArray(this.config.mediaPaths) ? this.config.mediaPaths : []),
+            ...(Array.isArray(this.config.sourcePaths) ? this.config.sourcePaths : [])
         ];
+        const defaultMediaPaths = [
+            '/mnt/backup/Audio Description',
+            '/mnt/backup/Dramatised audio',
+            '/mnt/backup/Music',
+            '/mnt/backup/Video',
+            '/mnt/backup/Intros',
+            '/home/dom/apps/media',
+            '/home/devinecr/apps/media',
+            '/home/dom/public_html/uploads/website_specific/audio',
+            '/home/dom/public_html/uploads/galleries',
+            '/home/dom/public_html/uploads'
+        ];
+        this.mediaPaths = this.normalizeMediaPaths([...configuredMediaPaths, ...defaultMediaPaths]);
         // Check both lowercase and capitalized folder names
         this.introsPath = this.config.introsPath || this.findMediaPath('Intros') || this.findMediaPath('intros');
         this.trailersPath = this.config.trailersPath || this.findMediaPath('trailers') || this.findMediaPath('Trailers');
@@ -107,14 +119,45 @@ class MediaRoomsModule {
         this.loadRoomTypesConfig(); // Load admin-configured settings
     }
 
+    normalizeMediaPaths(paths) {
+        const normalized = [];
+
+        for (const candidate of paths) {
+            if (!candidate || typeof candidate !== 'string') continue;
+
+            const trimmed = candidate.trim();
+            if (!trimmed) continue;
+
+            let resolved = trimmed;
+            try {
+                resolved = fs.existsSync(trimmed) ? fs.realpathSync(trimmed) : trimmed;
+            } catch (_) {
+                resolved = trimmed;
+            }
+
+            if (!normalized.includes(resolved)) {
+                normalized.push(resolved);
+            }
+        }
+
+        return normalized;
+    }
+
     /**
      * Find media path from available locations
      */
     findMediaPath(subdir) {
         for (const basePath of this.mediaPaths) {
+            if (path.basename(basePath).toLowerCase() === subdir.toLowerCase() && fs.existsSync(basePath)) {
+                return basePath;
+            }
             const fullPath = path.join(basePath, subdir);
             if (fs.existsSync(fullPath)) {
-                return fullPath;
+                try {
+                    return fs.realpathSync(fullPath);
+                } catch (_) {
+                    return fullPath;
+                }
             }
         }
         // Return first path as default
@@ -131,9 +174,20 @@ class MediaRoomsModule {
 
         for (const basePath of this.mediaPaths) {
             for (const variant of variants) {
+                if (path.basename(basePath).toLowerCase() === variant.toLowerCase() && fs.existsSync(basePath) && !paths.includes(basePath)) {
+                    try {
+                        paths.push(fs.realpathSync(basePath));
+                    } catch (_) {
+                        paths.push(basePath);
+                    }
+                }
                 const fullPath = path.join(basePath, variant);
                 if (fs.existsSync(fullPath) && !paths.includes(fullPath)) {
-                    paths.push(fullPath);
+                    try {
+                        paths.push(fs.realpathSync(fullPath));
+                    } catch (_) {
+                        paths.push(fullPath);
+                    }
                 }
             }
         }

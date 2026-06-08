@@ -1881,11 +1881,12 @@ class VoiceLinkApp {
             : 'room-description no-description';
 
         // User count message for accessibility
-        const userCountText = roomData.users === 0
+        const liveUserCount = Number(roomData.userCount ?? roomData.users ?? 0);
+        const userCountText = liveUserCount === 0
             ? 'Empty'
-            : roomData.users === 1
+            : liveUserCount === 1
                 ? '1 user'
-                : `${roomData.users} users`;
+                : `${liveUserCount} users`;
 
         return `
             <div class="room-item ${isDefault ? 'default-room' : 'user-room'}"
@@ -2271,13 +2272,15 @@ class VoiceLinkApp {
         messageElement.className = 'chat-message';
 
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
+        const previewMarkup = this.buildChatLinkPreviewMarkup(message);
 
         messageElement.innerHTML = `
             <div class="message-header">
                 <strong>${message.userName}</strong>
                 <span class="timestamp">${timestamp}</span>
             </div>
-            <div class="message-text">${this.escapeHtml(message.message)}</div>
+            <div class="message-text">${this.formatChatMessage(message.message)}</div>
+            ${previewMarkup}
         `;
 
         chatMessages.appendChild(messageElement);
@@ -2299,6 +2302,47 @@ class VoiceLinkApp {
 
         chatMessages.appendChild(messageElement);
         chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    formatChatMessage(value) {
+        const escaped = this.escapeHtml(value || '');
+        return escaped
+            .replace(/\b((?:https?:\/\/|www\.)[^\s<>"']+|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>"']*)?)/gi, (match) => {
+                if (match.includes('@')) {
+                    return match;
+                }
+                const trimmed = match.replace(/[),.!?;:]+$/g, '');
+                const suffix = match.slice(trimmed.length);
+                if (!trimmed) {
+                    return match;
+                }
+                const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+                const safeHref = this.escapeHtml(href);
+                const safeLabel = this.escapeHtml(trimmed);
+                return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>${suffix}`;
+            })
+            .replace(/\n/g, '<br>');
+    }
+
+    buildChatLinkPreviewMarkup(message = {}) {
+        const preview = message?.linkPreview || null;
+        if (!preview?.url) {
+            return '';
+        }
+
+        const safeUrl = this.escapeHtml(preview.url);
+        const safeTitle = this.escapeHtml(preview.title || preview.host || preview.url);
+        const safeHost = this.escapeHtml(preview.host || '');
+        const description = String(preview.description || '').trim();
+        const safeDescription = this.escapeHtml(description.length > 220 ? `${description.slice(0, 220)}...` : description);
+
+        return `
+            <div class="message-link-preview">
+                <a class="message-link-preview__title" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeTitle}</a>
+                ${safeHost ? `<div class="message-link-preview__host">${safeHost}</div>` : ''}
+                ${safeDescription ? `<p class="message-link-preview__description">${safeDescription}</p>` : ''}
+            </div>
+        `;
     }
 
     toggleAudioRoutingPanel() {
@@ -4298,7 +4342,7 @@ class VoiceLinkApp {
                     rooms.forEach(room => {
                         const item = this.createAdminListItem(
                             room.name,
-                            'Users: ' + (room.users || 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
+                            'Users: ' + (room.userCount ?? room.users ?? 0) + '/' + room.maxUsers + ' - ' + (room.hasPassword ? 'Locked' : 'Public'),
                             [
                                 { label: 'Edit', action: () => this.editRoom(room.id || room.roomId) },
                                 { label: 'Delete', action: () => this.deleteRoom(room.id || room.roomId), danger: true }

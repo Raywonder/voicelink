@@ -19,9 +19,13 @@ class LicensingManager: ObservableObject {
     @Published var remainingSlots: Int = 3
     @Published var registrationProgress: Double = 0
     @Published var remainingMinutes: Int = 0
+    @Published var remainingSeconds: Int = 0
     @Published var isChecking: Bool = false
     @Published var errorMessage: String?
     @Published var devices: [ActivatedDevice] = []
+    @Published var retryAttempts: Int = 0
+    @Published var supportTicketId: String?
+    @Published var supportTicketNumber: String?
 
     // 2FA support
     @Published var requires2FA: Bool = false
@@ -33,6 +37,9 @@ class LicensingManager: ObservableObject {
     private let registrationDelayMinutes: Int = 15
     private var statusCheckTimer: Timer?
     private var heartbeatTimer: Timer?
+    private var countdownTimer: Timer?
+    private var pendingUntilDate: Date?
+    private var hasEscalatedPendingFailure = false
 
     // Device identification
     private let deviceId: String
@@ -139,9 +146,13 @@ class LicensingManager: ObservableObject {
     private func loadSavedLicense() {
         if let savedKey = UserDefaults.standard.string(forKey: licenseKeyKey) {
             self.licenseKey = savedKey
-            // Validate on load
-            Task {
-                await validateLicense()
+            self.licenseStatus = .unknown
+
+            // Only validate immediately if the authenticated user is already available.
+            if AuthenticationManager.shared.currentUser != nil {
+                Task {
+                    await validateLicense()
+                }
             }
         }
     }
@@ -155,6 +166,40 @@ class LicensingManager: ObservableObject {
         UserDefaults.standard.removeObject(forKey: licenseKeyKey)
         self.licenseKey = nil
         self.licenseStatus = .notRegistered
+        self.pendingUntilDate = nil
+        self.remainingMinutes = 0
+        self.remainingSeconds = 0
+        self.retryAttempts = 0
+        self.supportTicketId = nil
+        self.supportTicketNumber = nil
+    }
+
+    func syncEntitlementsFromCurrentUser() async {
+        guard let user = AuthenticationManager.shared.currentUser else { return }
+
+        if let maxDevices = user.entitlements["maxDevices"]?.value as? Int {
+            self.maxDevices = max(maxDevices, 1)
+            remainingSlots = max(self.maxDevices - activatedDevices, 0)
+        }
+
+        await syncCurrentUserEntitlementsToAuthority(user)
+    }
+
+    func refreshForCurrentUser() async {
+        guard AuthenticationManager.shared.currentUser != nil else {
+            licenseStatus = licenseKey == nil ? .notRegistered : .error
+            return
+        }
+
+        if await fetchCurrentLicenseForAuthenticatedUser() {
+            return
+        }
+
+        if licenseKey != nil {
+            await validateLicense()
+        } else {
+            licenseStatus = .notRegistered
+        }
     }
 
     // MARK: - API Methods
@@ -209,25 +254,27 @@ class LicensingManager: ObservableObject {
                     }
 
                 case "pending":
-                    licenseStatus = .pending
-                    remainingMinutes = result["remainingMinutes"] as? Int ?? registrationDelayMinutes
-                    let remainingMs = result["remainingMs"] as? Double ?? Double(registrationDelayMinutes * 60 * 1000)
-                    registrationProgress = 1.0 - (remainingMs / Double(registrationDelayMinutes * 60 * 1000))
+                    applyPendingStatus(result)
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
 
                 case "registered":
-                    licenseStatus = .pending
-                    remainingMinutes = result["remainingMinutes"] as? Int ?? registrationDelayMinutes
-                    registrationProgress = 0
+                    applyPendingStatus(result)
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
 
                 case "licensed":
                     if let key = result["licenseKey"] as? String {
                         saveLicense(key)
                         licenseStatus = .licensed
+                        pendingUntilDate = nil
+                        remainingMinutes = 0
+                        remainingSeconds = 0
+                        retryAttempts = 0
+                        supportTicketId = nil
+                        supportTicketNumber = nil
                         activatedDevices = result["activatedDevices"] as? Int ?? 0
                         maxDevices = result["maxDevices"] as? Int ?? 3
                         remainingSlots = result["remainingSlots"] as? Int ?? (maxDevices - activatedDevices)
+                        stopStatusCheckTimer()
                         startHeartbeat()
                     }
 
@@ -336,8 +383,7 @@ class LicensingManager: ObservableObject {
                         startHeartbeat()
                     }
                 case "pending", "registered":
-                    licenseStatus = .pending
-                    remainingMinutes = result["remainingMinutes"] as? Int ?? 15
+                    applyPendingStatus(result)
                     startStatusCheckTimer(serverId: serverId, nodeId: nodeId)
                 default:
                     errorMessage = result["message"] as? String ?? "Unknown status"
@@ -355,7 +401,14 @@ class LicensingManager: ObservableObject {
     func checkStatus() async {
         guard let serverId = UserDefaults.standard.string(forKey: serverIdKey),
               let nodeId = UserDefaults.standard.string(forKey: nodeIdKey) else {
-            licenseStatus = .notRegistered
+            if await fetchCurrentLicenseForAuthenticatedUser() {
+                return
+            }
+            if licenseKey != nil {
+                await validateLicense()
+            } else {
+                licenseStatus = .notRegistered
+            }
             return
         }
 
@@ -394,22 +447,26 @@ class LicensingManager: ObservableObject {
                     }
 
                 case "pending":
-                    licenseStatus = .pending
-                    remainingMinutes = result["remainingMinutes"] as? Int ?? 0
-                    let remainingMs = result["remainingMs"] as? Double ?? 0
-                    let totalMs = Double(registrationDelayMinutes * 60 * 1000)
-                    registrationProgress = 1.0 - (remainingMs / totalMs)
+                    applyPendingStatus(result)
 
                 case "not_registered":
-                    licenseStatus = .notRegistered
-                    stopStatusCheckTimer()
+                    if pendingUntilDate != nil || licenseStatus == .pending {
+                        await handlePendingStatusFailure(serverId: serverId, nodeId: nodeId, reason: "Server still reports pending registration as unavailable.")
+                    } else {
+                        licenseStatus = .notRegistered
+                        stopStatusCheckTimer()
+                    }
 
                 default:
                     break
                 }
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if licenseStatus == .pending || pendingUntilDate != nil {
+                await handlePendingStatusFailure(serverId: serverId, nodeId: nodeId, reason: error.localizedDescription)
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
 
         isChecking = false
@@ -418,7 +475,15 @@ class LicensingManager: ObservableObject {
     /// Validate license and device
     func validateLicense() async {
         guard let key = licenseKey else {
+            if await fetchCurrentLicenseForAuthenticatedUser() {
+                return
+            }
             licenseStatus = .notRegistered
+            return
+        }
+        guard AuthenticationManager.shared.currentUser != nil else {
+            licenseStatus = .unknown
+            errorMessage = nil
             return
         }
 
@@ -457,6 +522,10 @@ class LicensingManager: ObservableObject {
     /// Activate this device on the license
     func activateDevice() async -> Bool {
         guard let key = licenseKey else { return false }
+        guard AuthenticationManager.shared.currentUser != nil else {
+            errorMessage = "You must be signed in to activate this device."
+            return false
+        }
 
         isChecking = true
 
@@ -496,6 +565,10 @@ class LicensingManager: ObservableObject {
     /// Deactivate a device to free up a slot
     func deactivateDevice(_ deviceId: String) async -> Bool {
         guard let key = licenseKey else { return false }
+        guard AuthenticationManager.shared.currentUser != nil else {
+            errorMessage = "You must be signed in to manage activated devices."
+            return false
+        }
 
         isChecking = true
 
@@ -527,6 +600,7 @@ class LicensingManager: ObservableObject {
     /// Send heartbeat to keep license active
     func sendHeartbeat() async {
         guard let key = licenseKey else { return }
+        guard AuthenticationManager.shared.currentUser != nil else { return }
 
         let body: [String: Any] = [
             "licenseKey": key,
@@ -548,6 +622,7 @@ class LicensingManager: ObservableObject {
 
     private func startStatusCheckTimer(serverId: String, nodeId: String) {
         stopStatusCheckTimer()
+        startCountdownTimer()
 
         // Check every 30 seconds while pending
         statusCheckTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -560,6 +635,8 @@ class LicensingManager: ObservableObject {
     private func stopStatusCheckTimer() {
         statusCheckTimer?.invalidate()
         statusCheckTimer = nil
+        countdownTimer?.invalidate()
+        countdownTimer = nil
     }
 
     private func startHeartbeat() {
@@ -573,10 +650,195 @@ class LicensingManager: ObservableObject {
         }
     }
 
+    private func applyPendingStatus(_ result: [String: Any]) {
+        licenseStatus = .pending
+        let remainingMs = result["remainingMs"] as? Double
+            ?? Double((result["remainingSeconds"] as? Int ?? (result["remainingMinutes"] as? Int ?? registrationDelayMinutes) * 60) * 1000)
+        remainingSeconds = max(0, Int(ceil(remainingMs / 1000.0)))
+        remainingMinutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
+        let totalMs = max(Double(registrationDelayMinutes * 60 * 1000), remainingMs)
+        registrationProgress = min(1.0, max(0.0, 1.0 - (remainingMs / totalMs)))
+        pendingUntilDate = Date().addingTimeInterval(TimeInterval(remainingSeconds))
+        hasEscalatedPendingFailure = false
+    }
+
+    private func syncCurrentUserEntitlementsToAuthority(_ user: AuthenticatedUser) async {
+        let entitlements = user.entitlements.mapValues(\.value)
+        guard !entitlements.isEmpty else { return }
+
+        let provider = (user.authProvider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty == false)
+            ? user.authProvider!.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            : user.authMethod.rawValue
+
+        do {
+            _ = try await apiRequest(
+                endpoint: "/sync-entitlements",
+                method: "POST",
+                body: [
+                    "source": provider,
+                    "provider": provider,
+                    "entitlements": entitlements
+                ]
+            )
+        } catch {
+            // Keep UI quiet here; this is background alignment work.
+        }
+    }
+
+    private func applyLicenseSnapshot(_ result: [String: Any], persistKey: Bool) {
+        if let key = result["licenseKey"] as? String, !key.isEmpty {
+            if persistKey {
+                saveLicense(key)
+            } else {
+                licenseKey = key
+            }
+        }
+
+        let status = String(result["status"] as? String ?? "").lowercased()
+        switch status {
+        case "pending":
+            applyPendingStatus(result)
+        case "licensed", "already_licensed":
+            licenseStatus = .licensed
+            pendingUntilDate = nil
+            remainingMinutes = 0
+            remainingSeconds = 0
+            retryAttempts = 0
+            supportTicketId = nil
+            supportTicketNumber = nil
+            activatedDevices = result["activatedDevices"] as? Int ?? 0
+            maxDevices = result["maxDevices"] as? Int ?? maxDevices
+            remainingSlots = result["remainingSlots"] as? Int ?? max(0, maxDevices - activatedDevices)
+
+            if let devicesData = result["devices"] as? [[String: Any]] {
+                devices = devicesData.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let name = dict["name"] as? String else { return nil }
+                    return ActivatedDevice(
+                        id: id,
+                        name: name,
+                        platform: dict["platform"] as? String ?? "unknown",
+                        activatedAt: dict["linkedAt"] as? String ?? dict["activatedAt"] as? String ?? "",
+                        lastSeen: dict["lastSeen"] as? String ?? ""
+                    )
+                }
+            }
+            startHeartbeat()
+        case "device_limit_reached":
+            licenseStatus = .deviceLimitReached
+        case "not_registered":
+            licenseStatus = .notRegistered
+        default:
+            break
+        }
+
+        if let installs = result["linkedServers"] as? [[String: Any]], !installs.isEmpty {
+            PairingManager.shared.syncServersFromAuthority(installs)
+        }
+    }
+
+    private func fetchCurrentLicenseForAuthenticatedUser() async -> Bool {
+        do {
+            let result = try await apiRequest(endpoint: "/me", method: "GET")
+            guard result["success"] as? Bool != false else { return false }
+            applyLicenseSnapshot(result, persistKey: true)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func startCountdownTimer() {
+        countdownTimer?.invalidate()
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.licenseStatus == .pending else { return }
+                if let pendingUntilDate = self.pendingUntilDate {
+                    let seconds = max(0, Int(ceil(pendingUntilDate.timeIntervalSinceNow)))
+                    self.remainingSeconds = seconds
+                    self.remainingMinutes = max(0, Int(ceil(Double(seconds) / 60.0)))
+                    let totalSeconds = max(self.registrationDelayMinutes * 60, 1)
+                    self.registrationProgress = min(1.0, max(0.0, 1.0 - (Double(seconds) / Double(totalSeconds))))
+                }
+            }
+        }
+    }
+
+    private func handlePendingStatusFailure(serverId: String, nodeId: String, reason: String) async {
+        errorMessage = reason
+        let secondsRemaining = max(remainingSeconds, Int(ceil((pendingUntilDate?.timeIntervalSinceNow ?? 0))))
+        if secondsRemaining > 0 {
+            licenseStatus = .pending
+            return
+        }
+
+        if retryAttempts < 2 {
+            retryAttempts += 1
+            await retryPendingRegistration(serverId: serverId, nodeId: nodeId)
+            return
+        }
+
+        if !hasEscalatedPendingFailure {
+            hasEscalatedPendingFailure = true
+            await createLicensingSupportTicket(serverId: serverId, nodeId: nodeId, reason: reason)
+        }
+    }
+
+    private func retryPendingRegistration(serverId: String, nodeId: String) async {
+        guard AuthenticationManager.shared.currentUser?.email != nil else { return }
+        do {
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+            await registerNode(serverId: serverId, nodeId: nodeId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func createLicensingSupportTicket(serverId: String, nodeId: String, reason: String) async {
+        guard let currentUser = AuthenticationManager.shared.currentUser else { return }
+        let body: [String: Any] = [
+            "retryAttempts": retryAttempts
+        ]
+
+        do {
+            let result = try await apiRequest(endpoint: "/escalate/\(serverId)/\(nodeId)", method: "POST", body: body, userEmail: currentUser.email)
+            supportTicketId = result["ticketId"] as? String
+            supportTicketNumber = result["ticketNumber"] as? String
+            errorMessage = "License generation is delayed. Support ticket \(supportTicketNumber ?? supportTicketId ?? "created") was opened."
+        } catch {
+            let ticketBody: [String: Any] = [
+                "subject": "VoiceLink licensing pending for \(serverId)",
+                "description": [
+                    "VoiceLink could not finish automatic license generation within the pending grace window.",
+                    "Server ID: \(serverId)",
+                    "Node ID: \(nodeId)",
+                    "Retry attempts: \(retryAttempts)",
+                    "Reason: \(reason)"
+                ].joined(separator: "\n"),
+                "priority": "high",
+                "category": "technical",
+                "channel": "voicelink",
+                "userId": currentUser.id,
+                "userName": currentUser.displayName,
+                "userEmail": currentUser.email ?? ""
+            ]
+            do {
+                let result = try await supportRequest(endpoint: "/api/support/tickets", body: ticketBody)
+                supportTicketId = result["ticketId"] as? String ?? result["id"] as? String
+                supportTicketNumber = result["ticketNumber"] as? String
+                errorMessage = "License setup is taking longer than expected, so VoiceLink opened an internal support ticket (\(supportTicketNumber ?? supportTicketId ?? "created")). Nothing is lost, and the app will keep trying in the background."
+            } catch {
+                errorMessage = "License setup is still delayed, and VoiceLink could not open the internal support ticket automatically. \(error.localizedDescription)"
+            }
+        }
+    }
+
     // MARK: - Network Helper
 
     private func apiRequest(endpoint: String, method: String, body: [String: Any]? = nil, userEmail: String? = nil) async throws -> [String: Any] {
         var lastError: Error = URLError(.cannotFindHost)
+        let accessToken = AuthenticationManager.shared.currentUser?.accessToken
 
         for base in licensingBaseCandidates() {
             guard let url = URL(string: base + endpoint) else { continue }
@@ -587,6 +849,9 @@ class LicensingManager: ObservableObject {
 
             if let email = userEmail {
                 request.setValue(email, forHTTPHeaderField: "X-User-Email")
+            }
+            if let accessToken, !accessToken.isEmpty {
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
             }
 
             if let body = body {
@@ -616,6 +881,47 @@ class LicensingManager: ObservableObject {
                 }
 
                 return json
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError
+    }
+
+    private func supportRequest(endpoint: String, body: [String: Any]) async throws -> [String: Any] {
+        var lastError: Error = URLError(.cannotFindHost)
+        let accessToken = AuthenticationManager.shared.currentUser?.accessToken
+
+        for base in APIEndpointResolver.apiBaseCandidates(preferred: ServerManager.shared.baseURL) {
+            guard let url = URL(string: base + endpoint) else { continue }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let accessToken, !accessToken.isEmpty {
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    lastError = URLError(.badServerResponse)
+                    continue
+                }
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let error = json["error"] as? String {
+                        lastError = NSError(domain: "SupportError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: error])
+                    } else {
+                        lastError = URLError(.badServerResponse)
+                    }
+                    continue
+                }
+                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    return json
+                }
             } catch {
                 lastError = error
             }

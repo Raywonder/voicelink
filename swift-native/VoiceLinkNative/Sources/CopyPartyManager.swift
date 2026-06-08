@@ -43,7 +43,20 @@ class CopyPartyManager: ObservableObject {
         var requireProtectedExternalLinks: Bool = true
         var allowRawExternalLinksFallback: Bool = false
         var defaultExternalLinkExpiryHours: Int = 72
-        var externalShareBaseURL: String = "https://voicelink.devinecreations.net"
+        var externalShareBaseURL: String = "https://voicelinkapp.app"
+        var smbHostnames: [String] = [
+            "smb.raywonderis.me",
+            "files.raywonderis.me"
+        ]
+        var smbUsername: String = "voicelinkshare"
+        var smbPreferredShare: String = "voicelink"
+        var localSMBHostnames: [String] = []
+        var localSMBPreferredShare: String = "voicelink"
+        var centralSMBHostnames: [String] = [
+            "smb.raywonderis.me",
+            "files.raywonderis.me"
+        ]
+        var centralSMBPreferredShare: String = "voicelink"
     }
 
     // MARK: - Types
@@ -98,6 +111,15 @@ class CopyPartyManager: ObservableObject {
     }
 
     struct ProtectedShareLink: Identifiable, Codable {
+        struct SMBAccess: Codable {
+            let enabled: Bool
+            let username: String?
+            let preferredShare: String?
+            let hostnames: [String]
+            let relativePath: String?
+            let uris: [String]
+        }
+
         let id: String
         let filePath: String
         let url: String
@@ -105,6 +127,9 @@ class CopyPartyManager: ObservableObject {
         let expiresAt: Date?
         let keepForever: Bool
         let createdAt: Date
+        let webURL: String?
+        let copyPartyURL: String?
+        let smb: SMBAccess?
     }
 
     enum ShareLinkError: LocalizedError {
@@ -192,6 +217,57 @@ class CopyPartyManager: ObservableObject {
         if let encoded = try? JSONEncoder().encode(config) {
             UserDefaults.standard.set(encoded, forKey: "copyPartyConfig")
         }
+    }
+
+    func applyServerFileSharingConfig(_ serverConfig: ServerFileSharingConfig?) {
+        guard let serverConfig else { return }
+
+        if let copyParty = serverConfig.copyParty {
+            let normalizedPrimary = APIEndpointResolver.normalize(copyParty.primaryServer)
+            if !normalizedPrimary.isEmpty {
+                config.primaryServer = normalizedPrimary
+            }
+        }
+
+        guard let smb = serverConfig.smb else {
+            saveConfig()
+            return
+        }
+
+        if let username = smb.username?.trimmingCharacters(in: .whitespacesAndNewlines), !username.isEmpty {
+            config.smbUsername = username
+        }
+
+        let mergedHosts = smb.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !mergedHosts.isEmpty {
+            config.smbHostnames = mergedHosts
+        }
+
+        let localHosts = smb.local?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !localHosts.isEmpty {
+            config.localSMBHostnames = localHosts
+        } else if !mergedHosts.isEmpty {
+            config.localSMBHostnames = mergedHosts
+        }
+
+        let centralHosts = smb.central?.hostnames?.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        if !centralHosts.isEmpty {
+            config.centralSMBHostnames = centralHosts
+        } else if !mergedHosts.isEmpty {
+            config.centralSMBHostnames = mergedHosts
+        }
+
+        if let preferredShare = smb.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !preferredShare.isEmpty {
+            config.smbPreferredShare = preferredShare
+        }
+        if let localShare = smb.local?.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !localShare.isEmpty {
+            config.localSMBPreferredShare = localShare
+        }
+        if let centralShare = smb.central?.preferredShareName?.trimmingCharacters(in: .whitespacesAndNewlines), !centralShare.isEmpty {
+            config.centralSMBPreferredShare = centralShare
+        }
+
+        saveConfig()
     }
 
     func updateCredentials(username: String, password: String) {
@@ -714,7 +790,10 @@ class CopyPartyManager: ObservableObject {
                 token: nil,
                 expiresAt: nil,
                 keepForever: keepForever,
-                createdAt: Date()
+                createdAt: Date(),
+                webURL: rawExternalFileURL(path: normalizedPath),
+                copyPartyURL: nil,
+                smb: nil
             )
             await MainActor.run {
                 self.recentProtectedLinks.insert(fallback, at: 0)
@@ -783,6 +862,22 @@ class CopyPartyManager: ObservableObject {
                     guard let finalURL, !finalURL.isEmpty else { continue }
                     let token = json["token"] as? String
                     let parsedExpiry = parseExpiry(from: json) ?? expiry.map { Date().addingTimeInterval(TimeInterval($0 * 3600)) }
+                    let webURL = (json["webUrl"] as? String) ?? (json["webURL"] as? String)
+                    let copyPartyURL = (json["copyPartyUrl"] as? String) ?? (json["copyPartyURL"] as? String)
+                    let smbAccess: ProtectedShareLink.SMBAccess? = {
+                        guard let smb = json["smb"] as? [String: Any] else { return nil }
+                        let hostnames = smb["hostnames"] as? [String] ?? []
+                        let uris = smb["uris"] as? [String] ?? []
+                        let enabled = smb["enabled"] as? Bool ?? !uris.isEmpty
+                        return ProtectedShareLink.SMBAccess(
+                            enabled: enabled,
+                            username: smb["username"] as? String,
+                            preferredShare: smb["preferredShare"] as? String,
+                            hostnames: hostnames,
+                            relativePath: smb["relativePath"] as? String,
+                            uris: uris
+                        )
+                    }()
 
                     return ProtectedShareLink(
                         id: UUID().uuidString,
@@ -791,7 +886,10 @@ class CopyPartyManager: ObservableObject {
                         token: token,
                         expiresAt: parsedExpiry,
                         keepForever: keepForever,
-                        createdAt: Date()
+                        createdAt: Date(),
+                        webURL: webURL,
+                        copyPartyURL: copyPartyURL,
+                        smb: smbAccess
                     )
                 } catch {
                     continue

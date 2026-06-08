@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Mesh and Tailnet Access</title>
+    <link rel="stylesheet" href="styles/docs.css">
+</head>
+<body>
+    <div class="docs-container">
+        <header class="docs-header">
+            <div class="header-content">
+                <h1>OpenClaw Mesh and Tailnet Access</h1>
+                <p class="subtitle">Connect VoiceLink agents, desktop clients, iOS clients, and server tools through the private Tailnet first.</p>
+                <nav class="header-nav" aria-label="Documentation navigation">
+                    <a href="index.html" class="nav-link">Help Home</a>
+                    <a href="authentication.html" class="nav-link">Authentication</a>
+                    <a href="getting-started.html" class="nav-link">Getting Started</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="content" id="main-content">
+            <div class="content-wrapper">
+                <section class="article-section" aria-labelledby="mesh-priority">
+                    <h2 id="mesh-priority">Connection Priority</h2>
+                    <ol>
+                        <li>Use Headscale or Tailscale private addresses first.</li>
+                        <li>Use the server OpenClaw mesh gateway as the primary gateway for agents and VoiceLink automation.</li>
+                        <li>Use the local Mac gateway only as a fallback when the server mesh is unavailable.</li>
+                        <li>Use public Clawdia domains only after authentication and never as a direct Ollama proxy.</li>
+                    </ol>
+                </section>
+
+                <section class="article-section" aria-labelledby="known-private-services">
+                    <h2 id="known-private-services">Private Services</h2>
+                    <table>
+                        <caption>Private mesh services used by VoiceLink and OpenClaw</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Service</th>
+                                <th scope="col">Private URL</th>
+                                <th scope="col">Use</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th scope="row">OpenClaw mesh UI</th>
+                                <td><code>http://100.64.0.2:18790</code></td>
+                                <td>Primary control surface for mesh agents.</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Token broker</th>
+                                <td><code>http://100.64.0.2:18788</code></td>
+                                <td>Issues authenticated mesh tokens for approved devices.</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Server Ollama</th>
+                                <td><code>http://100.64.0.2:11434</code></td>
+                                <td>Private model runtime. Do not expose publicly.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section class="article-section" aria-labelledby="ios-desktop">
+                    <h2 id="ios-desktop">iOS and Desktop Client Notes</h2>
+                    <p>Install and sign in to Tailscale or the approved Headscale profile before using private VoiceLink or OpenClaw mesh addresses. If the private address does not load, confirm the device is connected to the Tailnet, then retry the same private URL before using any public fallback.</p>
+                    <p>Desktop clients should keep the server gateway as primary and the local gateway as fallback. iOS clients should use the Tailnet path when available and should not be configured to reach Ollama directly.</p>
+                </section>
+
+                <section class="article-section" aria-labelledby="public-fallback">
+                    <h2 id="public-fallback">Public Fallback Rules</h2>
+                    <p>Public <code>clawdia.*</code> domains must require authentication before proxying gateway actions. They may expose landing, status, login, and documentation pages, but they must not expose Ollama directly or print raw tokens in page content, logs, or room messages.</p>
+                </section>
+            </div>
+        </main>
+    </div>
+    <script src="scripts/docs.js"></script>
+</body>
+</html>

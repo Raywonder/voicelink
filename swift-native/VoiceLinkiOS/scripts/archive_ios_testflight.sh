@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ARCHIVE_PATH="$ROOT_DIR/build/VoiceLinkiOS.xcarchive"
+EXPORT_PATH="$ROOT_DIR/build/export-testflight"
+IPA_PATH="$EXPORT_PATH/VoiceLink.ipa"
+MANUAL_IPA_DIR="$ROOT_DIR/build/manual-ipa"
+MANUAL_IPA_PATH="$ROOT_DIR/build/VoiceLink-manual.ipa"
+TESTFLIGHT_DIR="$ROOT_DIR/TestFlight"
+WHAT_TO_TEST_FILE="$TESTFLIGHT_DIR/WhatToTest.en-US.txt"
+NOTES_SOURCE_FILE="${NOTES_SOURCE_FILE:-/Users/admin/dev/appstore/VOICELINK_TESTFLIGHT_WHAT_TO_TEST_2026-03-06.txt}"
+APPLE_ID_EMAIL="${APPLE_ID_EMAIL:-}"
+APP_SPECIFIC_PASSWORD="${APP_SPECIFIC_PASSWORD:-}"
+ITC_PROVIDER="${ITC_PROVIDER:-G5232LU4Z7}"
+AUTO_UPLOAD="${AUTO_UPLOAD:-0}"
+BUILD_NUMBER="${BUILD_NUMBER:-}"
+CREDENTIALS_FILE="${CREDENTIALS_FILE:-/Users/admin/dev/appstore/voicelink/ios_testflight_credentials.env}"
+KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-voicelink.transporter}"
+LEDGER_FILE="${LEDGER_FILE:-/Users/admin/dev/appstore/voicelink/TESTFLIGHT_BUILD_LEDGER.md}"
+IOS_BUILD_KEYCHAIN_ENV="${IOS_BUILD_KEYCHAIN_ENV:-/Users/admin/dev/appstore/voicelink/ios_build_keychain.env}"
+IOS_BUILD_KEYCHAIN_PATH="${IOS_BUILD_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/voicelink-ios-build.keychain-db}"
+MACOS_SIGNING_ENV="${MACOS_SIGNING_ENV:-/Users/admin/dev/appstore/voicelink/macos_signing.env}"
+MACOS_SIGNING_KEYCHAIN_PATH="${MACOS_SIGNING_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/login.keychain-db}"
+
+if [[ -f "$IOS_BUILD_KEYCHAIN_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$IOS_BUILD_KEYCHAIN_ENV"
+fi
+
+if [[ -f "$MACOS_SIGNING_ENV" ]]; then
+  # shellcheck disable=SC1090
+  source "$MACOS_SIGNING_ENV"
+fi
+
+if [[ -n "${IOS_BUILD_KEYCHAIN_PASSWORD:-}" && -f "$IOS_BUILD_KEYCHAIN_PATH" ]]; then
+  security unlock-keychain -p "$IOS_BUILD_KEYCHAIN_PASSWORD" "$IOS_BUILD_KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$IOS_BUILD_KEYCHAIN_PATH"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$IOS_BUILD_KEYCHAIN_PASSWORD" "$IOS_BUILD_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+fi
+
+if [[ -n "${MACOS_SIGNING_KEYCHAIN_PASSWORD:-}" && -f "$MACOS_SIGNING_KEYCHAIN_PATH" ]]; then
+  security unlock-keychain -p "$MACOS_SIGNING_KEYCHAIN_PASSWORD" "$MACOS_SIGNING_KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$MACOS_SIGNING_KEYCHAIN_PATH"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_SIGNING_KEYCHAIN_PASSWORD" "$MACOS_SIGNING_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+fi
+
+if [[ -f "$CREDENTIALS_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CREDENTIALS_FILE"
+fi
+
+APPLE_ID_EMAIL="${APPLE_ID_EMAIL:-${VOICELINK_APPLE_ID_EMAIL:-}}"
+APP_SPECIFIC_PASSWORD="${APP_SPECIFIC_PASSWORD:-${VOICELINK_APP_SPECIFIC_PASSWORD:-}}"
+
+if [[ -z "$APP_SPECIFIC_PASSWORD" && -n "$APPLE_ID_EMAIL" ]]; then
+  APP_SPECIFIC_PASSWORD="$(security find-generic-password -a "$APPLE_ID_EMAIL" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)"
+fi
+
+cd "$ROOT_DIR"
+
+mkdir -p "$TESTFLIGHT_DIR"
+sync_testflight_notes() {
+  mkdir -p "$TESTFLIGHT_DIR" "$(dirname "$NOTES_SOURCE_FILE")"
+  if [[ -f "$NOTES_SOURCE_FILE" && -f "$WHAT_TO_TEST_FILE" ]]; then
+    if cmp -s "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"; then
+      echo "TestFlight notes already synced: $WHAT_TO_TEST_FILE"
+    elif [[ "$WHAT_TO_TEST_FILE" -nt "$NOTES_SOURCE_FILE" ]]; then
+      cp "$WHAT_TO_TEST_FILE" "$NOTES_SOURCE_FILE"
+      echo "Synced newer repo TestFlight notes to source: $NOTES_SOURCE_FILE"
+    else
+      cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
+      echo "Synced newer source TestFlight notes to repo: $WHAT_TO_TEST_FILE"
+    fi
+  elif [[ -f "$NOTES_SOURCE_FILE" ]]; then
+    cp "$NOTES_SOURCE_FILE" "$WHAT_TO_TEST_FILE"
+    echo "Synced TestFlight notes from source: $WHAT_TO_TEST_FILE"
+  elif [[ -f "$WHAT_TO_TEST_FILE" ]]; then
+    cp "$WHAT_TO_TEST_FILE" "$NOTES_SOURCE_FILE"
+    echo "Seeded TestFlight notes source from repo: $NOTES_SOURCE_FILE"
+  else
+    echo "No TestFlight notes found at $WHAT_TO_TEST_FILE or $NOTES_SOURCE_FILE"
+  fi
+}
+
+sync_testflight_notes
+
+if [[ -f "$ROOT_DIR/project.yml" ]]; then
+  xcodegen generate
+else
+  echo "No project.yml found; using existing Xcode project."
+fi
+
+xcodebuild \
+  -project VoiceLinkiOS.xcodeproj \
+  -scheme VoiceLinkiOS \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -archivePath "$ARCHIVE_PATH" \
+  archive \
+  CODE_SIGNING_ALLOWED="${CODE_SIGNING_ALLOWED:-YES}" \
+  CODE_SIGN_STYLE=Manual \
+  PROVISIONING_PROFILE_SPECIFIER=VoiceLink \
+  DEVELOPMENT_TEAM=G5232LU4Z7 \
+  PRODUCT_BUNDLE_IDENTIFIER=com.devinecreations.voicelink \
+  SUPPORTED_PLATFORMS=iphoneos \
+  ${BUILD_NUMBER:+CURRENT_PROJECT_VERSION=$BUILD_NUMBER} \
+  -allowProvisioningUpdates
+
+if ! xcodebuild \
+  -exportArchive \
+  -archivePath "$ARCHIVE_PATH" \
+  -exportPath "$EXPORT_PATH" \
+  -exportOptionsPlist "$ROOT_DIR/ExportOptions-AppStore.plist" \
+  -allowProvisioningUpdates; then
+  echo "xcodebuild export failed; falling back to manual IPA packaging from archive."
+  rm -rf "$MANUAL_IPA_DIR"
+  mkdir -p "$MANUAL_IPA_DIR/Payload"
+  cp -R "$ARCHIVE_PATH/Products/Applications/VoiceLink.app" "$MANUAL_IPA_DIR/Payload/VoiceLink.app"
+  (cd "$MANUAL_IPA_DIR" && /usr/bin/zip -qry "$MANUAL_IPA_PATH" Payload)
+  IPA_PATH="$MANUAL_IPA_PATH"
+fi
+
+echo
+echo "Archive: $ARCHIVE_PATH"
+echo "Export:  $EXPORT_PATH"
+echo "IPA:     $IPA_PATH"
+echo
+
+MARKETING_VERSION="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+    "$ARCHIVE_PATH/Products/Applications/VoiceLink.app/Info.plist" 2>/dev/null || echo "1.0"
+)"
+
+if [[ "$AUTO_UPLOAD" == "1" ]]; then
+  if [[ -z "$BUILD_NUMBER" ]]; then
+    echo "AUTO_UPLOAD=1 requires BUILD_NUMBER to avoid duplicate IPA uploads."
+    echo "Example: BUILD_NUMBER=5 AUTO_UPLOAD=1 ./scripts/archive_ios_testflight.sh"
+    exit 1
+  fi
+
+  if [[ -z "$APPLE_ID_EMAIL" || -z "$APP_SPECIFIC_PASSWORD" ]]; then
+    echo "AUTO_UPLOAD=1 set, but credentials are missing."
+    echo "Set credentials in:"
+    echo "  $CREDENTIALS_FILE"
+    echo "or save password in Keychain service '$KEYCHAIN_SERVICE' for account '$APPLE_ID_EMAIL'."
+    exit 1
+  fi
+
+  echo "Uploading IPA to App Store Connect via iTMSTransporter..."
+  xcrun iTMSTransporter \
+    -m upload \
+    -assetFile "$IPA_PATH" \
+    -u "$APPLE_ID_EMAIL" \
+    -p "$APP_SPECIFIC_PASSWORD" \
+    -itc_provider "$ITC_PROVIDER"
+  echo "Upload finished."
+
+  if [[ -n "$BUILD_NUMBER" ]]; then
+    if [[ ! -f "$LEDGER_FILE" ]]; then
+      mkdir -p "$(dirname "$LEDGER_FILE")"
+      cat >"$LEDGER_FILE" <<'EOF'
+# VoiceLink iOS TestFlight Build Ledger
+
+| Date (ET) | Marketing Version | Build Number | Status | Notes |
+|---|---:|---:|---|---|
+EOF
+    fi
+
+    printf '| %s | %s | %s | uploaded | iTMSTransporter upload finished successfully. |\n' \
+      "$(TZ=America/New_York date '+%Y-%m-%d %H:%M')" \
+      "$MARKETING_VERSION" \
+      "$BUILD_NUMBER" >>"$LEDGER_FILE"
+    echo "Ledger updated: $LEDGER_FILE"
+  fi
+else
+  echo "Upload with Transporter:"
+  echo "APPLE_ID_EMAIL=\"<APPLE_ID_EMAIL>\" APP_SPECIFIC_PASSWORD=\"<APP_SPECIFIC_PASSWORD>\" AUTO_UPLOAD=1 ./scripts/archive_ios_testflight.sh"
+fi

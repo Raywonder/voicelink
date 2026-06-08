@@ -15,7 +15,8 @@ NC='\033[0m' # No Color
 
 # Configuration
 VOICELINK_VERSION="1.0.0"
-MAIN_SERVER="https://voicelink.devinecreations.net"
+MAIN_SERVER="https://voicelink.dev"
+DOWNLOAD_SERVER="https://voicelinkapp.app/downloads/voicelink"
 DEFAULT_PORT=3010
 INSTALL_DIR="${VOICELINK_INSTALL_DIR:-$HOME/voicelink}"
 
@@ -92,12 +93,12 @@ download_voicelink() {
             git clone https://github.com/devinecreations/voicelink-local.git . 2>/dev/null || {
                 # Fallback: download release tarball
                 echo "Git clone failed, downloading release..."
-                curl -sL "$MAIN_SERVER/releases/latest.tar.gz" | tar xz --strip-components=1
+                curl -sL "$DOWNLOAD_SERVER/latest.tar.gz" | tar xz --strip-components=1
             }
         fi
     else
         # Download release tarball
-        curl -sL "$MAIN_SERVER/releases/latest.tar.gz" | tar xz --strip-components=1 2>/dev/null || {
+        curl -sL "$DOWNLOAD_SERVER/latest.tar.gz" | tar xz --strip-components=1 2>/dev/null || {
             echo -e "${RED}Failed to download VoiceLink${NC}"
             exit 1
         }

@@ -1,6 +1,84 @@
 import Foundation
 import SwiftUI
 
+private enum DiagnosticsSubmissionLogger {
+    private static let storageKey = "voicelink.diagnosticsSubmissionLog"
+    private static let maxEntries = 80
+
+    static func log(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "\(timestamp) [macOS] \(message)"
+        NSLog("%@", entry)
+        var entries = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+        entries.append(entry)
+        if entries.count > maxEntries {
+            entries.removeFirst(entries.count - maxEntries)
+        }
+        UserDefaults.standard.set(entries, forKey: storageKey)
+    }
+}
+
+private enum DiagnosticsSubmissionMessage {
+    static func starting(title: String, category: String, severity: String) -> String {
+        "Sending diagnostics report \"\(title)\" in \(category) with \(severity) priority."
+    }
+
+    static func attemptingPrimaryRoute() -> String {
+        "Trying the server diagnostics route."
+    }
+
+    static func routeStatus(_ statusCode: Int?) -> String {
+        guard let statusCode else {
+            return "The server replied, but the response could not be read clearly."
+        }
+        switch statusCode {
+        case 200 ... 299:
+            return "The server accepted the diagnostics report."
+        case 401, 403:
+            return "The server refused the diagnostics report because this account is not allowed to send it."
+        case 404:
+            return "The diagnostics route is not available on this server."
+        case 500 ... 599:
+            return "The server hit an internal error while processing the diagnostics report."
+        default:
+            return "The server replied with status \(statusCode) while processing the diagnostics report."
+        }
+    }
+
+    static func attemptingSupportLogs() -> String {
+        "Sending the attached support logs."
+    }
+
+    static func supportLogStatus(_ statusCode: Int?) -> String {
+        guard let statusCode else {
+            return "The support logs were sent, but the response could not be read clearly."
+        }
+        switch statusCode {
+        case 200 ... 299:
+            return "The support logs were delivered successfully."
+        case 401, 403:
+            return "The server would not accept the support logs from this account."
+        case 404:
+            return "The support-log route is not available on this server."
+        case 500 ... 599:
+            return "The server hit an internal error while processing the support logs."
+        default:
+            return "The server replied with status \(statusCode) while processing the support logs."
+        }
+    }
+
+    static func failed(_ error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.isEmpty {
+            return "The diagnostics report could not be delivered."
+        }
+        if message.lowercased().contains("timed out") {
+            return "The diagnostics report timed out before the server replied."
+        }
+        return "The diagnostics report could not be delivered: \(message)"
+    }
+}
+
 // MARK: - Announcement Model
 struct Announcement: Codable, Identifiable {
     let id: String
@@ -110,9 +188,12 @@ class AnnouncementsManager: ObservableObject {
             do {
                 let encoder = JSONEncoder()
                 let payload = try encoder.encode(report)
+                let supportPayload = try? JSONSerialization.data(withJSONObject: makeSupportLogsPayload(from: report))
+                DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.starting(title: report.title, category: report.category, severity: report.severity))
 
                 for base in APIEndpointResolver.apiBaseCandidates(preferred: serverURL) {
                     guard let url = APIEndpointResolver.url(base: base, path: "/api/bugs/submit") else { continue }
+                    DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.attemptingPrimaryRoute())
                     var request = URLRequest(url: url)
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -120,19 +201,50 @@ class AnnouncementsManager: ObservableObject {
 
                     do {
                         let (_, response) = try await URLSession.shared.data(for: request)
+                        if let httpResponse = response as? HTTPURLResponse {
+                            DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.routeStatus(httpResponse.statusCode))
+                        }
                         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                            if let supportPayload,
+                               let supportURL = APIEndpointResolver.url(base: base, path: "/api/support/logs") {
+                                DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.attemptingSupportLogs())
+                                var supportRequest = URLRequest(url: supportURL)
+                                supportRequest.httpMethod = "POST"
+                                supportRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                                supportRequest.httpBody = supportPayload
+                                do {
+                                    let (_, supportResponse) = try await URLSession.shared.data(for: supportRequest)
+                                    if let httpResponse = supportResponse as? HTTPURLResponse {
+                                        DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.supportLogStatus(httpResponse.statusCode))
+                                    } else {
+                                        DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.supportLogStatus(nil))
+                                    }
+                                } catch {
+                                    DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.failed(error))
+                                }
+                            }
+                            DiagnosticsSubmissionLogger.log("bug report submission succeeded")
                             await MainActor.run { completion(.success(())) }
                             return
                         }
                     } catch {
+                        DiagnosticsSubmissionLogger.log(DiagnosticsSubmissionMessage.failed(error))
                         continue
                     }
                 }
 
+                DiagnosticsSubmissionLogger.log("bug report submission failed after exhausting candidates")
                 await MainActor.run {
-                    completion(.failure(NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to submit bug report"])))
+                    completion(.failure(NSError(
+                        domain: "VoiceLinkDiagnostics",
+                        code: -1,
+                        userInfo: [
+                            NSLocalizedDescriptionKey: "VoiceLink tried every available support route but could not deliver the report."
+                        ]
+                    )))
                 }
             } catch {
+                DiagnosticsSubmissionLogger.log("The diagnostics report could not be prepared: \(error.localizedDescription)")
                 await MainActor.run { completion(.failure(error)) }
             }
         }
@@ -152,6 +264,78 @@ class AnnouncementsManager: ObservableObject {
         } else if let url = URL(string: "\(serverURL)/report-bug.html") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    private func makeSupportLogsPayload(from report: BugReport) -> [String: Any] {
+        let user = AuthenticationManager.shared.currentUser
+        let server = ServerManager.shared
+        let room = server.activeRoomId ?? "none"
+        let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        let displayName = user?.displayName ?? report.submittedBy ?? NSFullUserName()
+        let accountEmail = user?.email
+        let authProvider = user?.authProvider ?? user?.authMethod.rawValue ?? "guest"
+        let diagnosticsSummary = [
+            "connected=\(server.isConnected)",
+            "server=\(server.connectedServer.isEmpty ? "none" : server.connectedServer)",
+            "room=\(room)",
+            "audioState=\(server.audioTransmissionStatus)",
+            "inputMuted=\(server.inputMuted)",
+            "outputMuted=\(server.outputMuted)",
+            "authProvider=\(authProvider)"
+        ].joined(separator: " | ")
+
+        let logs = [
+            "section=account displayName=\(displayName) email=\(accountEmail ?? "none") authProvider=\(authProvider)",
+            "section=server connected=\(server.isConnected ? "true" : "false") server=\(server.connectedServer.isEmpty ? "none" : server.connectedServer) status=\(server.serverStatus)",
+            "section=room activeRoom=\(room) users=\(server.currentRoomUsers.count) roomsVisible=\(server.rooms.count)",
+            "section=audio transmissionStatus=\(server.audioTransmissionStatus) isTransmitting=\(server.isAudioTransmitting ? "true" : "false") inputMuted=\(server.inputMuted ? "true" : "false") outputMuted=\(server.outputMuted ? "true" : "false")",
+            "section=app version=\(report.appVersion) build=\(appBuild) platform=\(report.platform)"
+        ]
+
+        let resolvedClientId: String = {
+            if let clientId = UserDefaults.standard.string(forKey: "clientId") {
+                return clientId
+            }
+            let newId = UUID().uuidString
+            UserDefaults.standard.set(newId, forKey: "clientId")
+            return newId
+        }()
+
+        return [
+            "reason": "macos-bug-report",
+            "clientId": resolvedClientId,
+            "appVersion": "\(report.appVersion) (\(appBuild))",
+            "platform": report.platform,
+            "room": room,
+            "user": displayName,
+            "displayName": displayName,
+            "accountEmail": accountEmail as Any,
+            "diagnosticsSummary": diagnosticsSummary,
+            "sections": [
+                "account": [
+                    "displayName": displayName,
+                    "email": accountEmail as Any,
+                    "provider": authProvider
+                ],
+                "server": [
+                    "connected": server.isConnected,
+                    "server": server.connectedServer,
+                    "status": server.serverStatus
+                ],
+                "room": [
+                    "activeRoom": room,
+                    "visibleRooms": server.rooms.count,
+                    "usersInRoom": server.currentRoomUsers.count
+                ],
+                "audio": [
+                    "transmissionStatus": server.audioTransmissionStatus,
+                    "isTransmitting": server.isAudioTransmitting,
+                    "inputMuted": server.inputMuted,
+                    "outputMuted": server.outputMuted
+                ]
+            ],
+            "logs": logs
+        ]
     }
 }
 

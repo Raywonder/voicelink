@@ -1,8 +1,8 @@
 VOICELINK VIDEO TUTORIAL SCRIPTS
 ================================
 Generated for Google LLM Video Creation (NotebookLM Compatible)
-Version: 1.0.2
-Last Updated: January 2026
+Version: 1.0.3
+Last Updated: May 2026
 
 ================================================================================
 VISUAL RESOURCES FOR VIDEO GENERATION
@@ -11,11 +11,11 @@ VISUAL RESOURCES FOR VIDEO GENERATION
 The following public URLs and resources can be accessed and shown in videos:
 
 PUBLIC ACCESSIBLE PAGES:
-- Main Application: https://voicelink.devinecreations.net
-- Documentation Home: https://voicelink.devinecreations.net/docs/
-- Getting Started Guide: https://voicelink.devinecreations.net/docs/getting-started.html
-- Room Management Docs: https://voicelink.devinecreations.net/docs/room-management.html
-- Download Page: https://voicelink.devinecreations.net/downloads/
+- Main Application: https://voicelinkapp.app
+- Documentation Home: https://voicelinkapp.app/docs/
+- Getting Started Guide: https://voicelinkapp.app/docs/getting-started.html
+- Room Management Docs: https://voicelinkapp.app/docs/room-management.html
+- Download Page: https://voicelinkapp.app/downloads/
 
 SAFE UI ELEMENTS TO SHOW:
 - Room list interface (public rooms only)
@@ -44,7 +44,7 @@ Audience: New users
 
 VISUAL REFERENCES:
 ------------------
-[SHOW] Main landing page at https://voicelink.devinecreations.net
+[SHOW] Main landing page at https://voicelinkapp.app
 [SHOW] Room list with public room names visible
 [SHOW] Audio controls panel (bottom of screen)
 [SHOW] Settings icon and general settings tab
@@ -59,7 +59,7 @@ Audio: "Welcome to VoiceLink, a self-hosted peer-to-peer voice chat platform wit
 
 [SCENE 1: UNDERSTANDING VOICELINK - 30 seconds]
 Visual: Show the main interface with room list
-Audio: "VoiceLink is a decentralized voice chat platform. This means there are multiple servers around the world, and you choose which one to connect to. The main public server is at voicelink.devinecreations.net, but communities can run their own servers too."
+Audio: "VoiceLink is a decentralized voice chat platform. This means there are multiple servers around the world, and you choose which one to connect to. The main public server is at voicelinkapp.app, but communities can run their own servers too."
 
 Key points to display as text overlays:
 - "Decentralized: Multiple servers worldwide"
@@ -71,7 +71,7 @@ Visual: Show browser address bar, then desktop app icon
 Audio: "There are two ways to access VoiceLink. First, through any web browser by visiting a VoiceLink server URL. Second, using the desktop application available for Mac, Windows, and Linux. The desktop app provides additional features like local network hosting."
 
 Visual elements:
-- Browser with URL bar showing voicelink.devinecreations.net
+- Browser with URL bar showing voicelinkapp.app
 - Desktop app icons for each platform
 - "Web" and "Desktop" comparison graphic
 
@@ -362,7 +362,7 @@ Audience: Desktop users
 
 VISUAL REFERENCES:
 ------------------
-[SHOW] Download page at https://voicelink.devinecreations.net/downloads/
+[SHOW] Download page at https://voicelinkapp.app/downloads/
 [SHOW] Platform selection icons (Mac, Windows, Linux)
 [SHOW] Installation wizard steps (generic)
 [SHOW] App icon and first launch screen
@@ -686,14 +686,14 @@ VIDEO PRODUCTION NOTES FOR AI GENERATION:
 4. BRANDING:
    - VoiceLink logo in intro/outro
    - Consistent color scheme throughout
-   - "voicelink.devinecreations.net" as reference URL
+   - "voicelinkapp.app" as reference URL
    - Attribution: "Devine Creations"
 
 5. PUBLICLY ACCESSIBLE URLS FOR B-ROLL:
-   - https://voicelink.devinecreations.net (main app)
-   - https://voicelink.devinecreations.net/docs/ (documentation)
-   - https://voicelink.devinecreations.net/docs/getting-started.html
-   - https://voicelink.devinecreations.net/docs/room-management.html
+   - https://voicelinkapp.app (main app)
+   - https://voicelinkapp.app/docs/ (documentation)
+   - https://voicelinkapp.app/docs/getting-started.html
+   - https://voicelinkapp.app/docs/room-management.html
 
 6. DURATION TARGETS:
    - Tutorial 1: 3-5 minutes
@@ -704,5 +704,100 @@ VIDEO PRODUCTION NOTES FOR AI GENERATION:
    - Tutorial 6: 3-4 minutes
    - Tutorial 7: 5-6 minutes
    - Tutorial 8: 4-5 minutes
+   - Tutorial 9: 3-4 minutes
+   - Tutorial 10: 3-4 minutes
+
+================================================================================
+TUTORIAL 9: SERVER AND ROOM SUPPORT TICKETS
+================================================================================
+
+Title: VoiceLink - Contact Server Support from the App
+Duration: 3-4 minutes
+Audience: Testers, guests, signed-in users, and server owners
+
+VISUAL REFERENCES:
+------------------
+[SHOW] iOS or desktop server list with example server names
+[SHOW] Room details screen with Contact Server Support
+[SHOW] Support form with placeholder text only
+[SHOW] Existing ticket list with sample ticket names
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Show the server list and a highlighted room details button.
+Audio: "VoiceLink can open a private support ticket from the exact server or room you are using. This helps support staff understand where the issue happened without asking you to repeat the server and room details."
+
+[SCENE 1: OPEN SUPPORT FROM A SERVER - 40 seconds]
+Visual: Open a server details screen and highlight Contact Server Support.
+Audio: "From the server details screen, choose Contact Server Support. The support form includes the server name and address automatically. Use this when the problem is about signing in, server access, account approval, or a server-wide setting."
+
+Key points to display:
+- "Private ticket"
+- "Server context included"
+- "No room message is posted"
+
+[SCENE 2: OPEN SUPPORT FROM A ROOM - 45 seconds]
+Visual: Open a room details screen, then Contact Server Support.
+Audio: "From room details, Contact Server Support includes both the server and room context. Use this when you could not join a room, a room rule was unclear, audio did not behave as expected, or you need help from that server's staff."
+
+[SCENE 3: SIGNED-IN USERS AND GUESTS - 45 seconds]
+Visual: Show signed-in state, then a guest email field.
+Audio: "Signed-in users can see existing tickets for that server or room. Guests can still create a request when the server allows it by adding a contact email. Ticket replies stay in the support flow instead of public room chat."
+
+[SCENE 4: LOCAL AND PORTAL TICKETS - 35 seconds]
+Visual: Show a simple diagram: VoiceLink server ticket, optional client portal mirror.
+Audio: "Every VoiceLink server keeps its own built-in ticket record. Devine Creations-owned servers can also mirror tickets to the client portal. Other server owners can stay local-only or enable a supported external sync provider from admin settings."
+
+[SCENE 5: WHAT TO INCLUDE - 45 seconds]
+Visual: Show a sample issue description with generic text.
+Audio: "Include the device, app build, room name, what you expected, and what actually happened. If you saw an error, copy the exact wording. Do not paste passwords, tokens, or private billing information into room messages."
+
+[OUTRO - 15 seconds]
+Visual: Show Help Docs and Contact Support links.
+Audio: "Use server support for server-specific issues, and use the general contact page for account, billing, or broad VoiceLink questions."
+
+================================================================================
+TUTORIAL 10: FEDERATED SERVERS, RULES, AND SAFE JOINING
+================================================================================
+
+Title: VoiceLink - Choosing Servers and Reviewing Rules
+Duration: 3-4 minutes
+Audience: New users and testers
+
+VISUAL REFERENCES:
+------------------
+[SHOW] Federated Rooms tab
+[SHOW] Server choices for the same room name
+[SHOW] Server rules and message of the day sheet
+[SHOW] Useful links such as privacy, support, or iMessage/SMS contact links
+
+SCRIPT:
+-------
+
+[INTRO - 15 seconds]
+Visual: Show Federated Rooms tab with several example servers.
+Audio: "VoiceLink can show rooms from more than one server. A room name may appear on multiple servers, so always check which server hosts the room before joining."
+
+[SCENE 1: SERVER LIST VS FEDERATED ROOMS - 45 seconds]
+Visual: Move between the Server List and Federated Rooms tabs.
+Audio: "The Server List is for choosing a server. Federated Rooms is for browsing rooms across connected servers. If a room appears on more than one server, VoiceLink lets you choose which server copy to open."
+
+[SCENE 2: UNIQUE SERVER NAMES - 40 seconds]
+Visual: Show example labels: server name, owner, and domain.
+Audio: "Servers should have unique names that include who runs them and the domain they use. This helps you avoid joining the wrong community when several servers are online."
+
+[SCENE 3: RULES BEFORE JOINING - 50 seconds]
+Visual: Show rules sheet with Agree and Disagree buttons.
+Audio: "Some servers show rules, privacy links, support links, or a message of the day before joining. Read the rules and choose Agree to enter. Choose Disagree if you do not want to join under those rules."
+
+[SCENE 4: SAFE ACTIONS - 45 seconds]
+Visual: Show context menu actions: Details, Preview, Join, Share, Contact Server Support.
+Audio: "Use Details to inspect a room, Preview when available, Join to enter, Share to send the room link, and Contact Server Support when you need help from that server's staff."
+
+[OUTRO - 15 seconds]
+Visual: Return to Federated Rooms tab.
+Audio: "Choosing the right server first makes room joining, support, and moderation easier for everyone."
 
 ================================================================================

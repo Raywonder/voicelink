@@ -35,7 +35,7 @@ class URLHandler: ObservableObject {
     @AppStorage("defaultURLAction") var defaultURLAction: String = "join"
 
     // Web UI base URL
-    let webBaseURL = "https://voicelink.devinecreations.net/client"
+    let webBaseURL = "https://voicelinkapp.app/client"
 
     enum URLAction {
         case joinRoom(roomId: String, server: String?)
@@ -214,7 +214,7 @@ class URLHandler: ObservableObject {
             webURL = URL(string: "\(webBaseURL)/#/settings")
 
         case .openLicense:
-            webURL = URL(string: "https://voicelink.devinecreations.net/license")
+            webURL = URL(string: "https://voicelinkapp.app/license")
 
         case .oauthCallback(_):
             return // OAuth callbacks are handled natively, not in browser
@@ -317,7 +317,7 @@ class URLHandler: ObservableObject {
         roomId: String,
         server: String? = nil
     ) -> URL? {
-        var urlString = "https://voicelink.devinecreations.net/client/#/room/\(roomId)"
+        var urlString = "https://voicelinkapp.app/client/#/room/\(roomId)"
         if let server = server {
             urlString += "?server=\(server.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? server)"
         }
