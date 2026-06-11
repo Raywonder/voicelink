@@ -11,7 +11,12 @@ const net = require('net');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const { v4: uuidv4 } = require('uuid');
-const nodemailer = require('nodemailer');
+let nodemailer = null;
+try {
+    nodemailer = require('nodemailer');
+} catch (error) {
+    console.warn('[Mail] Optional nodemailer module unavailable; SMTP email sending disabled:', error.message);
+}
 let DatabaseStorageManager = null;
 try {
     ({ DatabaseStorageManager } = require('../services/database-storage'));
@@ -52,6 +57,12 @@ const JellyfinServiceManager = require('../utils/jellyfin-service-manager');
 const JellyfinAutoManager = require("../utils/jellyfin-auto-manager");
 const FederatedJellyfinManager = require('../utils/federated-jellyfin-manager');
 const fileTransferRoutes = require("./file-transfer");
+
+const VOICELINK_CANONICAL_DOWNLOAD_BASE = 'https://voicelinkapp.app/downloads/voicelink';
+const VOICELINK_APPROVED_DOWNLOAD_ALIASES = [
+    'https://voicelink.dev/downloads/voicelink',
+    'https://cloud.raywonderis.me/voicelink'
+];
 const execFileAsync = promisify(execFile);
 const databaseStorage = DatabaseStorageManager
     ? new DatabaseStorageManager({ deployConfig, appRoot: path.join(__dirname, '../..') })
@@ -157,10 +168,15 @@ class VoiceLinkLocalServer {
         // Audio relay state
         this.audioRelayEnabled = new Map(); // socketId -> boolean
         this.audioBuffers = new Map(); // socketId -> audio buffer for mixing
+        this.recentUpdateAlertKeys = new Map(); // update key -> timestamp
         this.relayStats = {
             bytesRelayed: 0,
             packetsRelayed: 0,
-            activeRelays: 0
+            activeRelays: 0,
+            underruns: 0,
+            overruns: 0,
+            jitterEvents: 0,
+            lastPacketAt: null
         };
         this.liveTranscriptionConfig = this.getLiveTranscriptionConfig();
         this.liveTranscriptionBuffers = new Map();
@@ -949,6 +965,10 @@ class VoiceLinkLocalServer {
             console.log('[Mail] SMTP not configured; email sending disabled');
             return;
         }
+        if (!nodemailer) {
+            console.warn('[Mail] SMTP configured, but nodemailer is not installed; email sending disabled');
+            return;
+        }
 
         const transportConfig = {
             host,
@@ -1022,48 +1042,49 @@ class VoiceLinkLocalServer {
     }
 
     getDownloadLinkCatalog() {
+        const downloadBase = this.getCanonicalDownloadBase();
         return {
             macos_zip: {
                 id: 'macos_zip',
                 label: 'VoiceLink macOS ZIP',
                 platform: 'macOS',
-                url: 'https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip'
+                url: `${downloadBase}/VoiceLinkMacOS.zip`
             },
             macos_pkg: {
                 id: 'macos_pkg',
                 label: 'VoiceLink macOS PKG Installer',
                 platform: 'macOS',
-                url: 'https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos.pkg'
+                url: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`
             },
             macos_intel_pkg: {
                 id: 'macos_intel_pkg',
                 label: 'VoiceLink macOS Intel PKG Installer',
                 platform: 'macOS Intel',
-                url: 'https://voicelinkapp.app/downloads/voicelink/VoiceLink-1.0.0-macos-intel.pkg'
+                url: `${downloadBase}/VoiceLink-1.0.0-macos-intel.pkg`
             },
             windows_wx_setup: {
                 id: 'windows_wx_setup',
                 label: 'VoiceLink Windows wxPython Installer',
                 platform: 'Windows',
-                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-windows-setup.exe'
+                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe`
             },
             windows_wx_portable: {
                 id: 'windows_wx_portable',
                 label: 'VoiceLink Windows wxPython Portable ZIP',
                 platform: 'Windows',
-                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-win-x64-portable.zip'
+                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip`
             },
             server_targz: {
                 id: 'server_targz',
                 label: 'VoiceLink Server Tarball',
                 platform: 'Server',
-                url: 'https://voicelinkapp.app/downloads/voicelink/voicelink-server-1.0.0.tar.gz'
+                url: `${downloadBase}/voicelink-server-1.0.0.tar.gz`
             },
             server_zip: {
                 id: 'server_zip',
                 label: 'VoiceLink Server ZIP',
                 platform: 'Server',
-                url: 'https://voicelinkapp.app/downloads/voicelink/voicelink-server-1.0.0.zip'
+                url: `${downloadBase}/voicelink-server-1.0.0.zip`
             },
             web_access: {
                 id: 'web_access',
@@ -1072,6 +1093,177 @@ class VoiceLinkLocalServer {
                 url: 'https://voicelinkapp.app/'
             }
         };
+    }
+
+    getCanonicalDownloadBase() {
+        return String(process.env.VOICELINK_CANONICAL_DOWNLOAD_BASE || VOICELINK_CANONICAL_DOWNLOAD_BASE)
+            .trim()
+            .replace(/\/+$/, '');
+    }
+
+    normalizeDownloadBaseForLicense(req, downloadRoot = '') {
+        const licenseTier = String(
+            req.body?.licenseTier
+            || req.query?.licenseTier
+            || req.headers['x-voicelink-license-tier']
+            || process.env.VOICELINK_LICENSE_TIER
+            || ''
+        ).trim().toLowerCase();
+        const enterpriseAllowed = ['enterprise', 'enterprise_self_hosted', 'self-hosted-enterprise'].includes(licenseTier);
+        const requestedBase = String(process.env.VOICELINK_DOWNLOAD_BASE || '').trim().replace(/\/+$/, '');
+        if (enterpriseAllowed && requestedBase && /^https:\/\//i.test(requestedBase)) {
+            return requestedBase;
+        }
+        return this.getCanonicalDownloadBase();
+    }
+
+    getDownloadRootCandidates() {
+        return [
+            process.env.VOICELINK_DOWNLOAD_ROOT,
+            process.env.HOME ? path.join(process.env.HOME, 'downloads', 'voicelink') : null,
+            path.join(process.cwd(), 'downloads', 'voicelink')
+        ].filter(Boolean);
+    }
+
+    getDownloadRoot() {
+        const candidates = this.getDownloadRootCandidates();
+        return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+    }
+
+    parseSimpleYamlValue(raw, key) {
+        const match = String(raw || '').match(new RegExp(`^${key}:\\s*\"?([^\"\\n]+)\"?`, 'm'));
+        return match ? match[1].trim() : null;
+    }
+
+    readReleaseManifest(platform, downloadRoot = this.getDownloadRoot()) {
+        const canonicalBase = this.getCanonicalDownloadBase();
+        const defaults = {
+            macos: {
+                platform: 'macos',
+                version: '1.0.0',
+                buildNumber: 95,
+                filename: 'VoiceLinkMacOS.zip',
+                downloadURL: `${canonicalBase}/VoiceLinkMacOS.zip`,
+                smartTarget: 'macos',
+                manifest: `${canonicalBase}/latest-mac.yml`,
+                releaseNotes: 'Latest macOS build restores notarized update packaging, bundled resources, and safer update handling.'
+            },
+            windows: {
+                platform: 'windows',
+                version: '0.1.0.6',
+                buildNumber: 6,
+                filename: 'windows/VoiceLinkWX-0.1.0.6-windows-setup.exe',
+                portableFilename: 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip',
+                downloadURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe`,
+                portableURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip`,
+                smartTarget: 'windows',
+                manifest: `${canonicalBase}/windows/voicelink-wxpython-update.json`,
+                releaseNotes: 'Latest Windows wxPython build improves room joining, update checks, and accessibility behavior.'
+            },
+            linux: {
+                platform: 'linux',
+                version: '1.0.4',
+                buildNumber: 26,
+                filename: 'VoiceLink-linux.AppImage',
+                downloadURL: `${canonicalBase}/VoiceLink-linux.AppImage`,
+                smartTarget: 'linux',
+                releaseNotes: 'Linux client release with AppImage and .deb installer support.'
+            },
+            server: {
+                platform: 'server',
+                version: '1.0.0',
+                buildNumber: 1,
+                filename: 'voicelink-server-1.0.0.tar.gz',
+                downloadURL: `${canonicalBase}/voicelink-server-1.0.0.tar.gz`,
+                smartTarget: 'server',
+                releaseNotes: 'VoiceLink server package with canonical update tracking and admin notifications.'
+            }
+        };
+
+        const selected = { ...(defaults[platform] || defaults.macos) };
+        if (!downloadRoot) return selected;
+
+        try {
+            if (platform === 'macos') {
+                const manifestPath = ['latest-mac.yml', 'latest.yml']
+                    .map((filename) => path.join(downloadRoot, filename))
+                    .find((candidate) => fs.existsSync(candidate));
+                if (manifestPath) {
+                    const raw = fs.readFileSync(manifestPath, 'utf8');
+                    const version = this.parseSimpleYamlValue(raw, 'version');
+                    const buildNumber = Number(this.parseSimpleYamlValue(raw, 'buildNumber') || 0);
+                    const pathValue = this.parseSimpleYamlValue(raw, 'path');
+                    const size = Number(this.parseSimpleYamlValue(raw, 'size') || 0);
+                    const sha512 = this.parseSimpleYamlValue(raw, 'sha512');
+                    if (version) {
+                        const versionText = String(version).trim();
+                        const buildSuffix = buildNumber > 0 ? `.${buildNumber}` : '';
+                        selected.version = buildSuffix && versionText.endsWith(buildSuffix)
+                            ? versionText.slice(0, -buildSuffix.length)
+                            : versionText;
+                    }
+                    if (buildNumber > 0) selected.buildNumber = buildNumber;
+                    if (pathValue) {
+                        selected.filename = path.basename(pathValue);
+                        selected.downloadURL = `${canonicalBase}/${encodeURIComponent(selected.filename)}`;
+                    }
+                    if (size > 0) selected.size = size;
+                    if (sha512) selected.sha512 = sha512;
+                    const notesMatch = raw.match(/releaseNotes:\s*>-\s*\n([\s\S]*)$/m);
+                    if (notesMatch) {
+                        selected.releaseNotes = notesMatch[1]
+                            .split('\n')
+                            .map((line) => line.replace(/^\s+/, ''))
+                            .join(' ')
+                            .trim() || selected.releaseNotes;
+                    }
+                }
+            }
+
+            if (platform === 'windows') {
+                const manifestPath = path.join(downloadRoot, 'windows', 'voicelink-wxpython-update.json');
+                if (fs.existsSync(manifestPath)) {
+                    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                    selected.version = parsed.version || selected.version;
+                    selected.buildNumber = Number(parsed.buildNumber || parsed.build || selected.buildNumber);
+                    selected.releaseNotes = parsed.releaseNotes || parsed.notes || selected.releaseNotes;
+                    const setupName = path.basename(parsed.installerUrl || parsed.installerURL || selected.filename);
+                    const portableName = path.basename(parsed.portableUrl || parsed.portableURL || selected.portableFilename);
+                    selected.filename = `windows/${setupName}`;
+                    selected.portableFilename = `windows/${portableName}`;
+                    selected.downloadURL = `${canonicalBase}/windows/${encodeURIComponent(setupName)}`;
+                    selected.portableURL = `${canonicalBase}/windows/${encodeURIComponent(portableName)}`;
+                }
+            }
+        } catch (error) {
+            console.warn('[Downloads] Failed to read release manifest:', platform, error.message);
+        }
+
+        return selected;
+    }
+
+    recordUpdateCheck(entry = {}) {
+        const dataDir = path.join(__dirname, '../../data/updater');
+        const filePath = path.join(dataDir, 'client-update-checks.jsonl');
+        try {
+            fs.mkdirSync(dataDir, { recursive: true });
+            const safeEntry = {
+                checkedAt: new Date().toISOString(),
+                installId: String(entry.installId || '').slice(0, 128) || null,
+                platform: String(entry.platform || 'unknown').slice(0, 32),
+                currentVersion: String(entry.currentVersion || 'unknown').slice(0, 64),
+                currentBuildNumber: Number(entry.currentBuildNumber || 0),
+                offeredVersion: String(entry.offeredVersion || '').slice(0, 64) || null,
+                offeredBuildNumber: Number(entry.offeredBuildNumber || 0),
+                updateAvailable: !!entry.updateAvailable,
+                updateType: entry.updateType || 'none',
+                postponedUntil: entry.postponedUntil || null,
+                channel: String(entry.channel || 'direct').slice(0, 32)
+            };
+            fs.appendFileSync(filePath, `${JSON.stringify(safeEntry)}\n`);
+        } catch (error) {
+            console.warn('[Updater] Failed to record update check:', error.message);
+        }
     }
 
     publicDownloadCatalogEntries() {
@@ -9882,37 +10074,11 @@ class VoiceLinkLocalServer {
         };
 
         const getDownloadRoot = () => {
-            const downloadRootCandidates = [
-                process.env.VOICELINK_DOWNLOAD_ROOT,
-                path.join(process.cwd(), 'downloads', 'voicelink'),
-                process.env.HOME ? path.join(process.env.HOME, 'downloads', 'voicelink') : null
-            ].filter(Boolean);
-            return downloadRootCandidates.find((candidate) => fs.existsSync(candidate)) || downloadRootCandidates[0];
+            return this.getDownloadRoot();
         };
 
         const getDownloadBase = (req) => {
-            if (process.env.VOICELINK_DOWNLOAD_BASE) {
-                return process.env.VOICELINK_DOWNLOAD_BASE;
-            }
-
-            const host = String(req.get('host') || '').toLowerCase();
-            const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
-            const proto = forwardedProto || req.protocol || 'https';
-            const mainHostedDomains = [
-                'voicelinkapp.app',
-                'community.voicelinkapp.app',
-                'voicelink.dev',
-                'devinecreations.net',
-                'devine-creations.com',
-                'raywonderis.me'
-            ];
-            const isMainHostedDomain = mainHostedDomains.some((domain) => host.includes(domain));
-
-            if (isMainHostedDomain) {
-                return 'https://voicelinkapp.app/downloads/voicelink';
-            }
-
-            return `${proto}://${req.get('host')}/downloads/voicelink`;
+            return this.normalizeDownloadBaseForLicense(req, getDownloadRoot());
         };
 
         const getSmartDlBase = (req) => {
@@ -9928,9 +10094,12 @@ class VoiceLinkLocalServer {
             const downloadRoot = getDownloadRoot();
 
             const platformDefaults = {
-                macos: ['VoiceLink-1.0.0-macos.pkg', 'VoiceLinkMacOS.zip'],
-                windows: ['VoiceLinkWX-0.1.0.6-windows-setup.exe', 'VoiceLinkWX-0.1.0.6-win-x64-portable.zip'],
-                linux: ['VoiceLink-linux.AppImage', 'voicelink-local_1.0.0_amd64.deb']
+                macos: [this.readReleaseManifest('macos', downloadRoot).filename, 'VoiceLinkMacOS.zip'],
+                windows: [
+                    this.readReleaseManifest('windows', downloadRoot).filename,
+                    this.readReleaseManifest('windows', downloadRoot).portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip'
+                ],
+                linux: [this.readReleaseManifest('linux', downloadRoot).filename, 'voicelink-local_1.0.0_amd64.deb']
             };
 
             const aliasMap = {
@@ -9959,6 +10128,7 @@ class VoiceLinkLocalServer {
             const selectedFile = requestedCandidates[0];
             const mirrorBases = [
                 getDownloadBase(req),
+                ...VOICELINK_APPROVED_DOWNLOAD_ALIASES,
                 ...(String(process.env.VOICELINK_DOWNLOAD_MIRRORS || '')
                     .split(',')
                     .map((item) => item.trim())
@@ -9973,7 +10143,11 @@ class VoiceLinkLocalServer {
                 .map((base) => {
                     if (!base) return '';
                     if (/^https?:\/\//i.test(base) && base.includes(selectedFile)) return base;
-                    return `${String(base).replace(/\/+$/, '')}/${encodeURIComponent(selectedFile)}`;
+                    const encodedPath = String(selectedFile)
+                        .split('/')
+                        .map((part) => encodeURIComponent(part))
+                        .join('/');
+                    return `${String(base).replace(/\/+$/, '')}/${encodedPath}`;
                 })
                 .filter(Boolean))];
 
@@ -10030,32 +10204,19 @@ class VoiceLinkLocalServer {
                 return fs.existsSync(path.join(resolvedDownloadRoot, filename));
             };
 
-            // Latest versions for each platform
             const latestVersions = {
-                macos: {
-                    version: '1.0.0',
-                    buildNumber: 46,
-                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
-                    smartTarget: 'macos',
-                    releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'
-                },
-                windows: {
-                    version: '0.1.0.6',
-                    buildNumber: 6,
-                    downloadURL: `${downloadBase}/VoiceLinkWX-0.1.0.6-windows-setup.exe`,
-                    smartTarget: 'windows',
-                    releaseNotes: 'Latest Windows wxPython build fixes Enter on the room list. Pressing Enter now opens an accessible room details dialog with Join room as the default action.'
-                },
-                linux: {
-                    version: '1.0.4',
-                    buildNumber: 26,
-                    downloadURL: `${downloadBase}/VoiceLink-linux.AppImage`,
-                    smartTarget: 'linux',
-                    releaseNotes: 'Linux client release with AppImage and .deb installer support.'
-                }
+                macos: this.readReleaseManifest('macos', resolvedDownloadRoot),
+                windows: this.readReleaseManifest('windows', resolvedDownloadRoot),
+                linux: this.readReleaseManifest('linux', resolvedDownloadRoot),
+                server: this.readReleaseManifest('server', resolvedDownloadRoot)
             };
 
-            const platformInfo = latestVersions[platform] || latestVersions.macos;
+            const normalizedPlatform = String(platform || 'macos').trim().toLowerCase();
+            const platformInfo = latestVersions[normalizedPlatform] || latestVersions.macos;
+            platformInfo.downloadURL = platformInfo.downloadURL.replace(this.getCanonicalDownloadBase(), downloadBase);
+            if (platformInfo.portableURL) {
+                platformInfo.portableURL = platformInfo.portableURL.replace(this.getCanonicalDownloadBase(), downloadBase);
+            }
             const currentBuildNumber = Number(buildNumber || 0);
 
             // Compare versions
@@ -10075,16 +10236,83 @@ class VoiceLinkLocalServer {
                 || (Number(platformInfo.buildNumber || 0) > currentBuildNumber);
             const updateAllowed = !isStoreManagedChannel;
             const checksumByPlatform = {
-                macos: readChecksum('VoiceLink-1.0.0-macos.pkg'),
-                windows: readChecksum('VoiceLinkWX-0.1.0.6-windows-setup.exe'),
-                linux: readChecksum('VoiceLink-linux.AppImage')
+                macos: readChecksum(platformInfo.platform === 'macos' ? platformInfo.filename : latestVersions.macos.filename),
+                windows: readChecksum(latestVersions.windows.filename),
+                linux: readChecksum(latestVersions.linux.filename),
+                server: readChecksum(latestVersions.server.filename)
             };
 
             const windowsArtifacts = {
-                portable: fileExists('VoiceLinkWX-0.1.0.6-win-x64-portable.zip'),
-                setup: fileExists('VoiceLinkWX-0.1.0.6-windows-setup.exe'),
-                manifest: fileExists('voicelink-wxpython-update.json')
+                portable: fileExists(latestVersions.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip'),
+                setup: fileExists(latestVersions.windows.filename),
+                manifest: fileExists('windows/voicelink-wxpython-update.json')
             };
+
+            const includesServerCheck = normalizedPlatform === 'server'
+                || req.body?.serverVersion !== undefined
+                || req.body?.currentServerVersion !== undefined
+                || req.body?.serverBuildNumber !== undefined
+                || req.body?.currentServerBuildNumber !== undefined;
+            const serverVersion = String(req.body?.serverVersion || req.body?.currentServerVersion || '0.0.0');
+            const serverBuildNumber = Number(req.body?.serverBuildNumber || req.body?.currentServerBuildNumber || 0);
+            const serverInfo = latestVersions.server;
+            const serverHasUpdate = includesServerCheck && (
+                compareVersions(serverInfo.version, serverVersion) > 0
+                || Number(serverInfo.buildNumber || 0) > serverBuildNumber
+            );
+            const updateType = hasUpdate && serverHasUpdate
+                ? 'client_and_server'
+                : hasUpdate
+                    ? 'client'
+                    : serverHasUpdate
+                        ? 'server'
+                        : 'none';
+            const postponedUntil = req.body?.postponedUntil || req.headers['x-voicelink-update-postponed-until'] || null;
+
+            this.recordUpdateCheck({
+                installId: req.body?.installId || req.body?.clientId || req.headers['x-voicelink-install-id'],
+                platform: normalizedPlatform,
+                currentVersion,
+                currentBuildNumber,
+                serverVersion: includesServerCheck ? serverVersion : null,
+                serverBuildNumber: includesServerCheck ? serverBuildNumber : null,
+                offeredVersion: platformInfo.version,
+                offeredBuildNumber: platformInfo.buildNumber,
+                offeredServerVersion: includesServerCheck ? serverInfo.version : null,
+                offeredServerBuildNumber: includesServerCheck ? serverInfo.buildNumber : null,
+                updateAvailable: updateAllowed && (hasUpdate || serverHasUpdate),
+                updateType,
+                postponedUntil,
+                channel: requestedChannelRaw
+            });
+
+            const updateAlertKey = `${updateType}|${normalizedPlatform}|${platformInfo.buildNumber}|${serverInfo.buildNumber}`;
+            const updateAlertNow = Date.now();
+            this.recentUpdateAlertKeys = this.recentUpdateAlertKeys || new Map();
+            for (const [key, timestamp] of this.recentUpdateAlertKeys.entries()) {
+                if (updateAlertNow - timestamp > 6 * 60 * 60 * 1000) {
+                    this.recentUpdateAlertKeys.delete(key);
+                }
+            }
+            const shouldAlertForUpdate = !this.recentUpdateAlertKeys.has(updateAlertKey);
+            if (updateAllowed && (hasUpdate || serverHasUpdate) && shouldAlertForUpdate && this.modules?.updater?.addAdminAlert) {
+                this.recentUpdateAlertKeys.set(updateAlertKey, updateAlertNow);
+                this.modules.updater.addAdminAlert({
+                    type: 'update_available',
+                    updateType,
+                    platform: normalizedPlatform,
+                    message: updateType === 'client_and_server'
+                        ? `VoiceLink client and server updates are available.`
+                        : updateType === 'server'
+                            ? `A VoiceLink server update is available.`
+                            : `A VoiceLink ${normalizedPlatform} client update is available.`,
+                    latestClientVersion: platformInfo.version,
+                    latestClientBuild: platformInfo.buildNumber,
+                    latestServerVersion: serverInfo.version,
+                    latestServerBuild: serverInfo.buildNumber,
+                    timestamp: Date.now()
+                });
+            }
 
             res.json({
                 updateAvailable: updateAllowed ? hasUpdate : false,
@@ -10093,12 +10321,43 @@ class VoiceLinkLocalServer {
                 downloadURL: updateAllowed && hasUpdate ? platformInfo.downloadURL : null,
                 smartDownloadURL: updateAllowed && hasUpdate ? `${getSmartDlBase(req)}/${platformInfo.smartTarget}?os=${encodeURIComponent(platformInfo.smartTarget)}` : null,
                 releaseNotes: updateAllowed && hasUpdate ? platformInfo.releaseNotes : null,
-                checksum: checksumByPlatform[platform] || null,
+                checksum: checksumByPlatform[normalizedPlatform] || null,
                 updateSource: updateAllowed ? 'self-updater' : 'store-managed',
                 distChannel: requestedChannelRaw,
                 message: updateAllowed ? null : 'Updates are managed by the app store channel for this build.',
-                platform: platform || 'unknown',
+                platform: normalizedPlatform || 'unknown',
                 currentVersion: currentVersion || 'unknown',
+                updateType,
+                postponedUntil,
+                canonicalDownloadBase: this.getCanonicalDownloadBase(),
+                downloadAliases: VOICELINK_APPROVED_DOWNLOAD_ALIASES,
+                clientUpdates: {
+                    available: updateAllowed ? hasUpdate : false,
+                    platform: normalizedPlatform,
+                    version: platformInfo.version,
+                    buildNumber: platformInfo.buildNumber,
+                    mandatory: false,
+                    critical: false,
+                    releaseNotes: platformInfo.releaseNotes,
+                    downloadURL: updateAllowed && hasUpdate ? platformInfo.downloadURL : null,
+                    checksum: checksumByPlatform[normalizedPlatform] || null
+                },
+                serverUpdates: {
+                    available: updateAllowed ? serverHasUpdate : false,
+                    version: serverInfo.version,
+                    buildNumber: serverInfo.buildNumber,
+                    mandatory: false,
+                    critical: false,
+                    releaseNotes: serverInfo.releaseNotes,
+                    downloadURL: updateAllowed && serverHasUpdate ? serverInfo.downloadURL : null,
+                    checksum: checksumByPlatform.server || null
+                },
+                combinedUpdates: {
+                    available: updateAllowed ? (hasUpdate || serverHasUpdate) : false,
+                    type: updateType,
+                    client: updateAllowed ? hasUpdate : false,
+                    server: updateAllowed ? serverHasUpdate : false
+                },
                 windowsArtifacts
             });
         });
@@ -10119,42 +10378,56 @@ class VoiceLinkLocalServer {
 
             const buildEntry = (filename, name, type, size = 'Current build', platform = '') => ({
                 name,
-                url: `${downloadBase}/${filename}`,
-                smartUrl: `${smartDlBase}/${encodeURIComponent(filename)}${platform ? `?os=${encodeURIComponent(platform)}` : ''}`,
+                url: `${downloadBase}/${String(filename).split('/').map((part) => encodeURIComponent(part)).join('/')}`,
+                smartUrl: `${smartDlBase}/${String(filename).split('/').map((part) => encodeURIComponent(part)).join('/')}${platform ? `?os=${encodeURIComponent(platform)}` : ''}`,
                 size,
                 type,
                 checksum: readChecksum(filename),
                 checksumUrl: `${downloadBase}/${filename}.sha256`
             });
+            const latest = {
+                macos: this.readReleaseManifest('macos', resolvedDownloadRoot),
+                windows: this.readReleaseManifest('windows', resolvedDownloadRoot),
+                linux: this.readReleaseManifest('linux', resolvedDownloadRoot),
+                server: this.readReleaseManifest('server', resolvedDownloadRoot)
+            };
 
             res.json({
+                canonicalDownloadBase: this.getCanonicalDownloadBase(),
+                aliases: VOICELINK_APPROVED_DOWNLOAD_ALIASES,
                 platforms: {
                     macos: {
-                        version: '1.0.4',
+                        version: latest.macos.version,
+                        buildNumber: latest.macos.buildNumber,
                         downloads: [
                             buildEntry('VoiceLink-1.0.0-macos.pkg', 'macOS Installer (.pkg)', 'native', 'Current build', 'macos'),
-                            buildEntry('VoiceLinkMacOS.zip', 'macOS ZIP (Alternative)', 'native', 'Current build', 'macos')
+                            buildEntry(latest.macos.filename, 'macOS ZIP (Alternative)', 'native', latest.macos.size || 'Current build', 'macos'),
+                            buildEntry('latest-mac.yml', 'macOS Update Manifest', 'metadata', 'Current build', 'macos'),
+                            buildEntry('appcast.xml', 'macOS Sparkle Appcast', 'metadata', 'Current build', 'macos')
                         ]
                     },
                     windows: {
-                        version: '0.1.0.6',
+                        version: latest.windows.version,
+                        buildNumber: latest.windows.buildNumber,
                         downloads: [
-                            buildEntry('VoiceLinkWX-0.1.0.6-windows-setup.exe', 'Windows Setup Installer', 'native', 'Current build', 'windows'),
-                            buildEntry('VoiceLinkWX-0.1.0.6-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
-                            buildEntry('voicelink-wxpython-update.json', 'Windows Update Manifest', 'metadata', 'Current build', 'windows')
+                            buildEntry(latest.windows.filename, 'Windows Setup Installer', 'native', 'Current build', 'windows'),
+                            buildEntry(latest.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
+                            buildEntry('windows/voicelink-wxpython-update.json', 'Windows Update Manifest', 'metadata', 'Current build', 'windows')
                         ]
                     },
                 linux: {
-                        version: '1.0.4',
+                        version: latest.linux.version,
+                        buildNumber: latest.linux.buildNumber,
                         downloads: [
-                            buildEntry('VoiceLink-linux.AppImage', 'Linux AppImage', 'native', 'Current build', 'linux'),
+                            buildEntry(latest.linux.filename, 'Linux AppImage', 'native', 'Current build', 'linux'),
                             buildEntry('voicelink-local_1.0.0_amd64.deb', 'Linux DEB', 'native', 'Current build', 'linux')
                         ]
                     },
                     server: {
-                        version: '1.0.0',
+                        version: latest.server.version,
+                        buildNumber: latest.server.buildNumber,
                         downloads: [
-                            buildEntry('voicelink-server-1.0.0.tar.gz', 'VoiceLink Server Tarball', 'server', '451 MB', 'linux'),
+                            buildEntry(latest.server.filename, 'VoiceLink Server Tarball', 'server', '451 MB', 'linux'),
                             buildEntry('voicelink-server-1.0.0.zip', 'VoiceLink Server ZIP', 'server', '459 MB', 'cross-platform')
                         ]
                     }
@@ -25447,19 +25720,30 @@ class VoiceLinkLocalServer {
                 const user = this.users.get(socket.id);
                 const transmitEnabled = user?.audioSettings?.transmitEnabled !== false;
                 const relayEnabled = registration.enabled && transmitEnabled;
+                const wasEnabled = this.audioRelayEnabled.get(socket.id) === true;
                 this.audioRelayEnabled.set(socket.id, relayEnabled);
 
                 if (relayEnabled) {
-                    this.relayStats.activeRelays++;
+                    if (!wasEnabled) {
+                        this.relayStats.activeRelays++;
+                    }
                     console.log(`Audio relay enabled for ${socket.id}`);
 
                     // Initialize audio buffer for this user
                     this.audioBuffers.set(socket.id, {
                         ...registration,
-                        buffer: []
+                        buffer: [],
+                        packetCount: 0,
+                        lastTimestamp: null,
+                        lastPacketAt: null,
+                        jitterEvents: 0,
+                        underruns: 0,
+                        overruns: 0
                     });
                 } else {
-                    this.relayStats.activeRelays = Math.max(0, this.relayStats.activeRelays - 1);
+                    if (wasEnabled) {
+                        this.relayStats.activeRelays = Math.max(0, this.relayStats.activeRelays - 1);
+                    }
                     this.audioBuffers.delete(socket.id);
                     console.log(`Audio relay disabled for ${socket.id}`);
                 }
@@ -25492,9 +25776,22 @@ class VoiceLinkLocalServer {
                 } = data || {};
                 user.isSpeaking = !user.audioSettings?.muted;
                 user.lastActiveAt = new Date();
+                const relayBuffer = this.audioBuffers.get(socket.id);
+                const now = Date.now();
+                if (relayBuffer) {
+                    relayBuffer.packetCount = (relayBuffer.packetCount || 0) + 1;
+                    relayBuffer.lastPacketAt = now;
+                    const packetTimestamp = Number(timestamp || 0);
+                    if (packetTimestamp && relayBuffer.lastTimestamp && packetTimestamp < relayBuffer.lastTimestamp) {
+                        relayBuffer.jitterEvents = (relayBuffer.jitterEvents || 0) + 1;
+                        this.relayStats.jitterEvents++;
+                    }
+                    relayBuffer.lastTimestamp = packetTimestamp || relayBuffer.lastTimestamp || now;
+                }
 
                 // Update stats
                 this.relayStats.packetsRelayed++;
+                this.relayStats.lastPacketAt = new Date(now).toISOString();
                 if (audioData && audioData.length) {
                     this.relayStats.bytesRelayed += audioData.length;
                 }
@@ -25515,7 +25812,13 @@ class VoiceLinkLocalServer {
                                 preferredCodec,
                                 engine,
                                 audioMode,
-                                frameSize
+                                frameSize,
+                                relayTelemetry: relayBuffer ? {
+                                    packetCount: relayBuffer.packetCount || 0,
+                                    jitterEvents: relayBuffer.jitterEvents || 0,
+                                    jitterBufferMs: relayBuffer.jitterBufferMs || AudioEngineModule.DEFAULT_AUDIO_ENGINE?.jitterBufferMs || 80,
+                                    serverReceivedAt: now
+                                } : undefined
                             });
                         }
                     });

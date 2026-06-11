@@ -24,6 +24,7 @@ NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-}"
 NOTARY_APPLE_ID="${NOTARY_APPLE_ID:-}"
 NOTARY_PASSWORD="${NOTARY_PASSWORD:-}"
 NOTARY_TEAM_ID="${NOTARY_TEAM_ID:-${DEVELOPMENT_TEAM:-}}"
+KEYCHAIN_TEAM_ID="${KEYCHAIN_TEAM_ID:-${DEVELOPMENT_TEAM:-${NOTARY_TEAM_ID:-}}}"
 
 if [[ -f "$MACOS_SIGNING_ENV" ]]; then
   # shellcheck disable=SC1090
@@ -67,6 +68,11 @@ fi
 
 if [[ -z "$SIGN_IDENTITY" ]]; then
   echo "ERROR: No Developer ID Application signing identity found. Set SIGN_IDENTITY explicitly." >&2
+  exit 1
+fi
+
+if [[ -z "$KEYCHAIN_TEAM_ID" ]]; then
+  echo "ERROR: KEYCHAIN_TEAM_ID or DEVELOPMENT_TEAM is required for VoiceLink keychain entitlements." >&2
   exit 1
 fi
 
@@ -193,6 +199,12 @@ cat > "$DIST_DIR/entitlements.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>com.apple.application-identifier</key>
+    <string>__KEYCHAIN_TEAM_ID__.com.devinecreations.voicelink</string>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>__KEYCHAIN_TEAM_ID__.com.devinecreations.voicelink</string>
+    </array>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
@@ -202,6 +214,7 @@ cat > "$DIST_DIR/entitlements.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+perl -0pi -e "s/__KEYCHAIN_TEAM_ID__/$KEYCHAIN_TEAM_ID/g" "$DIST_DIR/entitlements.plist"
 
 xattr -cr "$APP_BUNDLE"
 while IFS= read -r -d '' item; do

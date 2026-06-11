@@ -49,6 +49,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private let microphoneCapture = IOSRoomMicrophoneCapture()
     private var lastRoomUsersRequestAt = Date.distantPast
     private var lastAudioLevelUpdateAt: [String: Date] = [:]
+    private var recentRoomMessageKeys: [String: Date] = [:]
 
     private init() {
         let center = NotificationCenter.default
@@ -134,6 +135,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         roomUsers = []
         userPlaybackGains = [:]
         userPlaybackMuted = [:]
+        recentRoomMessageKeys.removeAll()
         relayPlayer.setMonitorUserId(nil)
         microphoneCapture.stop()
         relayPlayer.stop()
@@ -367,7 +369,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     "engine": VoiceLinkAudioTransportDefaults.engine,
                     "audioMode": IOSVoiceLinkAudioMode.current.rawValue,
                     "supportsStereo": true,
-                    "supportsOpus": false,
+                    "supportsOpus": true,
                     "supportsDynamicProcessing": true
                 ])
                 self.startMicrophoneCaptureIfNeeded()
@@ -1020,6 +1022,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         let body = normalizedSocketText(payload["message"] ?? payload["content"] ?? payload["text"] ?? payload["body"], fallback: "")
         let type = normalizedSocketText(payload["type"] ?? payload["messageType"], fallback: "text")
         guard !roomId.isEmpty, !body.isEmpty else { return }
+        guard shouldPostRoomMessage(payload, roomId: roomId, senderId: senderId, body: body) else { return }
         NotificationCenter.default.post(
             name: .iosRoomMessageEvent,
             object: nil,
@@ -1034,6 +1037,18 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 "timestamp": normalizedSocketTimestamp(payload["timestamp"])
             ]
         )
+    }
+
+    private func shouldPostRoomMessage(_ payload: [String: Any], roomId: String, senderId: String, body: String) -> Bool {
+        let messageId = normalizedSocketText(payload["messageId"] ?? payload["id"] ?? payload["_id"], fallback: "")
+        let key = !messageId.isEmpty ? "\(roomId)|id|\(messageId)" : "\(roomId)|body|\(senderId)|\(body)"
+        let now = Date()
+        recentRoomMessageKeys = recentRoomMessageKeys.filter { now.timeIntervalSince($0.value) < 300 }
+        if let previous = recentRoomMessageKeys[key], now.timeIntervalSince(previous) < 300 {
+            return false
+        }
+        recentRoomMessageKeys[key] = now
+        return true
     }
 
     private func updateIncomingAudioLevel(from payload: [String: Any]) {

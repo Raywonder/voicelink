@@ -237,10 +237,12 @@ final class SelfTestScheduler: ObservableObject {
 
         case .updaterMetadata:
             for candidate in APIEndpointResolver.mainBaseCandidates(preferred: ServerManager.shared.baseURL) {
-                guard let url = APIEndpointResolver.url(base: candidate, path: "/downloads/latest-mac.yml") else { continue }
-                let result = await performHTTPCheck(url: url, successRange: 200...299, okMessage: "Updater metadata reachable")
-                if result.0 == .pass {
-                    return (.pass, "Updater metadata reachable at \(candidate).")
+                for metadataPath in ["/downloads/voicelink/latest-mac.yml", "/downloads/latest-mac.yml"] {
+                    guard let url = APIEndpointResolver.url(base: candidate, path: metadataPath) else { continue }
+                    let result = await performHTTPCheck(url: url, successRange: 200...299, okMessage: "Updater metadata reachable")
+                    if result.0 == .pass {
+                        return (.pass, "Updater metadata reachable at \(candidate)\(metadataPath).")
+                    }
                 }
             }
             return (.fail, "Updater metadata check failed for all known endpoints.")

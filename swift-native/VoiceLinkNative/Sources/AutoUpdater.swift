@@ -90,7 +90,7 @@ final class AutoUpdater: NSObject, ObservableObject {
 
     var automaticDownloadsEnabled: Bool {
         get {
-            UserDefaults.standard.object(forKey: automaticDownloadKey) as? Bool ?? false
+            UserDefaults.standard.object(forKey: automaticDownloadKey) as? Bool ?? true
         }
         set {
             UserDefaults.standard.set(newValue, forKey: automaticDownloadKey)
@@ -299,6 +299,7 @@ extension AutoUpdater: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         latestVersion = item.displayVersionString
+        releaseNotes = "What's new: \(item.displayVersionString) is available. Sparkle will verify the download and install the update safely."
         updateAvailable = true
         updateState = .available(version: item.displayVersionString)
         logger.info("Sparkle found update \(item.displayVersionString, privacy: .public)")
@@ -454,8 +455,16 @@ struct UpdateSettingsView: View {
             }
             .foregroundColor(.secondary)
         case .available(let version):
-            Label("Version \(version) is available. Continue in the Sparkle update window.", systemImage: "arrow.down.circle.fill")
-                .foregroundColor(.green)
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Version \(version) is available. Continue in the Sparkle update window.", systemImage: "arrow.down.circle.fill")
+                    .foregroundColor(.green)
+                if let releaseNotes = updater.releaseNotes {
+                    Text(releaseNotes)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel(releaseNotes)
+                }
+            }
         case .downloading:
             Label("Sparkle is downloading or preparing the update.", systemImage: "arrow.down")
                 .foregroundColor(.blue)

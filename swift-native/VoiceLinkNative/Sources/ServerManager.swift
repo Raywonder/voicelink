@@ -25,7 +25,7 @@ private enum VoiceLinkDesktopAudioTransport {
             "engine": engine,
             "audioMode": audioMode,
             "supportsStereo": true,
-            "supportsOpus": false,
+            "supportsOpus": true,
             "supportsDynamicProcessing": true
         ]
     }
@@ -78,6 +78,7 @@ class ServerManager: ObservableObject {
     private var awaitingDeviceApproval = false
     private var recentRoomJoinSoundKeys: [String: Date] = [:]
     private var recentUserJoinSoundKeys: [String: Date] = [:]
+    private var recentRoomMessageKeys: [String: Date] = [:]
     @Published var currentRoomMediaVolume: Float = 0.12
     @Published private(set) var currentRoomMediaMuted: Bool = false
 
@@ -578,6 +579,21 @@ class ServerManager: ObservableObject {
         return true
     }
 
+    private func shouldPostRoomMessage(_ payload: [String: Any]) -> Bool {
+        let messageId = (payload["messageId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let roomId = (payload["roomId"] as? String ?? activeRoomId ?? "room").trimmingCharacters(in: .whitespacesAndNewlines)
+        let senderId = (payload["senderId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = (payload["content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = !messageId.isEmpty ? "\(roomId)|id|\(messageId)" : "\(roomId)|body|\(senderId)|\(content)"
+        let now = Date()
+        recentRoomMessageKeys = recentRoomMessageKeys.filter { now.timeIntervalSince($0.value) < 300 }
+        if let previous = recentRoomMessageKeys[key], now.timeIntervalSince(previous) < 300 {
+            return false
+        }
+        recentRoomMessageKeys[key] = now
+        return true
+    }
+
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
@@ -1024,6 +1040,7 @@ class ServerManager: ObservableObject {
             print("Chat message received: \(data)")
             if let msgData = self.socketDictionaryValue(data.first),
                let messagePayload = self.normalizedIncomingChatPayload(msgData, fallbackRoomId: self.activeRoomId) {
+                guard self.shouldPostRoomMessage(messagePayload) else { return }
                 let senderId = messagePayload["senderId"] as? String ?? ""
                 let senderName = messagePayload["senderName"] as? String ?? "Unknown"
                 let content = messagePayload["content"] as? String ?? ""
@@ -1051,6 +1068,7 @@ class ServerManager: ObservableObject {
             let roomId = responseData["roomId"] as? String ?? self.activeRoomId
             for msgData in messages {
                 guard var messagePayload = self.normalizedIncomingChatPayload(msgData, fallbackRoomId: roomId) else { continue }
+                guard self.shouldPostRoomMessage(messagePayload) else { continue }
                 messagePayload["historical"] = true
 
                 NotificationCenter.default.post(
@@ -1718,6 +1736,7 @@ class ServerManager: ObservableObject {
             self.currentRoomUsers = []
             self.activeRoomId = nil
             self.currentUserId = nil
+            self.recentRoomMessageKeys.removeAll()
         }
         NotificationCenter.default.post(name: .roomLeft, object: nil, userInfo: ["roomId": leftRoomId as Any])
     }
