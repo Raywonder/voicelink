@@ -10158,7 +10158,7 @@ class VoiceLinkLocalServer {
             const latestVersions = {
                 macos: {
                     version: '1.0.0',
-                    buildNumber: 46,
+                    buildNumber: 96,
                     downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
                     smartTarget: 'macos',
                     releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'

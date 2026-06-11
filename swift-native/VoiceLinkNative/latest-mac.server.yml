@@ -1,11 +1,11 @@
-version: 1.0.0.95
+version: 1.0.0.96
 files:
   - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: 1vwcCv/P2nknJLCjSkBCRJTNzEoExii3lMvsSVzIX8Y1rxnhxsH5nZmNrwoT3m9IfdwcZY+g5jESVNqBviNUIA==
-    size: 514976638
+    sha512: 0v6e6L0IyDaPMHVBlkSWc3hn071oC0oqS8bdf1p1YGCGMlAfQhD60jYra7D9DL242zDlVdKx4n5vKvwAcKpADA==
+    size: 514981733
 path: VoiceLinkMacOS.zip
-sha512: 1vwcCv/P2nknJLCjSkBCRJTNzEoExii3lMvsSVzIX8Y1rxnhxsH5nZmNrwoT3m9IfdwcZY+g5jESVNqBviNUIA==
-buildNumber: 95
-releaseDate: "2026-06-11T06:30:37Z"
+sha512: 0v6e6L0IyDaPMHVBlkSWc3hn071oC0oqS8bdf1p1YGCGMlAfQhD60jYra7D9DL242zDlVdKx4n5vKvwAcKpADA==
+buildNumber: 96
+releaseDate: "2026-06-11T14:15:48Z"
 releaseNotes: >-
-  Build 95 rebuilds the notarized macOS app from current main, restores the required SwiftPM resource bundle, and verifies bundled documentation and sounds before publishing so update downloads do not regress to older artifacts.
+  Build 96 adds canonical VoiceLink download metadata, fixes stale update checks, improves room audio relay metadata, and keeps room messages and system messages from repeating during reconnects.

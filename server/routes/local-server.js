@@ -1141,12 +1141,12 @@ class VoiceLinkLocalServer {
             macos: {
                 platform: 'macos',
                 version: '1.0.0',
-                buildNumber: 95,
+                buildNumber: 96,
                 filename: 'VoiceLinkMacOS.zip',
                 downloadURL: `${canonicalBase}/VoiceLinkMacOS.zip`,
                 smartTarget: 'macos',
                 manifest: `${canonicalBase}/latest-mac.yml`,
-                releaseNotes: 'Latest macOS build restores notarized update packaging, bundled resources, and safer update handling.'
+                releaseNotes: 'Build 96 adds canonical VoiceLink download metadata, fixes stale update checks, improves room audio relay metadata, and keeps room messages and system messages from repeating during reconnects.'
             },
             windows: {
                 platform: 'windows',
