@@ -1,11 +1,11 @@
-﻿version: 1.0.0.88
+version: 1.0.0.95
 files:
   - url: https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip
-    sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
-    size: 366204867
+    sha512: 1vwcCv/P2nknJLCjSkBCRJTNzEoExii3lMvsSVzIX8Y1rxnhxsH5nZmNrwoT3m9IfdwcZY+g5jESVNqBviNUIA==
+    size: 514976638
 path: VoiceLinkMacOS.zip
-sha512: vZyAEiTnk9X1qkV51uu9Rze8XHld8CEqUV7skK7qtSqDMHrZ+LmtZVLlj4bCR6625bnjoCgT8gBJHr2CJ2ab9w==
-buildNumber: 88
-releaseDate: "2026-06-07T08:27:03.000Z"
+sha512: 1vwcCv/P2nknJLCjSkBCRJTNzEoExii3lMvsSVzIX8Y1rxnhxsH5nZmNrwoT3m9IfdwcZY+g5jESVNqBviNUIA==
+buildNumber: 95
+releaseDate: "2026-06-11T06:30:37Z"
 releaseNotes: >-
-  Build 88 updates VoiceLink macOS with the latest room browsing, authentication, admin module-management, and audio/session stability fixes from the native desktop tree.
+  Build 95 rebuilds the notarized macOS app from current main, restores the required SwiftPM resource bundle, and verifies bundled documentation and sounds before publishing so update downloads do not regress to older artifacts.
