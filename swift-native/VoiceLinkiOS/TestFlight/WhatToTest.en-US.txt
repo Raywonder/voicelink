@@ -1,4 +1,4 @@
-Build 94 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
+Build 95 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
 
 What changed:
 - Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
