@@ -1046,31 +1046,31 @@ class VoiceLinkLocalServer {
         return {
             macos_zip: {
                 id: 'macos_zip',
-                label: 'VoiceLink macOS ZIP',
-                platform: 'macOS',
+                label: 'Macos, Silicon',
+                platform: 'macOS Silicon',
                 url: `${downloadBase}/VoiceLinkMacOS.zip`
             },
             macos_pkg: {
                 id: 'macos_pkg',
-                label: 'VoiceLink macOS PKG Installer',
-                platform: 'macOS',
+                label: 'Macos, Silicon installer',
+                platform: 'macOS Silicon',
                 url: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`
             },
             macos_intel_pkg: {
                 id: 'macos_intel_pkg',
-                label: 'VoiceLink macOS Intel PKG Installer',
+                label: 'Macos, Intel',
                 platform: 'macOS Intel',
                 url: `${downloadBase}/VoiceLink-1.0.0-macos-intel.pkg`
             },
             windows_wx_setup: {
                 id: 'windows_wx_setup',
-                label: 'VoiceLink Windows wxPython Installer',
+                label: 'Windows, installer',
                 platform: 'Windows',
                 url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe`
             },
             windows_wx_portable: {
                 id: 'windows_wx_portable',
-                label: 'VoiceLink Windows wxPython Portable ZIP',
+                label: 'Windows, portable',
                 platform: 'Windows',
                 url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip`
             },
@@ -1120,6 +1120,7 @@ class VoiceLinkLocalServer {
     getDownloadRootCandidates() {
         return [
             process.env.VOICELINK_DOWNLOAD_ROOT,
+            process.env.VOICELINK_DOWNLOADS_DIR,
             process.env.HOME ? path.join(process.env.HOME, 'downloads', 'voicelink') : null,
             path.join(process.cwd(), 'downloads', 'voicelink')
         ].filter(Boolean);

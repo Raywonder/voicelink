@@ -466,14 +466,11 @@
                 <div class="testflight-request-row">
                     <input id="client-link-email" name="email" type="email" autocomplete="email" required aria-describedby="client-link-help">
                     <select id="client-link-target" name="downloadId" aria-label="Choose a VoiceLink download" required>
-                        <option value="macos_zip">VoiceLink macOS ZIP</option>
-                        <option value="macos_pkg">VoiceLink macOS PKG Installer</option>
-                        <option value="macos_intel_pkg">VoiceLink macOS Intel PKG Installer</option>
-                        <option value="windows_wx_setup">VoiceLink Windows Installer</option>
-                        <option value="windows_wx_portable">VoiceLink Windows Portable ZIP</option>
-                        <option value="server_targz">VoiceLink Server Tarball</option>
-                        <option value="server_zip">VoiceLink Server ZIP</option>
-                        <option value="web_access">VoiceLink Web Access</option>
+                        <option value="windows_wx_setup">Windows, installer</option>
+                        <option value="windows_wx_portable">Windows, portable</option>
+                        <option value="macos_intel_pkg">Macos, Intel</option>
+                        <option value="macos_zip">Macos, Silicon</option>
+                        <option value="testflight_ios">Testflight, iOS</option>
                     </select>
                     <button class="download-button secondary" type="submit" style="width: auto; min-width: 240px; margin-top: 0;">
                         Email Download Link
@@ -487,7 +484,7 @@
                     <label for="client-link-company">Leave this field empty</label>
                     <input id="client-link-company" name="company" type="text" tabindex="-1" autocomplete="off">
                 </div>
-                <p id="client-link-help" class="testflight-request-help">Choose the app or server package here. VoiceLink sends the selected download link by email instead of starting an anonymous download from the card buttons above.</p>
+                <p id="client-link-help" class="testflight-request-help">Choose the app package here. VoiceLink sends desktop download links by email; TestFlight requests receive the current iOS TestFlight link.</p>
                 <p class="testflight-request-status" aria-live="polite" aria-atomic="true"></p>
             </form>
         </div>
@@ -596,16 +593,17 @@
                 form.addEventListener('submit', async (event) => {
                     event.preventDefault();
                     if (!emailInput || !downloadSelect || !submitButton || !status || !humanCheckbox) return;
-                    status.textContent = 'Sending download link request...';
+                    const isTestFlightRequest = downloadSelect.value === 'testflight_ios';
+                    status.textContent = isTestFlightRequest ? 'Sending TestFlight request...' : 'Sending download link request...';
                     status.style.color = '#dbeafe';
                     submitButton.disabled = true;
                     try {
-                        const response = await fetch(downloadLinkEndpoint, {
+                        const response = await fetch(isTestFlightRequest ? endpoint : downloadLinkEndpoint, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 email: emailInput.value,
-                                downloadId: downloadSelect.value,
+                                downloadId: isTestFlightRequest ? undefined : downloadSelect.value,
                                 humanConfirmed: humanCheckbox.checked,
                                 company: honeypot ? honeypot.value : '',
                                 sourcePage: form.dataset.sourcePage || 'client-downloads',
@@ -616,7 +614,7 @@
                         if (!response.ok || data.success === false) {
                             throw new Error(data.error || 'Unable to submit your download request right now.');
                         }
-                        status.textContent = data.message || 'The selected download link was emailed to you.';
+                        status.textContent = data.message || (isTestFlightRequest ? 'The current TestFlight link was emailed to you.' : 'The selected download link was emailed to you.');
                         status.style.color = data.delivered ? '#d1fae5' : '#fde68a';
                         form.reset();
                     } catch (error) {
