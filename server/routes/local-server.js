@@ -1066,13 +1066,13 @@ class VoiceLinkLocalServer {
                 id: 'windows_wx_setup',
                 label: 'Windows, installer',
                 platform: 'Windows',
-                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe`
+                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.7-windows-setup.exe`
             },
             windows_wx_portable: {
                 id: 'windows_wx_portable',
                 label: 'Windows, portable',
                 platform: 'Windows',
-                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip`
+                url: `${downloadBase}/windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip`
             },
             server_targz: {
                 id: 'server_targz',
@@ -1151,15 +1151,15 @@ class VoiceLinkLocalServer {
             },
             windows: {
                 platform: 'windows',
-                version: '0.1.0.6',
-                buildNumber: 6,
-                filename: 'windows/VoiceLinkWX-0.1.0.6-windows-setup.exe',
-                portableFilename: 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip',
-                downloadURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe`,
-                portableURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip`,
+                version: '0.1.0.7',
+                buildNumber: 7,
+                filename: 'windows/VoiceLinkWX-0.1.0.7-windows-setup.exe',
+                portableFilename: 'windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip',
+                downloadURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.7-windows-setup.exe`,
+                portableURL: `${canonicalBase}/windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip`,
                 smartTarget: 'windows',
                 manifest: `${canonicalBase}/windows/voicelink-wxpython-update.json`,
-                releaseNotes: 'Latest Windows wxPython build improves room joining, update checks, and accessibility behavior.'
+                releaseNotes: 'VoiceLinkWX 0.1.0.7 adds the Windows self-updater flow, downloads and verifies installer updates from the canonical VoiceLink server, relaunches after install, and keeps the accessible room-list Enter behavior.'
             },
             linux: {
                 platform: 'linux',
@@ -1225,15 +1225,20 @@ class VoiceLinkLocalServer {
                 const manifestPath = path.join(downloadRoot, 'windows', 'voicelink-wxpython-update.json');
                 if (fs.existsSync(manifestPath)) {
                     const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                    selected.version = parsed.version || selected.version;
+                    selected.version = parsed.version || parsed.latest_version || parsed.latestVersion || selected.version;
                     selected.buildNumber = Number(parsed.buildNumber || parsed.build || selected.buildNumber);
-                    selected.releaseNotes = parsed.releaseNotes || parsed.notes || selected.releaseNotes;
-                    const setupName = path.basename(parsed.installerUrl || parsed.installerURL || selected.filename);
-                    const portableName = path.basename(parsed.portableUrl || parsed.portableURL || selected.portableFilename);
+                    selected.releaseNotes = parsed.releaseNotes || parsed.release_notes || parsed.notes || selected.releaseNotes;
+                    const setupName = path.basename(parsed.installerUrl || parsed.installerURL || parsed.installer_url || selected.filename);
+                    const portableName = path.basename(parsed.portableUrl || parsed.portableURL || parsed.portable_url || selected.portableFilename);
                     selected.filename = `windows/${setupName}`;
                     selected.portableFilename = `windows/${portableName}`;
                     selected.downloadURL = `${canonicalBase}/windows/${encodeURIComponent(setupName)}`;
                     selected.portableURL = `${canonicalBase}/windows/${encodeURIComponent(portableName)}`;
+                    selected.checksum = parsed.installerChecksumSha256
+                        || parsed.installer_checksum_sha256
+                        || parsed.checksumSha256
+                        || parsed.checksum_sha256
+                        || selected.checksum;
                 }
             }
         } catch (error) {
@@ -10098,7 +10103,7 @@ class VoiceLinkLocalServer {
                 macos: [this.readReleaseManifest('macos', downloadRoot).filename, 'VoiceLinkMacOS.zip'],
                 windows: [
                     this.readReleaseManifest('windows', downloadRoot).filename,
-                    this.readReleaseManifest('windows', downloadRoot).portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip'
+                    this.readReleaseManifest('windows', downloadRoot).portableFilename || 'windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip'
                 ],
                 linux: [this.readReleaseManifest('linux', downloadRoot).filename, 'voicelink-local_1.0.0_amd64.deb']
             };
@@ -10238,13 +10243,13 @@ class VoiceLinkLocalServer {
             const updateAllowed = !isStoreManagedChannel;
             const checksumByPlatform = {
                 macos: readChecksum(platformInfo.platform === 'macos' ? platformInfo.filename : latestVersions.macos.filename),
-                windows: readChecksum(latestVersions.windows.filename),
+                windows: latestVersions.windows.checksum || readChecksum(latestVersions.windows.filename),
                 linux: readChecksum(latestVersions.linux.filename),
                 server: readChecksum(latestVersions.server.filename)
             };
 
             const windowsArtifacts = {
-                portable: fileExists(latestVersions.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip'),
+                portable: fileExists(latestVersions.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip'),
                 setup: fileExists(latestVersions.windows.filename),
                 manifest: fileExists('windows/voicelink-wxpython-update.json')
             };
@@ -10412,7 +10417,7 @@ class VoiceLinkLocalServer {
                         buildNumber: latest.windows.buildNumber,
                         downloads: [
                             buildEntry(latest.windows.filename, 'Windows Setup Installer', 'native', 'Current build', 'windows'),
-                            buildEntry(latest.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
+                            buildEntry(latest.windows.portableFilename || 'windows/VoiceLinkWX-0.1.0.7-win-x64-portable.zip', 'Windows Portable ZIP', 'native', 'Current build', 'windows'),
                             buildEntry('windows/voicelink-wxpython-update.json', 'Windows Update Manifest', 'metadata', 'Current build', 'windows')
                         ]
                     },

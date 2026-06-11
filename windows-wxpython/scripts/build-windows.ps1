@@ -2,7 +2,7 @@ param(
     [string]$Python = "",
     [string]$Configuration = "Release",
     [string]$Version = "0.1.0",
-    [string]$Build = "6",
+    [string]$Build = "7",
     [string]$OutputDir = "E:\Downloads\VoiceLinkWX"
 )
 
@@ -71,10 +71,17 @@ Compress-Archive -Path (Join-Path $appDir "*") -DestinationPath $zipPath -Force
 $manifest = [ordered]@{
     version = "$Version.$Build"
     latest_version = "$Version.$Build"
+    latestVersion = "$Version.$Build"
     file_name = $zipName
+    fileName = $zipName
     portable_url = "/downloads/voicelink/windows/$zipName"
+    portableUrl = "/downloads/voicelink/windows/$zipName"
+    build = $Build
+    buildNumber = $Build
     checksum_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-    release_notes = "VoiceLinkWX $Version.$Build fixes Enter on the room list. Pressing Enter now opens an accessible room details dialog with Join room as the default action."
+    checksumSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+    release_notes = "VoiceLinkWX $Version.$Build adds the Windows self-updater flow, downloads and verifies installer updates from the canonical VoiceLink server, relaunches after install, and keeps the accessible room-list Enter behavior."
+    releaseNotes = "VoiceLinkWX $Version.$Build adds the Windows self-updater flow, downloads and verifies installer updates from the canonical VoiceLink server, relaunches after install, and keeps the accessible room-list Enter behavior."
 }
 $manifestPath = Join-Path $OutputDir "voicelink-wxpython-update.json"
 [System.IO.File]::WriteAllText(
@@ -105,7 +112,9 @@ if (Test-Path $innoScript) {
                 "$setupHash  $(Split-Path -Leaf $setupPath)`r`n",
                 [System.Text.UTF8Encoding]::new($false))
             $manifest.installer_url = "/downloads/voicelink/windows/$(Split-Path -Leaf $setupPath)"
+            $manifest.installerUrl = "/downloads/voicelink/windows/$(Split-Path -Leaf $setupPath)"
             $manifest.installer_checksum_sha256 = $setupHash
+            $manifest.installerChecksumSha256 = $setupHash
             [System.IO.File]::WriteAllText(
                 $manifestPath,
                 ($manifest | ConvertTo-Json -Depth 4),
