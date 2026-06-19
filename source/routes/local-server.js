@@ -6612,14 +6612,14 @@ class VoiceLinkLocalServer {
                 return fs.existsSync(path.join(resolvedDownloadRoot, filename));
             };
 
-            // Latest versions for each platform
+            // Fallback versions used only when canonical manifests are unavailable.
             const latestVersions = {
                 macos: {
-                    version: '1.0.4',
-                    buildNumber: 26,
-                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
+                    version: '1.0.0.96',
+                    buildNumber: 96,
+                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
                     smartTarget: 'macos',
-                    releaseNotes: 'Latest macOS build includes full room details/actions alignment, faster chat link title previews, improved status-menu room return behavior, and less repetitive bot responses.'
+                    releaseNotes: 'VoiceLink build 96 keeps the server browser, room list, audio, presence, messages, and update metadata aligned with the canonical download channel.'
                 },
                 windows: {
                     version: '1.0.4',
@@ -17253,8 +17253,9 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Federated server list (all known servers)
-        this.app.get('/api/discovery/servers', (req, res) => {
+        // Federated server list (all known servers). Keep /api/servers as a
+        // compatibility alias for older desktop and TestFlight builds.
+        this.app.get(['/api/discovery/servers', '/api/servers'], (req, res) => {
             const servers = [];
             this.discoveredServers.forEach((data, url) => {
                 servers.push({

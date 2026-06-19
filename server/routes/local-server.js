@@ -10030,14 +10030,14 @@ class VoiceLinkLocalServer {
                 return fs.existsSync(path.join(resolvedDownloadRoot, filename));
             };
 
-            // Latest versions for each platform
+            // Fallback versions used only when canonical manifests are unavailable.
             const latestVersions = {
                 macos: {
-                    version: '1.0.0',
-                    buildNumber: 46,
-                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
+                    version: '1.0.0.96',
+                    buildNumber: 96,
+                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
                     smartTarget: 'macos',
-                    releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'
+                    releaseNotes: 'VoiceLink build 96 keeps the server browser, room list, audio, presence, messages, and update metadata aligned with the canonical download channel.'
                 },
                 windows: {
                     version: '0.1.0.6',
@@ -23134,8 +23134,9 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Federated server list (all known servers)
-        this.app.get('/api/discovery/servers', (req, res) => {
+        // Federated server list (all known servers). Keep /api/servers as a
+        // compatibility alias for older desktop and TestFlight builds.
+        this.app.get(['/api/discovery/servers', '/api/servers'], (req, res) => {
             const servers = [];
             const seen = new Set();
             const revealQuery = String(req.query?.reveal || req.query?.code || req.query?.q || req.query?.search || '')
