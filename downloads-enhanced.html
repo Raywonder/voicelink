@@ -569,8 +569,11 @@
         });
 
         (() => {
-            const endpoint = 'https://voicelink.dev/api/downloads/testflight-request';
-            const downloadLinkEndpoint = 'https://voicelink.dev/api/downloads/email-link';
+            const apiBase = window.location.origin && window.location.origin !== 'null'
+                ? window.location.origin
+                : 'https://voicelinkapp.app';
+            const endpoint = `${apiBase}/api/downloads/testflight-request`;
+            const downloadLinkEndpoint = `${apiBase}/api/downloads/email-link`;
             const forms = document.querySelectorAll('[data-testflight-form]');
             const downloadForms = document.querySelectorAll('[data-download-link-form]');
             forms.forEach((form) => {
