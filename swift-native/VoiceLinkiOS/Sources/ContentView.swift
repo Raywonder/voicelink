@@ -1498,7 +1498,7 @@ private struct HomeTab: View {
                             .buttonStyle(.bordered)
                         }
                     } else {
-                        Text("Tap a room to join.")
+                        Text("Choose a room to join.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1529,7 +1529,7 @@ private struct HomeTab: View {
                 }
 
                 Section("Servers") {
-                    Text("Tap a server to browse only that server’s rooms. Use Federated Rooms for one combined room browser across all trusted servers.")
+                    Text("Choose a server to browse that server’s rooms. Use Federated Rooms for one combined room browser across trusted servers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -1566,7 +1566,7 @@ private struct HomeTab: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else if filteredServerSummaries.isEmpty {
-                        Text("No servers found yet.")
+                        Text("No servers found yet. VoiceLink refreshes the public directory when the app opens and when this screen appears.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
@@ -1589,7 +1589,7 @@ private struct HomeTab: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
-                            .accessibilityHint(isExpanded ? "Double tap to hide this owner's servers." : "Double tap to show this owner's servers.")
+                            .accessibilityHint(isExpanded ? "Activate to hide this owner's servers." : "Activate to show this owner's servers.")
                             .accessibilityAddTraits(.isButton)
                             if isExpanded {
                                 ForEach(group.servers) { server in
@@ -1613,7 +1613,7 @@ private struct HomeTab: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
-                            .accessibilityHint("Double tap to browse rooms on this server.")
+                            .accessibilityHint("Activate to browse rooms on this server.")
                         }
                             }
                         }
@@ -1645,6 +1645,13 @@ private struct HomeTab: View {
             }
             .onChange(of: roomSortMode) { _ in
                 Task { await refreshRooms() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRefreshPublicDirectory)) { _ in
+                guard !roomState.isInRoom else { return }
+                Task {
+                    await refreshRooms()
+                    await refreshAdminAccess()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { _ in
                 Task { await refreshRooms() }
@@ -1954,7 +1961,7 @@ private struct RoomRow: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(room.name), \(occupancySummary(room)), \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))\(liveBroadcastLabel.map { ", \($0)" } ?? "")")
-        .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
+        .accessibilityHint("Activate for room details. Use available actions for preview, join, and sharing.")
     }
 }
 
@@ -2040,7 +2047,7 @@ private struct HomeServerRoomsView: View {
                                     onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
                                 }
                             }
-                            .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
+                            .accessibilityHint("Activate for room details. Extra actions are available for preview, join, and sharing.")
                             .accessibilityAction(named: Text("Room Details")) { showDetails(for: room) }
                             .accessibilityAction(named: Text("Join Room")) { onJoinRoom(room) }
                             .accessibilityAction(named: Text("Preview Room")) { showPreview(for: room) }
@@ -2516,7 +2523,7 @@ private struct FederationTab: View {
                                 }
                                 .accessibilityElement(children: .combine)
                                 .accessibilityLabel("\(group.displayName), \(occupancySummary(users: group.totalUsers, bots: group.totalBots, totalVisible: group.totalVisible)) across \(group.choices.count) servers")
-                                .accessibilityHint("Double tap to choose which server copy of this room to open.")
+                                .accessibilityHint("Activate to choose which server copy of this room to open.")
                                 .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
                                 .accessibilityAction(named: Text("Preview Room")) { openGroupedRoom(group, action: "preview") }
                                 .accessibilityAction(named: Text("Join Room")) { openGroupedRoom(group, action: "join") }
@@ -2537,6 +2544,9 @@ private struct FederationTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { Task { await refreshRooms() } }
             .refreshable { await refreshRooms() }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRefreshPublicDirectory)) { _ in
+                Task { await refreshRooms() }
+            }
             .sheet(item: $activeSession) { session in
                 RoomSessionView(destination: session, roomState: roomState)
             }
@@ -2751,7 +2761,7 @@ private struct FederationRoomChoicesView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(occupancySummary(choice.room))")
-                    .accessibilityHint("Double tap for room details. Swipe down for preview and join actions.")
+                    .accessibilityHint("Activate for room details. Extra actions are available for preview and join.")
                     .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
                     .accessibilityAction(named: Text("Preview Room")) { onOpen(choice, "preview") }
@@ -2853,7 +2863,7 @@ private struct MessagesTab: View {
                             .buttonStyle(.plain)
                             .accessibilityElement(children: .combine)
                             .accessibilityAddTraits(roomState.selectedDirectTarget?.id == target.id ? .isSelected : [])
-                            .accessibilityHint("Double tap to select this user. Use the direct message field below to send a private message.")
+                            .accessibilityHint("Activate to select this user. Use the direct message field below to send a private message.")
                         }
                     }
 
@@ -4368,7 +4378,7 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
         }
         if let url = URL(string: normalized),
            let host = url.host?.lowercased(),
-           ["node2.voicelink.devinecreations.net", "voicelink.dev"].contains(host) {
+           host == "node2.voicelink.devinecreations.net" {
             return "https://community.voicelinkapp.app"
         }
         if let url = URL(string: normalized),
@@ -4381,6 +4391,7 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
            [
                "voicelinkapp.app",
                "community.voicelinkapp.app",
+               "voicelink.dev",
                "tappedin.fm"
            ].contains(host) {
             return "https://\(host)"
@@ -4402,6 +4413,7 @@ private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
     }
     candidates.append("https://voicelinkapp.app")
     candidates.append("https://community.voicelinkapp.app")
+    candidates.append("https://voicelink.dev")
     candidates.append("https://devine-creations.com/voicelink")
     candidates.append("https://devinecreations.net")
 
@@ -4538,22 +4550,26 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
     try await withThrowingTaskGroup(of: IOSRoomFetchBatch.self) { group in
         for base in bases {
             group.addTask {
-                let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
-                guard let url = URL(string: endpoint) else { return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil) }
-                let request = iosServerPresenceRequest(url: url, timeout: 12)
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
+                do {
+                    let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
+                    guard let url = URL(string: endpoint) else { return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil) }
+                    let request = iosServerPresenceRequest(url: url, timeout: 12)
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
+                    }
+                    if http.statusCode == 401 || http.statusCode == 403 {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: normalizeBaseURL(base))
+                    }
+                    guard (200...299).contains(http.statusCode) else {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
+                    }
+                    let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+                        .map { $0.normalizedForFetchedBase(base) }
+                    return IOSRoomFetchBatch(rooms: rooms, authRequiredBase: nil)
+                } catch {
                     return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
                 }
-                if http.statusCode == 401 || http.statusCode == 403 {
-                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: normalizeBaseURL(base))
-                }
-                guard (200...299).contains(http.statusCode) else {
-                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
-                }
-                let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
-                    .map { $0.normalizedForFetchedBase(base) }
-                return IOSRoomFetchBatch(rooms: rooms, authRequiredBase: nil)
             }
         }
 
@@ -4608,6 +4624,13 @@ private func configuredServerPresentation(baseURL: String) -> ConfiguredServerPr
             ownerGroup: "VoiceLink",
             domain: "community.voicelinkapp.app",
             description: "Community server for rooms, testing, and federation."
+        )
+    case "voicelink.dev", "www.voicelink.dev":
+        return ConfiguredServerPresentation(
+            name: "VoiceLink - Dev (voicelink.dev)",
+            ownerGroup: "VoiceLink",
+            domain: "voicelink.dev",
+            description: "VoiceLink beta and development server."
         )
     case "devine-creations.com", "www.devine-creations.com":
         guard path == "voicelink" || path.isEmpty else { return nil }
@@ -4743,6 +4766,9 @@ private func canonicalServerIdentity(baseURL: String, room: RoomSummary?) -> Str
     }
     if ["64.20.46.179", "community.voicelinkapp.app", "www.community.voicelinkapp.app"].contains(baseHost) {
         return "community.voicelinkapp.app"
+    }
+    if ["voicelink.dev", "www.voicelink.dev"].contains(baseHost) {
+        return "voicelink.dev"
     }
     if !baseHost.isEmpty, !isIPAddressValue(baseHost) {
         return baseIdentity.isEmpty ? baseHost : baseIdentity

@@ -1546,7 +1546,7 @@ struct DiscoverServersView: View {
                         .foregroundColor(.gray)
                     Text(isSearching ? "Scanning..." : "No servers found")
                         .foregroundColor(.gray)
-                    Text("Tap Scan to find VoiceLink servers on your network")
+                    Text("Choose Scan to find VoiceLink servers on your network")
                         .font(.caption)
                         .foregroundColor(.gray.opacity(0.7))
                 }

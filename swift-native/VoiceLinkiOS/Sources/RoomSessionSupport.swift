@@ -1550,6 +1550,7 @@ struct RoomPreviewView: View {
 }
 
 extension Notification.Name {
+    static let iosRefreshPublicDirectory = Notification.Name("iosRefreshPublicDirectory")
     static let iosOpenMessagesTab = Notification.Name("iosOpenMessagesTab")
     static let iosShowUserProfile = Notification.Name("iosShowUserProfile")
     static let iosPlayTestSound = Notification.Name("iosPlayTestSound")

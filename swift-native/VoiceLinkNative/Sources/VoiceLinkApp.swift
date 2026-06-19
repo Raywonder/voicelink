@@ -537,6 +537,7 @@ extension Notification.Name {
     static let openFileTransfers = Notification.Name("openFileTransfers")
     static let openDirectMessage = Notification.Name("openDirectMessage")
     static let openBugReport = Notification.Name("openBugReport")
+    static let refreshPublicDirectory = Notification.Name("refreshPublicDirectory")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -579,6 +580,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.autoConnectOnLaunch()
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            NotificationCenter.default.post(name: .refreshPublicDirectory, object: "launch")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+            NotificationCenter.default.post(name: .refreshPublicDirectory, object: "launch-followup")
+        }
 
         // Show window on launch based on user preference.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -602,6 +609,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DocsManager.shared.startBackgroundSync(baseURL: ServerManager.shared.baseURL)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        NotificationCenter.default.post(name: .refreshPublicDirectory, object: "became-active")
     }
 
     func autoConnectOnLaunch() {
@@ -890,7 +901,19 @@ class AppState: ObservableObject {
         setupAdminObservers()
         initializeLicensing()
         setupURLObservers()
+        setupPublicDirectoryRefreshObserver()
         refreshAdminCapabilities()
+    }
+
+    private func setupPublicDirectoryRefreshObserver() {
+        NotificationCenter.default.addObserver(forName: .refreshPublicDirectory, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard !self.hasActiveRoom else { return }
+                SettingsManager.shared.ensureManagedFederationDefaults()
+                self.refreshRooms()
+            }
+        }
     }
 
     private func setupURLObservers() {
@@ -6179,6 +6202,11 @@ class SettingsManager: ObservableObject {
             description: "Community rooms, testing, and federation peer."
         ),
         ManagedFederationServer(
+            url: APIEndpointResolver.devChannelBase,
+            name: "VoiceLink - Dev (voicelink.dev)",
+            description: "VoiceLink beta and development channel peer."
+        ),
+        ManagedFederationServer(
             url: APIEndpointResolver.devineCreationsComBase,
             name: "Devine Creations - devine-creations.com",
             description: "Domain-owned VoiceLink server linked to Devine Creations client account login."
@@ -6523,6 +6551,27 @@ class SettingsManager: ObservableObject {
 
     var visibleManagedFederationServers: [ManagedFederationServer] {
         managedFederationServers.filter { !$0.isHidden }
+    }
+
+    func ensureManagedFederationDefaults() {
+        let defaults = Self.defaultManagedFederationServers
+        var existingURLs = Set(managedFederationServers.map(\.url))
+        var didAppend = false
+
+        for fallback in defaults where !existingURLs.contains(fallback.url) {
+            managedFederationServers.append(fallback)
+            existingURLs.insert(fallback.url)
+            didAppend = true
+        }
+
+        if managedFederationServers.isEmpty {
+            managedFederationServers = defaults
+            didAppend = true
+        }
+
+        if didAppend {
+            saveManagedFederationServers()
+        }
     }
 
     func moveManagedFederationServer(_ server: ManagedFederationServer, offset: Int) {

@@ -17,6 +17,7 @@ struct VoiceLinkiOSApp: App {
                 .onChange(of: scenePhase) { newPhase in
                     if newPhase == .active {
                         IOSLaunchCoordinator.shared.scheduleStartupWorkIfNeeded()
+                        IOSLaunchCoordinator.shared.refreshPublicDirectory(reason: "scene-active")
                     }
                 }
         }
@@ -32,5 +33,13 @@ private final class IOSLaunchCoordinator {
     func scheduleStartupWorkIfNeeded() {
         guard !didScheduleStartupWork else { return }
         didScheduleStartupWork = true
+        refreshPublicDirectory(reason: "launch")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            self?.refreshPublicDirectory(reason: "launch-followup")
+        }
+    }
+
+    func refreshPublicDirectory(reason: String) {
+        NotificationCenter.default.post(name: .iosRefreshPublicDirectory, object: reason)
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 enum APIEndpointResolver {
     static let canonicalMainBase = "https://voicelinkapp.app"
     static let communityNode2Base = "https://community.voicelinkapp.app"
+    static let devChannelBase = "https://voicelink.dev"
     static let devineCreationsComBase = "https://devine-creations.com/voicelink"
     static let devineCreationsNetBase = "https://devinecreations.net"
     static let localBase = "http://127.0.0.1:3010"
@@ -18,6 +19,7 @@ enum APIEndpointResolver {
     // Trusted federated peers should be preferred before public fallbacks.
     private static let federatedBases = [
         communityNode2Base,
+        devChannelBase,
         devineCreationsComBase,
         devineCreationsNetBase,
     ]
