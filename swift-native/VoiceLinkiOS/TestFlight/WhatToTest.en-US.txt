@@ -1,4 +1,4 @@
-Build 95 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
+Build 96 refreshes the iOS beta with the latest room action, profile sheet, and join-time audio stability fixes.
 
 What changed:
 - Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
@@ -8,7 +8,8 @@ What changed:
 - Other people expose Whisper only when they have audio available.
 - Text-only bots expose text actions such as profile and direct message without audio controls.
 - Audio-capable bots can expose both text and audio-related actions.
-- iOS room audio now uses a slightly larger room I/O buffer and a larger relay packet queue to reduce join-time buffering while keeping latency low.
+- iOS room audio keeps the larger room I/O buffer and relay packet queue tuning from the last beta to reduce join-time buffering while keeping latency low.
+- This beta is a refresh build so testers receive the newest packaged fixes instead of remaining on build 95.
 
 Please test:
 - Join a room on iOS with VoiceOver enabled.
