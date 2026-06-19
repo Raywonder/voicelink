@@ -23413,8 +23413,9 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Federated server list (all known servers)
-        this.app.get('/api/discovery/servers', (req, res) => {
+        // Federated server list (all known servers). Keep /api/servers as a
+        // compatibility alias for older desktop/TestFlight builds.
+        this.app.get(['/api/discovery/servers', '/api/servers'], (req, res) => {
             const servers = [];
             const seen = new Set();
             const revealQuery = String(req.query?.reveal || req.query?.code || req.query?.q || req.query?.search || '')

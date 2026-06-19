@@ -36,6 +36,39 @@ The canonical server is authoritative but does not own user data.
 
 ---
 
+## Public API Routing Requirements
+
+Public clients, including iOS TestFlight, macOS, Windows, and browser builds,
+must be able to load the server directory from both of these paths:
+
+```text
+GET /api/discovery/servers
+GET /api/servers
+```
+
+`/api/servers` is a compatibility alias for clients that expect the shorter
+directory route. It must return the same JSON shape as `/api/discovery/servers`.
+
+Current public routing:
+
+```text
+https://voicelinkapp.app              -> main stable VoiceLink runtime
+https://community.voicelinkapp.app    -> community VoiceLink runtime
+https://voicelink.dev                 -> beta/dev VoiceLink runtime
+https://dev.voicelinkapp.app          -> beta/dev VoiceLink runtime alias
+```
+
+On shared-IP or cPanel hosts, the exact HTTPS SNI vhost for each domain must
+proxy `/health`, `/api/`, `/api/servers`, and `/socket.io/` to the VoiceLink
+runtime before any generic cPanel document-root location. If this is missed,
+clients can receive an HTML 404 page or a neighboring app's API instead of the
+VoiceLink JSON server list.
+
+Before calling a routing change complete, verify the apex, `www` variant, API
+directory endpoints, and neighboring sites on the same IP.
+
+---
+
 ## Account-Owned Runtime Layout
 
 Every hosted VoiceLink server runtime MUST be organized by the account that owns

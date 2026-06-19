@@ -468,8 +468,8 @@ class DeploymentManagerModule {
         const targetLabel = options.targetLabel || null;
         const ownerEmail = options.ownerEmail || null;
         const targetServerUrl = normalizePublicUrl(options.targetServerUrl) || null;
-        const masterApiUrl = normalizePublicUrl(federationConfig.masterApiUrl || serverConfig.masterApiUrl || 'https://voicelink.dev');
-        const secondaryApiUrl = normalizePublicUrl(federationConfig.secondaryApiUrl || serverConfig.secondaryApiUrl || 'https://voicelinkapp.app');
+        const masterApiUrl = normalizePublicUrl(federationConfig.masterApiUrl || serverConfig.masterApiUrl || 'https://voicelinkapp.app');
+        const secondaryApiUrl = normalizePublicUrl(federationConfig.secondaryApiUrl || serverConfig.secondaryApiUrl || 'https://voicelink.dev');
         const masterCommunityApiUrl = normalizePublicUrl(federationConfig.masterCommunityApiUrl || serverConfig.masterCommunityApiUrl || 'https://community.voicelinkapp.app');
         const localApiUrl = normalizePublicUrl(serverConfig.localApiUrl || targetServerUrl);
         const fallbackApiUrls = uniqueList([
