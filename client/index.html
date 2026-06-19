@@ -160,59 +160,84 @@
                 </div>
             </div>
 
-            <div class="menu-content">
-                <!-- Desktop App Controls (only shown when running in Electron) -->
-                <div id="desktop-controls" class="menu-section" style="display: none;">
-                    <h3>App Controls</h3>
-                    <button id="minimize-to-tray-btn" class="settings-btn">📍 Minimize to Menu Bar</button>
-                    <button id="preferences-btn" class="settings-btn">⚙️ Application Settings</button>
-                </div>
+            <nav class="webapp-primary-tabs" role="tablist" aria-label="VoiceLink web sections">
+                <button id="webapp-tab-servers" class="webapp-tab active" type="button" role="tab" aria-selected="true" aria-controls="webapp-panel-servers" data-webapp-tab="servers">Servers</button>
+                <button id="webapp-tab-rooms" class="webapp-tab" type="button" role="tab" aria-selected="false" aria-controls="webapp-panel-rooms" data-webapp-tab="rooms">Federated Rooms</button>
+                <button id="webapp-tab-settings" class="webapp-tab" type="button" role="tab" aria-selected="false" aria-controls="webapp-panel-settings" data-webapp-tab="settings">Settings</button>
+            </nav>
 
-                <div class="menu-section">
-                    <h3>Quick Start</h3>
-                    <button id="create-room-btn" class="primary-btn">Create New Room</button>
-                    <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
-                </div>
-
-                <div class="menu-section">
-                    <h3>Settings & Tools</h3>
-                    <button id="open-settings-btn" class="primary-btn">⚙️ Settings</button>
-                    <button id="quick-audio-btn" class="settings-btn">🎵 Quick Audio</button>
-                    <button id="test-audio-btn" class="settings-btn">🧪 Test Audio</button>
-                </div>
-
-                <div class="menu-section">
-                    <h3>Server Status</h3>
-                    <div id="server-status-display" class="server-status">
-                        <div class="status-item">
-                            <span class="status-label">Server:</span>
-                            <span class="status-value" id="server-status-value">🔴 Offline</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Port:</span>
-                            <span class="status-value" id="server-port-value">-</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Users:</span>
-                            <span class="status-value" id="server-users-value">0</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Rooms:</span>
-                            <span class="status-value" id="server-rooms-value">0</span>
+            <div class="menu-content webapp-tab-layout">
+                <div id="webapp-panel-servers" class="webapp-panel active" role="tabpanel" aria-labelledby="webapp-tab-servers">
+                    <div class="menu-section webapp-feature-section">
+                        <h2>Find a VoiceLink server</h2>
+                        <p class="webapp-section-note">Search official, community, and connected VoiceLink servers, then open rooms that are available in your browser.</p>
+                        <div class="server-search-row" role="search">
+                            <label for="webapp-server-search">Search servers</label>
+                            <input id="webapp-server-search" type="search" placeholder="Server owner, display name, or domain">
+                            <button id="webapp-server-search-btn" class="secondary-btn" type="button">Search</button>
                         </div>
                     </div>
-                    <div class="server-control-buttons">
-                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
-                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
-                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
+
+                    <div class="menu-section">
+                        <h3>Quick Start</h3>
+                        <button id="create-room-btn" class="primary-btn">Create New Room</button>
+                        <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
+                    </div>
+
+                    <div class="menu-section">
+                        <h3>Server Status</h3>
+                        <div id="server-status-display" class="server-status">
+                            <div class="status-item">
+                                <span class="status-label">Server:</span>
+                                <span class="status-value" id="server-status-value">Offline</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Port:</span>
+                                <span class="status-value" id="server-port-value">-</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Users:</span>
+                                <span class="status-value" id="server-users-value">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Rooms:</span>
+                                <span class="status-value" id="server-rooms-value">0</span>
+                            </div>
+                        </div>
+                        <div class="server-control-buttons">
+                            <button id="start-server-btn" class="secondary-btn" style="display: none;">Start Server</button>
+                            <button id="stop-server-btn" class="secondary-btn" style="display: none;">Stop Server</button>
+                            <button id="restart-server-btn" class="secondary-btn" style="display: none;">Restart Server</button>
+                        </div>
                     </div>
                 </div>
 
+                <div id="webapp-panel-rooms" class="webapp-panel" role="tabpanel" aria-labelledby="webapp-tab-rooms" hidden>
+                    <div class="menu-section webapp-feature-section">
+                        <h2>Federated Rooms</h2>
+                        <p class="webapp-section-note">Rooms from this server and connected VoiceLink servers appear here. Browser audio starts after you choose a room and allow microphone access.</p>
+                    </div>
 
-                <div class="menu-section" aria-labelledby="available-rooms-heading">
-                    <h3 id="available-rooms-heading">Available Rooms</h3>
-                    <div id="room-list" class="room-list" aria-live="polite" aria-busy="true">
-                        <p class="loading">Loading rooms...</p>
+                    <div class="menu-section" aria-labelledby="available-rooms-heading">
+                        <h3 id="available-rooms-heading">Available Rooms</h3>
+                        <div id="room-list" class="room-list" aria-live="polite" aria-busy="true">
+                            <p class="loading">Loading rooms...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="webapp-panel-settings" class="webapp-panel" role="tabpanel" aria-labelledby="webapp-tab-settings" hidden>
+                    <div id="desktop-controls" class="menu-section" style="display: none;">
+                        <h3>App Controls</h3>
+                        <button id="minimize-to-tray-btn" class="settings-btn">Minimize to Menu Bar</button>
+                        <button id="preferences-btn" class="settings-btn">Application Settings</button>
+                    </div>
+
+                    <div class="menu-section">
+                        <h3>Settings & Tools</h3>
+                        <button id="open-settings-btn" class="primary-btn">Settings</button>
+                        <button id="quick-audio-btn" class="settings-btn">Quick Audio</button>
+                        <button id="test-audio-btn" class="settings-btn">Test Audio</button>
                     </div>
                 </div>
             </div>
@@ -1123,5 +1148,54 @@
     <script src="js/media/jellyfin-manager.js"></script>
     <script src="js/media/live-streaming-manager.js"></script>
     <script src="js/ui/media-streaming-interface.js"></script>
+    <script>
+        (function () {
+            const tabs = Array.from(document.querySelectorAll('[data-webapp-tab]'));
+            const panels = {
+                servers: document.getElementById('webapp-panel-servers'),
+                rooms: document.getElementById('webapp-panel-rooms'),
+                settings: document.getElementById('webapp-panel-settings')
+            };
+            const live = document.getElementById('app-status-live');
+
+            function activateTab(name, announce = true) {
+                tabs.forEach((tab) => {
+                    const selected = tab.dataset.webappTab === name;
+                    tab.classList.toggle('active', selected);
+                    tab.setAttribute('aria-selected', String(selected));
+                    tab.tabIndex = selected ? 0 : -1;
+                });
+
+                Object.entries(panels).forEach(([key, panel]) => {
+                    if (!panel) return;
+                    const selected = key === name;
+                    panel.classList.toggle('active', selected);
+                    panel.hidden = !selected;
+                });
+
+                if (announce && live) {
+                    const label = tabs.find((tab) => tab.dataset.webappTab === name)?.textContent?.trim() || name;
+                    live.textContent = `${label} tab selected`;
+                }
+            }
+
+            tabs.forEach((tab, index) => {
+                tab.addEventListener('click', () => activateTab(tab.dataset.webappTab));
+                tab.addEventListener('keydown', (event) => {
+                    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                    event.preventDefault();
+                    let nextIndex = index;
+                    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+                    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+                    if (event.key === 'Home') nextIndex = 0;
+                    if (event.key === 'End') nextIndex = tabs.length - 1;
+                    tabs[nextIndex].focus();
+                    activateTab(tabs[nextIndex].dataset.webappTab);
+                });
+            });
+
+            activateTab('servers', false);
+        }());
+    </script>
 </body>
 </html>

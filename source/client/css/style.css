@@ -194,12 +194,88 @@ body {
     margin-bottom: 0.5rem;
 }
 
+.webapp-primary-tabs {
+    display: flex;
+    gap: 0.75rem;
+    max-width: 1200px;
+    margin: 0 auto 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+    padding-bottom: 0.75rem;
+}
+
+.webapp-tab {
+    appearance: none;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 700;
+    padding: 0.85rem 1.15rem;
+}
+
+.webapp-tab:hover,
+.webapp-tab:focus,
+.webapp-tab.active {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.42);
+    outline: none;
+}
+
+.webapp-tab:focus {
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35);
+}
+
 .menu-content {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 2rem;
+    display: block;
     max-width: 1200px;
     margin: 0 auto;
+}
+
+.webapp-panel {
+    display: none;
+    gap: 1.25rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.webapp-panel.active {
+    display: grid;
+}
+
+.webapp-feature-section {
+    grid-column: 1 / -1;
+}
+
+.webapp-feature-section h2 {
+    font-size: 1.6rem;
+    margin-bottom: 0.75rem;
+}
+
+.webapp-section-note {
+    color: rgba(255, 255, 255, 0.78);
+    line-height: 1.55;
+    margin-bottom: 1rem;
+}
+
+.server-search-row {
+    align-items: center;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(10rem, 14rem) minmax(14rem, 1fr) auto;
+}
+
+.server-search-row input {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1rem;
+    padding: 0.85rem 1rem;
+}
+
+.server-search-row input::placeholder {
+    color: rgba(255, 255, 255, 0.58);
 }
 
 .menu-section {
@@ -254,18 +330,148 @@ body {
     color: white;
 }
 
+/* Help link styled as button */
+a.help-link {
+    display: inline-block;
+    text-decoration: none;
+    text-align: center;
+    background: linear-gradient(45deg, #2196F3, #1976D2);
+    color: white;
+}
+
+a.help-link:hover {
+    background: linear-gradient(45deg, #1976D2, #1565C0);
+    transform: translateY(-1px);
+}
+
+/* Audio Control Groups */
+.audio-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+    padding: 0.5rem;
+}
+
+.audio-controls-help {
+    text-align: center;
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-top: 0.25rem;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 100px;
+}
+
 .control-btn {
     background: rgba(255, 255, 255, 0.2);
     color: white;
     border: 2px solid rgba(255, 255, 255, 0.3);
     width: auto;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
     margin: 0.25rem;
+    min-height: 48px;
+    min-width: 120px;
+    padding: 0.75rem 1rem;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
-.control-btn.active {
-    background: linear-gradient(45deg, #4CAF50, #45a049);
-    border-color: #4CAF50;
+.control-btn .btn-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.control-btn .btn-label {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.control-btn:hover,
+.control-btn:focus {
+    background: rgba(255, 255, 255, 0.3);
+    outline: 3px solid rgba(102, 126, 234, 0.8);
+    outline-offset: 2px;
+}
+
+.control-btn:active {
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.control-btn.active,
+.control-btn[aria-pressed="true"] {
+    background: linear-gradient(45deg, #e53935, #c62828);
+    border-color: #e53935;
+}
+
+.control-btn.active .btn-label,
+.control-btn[aria-pressed="true"] .btn-label {
+    font-weight: 700;
+}
+
+/* Status Messages */
+.status-message {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    min-height: 1.2em;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.status-message.muted {
+    color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.15);
+}
+
+.status-message.active {
+    color: #69db7c;
+    background: rgba(105, 219, 124, 0.15);
+}
+
+/* iOS Safari Specific Styles */
+@supports (-webkit-touch-callout: none) {
+    .control-btn {
+        min-height: 52px;
+        font-size: 16px;
+    }
+}
+
+/* Mobile Responsive Controls */
+@media (max-width: 480px) {
+    .audio-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .control-group {
+        flex-direction: row;
+        justify-content: space-between;
+        width: 100%;
+        padding: 0.25rem 0;
+    }
+
+    .control-btn {
+        flex: 1;
+        min-width: unset;
+    }
+
+    .status-message {
+        min-width: 100px;
+        text-align: right;
+    }
 }
 
 .icon-btn {
@@ -483,15 +689,8 @@ body {
     padding: 0.75rem;
     margin: 0.5rem 0;
     display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.user-header-row {
-    display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
 }
 
 .user-info {
@@ -518,21 +717,6 @@ body {
 .user-controls {
     display: flex;
     gap: 0.25rem;
-    flex-wrap: wrap;
-}
-
-.user-controls.hidden {
-    display: none;
-}
-
-.user-audio-toggle-btn {
-    background: rgba(255, 255, 255, 0.15);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    color: inherit;
-    font-size: 0.78rem;
-    cursor: pointer;
-    padding: 0.25rem 0.5rem;
-    border-radius: 6px;
 }
 
 .user-controls button {
@@ -585,13 +769,6 @@ body {
     justify-content: center;
     gap: 0.5rem;
     margin-top: auto;
-}
-
-.audio-controls-help {
-    margin-top: 0.5rem;
-    text-align: center;
-    font-size: 0.85rem;
-    color: rgba(255, 255, 255, 0.7);
 }
 
 /* Chat Panel */
@@ -684,13 +861,6 @@ body {
     background: rgba(255, 255, 255, 0.1);
     color: white;
     font: inherit;
-}
-
-#chat-input {
-    resize: none;
-    min-height: 42px;
-    max-height: 120px;
-    line-height: 1.35;
 }
 
 .chat-input-container button {
@@ -804,7 +974,7 @@ body {
 
 /* Responsive Design */
 @media (max-width: 1200px) {
-    .menu-content {
+    .webapp-panel {
         grid-template-columns: 1fr;
         gap: 1rem;
     }
@@ -820,6 +990,12 @@ body {
 }
 
 @media (max-width: 768px) {
+    .webapp-primary-tabs,
+    .server-search-row {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+
     .chat-header {
         padding: 1rem;
     }
@@ -1509,6 +1685,68 @@ body {
     border-color: rgba(255, 255, 255, 0.15);
 }
 
+/* Locked/Private Room Styles */
+.room-item.room-locked {
+    background: rgba(255, 193, 7, 0.08);
+    border-color: rgba(255, 193, 7, 0.3);
+    position: relative;
+}
+
+.room-item.room-locked::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #ffc107, #ff9800);
+    border-radius: 8px 8px 0 0;
+}
+
+.room-item.room-locked:hover {
+    background: rgba(255, 193, 7, 0.12);
+    border-color: rgba(255, 193, 7, 0.4);
+}
+
+.room-item.room-locked .lock-icon {
+    margin-right: 0.5rem;
+    font-size: 1rem;
+}
+
+.room-access-info {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.75rem;
+    color: #ffc107;
+    font-style: italic;
+}
+
+/* Room Status Label Colors */
+.status-label .status-public {
+    color: #4CAF50;
+}
+
+.status-label .status-unlisted {
+    color: #9e9e9e;
+}
+
+.status-label .status-private {
+    color: #ffc107;
+    font-weight: 600;
+}
+
+.status-label .status-password {
+    color: #ff9800;
+}
+
+.status-label .status-encrypted,
+.status-label .status-e2e {
+    color: #2196f3;
+}
+
+.status-label .status-secure {
+    color: #4CAF50;
+}
+
 .room-header {
     display: flex;
     justify-content: space-between;
@@ -1556,6 +1794,20 @@ body {
     gap: 0.5rem;
 }
 
+.room-metadata {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+.room-meta-item {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .room-stats {
     display: flex;
     flex-wrap: wrap;
@@ -1578,6 +1830,78 @@ body {
     color: rgba(255, 255, 255, 0.7);
 }
 
+.room-actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.room-primary-action-btn {
+    border: 1px solid rgba(63, 136, 255, 0.45);
+    background: linear-gradient(180deg, rgba(63, 136, 255, 0.35), rgba(42, 105, 210, 0.25));
+    color: #fff;
+    border-radius: 8px;
+    padding: 0.4rem 0.65rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.room-primary-action-btn:hover {
+    background: linear-gradient(180deg, rgba(72, 150, 255, 0.45), rgba(42, 105, 210, 0.35));
+}
+
+.room-primary-action-btn:focus-visible {
+    outline: 2px solid rgba(97, 169, 255, 0.95);
+    outline-offset: 2px;
+}
+
+.room-actions-menu {
+    margin-left: auto;
+}
+
+.room-actions-summary {
+    list-style: none;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 8px;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.76rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.room-actions-summary::-webkit-details-marker {
+    display: none;
+}
+
+.room-actions-list {
+    margin-top: 0.3rem;
+    padding: 0.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    background: rgba(15, 20, 30, 0.95);
+    display: grid;
+    gap: 0.28rem;
+    min-width: 170px;
+}
+
+.room-action-btn {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    font-size: 0.74rem;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.room-action-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 .room-tags {
     display: flex;
     flex-wrap: wrap;
@@ -1592,63 +1916,6 @@ body {
     font-size: 0.625rem;
     font-weight: 500;
     text-transform: lowercase;
-}
-
-.room-actions-menu {
-    position: relative;
-    margin-top: 6px;
-}
-
-.room-actions-summary {
-    list-style: none;
-    cursor: pointer;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.room-actions-summary::-webkit-details-marker {
-    display: none;
-}
-
-.room-actions-list {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 20;
-    min-width: 170px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 8px;
-    border-radius: 8px;
-    background: rgba(12, 16, 34, 0.98);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
-.room-action-btn {
-    border: none;
-    background: rgba(255, 255, 255, 0.08);
-    color: #fff;
-    text-align: left;
-    padding: 7px 9px;
-    border-radius: 6px;
-    font-size: 12px;
-    cursor: pointer;
-}
-
-.room-action-btn:hover,
-.room-action-btn:focus {
-    background: rgba(99, 100, 255, 0.55);
-    outline: none;
 }
 
 /* Default Rooms Management Modal */
@@ -3151,7 +3418,8 @@ body {
 
 .auth-form input[type="email"],
 .auth-form input[type="password"],
-.auth-form input[type="text"] {
+.auth-form input[type="text"],
+.auth-form textarea {
     width: 100%;
     padding: 12px 15px;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -3215,6 +3483,13 @@ body {
     padding: 0 15px;
     color: #666;
     font-size: 12px;
+}
+
+#chat-input {
+    resize: none;
+    min-height: 42px;
+    max-height: 120px;
+    line-height: 1.35;
 }
 
 .auth-actions-row {
@@ -5128,26 +5403,6 @@ a:focus-visible {
 .modal-content h3 {
     color: #fff;
     margin-bottom: 20px;
-}
-
-/* Multi-device status */
-.multi-device-status {
-    background: rgba(15, 23, 42, 0.6);
-    border: 1px solid rgba(99, 102, 241, 0.25);
-    border-radius: 12px;
-    padding: 16px;
-    color: #e2e8f0;
-    margin-bottom: 12px;
-}
-
-.multi-device-status .status-title {
-    font-weight: 600;
-    margin-bottom: 6px;
-}
-
-.multi-device-status .status-details {
-    font-size: 0.9rem;
-    color: rgba(226, 232, 240, 0.7);
 }
 
 .input-group {

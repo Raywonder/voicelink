@@ -9,6 +9,21 @@
     <script src="https://cdn.jsdelivr.net/npm/simple-peer@9.11.1/simplepeer.min.js"></script>
 </head>
 <body>
+    <script>
+        (function () {
+            const path = window.location.pathname || '';
+            if (path === '/client/downloads-enhanced.html') {
+                window.location.replace('/downloads-enhanced.html');
+                return;
+            }
+            if (path === '/client/downloads.html') {
+                window.location.replace('/downloads.html');
+            }
+        }());
+    </script>
+    <a href="#main-content" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;" onfocus="this.style.cssText='position:fixed;top:0;left:0;background:#1f5eff;color:#fff;padding:10px 20px;z-index:10001;font-size:16px;'">Skip to main content</a>
+    <div id="app-status-live" role="status" aria-live="polite" aria-atomic="true" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;"></div>
+    <div id="app-alert-live" role="alert" aria-atomic="true" class="sr-only" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;"></div>
     <div id="app">
         <!-- Loading Screen -->
         <div id="loading-screen" class="screen active">
@@ -19,85 +34,214 @@
             </div>
         </div>
 
+        <!-- Startup Auth Gate (shown for guests in browser) -->
+        <div id="startup-auth-screen" class="screen">
+            <div class="form-container">
+                <h2 id="startup-auth-title">Welcome to VoiceLink</h2>
+                <p>Sign in for your full account experience, or continue as a guest for quick browser access.</p>
+                <div class="button-group">
+                    <button id="startup-mastodon-login-btn" class="primary-btn" aria-label="Sign in with Mastodon">Login with Mastodon</button>
+                    <button id="startup-whmcs-login-btn" class="secondary-btn" aria-label="Sign in with Client Account">Login with Client Account</button>
+                </div>
+                <div class="button-group">
+                    <button id="startup-guest-btn" class="secondary-btn" aria-describedby="startup-guest-help">Continue as Guest</button>
+                </div>
+                <p id="startup-guest-help">Guest access is best for quick room entry. Sign in when you want your saved settings, server access, and account tools.</p>
+            </div>
+        </div>
+
         <!-- Main Menu -->
-        <div id="main-menu" class="screen">
+        <main id="main-menu" class="screen" tabindex="-1">
+            <div id="main-content" tabindex="-1"></div>
             <div class="menu-header">
                 <h1>🎙️ VoiceLink</h1>
                 <p>Browser voice chat with rooms, account login, and quick guest access</p>
             </div>
 
-            <div id="authelia-auth-section" class="auth-section">
-                <div id="authelia-login-prompt" class="auth-prompt">
-                    <button id="authelia-login-btn" class="auth-btn sso-btn">
-                        <span class="mastodon-icon">🔐</span> Login with SSO
+            <div id="mastodon-auth-section" class="auth-section">
+                <div id="mastodon-login-prompt" class="auth-prompt">
+                    <button id="mastodon-login-btn" class="auth-btn sso-btn" aria-label="Open login options">
+                        <span class="mastodon-icon">🔐</span> Login
                     </button>
                 </div>
-                <div id="authelia-user-info" class="auth-user-info" style="display: none;">
+                <div id="mastodon-user-info" class="auth-user-info" style="display: none;">
+                    <img id="mastodon-user-avatar" class="user-avatar" src="" alt="" aria-hidden="true">
                     <div class="user-details">
-                        <span id="authelia-user-name" class="user-name"></span>
-                        <span id="authelia-user-role" class="user-role"></span>
+                        <span id="mastodon-user-name" class="user-name"></span>
+                        <span id="mastodon-user-handle" class="user-handle"></span>
+                        <span id="mastodon-user-role" class="user-role"></span>
                     </div>
-                    <button id="authelia-logout-btn" class="auth-btn logout-btn">Logout</button>
+                    <button id="mastodon-logout-btn" class="auth-btn logout-btn" aria-label="Log out of VoiceLink">Logout</button>
                 </div>
             </div>
 
-            <div class="menu-content">
-                <!-- Desktop App Controls (only shown when running in Electron) -->
-                <div id="desktop-controls" class="menu-section" style="display: none;">
-                    <h3>App Controls</h3>
-                    <button id="minimize-to-tray-btn" class="settings-btn">📍 Minimize to Menu Bar</button>
-                    <button id="preferences-btn" class="settings-btn">⚙️ Application Settings</button>
-                </div>
+            <div id="mastodon-login-modal" class="modal" style="display: none;">
+                <div class="modal-content auth-modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+                    <button id="close-login-modal" class="close-modal-btn" aria-label="Close login dialog">✕</button>
+                    <h2 id="login-modal-title">Login to VoiceLink</h2>
+                    <div class="auth-tabs" role="tablist" aria-label="Login methods">
+                        <button class="auth-tab active" data-tab="local-login" type="button" role="tab" aria-selected="true" aria-controls="local-login-tab" id="local-login-tab-button">VoiceLink</button>
+                        <button class="auth-tab" data-tab="whmcs-login" type="button" role="tab" aria-selected="false" aria-controls="whmcs-login-tab" id="whmcs-login-tab-button">Client Account</button>
+                        <button class="auth-tab" data-tab="mastodon-login" type="button" role="tab" aria-selected="false" aria-controls="mastodon-login-tab" id="mastodon-login-tab-button">Mastodon</button>
+                    </div>
 
-                <div class="menu-section">
-                    <h3>Quick Start</h3>
-                    <button id="create-room-btn" class="primary-btn">Create New Room</button>
-                    <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
-                </div>
+                    <div id="local-login-tab" class="auth-tab-content active" role="tabpanel" aria-labelledby="local-login-tab-button">
+                        <form id="local-login-form" class="auth-form">
+                            <div class="input-group">
+                                <label for="local-login-identity">Username or Email</label>
+                                <input type="text" id="local-login-identity" autocomplete="username" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="local-login-password">Password</label>
+                                <input type="password" id="local-login-password" autocomplete="current-password" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="local-login-2fa">Two-Factor Code</label>
+                                <input type="text" id="local-login-2fa" inputmode="numeric" autocomplete="one-time-code">
+                            </div>
+                            <div class="auth-options">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="local-remember-me"> Remember me
+                                </label>
+                                <button id="local-request-2fa-btn" class="secondary-btn" type="button">Send Code</button>
+                            </div>
+                            <button type="submit" class="primary-btn auth-submit">Sign In</button>
+                        </form>
+                    </div>
 
-                <div class="menu-section">
-                    <h3>Settings & Tools</h3>
-                    <button id="open-settings-btn" class="primary-btn">⚙️ Settings</button>
-                    <button id="quick-audio-btn" class="settings-btn">🎵 Quick Audio</button>
-                    <button id="test-audio-btn" class="settings-btn">🧪 Test Audio</button>
-                </div>
-
-                <div class="menu-section">
-                    <h3>Server Status</h3>
-                    <div id="server-status-display" class="server-status">
-                        <div class="status-item">
-                            <span class="status-label">Server:</span>
-                            <span class="status-value" id="server-status-value">🔴 Offline</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Port:</span>
-                            <span class="status-value" id="server-port-value">-</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Users:</span>
-                            <span class="status-value" id="server-users-value">0</span>
-                        </div>
-                        <div class="status-item">
-                            <span class="status-label">Rooms:</span>
-                            <span class="status-value" id="server-rooms-value">0</span>
+                    <div id="whmcs-login-tab" class="auth-tab-content" role="tabpanel" aria-labelledby="whmcs-login-tab-button" hidden>
+                        <form id="whmcs-login-form" class="auth-form">
+                            <div class="input-group">
+                                <label for="whmcs-login-email">Username or Email</label>
+                                <input type="text" id="whmcs-login-email" autocomplete="username" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-login-password">Password</label>
+                                <input type="password" id="whmcs-login-password" autocomplete="current-password" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-login-2fa">2FA Code</label>
+                                <input type="text" id="whmcs-login-2fa" inputmode="numeric" autocomplete="one-time-code">
+                            </div>
+                            <div class="input-group">
+                                <label for="whmcs-mastodon-handle">Mastodon Handle</label>
+                                <input type="text" id="whmcs-mastodon-handle" placeholder="@name@instance.social">
+                            </div>
+                            <div class="auth-options">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="whmcs-remember-me"> Remember me
+                                </label>
+                            </div>
+                            <button type="submit" class="primary-btn auth-submit">Login</button>
+                        </form>
+                        <div class="auth-actions-row">
+                            <button id="whmcs-sso-btn" class="secondary-btn" type="button">Open Client Account Portal</button>
                         </div>
                     </div>
-                    <div class="server-control-buttons">
-                        <button id="start-server-btn" class="secondary-btn" style="display: none;">▶️ Start Server</button>
-                        <button id="stop-server-btn" class="secondary-btn" style="display: none;">⏹️ Stop Server</button>
-                        <button id="restart-server-btn" class="secondary-btn" style="display: none;">🔄 Restart Server</button>
-                    </div>
-                </div>
 
-
-                <div class="menu-section">
-                    <h3>Available Rooms</h3>
-                    <div id="room-list" class="room-list">
-                        <p class="loading">Loading rooms...</p>
+                    <div id="mastodon-login-tab" class="auth-tab-content" role="tabpanel" aria-labelledby="mastodon-login-tab-button" hidden>
+                        <p>Login with your Mastodon account for federated authentication.</p>
+                        <div class="instance-input-group">
+                            <label for="mastodon-instance-input">Mastodon instance</label>
+                            <input type="text" id="mastodon-instance-input" placeholder="mastodon.social" class="instance-input">
+                            <button id="mastodon-connect-btn" class="primary-btn" type="button">Connect</button>
+                        </div>
+                        <div class="suggested-instances">
+                            <p>Suggested instances:</p>
+                            <button class="instance-btn" data-instance="md.tappedin.fm" type="button">TappedIn</button>
+                            <button class="instance-btn" data-instance="mastodon.devinecreations.net" type="button">DevineCreations</button>
+                        </div>
+                        <div id="oauth-code-entry" class="oauth-code-entry" style="display: none;">
+                            <label for="oauth-code-input">Authorization code</label>
+                            <input type="text" id="oauth-code-input" class="code-input">
+                            <button id="oauth-code-submit" class="primary-btn" type="button">Submit Code</button>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+
+            <nav class="webapp-primary-tabs" role="tablist" aria-label="VoiceLink web sections">
+                <button id="webapp-tab-servers" class="webapp-tab active" type="button" role="tab" aria-selected="true" aria-controls="webapp-panel-servers" data-webapp-tab="servers">Servers</button>
+                <button id="webapp-tab-rooms" class="webapp-tab" type="button" role="tab" aria-selected="false" aria-controls="webapp-panel-rooms" data-webapp-tab="rooms">Federated Rooms</button>
+                <button id="webapp-tab-settings" class="webapp-tab" type="button" role="tab" aria-selected="false" aria-controls="webapp-panel-settings" data-webapp-tab="settings">Settings</button>
+            </nav>
+
+            <div class="menu-content webapp-tab-layout">
+                <div id="webapp-panel-servers" class="webapp-panel active" role="tabpanel" aria-labelledby="webapp-tab-servers">
+                    <div class="menu-section webapp-feature-section">
+                        <h2>Find a VoiceLink server</h2>
+                        <p class="webapp-section-note">Search official, community, and connected VoiceLink servers, then open rooms that are available in your browser.</p>
+                        <div class="server-search-row" role="search">
+                            <label for="webapp-server-search">Search servers</label>
+                            <input id="webapp-server-search" type="search" placeholder="Server owner, display name, or domain">
+                            <button id="webapp-server-search-btn" class="secondary-btn" type="button">Search</button>
+                        </div>
+                    </div>
+
+                    <div class="menu-section">
+                        <h3>Quick Start</h3>
+                        <button id="create-room-btn" class="primary-btn">Create New Room</button>
+                        <button id="join-room-btn" class="secondary-btn">Join Existing Room</button>
+                    </div>
+
+                    <div class="menu-section">
+                        <h3>Server Status</h3>
+                        <div id="server-status-display" class="server-status">
+                            <div class="status-item">
+                                <span class="status-label">Server:</span>
+                                <span class="status-value" id="server-status-value">Offline</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Port:</span>
+                                <span class="status-value" id="server-port-value">-</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Users:</span>
+                                <span class="status-value" id="server-users-value">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">Rooms:</span>
+                                <span class="status-value" id="server-rooms-value">0</span>
+                            </div>
+                        </div>
+                        <div class="server-control-buttons">
+                            <button id="start-server-btn" class="secondary-btn" style="display: none;">Start Server</button>
+                            <button id="stop-server-btn" class="secondary-btn" style="display: none;">Stop Server</button>
+                            <button id="restart-server-btn" class="secondary-btn" style="display: none;">Restart Server</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="webapp-panel-rooms" class="webapp-panel" role="tabpanel" aria-labelledby="webapp-tab-rooms" hidden>
+                    <div class="menu-section webapp-feature-section">
+                        <h2>Federated Rooms</h2>
+                        <p class="webapp-section-note">Rooms from this server and connected VoiceLink servers appear here. Browser audio starts after you choose a room and allow microphone access.</p>
+                    </div>
+
+                    <div class="menu-section" aria-labelledby="available-rooms-heading">
+                        <h3 id="available-rooms-heading">Available Rooms</h3>
+                        <div id="room-list" class="room-list" aria-live="polite" aria-busy="true">
+                            <p class="loading">Loading rooms...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="webapp-panel-settings" class="webapp-panel" role="tabpanel" aria-labelledby="webapp-tab-settings" hidden>
+                    <div id="desktop-controls" class="menu-section" style="display: none;">
+                        <h3>App Controls</h3>
+                        <button id="minimize-to-tray-btn" class="settings-btn">Minimize to Menu Bar</button>
+                        <button id="preferences-btn" class="settings-btn">Application Settings</button>
+                    </div>
+
+                    <div class="menu-section">
+                        <h3>Settings & Tools</h3>
+                        <button id="open-settings-btn" class="primary-btn">Settings</button>
+                        <button id="quick-audio-btn" class="settings-btn">Quick Audio</button>
+                        <button id="test-audio-btn" class="settings-btn">Test Audio</button>
+                    </div>
+                </div>
+            </div>
+        </main>
 
         <!-- Room Creation -->
         <div id="create-room-screen" class="screen">
@@ -192,9 +336,9 @@
                     <span id="room-id-display">Room ID: </span>
                 </div>
                 <div class="header-controls">
-                    <button id="room-settings-btn" class="icon-btn" title="Settings">⚙️</button>
-                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio">🎵</button>
-                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room">🚪</button>
+                    <button id="room-settings-btn" class="icon-btn" title="Settings" aria-label="Open room settings">⚙️</button>
+                    <button id="quick-audio-room-btn" class="icon-btn" title="Quick Audio" aria-label="Open quick audio controls">🎵</button>
+                    <button id="leave-room-btn" class="icon-btn danger" title="Leave Room" aria-label="Leave room">🚪</button>
                 </div>
             </div>
 
@@ -958,6 +1102,7 @@
     </div>
 
     <!-- Core Scripts -->
+    <script src="js/ui/accessibility-manager.js"></script>
     <script src="js/core/ios-compatibility.js"></script>
     <script src="js/core/audio-engine.js"></script>
     <script src="js/core/media-metadata-detector.js"></script>
@@ -966,7 +1111,7 @@
     <script src="js/core/default-rooms-manager.js"></script>
     <script src="js/core/feature-permissions-manager.js"></script>
     <script src="js/integrations/wordpress-integration.js"></script>
-    <script src="js/auth/authelia-auth.js"></script>
+    <script src="js/auth/mastodon-oauth.js"></script>
     <script src="js/core/app.js"></script>
 
     <!-- Audio Processing -->
@@ -1003,5 +1148,54 @@
     <script src="js/media/jellyfin-manager.js"></script>
     <script src="js/media/live-streaming-manager.js"></script>
     <script src="js/ui/media-streaming-interface.js"></script>
+    <script>
+        (function () {
+            const tabs = Array.from(document.querySelectorAll('[data-webapp-tab]'));
+            const panels = {
+                servers: document.getElementById('webapp-panel-servers'),
+                rooms: document.getElementById('webapp-panel-rooms'),
+                settings: document.getElementById('webapp-panel-settings')
+            };
+            const live = document.getElementById('app-status-live');
+
+            function activateTab(name, announce = true) {
+                tabs.forEach((tab) => {
+                    const selected = tab.dataset.webappTab === name;
+                    tab.classList.toggle('active', selected);
+                    tab.setAttribute('aria-selected', String(selected));
+                    tab.tabIndex = selected ? 0 : -1;
+                });
+
+                Object.entries(panels).forEach(([key, panel]) => {
+                    if (!panel) return;
+                    const selected = key === name;
+                    panel.classList.toggle('active', selected);
+                    panel.hidden = !selected;
+                });
+
+                if (announce && live) {
+                    const label = tabs.find((tab) => tab.dataset.webappTab === name)?.textContent?.trim() || name;
+                    live.textContent = `${label} tab selected`;
+                }
+            }
+
+            tabs.forEach((tab, index) => {
+                tab.addEventListener('click', () => activateTab(tab.dataset.webappTab));
+                tab.addEventListener('keydown', (event) => {
+                    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                    event.preventDefault();
+                    let nextIndex = index;
+                    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+                    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+                    if (event.key === 'Home') nextIndex = 0;
+                    if (event.key === 'End') nextIndex = tabs.length - 1;
+                    tabs[nextIndex].focus();
+                    activateTab(tabs[nextIndex].dataset.webappTab);
+                });
+            });
+
+            activateTab('servers', false);
+        }());
+    </script>
 </body>
 </html>
