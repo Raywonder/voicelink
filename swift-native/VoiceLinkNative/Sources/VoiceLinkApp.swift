@@ -6151,6 +6151,24 @@ class SettingsManager: ObservableObject {
         var id: String { url }
     }
 
+    private struct ServerDirectoryEnvelope: Decodable {
+        let servers: [ServerDirectoryEntry]
+    }
+
+    private struct ServerDirectoryEntry: Decodable {
+        let url: String?
+        let apiUrl: String?
+        let name: String?
+        let configuredName: String?
+        let displayName: String?
+        let domain: String?
+        let owner: String?
+        let roomCount: Int?
+        let description: String?
+        let listedInDirectory: Bool?
+        let revealRequired: Bool?
+    }
+
     struct DetectedAudioPlugin: Identifiable {
         let identifier: String
         let name: String
@@ -6457,6 +6475,9 @@ class SettingsManager: ObservableObject {
         }
 
         loadManagedFederationServers()
+        Task {
+            await refreshManagedFederationServersFromDirectory()
+        }
     }
 
     private func boostedVolume(_ sliderValue: Double) -> Double {
@@ -6575,6 +6596,117 @@ class SettingsManager: ObservableObject {
 
         managedFederationServers = merged
         if didMigrateManagedServers || merged.count != saved.count {
+            saveManagedFederationServers()
+        }
+    }
+
+    func refreshManagedFederationServersFromDirectory() async {
+        var requestCandidates = APIEndpointResolver.remoteMainBaseCandidates(preferred: APIEndpointResolver.canonicalMainBase)
+        requestCandidates.append(APIEndpointResolver.canonicalMainBase)
+        var seenCandidates = Set<String>()
+        requestCandidates = requestCandidates
+            .map { APIEndpointResolver.normalize($0) }
+            .filter { !$0.isEmpty && seenCandidates.insert($0).inserted }
+
+        let decoder = JSONDecoder()
+        for base in requestCandidates {
+            guard let url = APIEndpointResolver.url(base: base, path: "/api/servers") else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 8
+            request.setValue("macos", forHTTPHeaderField: "x-voicelink-client")
+            request.setValue("server-directory", forHTTPHeaderField: "x-voicelink-connection-mode")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { continue }
+                let envelope = try decoder.decode(ServerDirectoryEnvelope.self, from: data)
+                let liveServers = Self.managedServers(from: envelope.servers)
+                guard !liveServers.isEmpty else { continue }
+                await MainActor.run {
+                    mergeManagedFederationServers(liveServers)
+                }
+                return
+            } catch {
+                continue
+            }
+        }
+    }
+
+    private static func managedServers(from directoryEntries: [ServerDirectoryEntry]) -> [ManagedFederationServer] {
+        var servers: [ManagedFederationServer] = []
+        var seen = Set<String>()
+
+        for entry in directoryEntries {
+            if entry.listedInDirectory == false && entry.revealRequired == true {
+                continue
+            }
+            let rawURL = entry.apiUrl ?? entry.url ?? ""
+            let normalizedURL = APIEndpointResolver.normalize(rawURL)
+            guard !normalizedURL.isEmpty, seen.insert(normalizedURL).inserted else { continue }
+
+            let owner = entry.owner?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let domain = entry.domain?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = [
+                entry.configuredName,
+                entry.displayName,
+                entry.name,
+                domain
+            ]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? normalizedURL
+            let description = entry.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedDescription = description?.isEmpty == false
+                ? description!
+                : [
+                    owner?.isEmpty == false ? "Owner: \(owner!)" : nil,
+                    domain?.isEmpty == false ? "Domain: \(domain!)" : nil,
+                    entry.roomCount.map { "Rooms: \($0)" }
+                ]
+                    .compactMap { $0 }
+                    .joined(separator: ". ")
+
+            servers.append(
+                ManagedFederationServer(
+                    url: normalizedURL,
+                    name: displayName,
+                    description: resolvedDescription.isEmpty ? "VoiceLink server discovered from the live directory." : resolvedDescription
+                )
+            )
+        }
+
+        return servers
+    }
+
+    @MainActor
+    private func mergeManagedFederationServers(_ liveServers: [ManagedFederationServer]) {
+        var merged = managedFederationServers
+        var indexByURL = Dictionary(uniqueKeysWithValues: merged.enumerated().map { (APIEndpointResolver.normalize($0.element.url), $0.offset) })
+        var changed = false
+
+        for server in liveServers {
+            let key = APIEndpointResolver.normalize(server.url)
+            if let index = indexByURL[key] {
+                let existing = merged[index]
+                let updated = ManagedFederationServer(
+                    url: server.url,
+                    name: server.name,
+                    description: server.description,
+                    isHidden: existing.isHidden
+                )
+                if updated != existing {
+                    merged[index] = updated
+                    changed = true
+                }
+            } else {
+                indexByURL[key] = merged.count
+                merged.append(server)
+                changed = true
+            }
+        }
+
+        if changed {
+            managedFederationServers = merged
             saveManagedFederationServers()
         }
     }

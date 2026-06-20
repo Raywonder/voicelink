@@ -4,7 +4,7 @@ enum APIEndpointResolver {
     static let canonicalMainBase = "https://voicelinkapp.app"
     static let communityNode2Base = "https://community.voicelinkapp.app"
     static let devineCreationsComBase = "https://devine-creations.com/voicelink"
-    static let devineCreationsNetBase = "https://devinecreations.net"
+    static let devineCreationsNetBase = "https://devinecreations.net/voicelink"
     static let localBase = "http://127.0.0.1:3010"
     static let localSecondaryBase = "http://127.0.0.1:3011"
     static let localStagingBase = "http://127.0.0.1:3012"
