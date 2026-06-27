@@ -372,7 +372,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                     "supportsOpus": true,
                     "supportsDynamicProcessing": true
                 ])
-                self.startMicrophoneCaptureIfNeeded()
+                if self.hasAuthenticatedPendingSession {
+                    self.startMicrophoneCaptureIfNeeded()
+                } else {
+                    self.audioRelayStatus = "Sign in to use microphone input."
+                }
             } else {
                 self.audioRelayStatus = "Waiting for server connection"
             }
@@ -396,8 +400,15 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("auth_failed") { [weak self] data, _ in
             guard let self else { return }
             let message = self.parseErrorMessage(data) ?? "Authentication failed"
-            self.connectionStatus = "\(message). Joining as guest…"
-            self.joinPendingSessionIfNeeded()
+            if self.hasAuthenticatedPendingSession {
+                self.connectionStatus = "\(message). Sign in again before joining this room."
+                self.pendingSession = nil
+                self.microphoneCapture.stop()
+                self.audioRelayStatus = "Sign in to use microphone input."
+            } else {
+                self.connectionStatus = "\(message). Joining as guest..."
+                self.joinPendingSessionIfNeeded()
+            }
         }
 
         socket.on("auth_token_refreshed") { data, _ in
@@ -894,6 +905,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     private func publishAudioState() {
         guard !joinedRoomId.isEmpty else { return }
+        guard hasAuthenticatedPendingSession else {
+            audioRelayStatus = "Sign in to use microphone input."
+            microphoneCapture.stop()
+            return
+        }
         guard canEmitSocketEvent else {
             audioRelayStatus = "Waiting for server connection"
             return
@@ -916,6 +932,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     private var canEmitSocketEvent: Bool {
         socket?.status == .connected
+    }
+
+    private var hasAuthenticatedPendingSession: Bool {
+        guard let pendingSession else { return false }
+        return !pendingSession.authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func startMicrophoneCaptureIfNeeded() {

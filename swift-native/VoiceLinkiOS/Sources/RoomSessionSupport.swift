@@ -82,6 +82,12 @@ struct RoomSessionView: View {
         !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var canUseRoomAudioControls: Bool {
+        isSignedIn
+            && normalizedIOSRoomIdentity(socketClient.joinedRoomId) == normalizedIOSRoomIdentity(destination.roomId)
+            && roomState.isInRoom
+    }
+
     private var roomMessages: [IOSRoomMessageItem] {
         let targetRoomId = normalizedIOSRoomIdentity(destination.roomId)
         let targetRoomName = normalizedIOSRoomIdentity(destination.roomName)
@@ -161,7 +167,6 @@ struct RoomSessionView: View {
         .onAppear {
             IOSAudioSessionManager.shared.activate(for: .room)
             socketClient.setPlaybackGain(Float(outputGain))
-            syncRoomAudioState()
             socketClient.startSession(
                 baseURL: destination.baseURL,
                 roomId: destination.roomId,
@@ -345,7 +350,13 @@ struct RoomSessionView: View {
     private var roomAudioSection: some View {
         if showAudioControls {
             Section("Audio Settings") {
-                LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
+                if canUseRoomAudioControls {
+                    LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
+                } else {
+                    Text("Sign in and join this room to use microphone controls.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Microphone controls are available after sign in and room join.")
+                }
                 LabeledContent("Room Output", value: roomOutputMuted ? "Muted" : "On")
                 LabeledContent("Audio Mode", value: roomAudioModeLabel)
                 if showRoomRelayDebugDetails {
@@ -356,10 +367,12 @@ struct RoomSessionView: View {
                     IOSActionSoundPlayer.playConfirm()
                 }
                 .accessibilityHint("Opens the room audio settings subtab with microphone, output, media, and processing controls.")
-                Button(inputMuted ? "Unmute Microphone" : "Mute Microphone") {
-                    inputMuted.toggle()
-                    syncRoomAudioState()
-                    IOSActionSoundPlayer.playToggle()
+                if canUseRoomAudioControls {
+                    Button(inputMuted ? "Unmute Microphone" : "Mute Microphone") {
+                        inputMuted.toggle()
+                        syncRoomAudioState()
+                        IOSActionSoundPlayer.playToggle()
+                    }
                 }
                 Button(roomOutputMuted ? "Unmute Room Output" : "Mute Room Output") {
                     roomOutputMuted.toggle()
@@ -489,27 +502,33 @@ struct RoomSessionView: View {
                 }
 
                 Section("Audio Settings") {
-                    Toggle("Mute Microphone", isOn: $inputMuted)
-                        .onChange(of: inputMuted) { _ in
-                            syncRoomAudioState()
-                            IOSActionSoundPlayer.playToggle()
+                    if canUseRoomAudioControls {
+                        Toggle("Mute Microphone", isOn: $inputMuted)
+                            .onChange(of: inputMuted) { _ in
+                                syncRoomAudioState()
+                                IOSActionSoundPlayer.playToggle()
+                            }
+                        Slider(value: $inputGain, in: 0...3) {
+                            Text("Mic Level")
+                        } minimumValueLabel: {
+                            Text("0%")
+                        } maximumValueLabel: {
+                            Text("300%")
                         }
+                        .accessibilityValue("\(Int(inputGain * 100)) percent")
+                        .accessibilityAdjustableAction { direction in
+                            adjustGainValue(&inputGain, direction: direction)
+                        }
+                    } else {
+                        Text("Sign in and join this room to enable microphone input.")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Microphone input is unavailable until you sign in and join this room.")
+                    }
                     Toggle("Mute Room Output", isOn: $roomOutputMuted)
                         .onChange(of: roomOutputMuted) { _ in
                             syncRoomAudioState()
                             IOSActionSoundPlayer.playToggle()
                         }
-                    Slider(value: $inputGain, in: 0...3) {
-                        Text("Mic Level")
-                    } minimumValueLabel: {
-                        Text("0%")
-                    } maximumValueLabel: {
-                        Text("300%")
-                    }
-                    .accessibilityValue("\(Int(inputGain * 100)) percent")
-                    .accessibilityAdjustableAction { direction in
-                        adjustGainValue(&inputGain, direction: direction)
-                    }
 
                     Slider(value: $outputGain, in: 0...3) {
                         Text("Master Output")
@@ -1199,7 +1218,9 @@ struct RoomSessionView: View {
         keepRoomAliveResetTask = nil
         keepRoomAliveDuringInterfaceChange = false
         IOSAudioSessionManager.shared.activate(for: .room)
-        syncRoomAudioState()
+        if canUseRoomAudioControls {
+            syncRoomAudioState()
+        }
         socketClient.setPlaybackGain(Float(outputGain))
         updateRoomBackgroundPlaybackVolume()
         socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
@@ -1303,6 +1324,10 @@ struct RoomSessionView: View {
     }
 
     private func syncRoomAudioState() {
+        guard canUseRoomAudioControls else {
+            socketClient.setOutputMuted(roomOutputMuted)
+            return
+        }
         socketClient.setInputMuted(inputMuted)
         socketClient.setOutputMuted(roomOutputMuted)
     }

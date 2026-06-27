@@ -1991,9 +1991,20 @@ class ServerManager: ObservableObject {
             self.outputMuted = isDeafened
         }
 
+        guard let activeRoomId, !activeRoomId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            audioStartQueue.async { [weak self] in
+                self?.stopAudioTransmissionNow()
+            }
+            DispatchQueue.main.async {
+                self.audioTransmissionStatus = "Join a room to use microphone"
+            }
+            return
+        }
+
         socket?.emit("audio-state", [
             "muted": isMuted,
-            "deafened": isDeafened
+            "deafened": isDeafened,
+            "roomId": activeRoomId
         ])
 
         // Start/stop audio transmission based on mute state

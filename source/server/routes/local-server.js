@@ -19463,8 +19463,10 @@ class VoiceLinkLocalServer {
                 notifyAdmins: config.notifyAdmins !== false,
                 notifySupportRooms: config.notifySupportRooms === true,
                 allowFileRelay: config.allowFileRelay !== false,
-                preferredBackends: Array.isArray(config.preferredBackends) ? config.preferredBackends : [],
-                defaultDelegateBot: String(config.defaultDelegateBot || '').trim() || null
+                preferredBackends: Array.isArray(config.preferredBackends)
+                    ? config.preferredBackends
+                    : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
+                defaultDelegateBot: String(config.defaultDelegateBot || 'codex-bot').trim() || 'codex-bot'
             };
         };
         const summarizeModerationText = (value, maxLength = 140) => {
@@ -22447,7 +22449,7 @@ class VoiceLinkLocalServer {
                 botNotifySupportRooms: botConfig.notifySupportRooms === true,
                 botAllowFileRelay: botConfig.allowFileRelay !== false,
                 botDefaultDelegateBot: botConfig.defaultDelegateBot || 'codex-bot',
-                botPreferredBackends: Array.isArray(botConfig.preferredBackends) ? botConfig.preferredBackends : ['ollama', 'codex', 'opencode', 'openclaw', 'claude'],
+                botPreferredBackends: Array.isArray(botConfig.preferredBackends) ? botConfig.preferredBackends : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
                 botTempDirectory: botConfig.tempDirectory || null,
                 botMaxRelayFileSize: Number(botConfig.maxRelayFileSize || 10485760)
             });
@@ -22517,7 +22519,7 @@ class VoiceLinkLocalServer {
                     defaultDelegateBot: body.botDefaultDelegateBot ? String(body.botDefaultDelegateBot).trim() : 'codex-bot',
                     preferredBackends: Array.isArray(body.botPreferredBackends)
                         ? body.botPreferredBackends.slice(0, 8).map((item) => String(item || '').trim()).filter(Boolean)
-                        : ['ollama', 'codex', 'opencode', 'openclaw', 'claude'],
+                        : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
                     tempDirectory: body.botTempDirectory ? String(body.botTempDirectory).trim() : null,
                     maxRelayFileSize: Math.max(1024, Number(body.botMaxRelayFileSize) || 10485760)
                 });

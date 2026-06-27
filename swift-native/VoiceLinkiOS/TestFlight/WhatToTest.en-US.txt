@@ -1,23 +1,16 @@
-Build 96 refreshes the iOS beta with the latest room action, profile sheet, and join-time audio stability fixes.
+Build 97 focuses on Mastodon sign-in, safer room audio startup, live transcripts, and server bot management.
 
 What changed:
-- Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
-- VoiceOver actions for people and bot rows stay in the active room when showing profile details, direct messages, monitoring, whisper, or audio controls.
-- The user details sheet now shows room state, transmit state, mute/output state, speaking state, bot type, role, authentication provider, and device/client details when available.
-- The current signed-in user row still allows monitoring and audio controls, but does not expose Whisper.
-- Other people expose Whisper only when they have audio available.
-- Text-only bots expose text actions such as profile and direct message without audio controls.
-- Audio-capable bots can expose both text and audio-related actions.
-- iOS room audio keeps the larger room I/O buffer and relay packet queue tuning from the last beta to reduce join-time buffering while keeping latency low.
-- This beta is a refresh build so testers receive the newest packaged fixes instead of remaining on build 95.
+- Mastodon-authenticated sessions refresh rooms after sign-in and avoid silently downgrading a failed signed-in join to guest mode.
+- Microphone controls are hidden until the user is signed in and has actually joined a room.
+- The iOS audio socket also refuses to publish microphone/audio state unless a signed-in room session is active.
+- Room transcript events continue into the Live Transcripts section so spoken room activity can appear as subtitles when the server provides transcripts.
+- VoiceLink server bot defaults now prefer Codex/OpenClaw before local fallback models, with existing role boundaries for visitors, users, moderators, and admins.
 
 Please test:
-- Join a room on iOS with VoiceOver enabled.
-- Focus your own user row and confirm Monitoring or Audio Controls are available, but Whisper is not.
-- Use the View Profile action and confirm the user details sheet opens without leaving the room or disconnecting.
-- Open and close audio controls from your own row and another user's row and confirm the room remains active.
-- Focus another person with audio and confirm Whisper and audio actions are available.
-- Focus a text-only bot and confirm only text-related actions are offered.
-- Focus an audio-capable bot and confirm both text and audio actions are offered.
-- Join a room and confirm audio starts with less buffering and no new distortion, clipping, or repeated join sounds.
-- Leave the details sheet, People in Room sheet, and audio controls and confirm room messages and users remain visible.
+- Sign in with Mastodon, refresh the server list, and join a room.
+- Confirm the microphone controls are not visible from a shared room URL, preview, or sign-in screen.
+- Confirm microphone controls appear only after signed-in room join.
+- Try a bad or expired sign-in session and confirm the app asks for sign-in again instead of joining as guest.
+- Join a room where transcripts are enabled and confirm spoken messages appear in Live Transcripts.
+- Confirm room messages, people, room details, and audio settings sheets do not disconnect the room.

@@ -234,6 +234,22 @@ const DEFAULT_CONFIG = {
         instances: [],
         defaultInstance: null
     },
+    bots: {
+        enabled: true,
+        botMeshEnabled: true,
+        moderationEnabled: true,
+        watchGuestLogins: true,
+        watchRoomMessages: true,
+        watchDirectMessages: true,
+        watchFileOffers: true,
+        notifyAdmins: true,
+        notifySupportRooms: false,
+        allowFileRelay: true,
+        defaultDelegateBot: 'codex-bot',
+        preferredBackends: ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
+        tempDirectory: null,
+        maxRelayFileSize: 10485760
+    },
     admin: {
         enabled: true,
         requireAuth: true,
