@@ -10554,9 +10554,10 @@ class VoiceLinkLocalServer {
             if (code) nativeParams.set('code', code);
             if (state) nativeParams.set('state', state);
             if (error) nativeParams.set('error', error);
-            const nativeRedirect = `voicelink://oauth/callback?${nativeParams.toString()}`;
+            const nativeRedirect = `vcl://oauth/callback?${nativeParams.toString()}`;
+            const legacyNativeRedirect = `voicelink://oauth/callback?${nativeParams.toString()}`;
             const userAgent = String(req.get('user-agent') || '').toLowerCase();
-            const wantsNative = ['ios', 'iphone', 'ipad', 'testflight', 'voicelink'].some((needle) => userAgent.includes(needle))
+            const wantsNative = ['testflight', 'voicelink'].some((needle) => userAgent.includes(needle))
                 || String(req.query.client || '').toLowerCase() === 'ios'
                 || String(req.query.native || '').toLowerCase() === '1';
 
@@ -10571,14 +10572,18 @@ class VoiceLinkLocalServer {
   <meta charset="utf-8">
   <title>Return to VoiceLink</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0;url=${nativeRedirect.replace(/"/g, '&quot;')}">
 </head>
 <body>
   <h1>Return to VoiceLink</h1>
-  <p>Your Mastodon sign-in returned to VoiceLink. If the app does not open automatically, use this link:</p>
+  <p>Your Mastodon sign-in returned to VoiceLink. If the app does not open automatically, use one of these links:</p>
   <p><a href="${nativeRedirect.replace(/"/g, '&quot;')}">Open VoiceLink</a></p>
+  <p><a href="${legacyNativeRedirect.replace(/"/g, '&quot;')}">Open VoiceLink using legacy link</a></p>
   ${code ? `<p>Authorization code: <code>${code.replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char]))}</code></p>` : ''}
-  <script>window.location.replace(${JSON.stringify(nativeRedirect)});</script>
+  <script>
+    setTimeout(function () {
+      window.location.href = ${JSON.stringify(nativeRedirect)};
+    }, 250);
+  </script>
 </body>
 </html>`);
         };

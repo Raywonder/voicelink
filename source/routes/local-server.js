@@ -6831,7 +6831,7 @@ class VoiceLinkLocalServer {
         this.app.get('/oauth/callback', (req, res) => {
             const { code, state } = req.query;
             // Redirect to main app with code for client-side processing
-            res.redirect(`/?oauth_code=${code}&oauth_state=${state}`);
+            res.redirect(`/client/?oauth_code=${encodeURIComponent(code || '')}&oauth_state=${encodeURIComponent(state || '')}`);
         });
 
         // Generate Mastodon share URL for a room
