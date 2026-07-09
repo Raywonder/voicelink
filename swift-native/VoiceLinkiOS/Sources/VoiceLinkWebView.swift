@@ -467,6 +467,53 @@ struct VoiceLinkWebView: UIViewRepresentable {
                 if (userPanel) userPanel.style.flex = visible ? '0 0 250px' : '0 0 290px';
               };
 
+              window.__voicelinkHandleNativeURL = async (urlString) => {
+                try {
+                  const nativeURL = new URL(String(urlString || ''));
+                  if (nativeURL.protocol !== 'voicelink:' || nativeURL.hostname !== 'oauth') return false;
+                  const path = nativeURL.pathname.replace(/^\\//, '');
+                  if (path !== 'callback') return false;
+                  const code = nativeURL.searchParams.get('code') || nativeURL.searchParams.get('oauth_code');
+                  const state = nativeURL.searchParams.get('state') || nativeURL.searchParams.get('oauth_state');
+                  const error = nativeURL.searchParams.get('error') || nativeURL.searchParams.get('oauth_error');
+
+                  if (error) {
+                    const message = `Login failed: ${error}`;
+                    if (window.app?.showNotification) window.app.showNotification(message, 'error');
+                    return true;
+                  }
+                  if (!code) return false;
+
+                  if (window.app?.handleOAuthCallback) {
+                    await window.app.handleOAuthCallback(code, state);
+                    return true;
+                  }
+                  if (window.mastodonAuth?.handleCallback) {
+                    const user = await window.mastodonAuth.handleCallback(code, state);
+                    window.dispatchEvent(new CustomEvent('mastodon-login', { detail: { user } }));
+                    if (window.app?.showNotification) window.app.showNotification(`Welcome, ${user?.displayName || 'VoiceLink User'}!`, 'success');
+                    return true;
+                  }
+                  window.__voicelinkPendingNativeOAuthURL = urlString;
+                  return false;
+                } catch (error) {
+                  console.error('Failed to handle native VoiceLink URL:', error);
+                  if (window.app?.showNotification) window.app.showNotification(`Login failed: ${error.message}`, 'error');
+                  return false;
+                }
+              };
+
+              const retryPendingNativeOAuthURL = () => {
+                if (!window.__voicelinkPendingNativeOAuthURL) return;
+                const pending = window.__voicelinkPendingNativeOAuthURL;
+                window.__voicelinkPendingNativeOAuthURL = '';
+                window.__voicelinkHandleNativeURL(pending).then((handled) => {
+                  if (!handled) window.__voicelinkPendingNativeOAuthURL = pending;
+                }).catch(() => {
+                  window.__voicelinkPendingNativeOAuthURL = pending;
+                });
+              };
+
               const roomId = () =>
                 new URLSearchParams(window.location.search).get('room') ||
                 document.getElementById('join-room-id')?.value ||
@@ -602,22 +649,26 @@ struct VoiceLinkWebView: UIViewRepresentable {
 
               window.addEventListener('load', () => {
                 wireObservers();
+                retryPendingNativeOAuthURL();
                 window.__voicelinkResumeAudio?.(true);
                 startAudioWatchdog();
               }, { once: false });
               document.addEventListener('DOMContentLoaded', () => {
                 wireObservers();
+                retryPendingNativeOAuthURL();
                 window.__voicelinkResumeAudio?.(true);
                 startAudioWatchdog();
               }, { once: false });
               document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
                   wireObservers();
+                  retryPendingNativeOAuthURL();
                   window.__voicelinkResumeAudio?.(true);
                 }
               });
               window.addEventListener('pageshow', () => {
                 wireObservers();
+                retryPendingNativeOAuthURL();
                 window.__voicelinkResumeAudio?.(true);
               });
               ['touchend', 'click'].forEach((eventName) => {
@@ -664,6 +715,20 @@ struct VoiceLinkWebView: UIViewRepresentable {
                     queue: .main
                 ) { [weak self] _ in
                     self?.reassertAudioBridge()
+                }
+            )
+
+            observers.append(
+                NotificationCenter.default.addObserver(
+                    forName: .iosOpenURL,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    guard let urlString = notification.userInfo?["url"] as? String else { return }
+                    self?.webView?.evaluateJavaScript(
+                        "window.__voicelinkHandleNativeURL?.('\(urlString.jsEscapedLiteral)');",
+                        completionHandler: nil
+                    )
                 }
             )
         }

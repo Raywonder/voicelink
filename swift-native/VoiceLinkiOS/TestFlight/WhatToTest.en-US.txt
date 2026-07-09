@@ -6,6 +6,7 @@ What changed:
 - The iOS audio socket also refuses to publish microphone/audio state unless a signed-in room session is active.
 - Room transcript events continue into the Live Transcripts section so spoken room activity can appear as subtitles when the server provides transcripts.
 - VoiceLink server bot defaults now prefer Codex/OpenClaw before local fallback models, with existing role boundaries for visitors, users, moderators, and admins.
+- The beta can automatically send diagnostics on first launch of each build and roughly every 15 minutes while the app is active; Settings still includes a manual Send Diagnostics Report button.
 
 Please test:
 - Sign in with Mastodon, refresh the server list, and join a room.
@@ -14,3 +15,4 @@ Please test:
 - Try a bad or expired sign-in session and confirm the app asks for sign-in again instead of joining as guest.
 - Join a room where transcripts are enabled and confirm spoken messages appear in Live Transcripts.
 - Confirm room messages, people, room details, and audio settings sheets do not disconnect the room.
+- Open Settings, confirm automatic diagnostics is enabled, reproduce a Mastodon or audio issue, and use Send Diagnostics Report if support asks for an immediate extra report.

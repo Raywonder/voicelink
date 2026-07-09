@@ -3884,8 +3884,11 @@ struct SettingsTab: View {
                 }
 
                 Section("Diagnostics") {
-                    Toggle("Auto-send diagnostics with bug reports", isOn: $autoSendDiagnostics)
+                    Toggle("Automatically send beta diagnostics", isOn: $autoSendDiagnostics)
                     Toggle("Include recent crash/session reports", isOn: $shareCrashReports)
+                    Text("When enabled, the beta sends a diagnostics snapshot on first launch of each build and about every 15 minutes while the app is active.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Button(submittingDiagnostics ? "Sending…" : "Send Diagnostics Report") {
                         submitDiagnosticsReport()
                     }

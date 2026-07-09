@@ -202,6 +202,7 @@ class iOSCompatibility {
 
     createAudioUnlockOverlay() {
         if (this.unlocked) return;
+        if (document.getElementById('ios-audio-unlock')) return;
 
         const overlay = document.createElement('div');
         overlay.id = 'ios-audio-unlock';
@@ -303,6 +304,8 @@ class iOSCompatibility {
 
     async unlockAudio() {
         if (this.unlocked) return;
+        if (this.unlocking) return;
+        this.unlocking = true;
 
         try {
             let microphoneGranted = false;
@@ -361,6 +364,8 @@ class iOSCompatibility {
 
         } catch (error) {
             console.error('Failed to unlock iOS audio:', error);
+        } finally {
+            this.unlocking = false;
         }
     }
 
