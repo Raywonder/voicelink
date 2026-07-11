@@ -65,6 +65,7 @@ async function main() {
   const bundleId = process.env.ASC_APP_BUNDLE_ID || 'com.devinecreations.voicelink';
   const version = process.env.ASC_MARKETING_VERSION || '1.0.0';
   const buildNumber = process.env.ASC_BUILD_NUMBER || '86';
+  const locale = process.env.ASC_LOCALE || 'en-US';
   if (!keyId || !issuerId || !privateKeyPem) throw new Error('Missing ASC credentials');
   const token = makeJwt({ keyId, issuerId, privateKeyPem });
   const appJson = await apiRequest(token, '/apps', { 'filter[bundleId]': bundleId, limit: 1 });
@@ -82,12 +83,23 @@ async function main() {
   const included = buildsJson.included || [];
   const review = included.find((item) => item.type === 'betaAppReviewSubmissions') || null;
   const groups = included.filter((item) => item.type === 'betaGroups').map((item) => item.attributes?.name || item.id);
+  const localizationsJson = await apiRequest(token, '/betaBuildLocalizations', {
+    'filter[build]': build.id,
+    'filter[locale]': locale,
+    limit: 1
+  });
+  const localization = localizationsJson.data?.[0] || null;
   console.log(JSON.stringify({
     id: build.id,
     version,
     buildNumber,
+    locale,
     attributes: build.attributes,
     betaGroups: groups,
+    betaBuildLocalization: localization ? {
+      id: localization.id,
+      attributes: localization.attributes
+    } : null,
     betaAppReviewSubmission: review ? { id: review.id, attributes: review.attributes } : null
   }, null, 2));
 }

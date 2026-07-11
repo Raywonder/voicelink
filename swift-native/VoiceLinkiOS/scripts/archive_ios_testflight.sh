@@ -16,8 +16,11 @@ ITC_PROVIDER="${ITC_PROVIDER:-G5232LU4Z7}"
 AUTO_UPLOAD="${AUTO_UPLOAD:-0}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
 CREDENTIALS_FILE="${CREDENTIALS_FILE:-/Users/admin/dev/appstore/voicelink/ios_testflight_credentials.env}"
+ASC_CREDENTIALS_FILE="${ASC_CREDENTIALS_FILE:-/Users/admin/dev/appstore/voicelink/appstoreconnect_api.env}"
 KEYCHAIN_SERVICE="${KEYCHAIN_SERVICE:-voicelink.transporter}"
 LEDGER_FILE="${LEDGER_FILE:-/Users/admin/dev/appstore/voicelink/TESTFLIGHT_BUILD_LEDGER.md}"
+REQUIRE_TESTFLIGHT_NOTES="${REQUIRE_TESTFLIGHT_NOTES:-1}"
+INSPECT_RECEIPT_DIR="${INSPECT_RECEIPT_DIR:-$ROOT_DIR/build/testflight-inspect}"
 IOS_BUILD_KEYCHAIN_ENV="${IOS_BUILD_KEYCHAIN_ENV:-/Users/admin/dev/appstore/voicelink/ios_build_keychain.env}"
 IOS_BUILD_KEYCHAIN_PATH="${IOS_BUILD_KEYCHAIN_PATH:-/Users/admin/Library/Keychains/voicelink-ios-build.keychain-db}"
 MACOS_SIGNING_ENV="${MACOS_SIGNING_ENV:-/Users/admin/dev/appstore/voicelink/macos_signing.env}"
@@ -48,6 +51,11 @@ fi
 if [[ -f "$CREDENTIALS_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$CREDENTIALS_FILE"
+fi
+
+if [[ -f "$ASC_CREDENTIALS_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ASC_CREDENTIALS_FILE"
 fi
 
 APPLE_ID_EMAIL="${APPLE_ID_EMAIL:-${VOICELINK_APPLE_ID_EMAIL:-}}"
@@ -132,6 +140,45 @@ MARKETING_VERSION="$(
     "$ARCHIVE_PATH/Products/Applications/VoiceLink.app/Info.plist" 2>/dev/null || echo "1.0"
 )"
 
+has_app_store_connect_api_credentials() {
+  [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]] \
+    && [[ -n "${ASC_PRIVATE_KEY:-}" || -n "${ASC_PRIVATE_KEY_PATH:-}" ]]
+}
+
+sync_uploaded_build_testflight_notes() {
+  if [[ -z "$BUILD_NUMBER" ]]; then
+    echo "Skipping TestFlight notes sync because BUILD_NUMBER is empty."
+    return 0
+  fi
+
+  export ASC_APP_BUNDLE_ID="${ASC_APP_BUNDLE_ID:-com.devinecreations.voicelink}"
+  export ASC_MARKETING_VERSION="${ASC_MARKETING_VERSION:-$MARKETING_VERSION}"
+  export ASC_BUILD_NUMBER="${ASC_BUILD_NUMBER:-$BUILD_NUMBER}"
+
+  if ! has_app_store_connect_api_credentials; then
+    echo "TestFlight notes were NOT attached: missing App Store Connect API credentials."
+    echo "Expected ASC_KEY_ID, ASC_ISSUER_ID, and ASC_PRIVATE_KEY_PATH or ASC_PRIVATE_KEY."
+    echo "Checked ASC_CREDENTIALS_FILE: $ASC_CREDENTIALS_FILE"
+    if [[ "$REQUIRE_TESTFLIGHT_NOTES" == "1" ]]; then
+      echo "Failing because REQUIRE_TESTFLIGHT_NOTES=1. Set REQUIRE_TESTFLIGHT_NOTES=0 only for an intentional upload without notes."
+      return 1
+    fi
+    echo "WARNING: continuing because REQUIRE_TESTFLIGHT_NOTES=0."
+    return 0
+  fi
+
+  echo "Syncing TestFlight What to Test notes for build $ASC_MARKETING_VERSION ($ASC_BUILD_NUMBER)..."
+  "$ROOT_DIR/scripts/update_testflight_notes.sh" \
+    --version "$ASC_MARKETING_VERSION" \
+    --build-number "$ASC_BUILD_NUMBER"
+
+  mkdir -p "$INSPECT_RECEIPT_DIR"
+  local inspect_receipt="$INSPECT_RECEIPT_DIR/voicelink-${ASC_MARKETING_VERSION}-${ASC_BUILD_NUMBER}-$(date '+%Y%m%d-%H%M%S').json"
+  echo "Inspecting TestFlight build state..."
+  node "$ROOT_DIR/scripts/inspect_testflight_build.js" >"$inspect_receipt"
+  echo "TestFlight inspect receipt: $inspect_receipt"
+}
+
 if [[ "$AUTO_UPLOAD" == "1" ]]; then
   if [[ -z "$BUILD_NUMBER" ]]; then
     echo "AUTO_UPLOAD=1 requires BUILD_NUMBER to avoid duplicate IPA uploads."
@@ -155,6 +202,8 @@ if [[ "$AUTO_UPLOAD" == "1" ]]; then
     -p "$APP_SPECIFIC_PASSWORD" \
     -itc_provider "$ITC_PROVIDER"
   echo "Upload finished."
+
+  sync_uploaded_build_testflight_notes
 
   if [[ -n "$BUILD_NUMBER" ]]; then
     if [[ ! -f "$LEDGER_FILE" ]]; then
