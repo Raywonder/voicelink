@@ -1,4 +1,4 @@
-Build 98 adds room media playback and makes basic room audio available to guests as well as signed-in users.
+Build 99 adds room media playback and makes basic room audio available to guests as well as signed-in users.
 
 What changed:
 - Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
