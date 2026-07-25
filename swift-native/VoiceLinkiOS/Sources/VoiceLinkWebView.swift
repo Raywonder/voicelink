@@ -29,6 +29,14 @@ enum IOSVoiceLinkAudioMode: String {
     }
 }
 
+enum IOSVoiceLinkAudioFeatureFlags {
+    static let advancedRoomAudioEnabledKey = "voicelink.ios.advancedRoomAudioEnabled"
+
+    static var advancedRoomAudioEnabled: Bool {
+        UserDefaults.standard.object(forKey: advancedRoomAudioEnabledKey) as? Bool ?? false
+    }
+}
+
 final class IOSAudioSessionManager {
     static let shared = IOSAudioSessionManager()
 

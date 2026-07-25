@@ -51,6 +51,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private var lastAudioLevelUpdateAt: [String: Date] = [:]
     private var recentRoomMessageKeys: [String: Date] = [:]
 
+    private var advancedRoomAudioEnabled: Bool {
+        IOSVoiceLinkAudioFeatureFlags.advancedRoomAudioEnabled
+    }
+
     private init() {
         let center = NotificationCenter.default
         observers.append(
@@ -149,7 +153,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             connectionStatus = "Waiting for server connection."
             return
         }
-        socket?.emit("chat-message", [
+        var payload: [String: Any] = [
             "roomId": joinedRoomId,
             "message": body,
             "type": "text",
@@ -157,7 +161,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "deviceName": UIDevice.current.name,
             "deviceType": "ios",
             "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-        ])
+        ]
+        payload.merge(currentAuthSocketPayload()) { current, _ in current }
+        socket?.emit("chat-message", payload)
     }
 
     func requestRoomUsers() {
@@ -360,22 +366,25 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 await self.refreshRoomSnapshotViaHTTP()
             }
             if self.canEmitSocketEvent {
+                let advancedAudioEnabled = self.advancedRoomAudioEnabled
                 self.socket?.emit("enable-audio-relay", [
-                    "enabled": true,
+                    "enabled": advancedAudioEnabled,
                     "sampleRate": VoiceLinkAudioTransportDefaults.sampleRate,
                     "channels": VoiceLinkAudioTransportDefaults.preferredChannels,
                     "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
                     "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
-                    "engine": VoiceLinkAudioTransportDefaults.engine,
+                    "engine": advancedAudioEnabled ? VoiceLinkAudioTransportDefaults.engine : "apple-native-default",
                     "audioMode": IOSVoiceLinkAudioMode.current.rawValue,
                     "supportsStereo": true,
                     "supportsOpus": true,
                     "supportsDynamicProcessing": true
                 ])
-                if self.hasAuthenticatedPendingSession {
-                    self.startMicrophoneCaptureIfNeeded()
+                if !advancedAudioEnabled {
+                    self.microphoneCapture.stop()
+                    self.relayPlayer.stop()
+                    self.audioRelayStatus = "Using iOS default room audio."
                 } else {
-                    self.audioRelayStatus = "Sign in to use microphone input."
+                    self.startMicrophoneCaptureIfNeeded()
                 }
             } else {
                 self.audioRelayStatus = "Waiting for server connection"
@@ -391,6 +400,17 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("auth_success") { [weak self] _, _ in
             guard let self else { return }
             if !self.joinedRoomId.isEmpty {
+                self.connectionStatus = "Session verified"
+                self.requestRoomUsersIfDue(minimumInterval: 0.5)
+                self.requestRoomMessages()
+                Task { [weak self] in
+                    await self?.refreshRoomSnapshotViaHTTP()
+                }
+                if self.advancedRoomAudioEnabled {
+                    self.startMicrophoneCaptureIfNeeded()
+                } else {
+                    self.audioRelayStatus = "Using iOS default room audio."
+                }
                 return
             }
             self.connectionStatus = "Session verified"
@@ -404,7 +424,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                 self.connectionStatus = "\(message). Sign in again before joining this room."
                 self.pendingSession = nil
                 self.microphoneCapture.stop()
-                self.audioRelayStatus = "Sign in to use microphone input."
+                self.audioRelayStatus = "Sign in again before joining this room."
             } else {
                 self.connectionStatus = "\(message). Joining as guest..."
                 self.joinPendingSessionIfNeeded()
@@ -488,10 +508,16 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             guard let payload = Self.socketDictionaryValue(data.first) else { return }
             let userId = normalizedSocketText(payload["senderId"] ?? payload["userId"], fallback: "")
             let userName = normalizedSocketText(payload["senderName"] ?? payload["userName"], fallback: "User")
+            let body = normalizedSocketText(payload["message"] ?? payload["content"] ?? payload["text"] ?? payload["body"], fallback: "")
             NotificationCenter.default.post(
                 name: .iosDirectMessageEvent,
                 object: nil,
-                userInfo: ["userId": userId, "userName": userName]
+                userInfo: [
+                    "userId": userId,
+                    "userName": userName,
+                    "body": body,
+                    "timestamp": normalizedSocketTimestamp(payload["timestamp"])
+                ]
             )
         }
 
@@ -521,6 +547,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
         socket.on("relay-status") { [weak self] data, _ in
             guard let self else { return }
+            guard self.advancedRoomAudioEnabled else {
+                self.relayPlayer.stop()
+                self.audioRelayStatus = "Using iOS default room audio."
+                return
+            }
             let payload = Self.socketDictionaryValue(data.first) ?? [:]
             let isActive = (payload["active"] as? Bool) ?? false
             self.audioRelayStatus = isActive ? "Relay active" : "Relay unavailable"
@@ -534,6 +565,11 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("relayed-audio") { [weak self] data, _ in
             guard let self,
                   let payload = self.socketDictionary(from: data) else { return }
+            guard self.advancedRoomAudioEnabled else {
+                self.relayPlayer.stop()
+                self.audioRelayStatus = "Using iOS default room audio."
+                return
+            }
             self.updateIncomingAudioLevel(from: payload)
             self.relayPlayer.playPacket(payload)
         }
@@ -769,7 +805,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             connectionStatus = "Waiting for server connection."
             return
         }
-        socket?.emit("join-room", [
+        var payload: [String: Any] = [
             "roomId": pendingSession.roomId,
             "userName": pendingSession.displayName,
             "username": pendingSession.displayName,
@@ -777,7 +813,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "deviceType": "ios",
             "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0",
             "appVersion": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        ])
+        ]
+        payload.merge(currentAuthSocketPayload()) { current, _ in current }
+        socket?.emit("join-room", payload)
         connectionStatus = "Joining \(pendingSession.roomName)…"
     }
 
@@ -905,9 +943,10 @@ final class IOSNativeRoomSocketClient: ObservableObject {
 
     private func publishAudioState() {
         guard !joinedRoomId.isEmpty else { return }
-        guard hasAuthenticatedPendingSession else {
-            audioRelayStatus = "Sign in to use microphone input."
+        guard advancedRoomAudioEnabled else {
+            audioRelayStatus = "Using iOS default room audio."
             microphoneCapture.stop()
+            relayPlayer.stop()
             return
         }
         guard canEmitSocketEvent else {
@@ -937,11 +976,49 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private var hasAuthenticatedPendingSession: Bool {
         guard let pendingSession else { return false }
         return !pendingSession.authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (!pendingSession.authProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !pendingAuthUserId(for: pendingSession).isEmpty)
+    }
+
+    private func pendingAuthUserId(for session: PendingSession) -> String {
+        for key in ["id", "userId", "accountId", "email", "username", "acct", "handle"] {
+            let value = normalizedSocketText(session.authUser[key], fallback: "")
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return ""
+    }
+
+    private func currentAuthSocketPayload() -> [String: Any] {
+        guard let pendingSession,
+              hasAuthenticatedPendingSession else {
+            return [:]
+        }
+        var payload: [String: Any] = [
+            "isAuthenticated": true,
+            "authProvider": pendingSession.authProvider,
+            "authUser": pendingSession.authUser
+        ]
+        let token = pendingSession.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            payload["authToken"] = token
+        }
+        let authUserId = pendingAuthUserId(for: pendingSession)
+        if !authUserId.isEmpty {
+            payload["authUserId"] = authUserId
+        }
+        return payload
     }
 
     private func startMicrophoneCaptureIfNeeded() {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard self.advancedRoomAudioEnabled else {
+                self.audioRelayStatus = "Using iOS default room audio."
+                self.microphoneCapture.stop()
+                return
+            }
             IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
             guard await self.ensureMicrophonePermission() else {
                 self.audioRelayStatus = "Microphone access is required for room audio."
@@ -972,6 +1049,9 @@ final class IOSNativeRoomSocketClient: ObservableObject {
                         "timestamp": packetTimestamp,
                         "sampleRate": packet.sampleRate,
                         "channels": packet.channels,
+                        "isAuthenticated": self.hasAuthenticatedPendingSession,
+                        "authProvider": self.pendingSession?.authProvider ?? "",
+                        "authUserId": self.pendingSession.map { self.pendingAuthUserId(for: $0) } ?? "",
                         "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
                         "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
                         "engine": VoiceLinkAudioTransportDefaults.engine,

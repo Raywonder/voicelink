@@ -1,18 +1,21 @@
-Build 97 focuses on Mastodon sign-in, safer room audio startup, live transcripts, and server bot management.
+Build 98 adds room media playback and makes basic room audio available to guests as well as signed-in users.
 
 What changed:
-- Mastodon-authenticated sessions refresh rooms after sign-in and avoid silently downgrading a failed signed-in join to guest mode.
-- Microphone controls are hidden until the user is signed in and has actually joined a room.
-- The iOS audio socket also refuses to publish microphone/audio state unless a signed-in room session is active.
-- Room transcript events continue into the Live Transcripts section so spoken room activity can appear as subtitles when the server provides transcripts.
-- VoiceLink server bot defaults now prefer Codex/OpenClaw before local fallback models, with existing role boundaries for visitors, users, moderators, and admins.
-- The beta can automatically send diagnostics on first launch of each build and roughly every 15 minutes while the app is active; Settings still includes a manual Send Diagnostics Report button.
+- Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
+- The panel includes Play, Retry, media mute, and a source label. Room media plays locally and does not replace room conversation audio.
+- Guest users can join a room and use basic microphone and output controls. Administrative actions remain server-authorized.
+- Audio Settings adds a join preference: use the room default, always join muted, or always join unmuted.
+- Mastodon-authenticated sessions refresh rooms after sign-in and do not silently downgrade a failed signed-in join to guest mode.
+- Room transcript events continue into Live Transcripts when the server provides them.
+- The beta can automatically send diagnostics on first launch and periodically while active; Settings also includes Send Diagnostics Report.
+- VoiceLink server bot defaults prefer Codex/OpenClaw before local fallback models, with existing role boundaries preserved.
 
 Please test:
-- Sign in with Mastodon, refresh the server list, and join a room.
-- Confirm the microphone controls are not visible from a shared room URL, preview, or sign-in screen.
-- Confirm microphone controls appear only after signed-in room join.
-- Try a bad or expired sign-in session and confirm the app asks for sign-in again instead of joining as guest.
-- Join a room where transcripts are enabled and confirm spoken messages appear in Live Transcripts.
+- Join a room as a guest and confirm microphone and room-output controls appear after the room join completes.
+- Join while signed in and confirm the same basic audio controls work, while management controls follow your server role.
+- Change the join preference, leave and rejoin, and confirm the microphone starts in the selected state.
+- Join a room with an audio-only background stream and confirm the expandable Room Media panel plays it.
+- Join a room with a video source and confirm video appears only for that source.
+- Confirm the Play or Retry control recovers media if the stream was not ready on the first attempt.
 - Confirm room messages, people, room details, and audio settings sheets do not disconnect the room.
-- Open Settings, confirm automatic diagnostics is enabled, reproduce a Mastodon or audio issue, and use Send Diagnostics Report if support asks for an immediate extra report.
+- Reproduce a Mastodon or audio issue and confirm Send Diagnostics Report is available if support asks for it.
