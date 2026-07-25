@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import SwiftUI
 
 struct RoomSessionDestination: Identifiable, Hashable {
@@ -65,6 +66,8 @@ struct RoomSessionView: View {
     @State private var joinSoundTask: Task<Void, Never>?
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
+    @State private var roomBackgroundContainsVideo = false
+    @State private var roomMediaExpanded = false
     @State private var roomBackgroundFadeTask: Task<Void, Never>?
     @State private var roomAudioDuckTask: Task<Void, Never>?
     @State private var draftMessage = ""
@@ -143,6 +146,7 @@ struct RoomSessionView: View {
         NavigationStack {
             List {
                 connectionSection
+                roomMediaSection
                 peopleSection
                 roomAudioSection
                 roomChatSection
@@ -237,6 +241,54 @@ struct RoomSessionView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var roomMediaSection: some View {
+        let streamURL = destination.backgroundStream.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !streamURL.isEmpty {
+            Section("Room Media") {
+                DisclosureGroup("\\(roomBackgroundSourceLabel(streamURL)) media", isExpanded: $roomMediaExpanded) {
+                    LabeledContent("Status", value: mediaMuted ? "Muted" : "Available")
+                    Text("This room media plays locally on your device and does not replace room voices.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if roomBackgroundContainsVideo, !mediaMuted, let roomBackgroundPlayer {
+                        VideoPlayer(player: roomBackgroundPlayer)
+                            .frame(minHeight: 180)
+                            .accessibilityLabel("Room video from \\(roomBackgroundSourceLabel(streamURL))")
+                    }
+                    Button("Play Background Media") {
+                        mediaMuted = false
+                        startRoomBackgroundPlaybackIfNeeded()
+                        IOSActionSoundPlayer.playConfirm()
+                    }
+                    .accessibilityHint("Starts the room media on this device.")
+                    Button("Retry Background Media") {
+                        mediaMuted = false
+                        startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
+                        IOSActionSoundPlayer.playConfirm()
+                    }
+                    .accessibilityHint("Reloads the room media if it did not begin playing.")
+                    Toggle("Mute Background Media", isOn: $mediaMuted)
+                        .onChange(of: mediaMuted) { _ in
+                            syncRoomBackgroundPlaybackState()
+                            IOSActionSoundPlayer.playToggle()
+                        }
+                }
+                .accessibilityHint(roomBackgroundContainsVideo ? "Expands room media controls and the active video player." : "Expands room media controls.")
+            }
+        }
+    }
+
+    private func roomBackgroundSourceLabel(_ streamURL: String) -> String {
+        guard let host = URL(string: streamURL)?.host?.lowercased() else {
+            return "Room background stream"
+        }
+        if host.contains("aaastreamer.devinecreations.net") {
+            return "TappedIn.fm"
+        }
+        return host
     }
 
     @ViewBuilder
@@ -1307,9 +1359,20 @@ struct RoomSessionView: View {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         roomBackgroundPlayer = player
+        detectRoomBackgroundVideo(at: url)
         updateRoomBackgroundPlaybackVolume()
         if !mediaMuted {
             player.play()
+        }
+    }
+
+    private func detectRoomBackgroundVideo(at url: URL) {
+        roomBackgroundContainsVideo = false
+        Task { @MainActor in
+            let asset = AVURLAsset(url: url)
+            let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+            guard !Task.isCancelled else { return }
+            roomBackgroundContainsVideo = !videoTracks.isEmpty
         }
     }
 
@@ -1376,6 +1439,7 @@ struct RoomSessionView: View {
     private func stopRoomBackgroundPlayback() {
         roomBackgroundPlayer?.pause()
         roomBackgroundPlayer = nil
+        roomBackgroundContainsVideo = false
     }
 
     private func roomAudioStatusLabel(for target: IOSDirectMessageTarget) -> String {
