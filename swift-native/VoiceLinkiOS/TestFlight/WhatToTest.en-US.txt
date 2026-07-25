@@ -1,6 +1,8 @@
-Build 100 adds room media playback and makes basic room audio available to guests as well as signed-in users.
+Build 101 repairs the iOS room activation path and includes the room-media and guest-audio work from build 100.
 
 What changed:
+- iOS now completes its room-join activation from the server acknowledgement, rather than waiting only for a later realtime event. The app records activation stages and makes acknowledgement failures retryable instead of silently leaving the room half-joined.
+- The Servers tab now loads the selected server directly instead of waiting for a federation crawl. Room-directory failures show an error and can be retried.
 - Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
 - The panel includes Play, Retry, media mute, and a source label. Room media plays locally and does not replace room conversation audio.
 - Guest users can join a room and use basic microphone and output controls. Administrative actions remain server-authorized.
@@ -11,6 +13,10 @@ What changed:
 - VoiceLink server bot defaults prefer Codex/OpenClaw before local fallback models, with existing role boundaries preserved.
 
 Please test:
+- Join a room and confirm the participant list shows you, your role, and any room bots; confirm messages appear immediately.
+- With VoiceOver enabled, confirm join, leave, system, and error announcements are spoken and that room controls have useful labels.
+- Confirm microphone controls become available after join. If microphone permission is denied, the app should say that rather than asking you to join again.
+- Leave and rejoin the same room; confirm there are no duplicate users and the room recovers after a reconnect.
 - Join a room as a guest and confirm microphone and room-output controls appear after the room join completes.
 - Join while signed in and confirm the same basic audio controls work, while management controls follow your server role.
 - Change the join preference, leave and rejoin, and confirm the microphone starts in the selected state.

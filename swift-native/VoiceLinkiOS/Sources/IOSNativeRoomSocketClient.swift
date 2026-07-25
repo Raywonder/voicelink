@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import UIKit
 import SocketIO
+import OSLog
 
 private enum VoiceLinkAudioTransportDefaults {
     static let sampleRate = 48_000
@@ -16,6 +17,19 @@ private enum VoiceLinkAudioTransportDefaults {
 final class IOSNativeRoomSocketClient: ObservableObject {
     static let shared = IOSNativeRoomSocketClient()
 
+    enum RoomActivationState: String {
+        case idle
+        case joining
+        case awaitingAcknowledgement
+        case loadingSnapshot
+        case connectingRealtime
+        case syncingPresence
+        case initializingAudio
+        case joined
+        case reconnecting
+        case failed
+    }
+
     @Published private(set) var connectionStatus = "Offline"
     @Published private(set) var joinedRoomId = ""
     @Published private(set) var joinedRoomName = ""
@@ -29,6 +43,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     @Published private(set) var microphoneSampleRate: Double = 0
     @Published private(set) var microphoneBufferSize: Int = 0
     @Published private(set) var microphoneChannelCount: Int = 0
+    @Published private(set) var activationState: RoomActivationState = .idle
 
     private struct PendingSession {
         let baseURL: String
@@ -50,6 +65,8 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private var lastRoomUsersRequestAt = Date.distantPast
     private var lastAudioLevelUpdateAt: [String: Date] = [:]
     private var recentRoomMessageKeys: [String: Date] = [:]
+    private var activationCorrelationID = UUID().uuidString
+    private let activationLogger = Logger(subsystem: "com.devinecreations.voicelink", category: "RoomActivation")
 
     private var advancedRoomAudioEnabled: Bool {
         IOSVoiceLinkAudioFeatureFlags.advancedRoomAudioEnabled
@@ -297,12 +314,23 @@ final class IOSNativeRoomSocketClient: ObservableObject {
         socket.on("joined-room") { [weak self] data, _ in
             guard let self,
                   let payload = self.socketDictionary(from: data) else { return }
+            self.transitionActivation(to: .connectingRealtime, result: "joined-room event received")
             let room = Self.socketDictionaryValue(payload["room"]) ?? [:]
             let fallbackRoomId = self.pendingSession?.roomId ?? self.joinedRoomId
             let roomId = normalizedSocketText(room["id"], fallback: fallbackRoomId)
             let roomName = normalizedSocketText(room["name"], fallback: self.joinedRoomName)
             let joinedUser = Self.socketDictionaryValue(payload["user"])
             let seededMessages = Self.socketMessagesValue(payload)
+            if !roomId.isEmpty, self.joinedRoomId == roomId {
+                let users = Self.socketUsersValue(payload)
+                self.updateRoomUsers(Self.socketUserDictionaries(users), fallbackRoomId: roomId)
+                for message in seededMessages {
+                    self.postRoomMessage(message, fallbackRoomId: roomId)
+                }
+                self.requestRoomUsersIfDue(minimumInterval: 0.5)
+                self.requestRoomMessages()
+                return
+            }
             self.joinedRoomId = roomId
             self.joinedRoomName = roomName
             self.connectionStatus = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
@@ -360,7 +388,19 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             self.requestRoomUsers()
             self.requestRoomMessages()
             Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 1_250_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: 1_250_000_000)
+                } catch is CancellationError {
+                    await MainActor.run {
+                        self?.transitionActivation(to: .reconnecting, result: "snapshot retry cancelled", underlyingError: "activation task cancelled")
+                    }
+                    return
+                } catch {
+                    await MainActor.run {
+                        self?.transitionActivation(to: .failed, result: "snapshot retry failed", underlyingError: error.localizedDescription)
+                    }
+                    return
+                }
                 guard let self, self.joinedRoomId == roomId, self.roomUsers.isEmpty else { return }
                 self.requestRoomUsersIfDue(minimumInterval: 1.0)
                 await self.refreshRoomSnapshotViaHTTP()
@@ -389,6 +429,7 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             } else {
                 self.audioRelayStatus = "Waiting for server connection"
             }
+            self.transitionActivation(to: .joined, result: "event activation completed")
         }
 
         socket.on("join-room-error") { [weak self] data, _ in
@@ -802,9 +843,12 @@ final class IOSNativeRoomSocketClient: ObservableObject {
     private func joinPendingSessionIfNeeded() {
         guard let pendingSession else { return }
         guard canEmitSocketEvent else {
+            transitionActivation(to: .failed, result: "socket unavailable", underlyingError: "join requested before Socket.IO connected")
             connectionStatus = "Waiting for server connection."
             return
         }
+        activationCorrelationID = UUID().uuidString
+        transitionActivation(to: .joining, result: "started")
         var payload: [String: Any] = [
             "roomId": pendingSession.roomId,
             "userName": pendingSession.displayName,
@@ -815,8 +859,124 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             "appVersion": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
         ]
         payload.merge(currentAuthSocketPayload()) { current, _ in current }
-        socket?.emit("join-room", payload)
         connectionStatus = "Joining \(pendingSession.roomName)…"
+        transitionActivation(to: .awaitingAcknowledgement, result: "join-room emitted")
+        socket?.emitWithAck("join-room", payload).timingOut(after: 8) { [weak self] ackData in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let first = ackData.first as? String, first.uppercased() == SocketAckStatus.noAck {
+                    self.transitionActivation(to: .failed, result: "timeout", underlyingError: "join-room acknowledgement timed out")
+                    self.connectionStatus = "Room join timed out. Retry joining the room."
+                    self.audioRelayStatus = "Room join acknowledgement timed out."
+                    return
+                }
+                guard let payload = Self.socketDictionaryValue(ackData.first) else {
+                    self.transitionActivation(to: .failed, result: "invalid acknowledgement", underlyingError: "join-room returned an unreadable acknowledgement")
+                    self.connectionStatus = "Room join acknowledgement was invalid. Retry joining the room."
+                    self.audioRelayStatus = "Room join acknowledgement was invalid."
+                    return
+                }
+                if payload["success"] as? Bool == false {
+                    self.transitionActivation(to: .failed, result: "rejected", underlyingError: self.parseErrorMessage([payload]) ?? "server rejected join-room")
+                    self.connectionStatus = self.parseErrorMessage([payload]) ?? "Could not join room."
+                    self.audioRelayStatus = "Room join was rejected."
+                    return
+                }
+                self.activateJoinAcknowledgement(payload)
+            }
+        }
+    }
+
+    private func activateJoinAcknowledgement(_ payload: [String: Any]) {
+        guard joinedRoomId.isEmpty else { return }
+        transitionActivation(to: .loadingSnapshot, result: "acknowledgement received")
+        let room = Self.socketDictionaryValue(payload["room"]) ?? [:]
+        let roomId = normalizedSocketText(room["id"], fallback: pendingSession?.roomId ?? "")
+        guard !roomId.isEmpty else {
+            transitionActivation(to: .failed, result: "missing room", underlyingError: "join acknowledgement contained no room id")
+            connectionStatus = "Room join acknowledgement did not include a room. Retry joining the room."
+            return
+        }
+        let roomName = normalizedSocketText(room["name"], fallback: pendingSession?.roomName ?? "")
+        let user = Self.socketDictionaryValue(payload["user"]) ?? [:]
+        joinedRoomId = roomId
+        joinedRoomName = roomName
+        let fallbackUser: [String: Any] = !user.isEmpty ? user : [
+            "id": "local:\(pendingSession?.displayName.lowercased() ?? "guest")",
+            "userId": "local:\(pendingSession?.displayName.lowercased() ?? "guest")",
+            "name": pendingSession?.displayName ?? "Guest",
+            "userName": pendingSession?.displayName ?? "Guest",
+            "displayName": pendingSession?.displayName ?? "Guest",
+            "transmitEnabled": !inputMuted,
+            "muted": inputMuted,
+            "deafened": outputMuted,
+            "deviceName": UIDevice.current.name,
+            "deviceType": "ios"
+        ]
+        let users = Self.socketUsersValue(payload)
+        updateRoomUsers(Self.socketUserDictionaries(users), fallbackRoomId: roomId)
+        mergeRoomUser(fallbackUser, fallbackRoomId: roomId)
+        transitionActivation(to: .syncingPresence, result: "current user seeded")
+        requestRoomUsers()
+        requestRoomMessages()
+        transitionActivation(to: .initializingAudio, result: "room requests issued")
+        initializeRoomAudio()
+        connectionStatus = roomName.isEmpty ? "Joined room." : "Joined \(roomName)."
+        NotificationCenter.default.post(
+            name: .iosRoomJoined,
+            object: nil,
+            userInfo: [
+                "roomId": roomId,
+                "roomName": roomName,
+                "users": users,
+                "user": fallbackUser,
+                "displayName": pendingSession?.displayName ?? "",
+                "messages": Self.socketMessagesValue(payload)
+            ]
+        )
+        let announcedUsers: [Any] = users.isEmpty ? [fallbackUser] : users
+        NotificationCenter.default.post(
+            name: .iosRoomUsersUpdated,
+            object: nil,
+            userInfo: ["roomId": roomId, "users": announcedUsers]
+        )
+        transitionActivation(to: .joined, result: "ack, presence seed, requests, and audio initialization completed")
+    }
+
+    private func initializeRoomAudio() {
+        guard canEmitSocketEvent else {
+            audioRelayStatus = "Waiting for server connection"
+            return
+        }
+        let advancedAudioEnabled = advancedRoomAudioEnabled
+        socket?.emit("enable-audio-relay", [
+            "enabled": advancedAudioEnabled,
+            "sampleRate": VoiceLinkAudioTransportDefaults.sampleRate,
+            "channels": VoiceLinkAudioTransportDefaults.preferredChannels,
+            "codec": VoiceLinkAudioTransportDefaults.pcmCodec,
+            "preferredCodec": VoiceLinkAudioTransportDefaults.preferredCodec,
+            "engine": advancedAudioEnabled ? VoiceLinkAudioTransportDefaults.engine : "apple-native-default",
+            "audioMode": IOSVoiceLinkAudioMode.current.rawValue,
+            "supportsStereo": true,
+            "supportsOpus": true,
+            "supportsDynamicProcessing": true
+        ])
+        if advancedAudioEnabled {
+            startMicrophoneCaptureIfNeeded()
+        } else {
+            microphoneCapture.stop()
+            relayPlayer.stop()
+            audioRelayStatus = "Using iOS default room audio."
+        }
+    }
+
+    private func transitionActivation(to state: RoomActivationState, result: String, underlyingError: String = "") {
+        activationState = state
+        let roomId = pendingSession?.roomId ?? joinedRoomId
+        let userId = pendingSession.map { pendingAuthUserId(for: $0) } ?? "guest"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        activationLogger.notice("stage=\(state.rawValue, privacy: .public) result=\(result, privacy: .public) platform=iOS version=\(version, privacy: .public) build=\(build, privacy: .public) room=\(roomId, privacy: .public) user=\(userId, privacy: .public) correlation=\(self.activationCorrelationID, privacy: .public) error=\(underlyingError, privacy: .public)")
     }
 
     private func socketDictionary(from data: [Any]) -> [String: Any]? {

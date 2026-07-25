@@ -55,7 +55,9 @@ fi
 
 if [[ -f "$ASC_CREDENTIALS_FILE" ]]; then
   # shellcheck disable=SC1090
+  set -a
   source "$ASC_CREDENTIALS_FILE"
+  set +a
 fi
 
 APPLE_ID_EMAIL="${APPLE_ID_EMAIL:-${VOICELINK_APPLE_ID_EMAIL:-}}"

@@ -2,6 +2,12 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import AVFoundation
+import OSLog
+
+private let roomDirectoryLogger = Logger(
+    subsystem: "com.devinecreations.voicelink",
+    category: "RoomDirectory"
+)
 
 struct ContentView: View {
     @Binding var serverURL: String
@@ -1812,15 +1818,17 @@ private struct HomeTab: View {
             return
         }
 
-        if !isLoading {
-            isLoading = true
-        }
+        isLoading = true
+        defer { isLoading = false }
         errorMessage = ""
         do {
-            let bases = await fetchVisibleFederationBases(preferredBase: normalizedBaseURL)
+            let (localRooms, resolvedBase) = try await fetchRoomsWithFallback(
+                sortMode: roomSortMode,
+                preferredBase: normalizedBaseURL
+            )
             rooms = deduplicateHomeRooms(
-                try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: roomSortMode),
-                fallbackBase: normalizedBaseURL
+                localRooms,
+                fallbackBase: resolvedBase
             )
         } catch let error as IOSRoomsAuthenticationRequired {
             rooms = []
@@ -1829,9 +1837,9 @@ private struct HomeTab: View {
             showNativeAccountSignIn = true
         } catch {
             rooms = []
-            errorMessage = "Could not load rooms. Check server URL and network."
+            roomDirectoryLogger.error("room.directory.failed base=\(normalizedBaseURL, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            errorMessage = "Could not load rooms: \(error.localizedDescription)"
         }
-        isLoading = false
     }
 
     private func deduplicateHomeRooms(_ allRooms: [RoomSummary], fallbackBase: String) -> [RoomSummary] {
@@ -4443,19 +4451,24 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
         let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
         guard let url = URL(string: endpoint) else { continue }
         let request = iosServerPresenceRequest(url: url, timeout: 12)
+        let startedAt = Date()
+        roomDirectoryLogger.notice("room.directory.request base=\(normalizeBaseURL(base), privacy: .public) sort=\(sortMode.rawValue, privacy: .public)")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 if http.statusCode == 401 || http.statusCode == 403 {
                     lastError = IOSRoomsAuthenticationRequired(baseURL: normalizeBaseURL(base))
                 }
+                roomDirectoryLogger.error("room.directory.response base=\(normalizeBaseURL(base), privacy: .public) status=\(http.statusCode) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) result=http-error")
                 continue
             }
             let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
                 .map { $0.normalizedForFetchedBase(base) }
+            roomDirectoryLogger.notice("room.directory.response base=\(normalizeBaseURL(base), privacy: .public) count=\(decodedRooms.count) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) result=success")
             return (decodedRooms, normalizeBaseURL(base))
         } catch {
             lastError = error
+            roomDirectoryLogger.error("room.directory.failed base=\(normalizeBaseURL(base), privacy: .public) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) error=\(error.localizedDescription, privacy: .public)")
         }
     }
     throw lastError ?? URLError(.cannotConnectToHost)
