@@ -50,6 +50,8 @@ swift-native/VoiceLinkNative/build-universal/
 swift-native/VoiceLinkNative/release-artifacts/
 swift-native/*/.build/
 swift-native/*/build/
+swift-native/VoiceLinkiOS/build-codex/
+swift-native/VoiceLinkiOS/backups/
 swift-native/*/*.dSYM/
 
 # Windows build artifacts
