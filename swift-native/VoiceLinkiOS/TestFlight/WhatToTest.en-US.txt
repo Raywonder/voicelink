@@ -1,35 +1,22 @@
-Build 103 completes iOS room presence, server navigation, selected-server administration, and automatic room-media recovery.
+Build 103 completes room presence, server navigation, selected-server administration, and automatic room-media recovery.
 
 What changed:
-- Rejoining or reopening an already-connected room now re-announces the active room and current user to the app state, so the People list and audio controls no longer remain in a half-joined state.
-- The Servers tab loads every configured iOS server in parallel instead of stopping after the first reachable server.
-- Administration actions are checked against and opened for the server selected in the directory, rather than the previously preferred server.
-- iOS now completes its room-join activation from the server acknowledgement, rather than waiting only for a later realtime event. The app records activation stages and makes acknowledgement failures retryable instead of silently leaving the room half-joined.
-- Server owner/site blocks and individual servers open on their own screens instead of expandable sections.
-- A selected server shows its owner, description, open/closed join state, guest policy, contact action, and Administration Settings when authorized.
-- Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
-- Room media autoplays after the server confirms the join. Dropped media retries automatically using the server administrator's attempt, delay, and cooldown policy; room users cannot override it.
-- Audio Settings includes Media Playback Volume and lets Mute Room Output affect room audio only or room audio plus media.
-- Room preview plays briefly without presenting a separate screen.
-- Guest users can join a room and use basic microphone and output controls. Administrative actions remain server-authorized.
-- Audio Settings adds a join preference: use the room default, always join muted, or always join unmuted.
-- Mastodon-authenticated sessions refresh rooms after sign-in and do not silently downgrade a failed signed-in join to guest mode.
-- Room transcript events continue into Live Transcripts when the server provides them.
-- The beta can automatically send diagnostics on first launch and periodically while active; Settings also includes Send Diagnostics Report.
-- VoiceLink server bot defaults prefer Codex/OpenClaw before local fallback models, with existing role boundaries preserved.
+- Confirmed socket state now repairs the joined-room state, People list, microphone controls, and current user after reconnects or notification races.
+- Server owner/site groups and individual servers open on separate screens instead of expandable sections.
+- Selected-server screens show description, owner, contact, open/closed state, guest policy, and Administration Settings when authorized.
+- VoiceOver double-tap joins the focused room. Swipe actions include Room Details, preview, sharing, and support.
+- Room preview plays briefly without presenting another screen.
+- Background media autoplays after a confirmed join.
+- Dropped media retries automatically using server-admin attempt, delay, and cooldown settings. Room users cannot override them, and there is no Retry button.
+- Audio Settings includes Media Playback Volume. Mute Room Output can affect room audio only or room audio plus media.
+- Guest microphone and output controls remain available after a confirmed join.
+- Room messages, system announcements, transcripts, and participant updates continue while details and settings sheets are open.
 
 Please test:
-- Confirm the Servers tab shows main, community, development, and configured Devine Creations servers, with owner/site groups and servers opening on separate screens.
-- Select a server where your account can manage rooms and confirm Create Room and Edit Rooms open administration for that selected server.
-- Join a room and confirm the participant list shows you, your role, and any room bots; confirm messages appear immediately.
-- With VoiceOver enabled, confirm join, leave, system, and error announcements are spoken and that room controls have useful labels.
-- Confirm microphone controls become available after join. If microphone permission is denied, the app should say that rather than asking you to join again.
-- Leave and rejoin the same room; confirm there are no duplicate users and the room recovers after a reconnect.
-- Join a room as a guest and confirm microphone and room-output controls appear after the room join completes.
-- Join while signed in and confirm the same basic audio controls work, while management controls follow your server role.
-- Change the join preference, leave and rejoin, and confirm the microphone starts in the selected state.
-- Join a room with an audio-only background stream and confirm it autoplays, honors Media Playback Volume, and follows the selected room-output mute scope.
-- Join a room with a video source and confirm video appears only for that source.
-- Interrupt a media stream and confirm it retries automatically without a Retry button.
-- Confirm room messages, people, room details, and audio settings sheets do not disconnect the room.
-- Reproduce a Mastodon or audio issue and confirm Send Diagnostics Report is available if support asks for it.
+- Confirm main, community, development, and configured Devine Creations servers remain visible.
+- Open an owner/site group, then a server, and verify its information and room list.
+- On an authorized server, open Administration Settings and confirm it targets that selected server.
+- With VoiceOver, double-tap a room to join and use swipe actions to open Room Details before joining.
+- Join, leave, and rejoin. Confirm you and other participants appear, messages arrive, and microphone controls do not say you still need to join.
+- Join a room with background media. Confirm autoplay, automatic recovery, Media Playback Volume, and both output-mute scopes.
+- Confirm preview playback does not open a separate screen.
