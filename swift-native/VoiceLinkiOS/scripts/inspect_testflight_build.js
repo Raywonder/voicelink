@@ -68,6 +68,34 @@ async function main() {
   const locale = process.env.ASC_LOCALE || 'en-US';
   if (!keyId || !issuerId || !privateKeyPem) throw new Error('Missing ASC credentials');
   const token = makeJwt({ keyId, issuerId, privateKeyPem });
+  if (process.env.ASC_CHECK_EMAILS) {
+    const emails = process.env.ASC_CHECK_EMAILS
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+    const results = [];
+    for (const email of emails) {
+      const testers = await apiRequest(token, '/betaTesters', {
+        'filter[email]': email,
+        limit: 20
+      });
+      const users = await apiRequest(token, '/users', {
+        'filter[username]': email,
+        limit: 20
+      });
+      results.push({
+        email,
+        betaTesterIds: (testers.data || []).map((item) => item.id),
+        appStoreConnectUsers: (users.data || []).map((item) => ({
+          id: item.id,
+          roles: item.attributes?.roles || [],
+          allAppsVisible: item.attributes?.allAppsVisible === true
+        }))
+      });
+    }
+    console.log(JSON.stringify({ accounts: results }, null, 2));
+    return;
+  }
   if (process.env.ASC_AUDIT_ALL === '1') {
     const appsJson = await apiRequest(token, '/apps', {
       'fields[apps]': 'name,bundleId',
@@ -91,10 +119,32 @@ async function main() {
           publicLinkEnabled: item.attributes?.publicLinkEnabled === true,
           publicLink: item.attributes?.publicLink || null
         }));
+      const testerSuffixes = (process.env.ASC_TESTER_EMAIL_SUFFIXES || '')
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      const matchingInternalTesters = [];
+      if (testerSuffixes.length > 0) {
+        for (const group of groups.filter((item) => item.isInternalGroup)) {
+          const testersJson = await apiRequest(token, `/betaGroups/${group.id}/betaTesters`, {
+            limit: 200
+          });
+          for (const tester of testersJson.data || []) {
+            const email = String(tester.attributes?.email || '').trim().toLowerCase();
+            if (email && testerSuffixes.some((suffix) => email.endsWith(`@${suffix}`))) {
+              matchingInternalTesters.push({
+                group: group.name,
+                email
+              });
+            }
+          }
+        }
+      }
       auditedApps.push({
         id: app.id,
         name: app.attributes?.name || app.id,
         bundleId: app.attributes?.bundleId || null,
+        matchingInternalTesters,
         latestBuild: latest ? {
           id: latest.id,
           buildNumber: latest.attributes?.version || null,

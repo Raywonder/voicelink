@@ -285,6 +285,62 @@ async function detachBuildFromBetaGroup(token, { buildId, groupId }) {
   return 'detached';
 }
 
+async function ensureBetaTesterInGroup(token, { email, groupId }) {
+  const testers = await apiRequest(token, '/betaTesters', {
+    query: {
+      'filter[email]': email,
+      limit: 1
+    }
+  });
+  let tester = testers?.data?.[0] || null;
+  if (!tester?.id) {
+    const created = await apiRequest(token, '/betaTesters', {
+      method: 'POST',
+      body: {
+        data: {
+          type: 'betaTesters',
+          attributes: {
+            email
+          },
+          relationships: {
+            betaGroups: {
+              data: [
+                {
+                  type: 'betaGroups',
+                  id: groupId
+                }
+              ]
+            }
+          }
+        }
+      }
+    });
+    tester = created?.data || null;
+    return tester?.id ? 'invited' : 'invite-requested';
+  }
+
+  try {
+    await apiRequest(token, `/betaGroups/${groupId}/relationships/betaTesters`, {
+      method: 'POST',
+      body: {
+        data: [
+          {
+            type: 'betaTesters',
+            id: tester.id
+          }
+        ]
+      }
+    });
+    return 'attached';
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (message.toLowerCase().includes('already')) {
+      return 'already-attached';
+    }
+    throw error;
+  }
+}
+
 async function ensureExternalBetaReviewSubmission(token, { buildId }) {
   try {
     await apiRequest(token, '/betaAppReviewSubmissions', {
@@ -331,6 +387,11 @@ async function main() {
   const betaGroupName = args['beta-group-name'] || process.env.ASC_BETA_GROUP_NAME || DEFAULT_BETA_GROUP_NAME;
   const removeBetaGroupName = args['remove-beta-group-name'] || process.env.ASC_REMOVE_BETA_GROUP_NAME || '';
   const releaseExternal = args['release-external'] === true || process.env.ASC_RELEASE_EXTERNAL === '1';
+  const internalTesterEmail = (
+    args['internal-tester-email']
+    || process.env.ASC_INTERNAL_TESTER_EMAIL
+    || ''
+  ).trim().toLowerCase();
 
   const pbxproj = readFileRequired(pbxprojPath, 'Xcode project');
   const bundleId = args['bundle-id'] || process.env.ASC_APP_BUNDLE_ID || extractPbxprojValue(pbxproj, 'PRODUCT_BUNDLE_IDENTIFIER');
@@ -371,11 +432,21 @@ async function main() {
         `Beta group ${betaGroupName} is external. Pass --release-external only after internal testing is verified.`
       );
     }
+    if (internalTesterEmail && !isInternalGroup) {
+      throw new Error(`Internal tester invitations require an internal beta group, not ${betaGroupName}.`);
+    }
     const attachState = await attachBuildToBetaGroup(token, {
       buildId: build.id,
       groupId: betaGroup.id
     });
     console.log(`Build ${version} (${buildNumber}) ${attachState} to beta group ${betaGroupName}`);
+    if (internalTesterEmail) {
+      const testerState = await ensureBetaTesterInGroup(token, {
+        email: internalTesterEmail,
+        groupId: betaGroup.id
+      });
+      console.log(`Internal tester ${testerState} for beta group ${betaGroupName}`);
+    }
     if (!isInternalGroup) {
       const reviewState = await ensureExternalBetaReviewSubmission(token, { buildId: build.id });
       console.log(`External beta review ${reviewState} for build ${version} (${buildNumber})`);
