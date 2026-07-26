@@ -204,6 +204,42 @@ final class IOSRoomMessagingState: ObservableObject {
         )
     }
 
+    func synchronizeConfirmedRoom(
+        roomId: String,
+        roomName: String,
+        displayName: String,
+        users: [IOSDirectMessageTarget]
+    ) {
+        let normalizedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedRoomId.isEmpty else { return }
+        let alreadyConfirmed = isInRoom
+            && normalizedIOSRoomIdentity(activeRoomId) == normalizedIOSRoomIdentity(normalizedRoomId)
+        var payload: [String: Any] = [
+            "roomId": normalizedRoomId,
+            "roomName": roomName,
+            "displayName": displayName
+        ]
+        if !users.isEmpty {
+            payload["users"] = users.map {
+                [
+                    "id": $0.id,
+                    "name": $0.name,
+                    "isBot": $0.isBot,
+                    "muted": $0.isMuted,
+                    "deafened": $0.isDeafened,
+                    "transmitEnabled": $0.transmitEnabled,
+                    "deviceName": $0.deviceName,
+                    "deviceType": $0.deviceType
+                ] as [String: Any]
+            }
+        }
+        if alreadyConfirmed {
+            handleRoomUsers(payload)
+        } else {
+            handleRoomJoined(payload)
+        }
+    }
+
     func sendDirectMessage(_ text: String) {
         guard isInRoom else {
             statusText = "Join a room first to send direct messages."
@@ -999,6 +1035,14 @@ private enum RoomSortMode: String, CaseIterable, Identifiable {
 }
 
 struct RoomSummary: Identifiable, Decodable, Hashable {
+    struct MediaRetryPolicy: Decodable, Hashable {
+        let enabled: Bool
+        let retryAttempts: Int
+        let retryDelaySeconds: Int
+        let cooldownSeconds: Int
+
+        static let serverDefault = MediaRetryPolicy(enabled: true, retryAttempts: 4, retryDelaySeconds: 3, cooldownSeconds: 30)
+    }
     struct LiveBroadcastSummary: Decodable, Hashable {
         let enabled: Bool
         let isLive: Bool
@@ -1069,6 +1113,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     let federationTier: String
     let backgroundStream: String
     let streamVolume: Double
+    let mediaRetryPolicy: MediaRetryPolicy
     let liveBroadcast: LiveBroadcastSummary?
     let showChatInIOS: Bool
     let iosChatMessageOrder: String
@@ -1096,6 +1141,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         federationTier: String,
         backgroundStream: String,
         streamVolume: Double,
+        mediaRetryPolicy: MediaRetryPolicy = .serverDefault,
         liveBroadcast: LiveBroadcastSummary?,
         showChatInIOS: Bool,
         iosChatMessageOrder: String,
@@ -1122,6 +1168,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         self.federationTier = federationTier
         self.backgroundStream = backgroundStream
         self.streamVolume = streamVolume
+        self.mediaRetryPolicy = mediaRetryPolicy
         self.liveBroadcast = liveBroadcast
         self.showChatInIOS = showChatInIOS
         self.iosChatMessageOrder = iosChatMessageOrder
@@ -1132,7 +1179,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description, users, userCount, memberCount, botCount, totalVisible, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, liveBroadcast, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit, motd, motdSettings, serverRules
+        case id, name, description, users, userCount, memberCount, botCount, totalVisible, visibility, accessType, locked, serverSource, serverTitle, serverApiBase, serverDomain, serverDescription, federated, federationTier, backgroundStream, streamVolume, mediaRetryPolicy, liveBroadcast, showChatInIOS, iosChatMessageOrder, iosChatMessageLimit, motd, motdSettings, serverRules
     }
 
     init(from decoder: Decoder) throws {
@@ -1159,6 +1206,7 @@ struct RoomSummary: Identifiable, Decodable, Hashable {
         backgroundStream = (try? container.decode(String.self, forKey: .backgroundStream)) ?? ""
         streamVolume = (try? container.decode(Double.self, forKey: .streamVolume))
             ?? Double((try? container.decode(Int.self, forKey: .streamVolume)) ?? 30)
+        mediaRetryPolicy = (try? container.decode(MediaRetryPolicy.self, forKey: .mediaRetryPolicy)) ?? .serverDefault
         liveBroadcast = try? container.decode(LiveBroadcastSummary.self, forKey: .liveBroadcast)
         showChatInIOS = (try? container.decode(Bool.self, forKey: .showChatInIOS)) ?? true
         let decodedOrder = (try? container.decode(String.self, forKey: .iosChatMessageOrder))?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "newest-first"
@@ -1245,6 +1293,7 @@ private extension RoomSummary {
             federationTier: federationTier,
             backgroundStream: backgroundStream,
             streamVolume: streamVolume,
+            mediaRetryPolicy: mediaRetryPolicy,
             liveBroadcast: liveBroadcast,
             showChatInIOS: showChatInIOS,
             iosChatMessageOrder: iosChatMessageOrder,
@@ -1401,7 +1450,6 @@ private struct HomeTab: View {
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
-    @State private var expandedServerOwnerGroups: Set<String> = []
     @State private var showNativeAccountSignIn = false
     @State private var authRequiredServerURL = ""
 
@@ -1570,51 +1618,27 @@ private struct HomeTab: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
-                            let serverCount = group.servers.count
-                            let isExpanded = expandedServerOwnerGroups.contains(group.owner) || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            Button {
-                                if expandedServerOwnerGroups.contains(group.owner) {
-                                    expandedServerOwnerGroups.remove(group.owner)
-                                } else {
-                                    expandedServerOwnerGroups.insert(group.owner)
-                                }
-                            } label: {
-                                HStack {
-                                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                        .accessibilityHidden(true)
-                                    Text("\(group.owner) (\(serverCount) server\(serverCount == 1 ? "" : "s"))")
-                                        .font(.headline)
-                                    Spacer()
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(group.owner), \(serverCount) server\(serverCount == 1 ? "" : "s")")
-                            .accessibilityHint(isExpanded ? "Double tap to hide this owner's servers." : "Double tap to show this owner's servers.")
-                            .accessibilityAddTraits(.isButton)
-                            if isExpanded {
+                            Section(group.owner) {
                                 ForEach(group.servers) { server in
                                     Button {
-                                activeServer = server
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(server.name)
-                                        .font(.headline)
-                                    Text(server.baseURL)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(displayOptionalDescription(server.description))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                    Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        activeServer = server
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(server.name)
+                                                .font(.headline)
+                                            Text(displayOptionalDescription(server.description))
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                            Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .padding(.vertical, 4)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
+                                    .accessibilityHint("Double tap to open this server screen.")
                                 }
-                                .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.baseURL), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
-                            .accessibilityHint("Double tap to browse rooms on this server.")
-                        }
                             }
                         }
                     }
@@ -1766,6 +1790,10 @@ private struct HomeTab: View {
                     : "Guest",
                 backgroundStream: room.backgroundStream,
                 backgroundStreamVolume: room.streamVolume,
+                mediaRetryEnabled: room.mediaRetryPolicy.enabled,
+                mediaRetryAttempts: room.mediaRetryPolicy.retryAttempts,
+                mediaRetryDelaySeconds: room.mediaRetryPolicy.retryDelaySeconds,
+                mediaRetryCooldownSeconds: room.mediaRetryPolicy.cooldownSeconds,
                 showChatByDefault: room.showChatInIOS,
                 chatMessageOrder: room.iosChatMessageOrder,
                 chatMessageLimit: room.iosChatMessageLimit,
@@ -1776,13 +1804,8 @@ private struct HomeTab: View {
 
         activeSession = nil
         activeDetails = nil
-        activePreview = RoomPreviewDestination(
-            roomId: room.id,
-            roomName: room.name,
-            roomDescription: room.description,
-            baseURL: resolvedRoomBase,
-            room: room
-        )
+        activePreview = nil
+        IOSRoomPreviewPlayer.shared.play(room: room)
     }
 
     private func shareRoom(_ room: RoomSummary) {
@@ -1988,9 +2011,21 @@ private struct HomeServerRoomsView: View {
             List {
                 Section("Server") {
                     LabeledContent("Name", value: server.name)
+                    LabeledContent("Owner", value: server.ownerGroup)
                     LabeledContent("Address", value: server.baseURL)
                     LabeledContent("Rooms", value: "\(server.roomCount)")
                     LabeledContent("Users and Bots", value: occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))
+                    LabeledContent(
+                        "Join State",
+                        value: server.rooms.contains(where: { !$0.locked }) ? "Open" : "Closed"
+                    )
+                    LabeledContent(
+                        "Guest Access",
+                        value: server.rooms.contains(where: {
+                            let access = $0.accessType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            return access == "open" || access == "hybrid" || $0.visibility.lowercased() == "public"
+                        }) ? "Guests Allowed" : "Account Required"
+                    )
                     Text(displayOptionalDescription(server.description))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -2026,7 +2061,7 @@ private struct HomeServerRoomsView: View {
                     } else {
                         ForEach(server.rooms) { room in
                             Button {
-                                showDetails(for: room)
+                                onJoinRoom(room)
                             } label: {
                                 RoomRow(room: room)
                             }
@@ -2040,7 +2075,7 @@ private struct HomeServerRoomsView: View {
                                     onContactSupport(.room(baseURL: server.baseURL, serverName: server.name, room: room))
                                 }
                             }
-                            .accessibilityHint("Double tap for room details. Extra actions are available for preview, join, and sharing.")
+                            .accessibilityHint("Double tap to join. Swipe down for room details, preview, sharing, and support.")
                             .accessibilityAction(named: Text("Room Details")) { showDetails(for: room) }
                             .accessibilityAction(named: Text("Join Room")) { onJoinRoom(room) }
                             .accessibilityAction(named: Text("Preview Room")) { showPreview(for: room) }
@@ -2080,13 +2115,8 @@ private struct HomeServerRoomsView: View {
     }
 
     private func showPreview(for room: RoomSummary) {
-        activePreview = RoomPreviewDestination(
-            roomId: room.id,
-            roomName: room.name,
-            roomDescription: room.description,
-            baseURL: resolvedBaseURL(for: room),
-            room: room
-        )
+        activePreview = nil
+        IOSRoomPreviewPlayer.shared.play(room: room)
     }
 
     private func resolvedBaseURL(for room: RoomSummary) -> String {
@@ -2584,6 +2614,10 @@ private struct FederationTab: View {
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Guest" : displayName,
                 backgroundStream: choice.room.backgroundStream,
                 backgroundStreamVolume: choice.room.streamVolume,
+                mediaRetryEnabled: choice.room.mediaRetryPolicy.enabled,
+                mediaRetryAttempts: choice.room.mediaRetryPolicy.retryAttempts,
+                mediaRetryDelaySeconds: choice.room.mediaRetryPolicy.retryDelaySeconds,
+                mediaRetryCooldownSeconds: choice.room.mediaRetryPolicy.cooldownSeconds,
                 showChatByDefault: choice.room.showChatInIOS,
                 chatMessageOrder: choice.room.iosChatMessageOrder,
                 chatMessageLimit: choice.room.iosChatMessageLimit,
@@ -2594,13 +2628,8 @@ private struct FederationTab: View {
 
         activeSession = nil
         activeDetails = nil
-        activePreview = RoomPreviewDestination(
-            roomId: choice.room.id,
-            roomName: choice.room.name,
-            roomDescription: choice.room.description,
-            baseURL: choice.baseURL,
-            room: choice.room
-        )
+        activePreview = nil
+        IOSRoomPreviewPlayer.shared.play(room: choice.room)
     }
 
     @MainActor

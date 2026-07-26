@@ -8889,6 +8889,13 @@ class VoiceLinkLocalServer {
 
             const localRoomList = localRooms.map(room => {
                 const configuredBackgroundStream = this.getConfiguredBackgroundStreamForRoom(room);
+                const backgroundStreamsConfig = deployConfig.get('backgroundStreams') || {};
+                const mediaRetryPolicy = {
+                    enabled: backgroundStreamsConfig.autoReconnectDropped !== false,
+                    retryAttempts: Math.min(20, Math.max(1, Number(backgroundStreamsConfig.retryAttempts) || 4)),
+                    retryDelaySeconds: Math.min(300, Math.max(1, Number(backgroundStreamsConfig.retryDelaySeconds) || 3)),
+                    cooldownSeconds: Math.min(3600, Math.max(5, Number(backgroundStreamsConfig.retryCooldownSeconds) || 30))
+                };
                 const visibleUsers = this.normalizeRoomUsers(room.id);
                 const humanCount = this.getHumanRoomUsers(room.id).length;
                 const botCount = visibleUsers.filter((user) => !!user?.isBot).length;
@@ -8896,6 +8903,7 @@ class VoiceLinkLocalServer {
                     ...(configuredBackgroundStream ? {
                         backgroundStream: String(configuredBackgroundStream.streamUrl || configuredBackgroundStream.url || '').trim() || null,
                         streamVolume: configuredBackgroundStream.volume,
+                        mediaRetryPolicy,
                         nowPlaying: {
                             playing: true,
                             title: configuredBackgroundStream.name,

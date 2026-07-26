@@ -1699,6 +1699,9 @@ class AdminServerManager: ObservableObject {
             fadeInDuration: existing.fadeInDuration,
             autoRefreshEnabled: existing.autoRefreshEnabled,
             autoReconnectDropped: existing.autoReconnectDropped,
+            retryAttempts: existing.retryAttempts,
+            retryDelaySeconds: existing.retryDelaySeconds,
+            retryCooldownSeconds: existing.retryCooldownSeconds,
             metadataRefreshIntervalSeconds: existing.metadataRefreshIntervalSeconds,
             preJoinEnabled: existing.preJoinEnabled,
             preJoinStreamId: existing.preJoinStreamId
@@ -3847,6 +3850,9 @@ struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
     var shuffleIntervalMinutes: Int
     var autoRefreshEnabled: Bool
     var autoReconnectDropped: Bool
+    var retryAttempts: Int
+    var retryDelaySeconds: Int
+    var retryCooldownSeconds: Int
     var metadataRefreshIntervalSeconds: Int
     var preJoinEnabled: Bool
     var preJoinStreamId: String?
@@ -3860,6 +3866,9 @@ struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
         case shuffleIntervalMinutes
         case autoRefreshEnabled
         case autoReconnectDropped
+        case retryAttempts
+        case retryDelaySeconds
+        case retryCooldownSeconds
         case metadataRefreshIntervalSeconds
         case preJoinEnabled
         case preJoinStreamId
@@ -3874,6 +3883,9 @@ struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
         shuffleIntervalMinutes: Int = 15,
         autoRefreshEnabled: Bool = true,
         autoReconnectDropped: Bool = true,
+        retryAttempts: Int = 4,
+        retryDelaySeconds: Int = 3,
+        retryCooldownSeconds: Int = 30,
         metadataRefreshIntervalSeconds: Int = 20,
         preJoinEnabled: Bool = false,
         preJoinStreamId: String? = nil
@@ -3886,6 +3898,9 @@ struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
         self.shuffleIntervalMinutes = shuffleIntervalMinutes
         self.autoRefreshEnabled = autoRefreshEnabled
         self.autoReconnectDropped = autoReconnectDropped
+        self.retryAttempts = min(max(retryAttempts, 1), 20)
+        self.retryDelaySeconds = min(max(retryDelaySeconds, 1), 300)
+        self.retryCooldownSeconds = min(max(retryCooldownSeconds, 5), 3600)
         self.metadataRefreshIntervalSeconds = metadataRefreshIntervalSeconds
         self.preJoinEnabled = preJoinEnabled
         self.preJoinStreamId = preJoinStreamId
@@ -3901,6 +3916,9 @@ struct BackgroundStreamsConfig: Codable, Equatable, Hashable {
         shuffleIntervalMinutes = max(1, try container.decodeIfPresent(Int.self, forKey: .shuffleIntervalMinutes) ?? 15)
         autoRefreshEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoRefreshEnabled) ?? true
         autoReconnectDropped = try container.decodeIfPresent(Bool.self, forKey: .autoReconnectDropped) ?? true
+        retryAttempts = min(max(try container.decodeIfPresent(Int.self, forKey: .retryAttempts) ?? 4, 1), 20)
+        retryDelaySeconds = min(max(try container.decodeIfPresent(Int.self, forKey: .retryDelaySeconds) ?? 3, 1), 300)
+        retryCooldownSeconds = min(max(try container.decodeIfPresent(Int.self, forKey: .retryCooldownSeconds) ?? 30, 5), 3600)
         metadataRefreshIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .metadataRefreshIntervalSeconds) ?? 20
         preJoinEnabled = try container.decodeIfPresent(Bool.self, forKey: .preJoinEnabled) ?? false
         preJoinStreamId = try container.decodeIfPresent(String.self, forKey: .preJoinStreamId)

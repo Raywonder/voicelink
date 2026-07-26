@@ -9,6 +9,10 @@ struct RoomSessionDestination: Identifiable, Hashable {
     let displayName: String
     let backgroundStream: String
     let backgroundStreamVolume: Double
+    let mediaRetryEnabled: Bool
+    let mediaRetryAttempts: Int
+    let mediaRetryDelaySeconds: Int
+    let mediaRetryCooldownSeconds: Int
     let showChatByDefault: Bool
     let chatMessageOrder: String
     let chatMessageLimit: Int
@@ -27,6 +31,42 @@ struct RoomPreviewDestination: Identifiable, Hashable {
     var id: String { "\(baseURL)|\(roomId)|preview" }
 }
 
+@MainActor
+final class IOSRoomPreviewPlayer {
+    static let shared = IOSRoomPreviewPlayer()
+
+    private var player: AVPlayer?
+    private var stopTask: Task<Void, Never>?
+
+    func play(room: RoomSummary) {
+        stop()
+        let stream = room.backgroundStream.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stream.isEmpty, let url = URL(string: stream) else {
+            IOSActionSoundPlayer.playError()
+            return
+        }
+        IOSAudioSessionManager.shared.activate(for: .preview)
+        IOSActionSoundPlayer.playPreviewStart()
+        let player = AVPlayer(url: url)
+        player.volume = 1
+        self.player = player
+        player.play()
+        stopTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled else { return }
+            stop()
+        }
+    }
+
+    func stop() {
+        stopTask?.cancel()
+        stopTask = nil
+        player?.pause()
+        player = nil
+        IOSAudioSessionManager.shared.deactivate(.preview)
+    }
+}
+
 struct RoomSessionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -34,8 +74,10 @@ struct RoomSessionView: View {
     @AppStorage("voicelink.audio.inputGain") private var inputGain: Double = 1.0
     @AppStorage("voicelink.audio.outputGain") private var outputGain: Double = 1.0
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
+    @AppStorage("voicelink.audio.mediaGain") private var mediaGain: Double = 1.0
     @AppStorage("voicelink.audio.inputMuted") private var inputMuted = false
     @AppStorage("voicelink.audio.roomOutputMuted") private var roomOutputMuted = false
+    @AppStorage("voicelink.audio.roomOutputMuteScope") private var roomOutputMuteScope = "all"
     @AppStorage("voicelink.audio.mode") private var audioMode = IOSVoiceLinkAudioMode.original.rawValue
     @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = false
     @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = false
@@ -66,6 +108,8 @@ struct RoomSessionView: View {
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
     @State private var roomBackgroundFadeTask: Task<Void, Never>?
+    @State private var roomBackgroundRetryTask: Task<Void, Never>?
+    @State private var roomBackgroundRetryCount = 0
     @State private var roomAudioDuckTask: Task<Void, Never>?
     @State private var draftMessage = ""
     @State private var draftDirectMessage = ""
@@ -171,6 +215,8 @@ struct RoomSessionView: View {
                 authProvider: authProvider,
                 authUserJSON: authUserJSON
             )
+            synchronizeConfirmedSocketRoom()
+            startRoomBackgroundPlaybackIfNeeded()
             Task { await refreshRoomAdminAccess() }
             joinSoundTask?.cancel()
             joinSoundTask = Task { @MainActor in
@@ -202,6 +248,8 @@ struct RoomSessionView: View {
             keepRoomAliveResetTask = nil
             roomBackgroundFadeTask?.cancel()
             roomBackgroundFadeTask = nil
+            roomBackgroundRetryTask?.cancel()
+            roomBackgroundRetryTask = nil
             roomAudioDuckTask?.cancel()
             roomAudioDuckTask = nil
             stopRoomBackgroundPlayback()
@@ -217,6 +265,20 @@ struct RoomSessionView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .iosPlayTestSound)) { _ in
             playTestSoundWithRoomDuck()
+        }
+        .onReceive(socketClient.$joinedRoomId) { _ in
+            synchronizeConfirmedSocketRoom()
+        }
+        .onReceive(socketClient.$roomUsers) { _ in
+            synchronizeConfirmedSocketRoom()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemPlaybackStalled)) { notification in
+            guard notification.object as? AVPlayerItem === roomBackgroundPlayer?.currentItem else { return }
+            scheduleRoomBackgroundRetry()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { notification in
+            guard notification.object as? AVPlayerItem === roomBackgroundPlayer?.currentItem else { return }
+            scheduleRoomBackgroundRetry()
         }
     }
 
@@ -347,6 +409,7 @@ struct RoomSessionView: View {
             Section("Audio Settings") {
                 LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
                 LabeledContent("Room Output", value: roomOutputMuted ? "Muted" : "On")
+                LabeledContent("Media Playback", value: effectiveMediaMuted ? "Muted" : "\(Int(mediaGain * 100)) percent")
                 LabeledContent("Audio Mode", value: roomAudioModeLabel)
                 if showRoomRelayDebugDetails {
                     LabeledContent("Relay", value: socketClient.audioRelayStatus)
@@ -364,6 +427,7 @@ struct RoomSessionView: View {
                 Button(roomOutputMuted ? "Unmute Room Output" : "Mute Room Output") {
                     roomOutputMuted.toggle()
                     syncRoomAudioState()
+                    syncRoomBackgroundPlaybackState()
                     IOSActionSoundPlayer.playToggle()
                 }
             }
@@ -497,8 +561,17 @@ struct RoomSessionView: View {
                     Toggle("Mute Room Output", isOn: $roomOutputMuted)
                         .onChange(of: roomOutputMuted) { _ in
                             syncRoomAudioState()
+                            syncRoomBackgroundPlaybackState()
                             IOSActionSoundPlayer.playToggle()
                         }
+                    Picker("Room Output Mute Controls", selection: $roomOutputMuteScope) {
+                        Text("Room and Media").tag("all")
+                        Text("Room Audio Only").tag("room-only")
+                    }
+                    .onChange(of: roomOutputMuteScope) { _ in
+                        syncRoomBackgroundPlaybackState()
+                        IOSActionSoundPlayer.playToggle()
+                    }
                     Slider(value: $inputGain, in: 0...3) {
                         Text("Mic Level")
                     } minimumValueLabel: {
@@ -521,6 +594,23 @@ struct RoomSessionView: View {
                     .accessibilityValue("\(Int(outputGain * 100)) percent")
                     .accessibilityAdjustableAction { direction in
                         adjustGainValue(&outputGain, direction: direction)
+                        updateRoomBackgroundPlaybackVolume()
+                    }
+
+                    Slider(value: $mediaGain, in: 0...3) {
+                        Text("Media Playback Volume")
+                    } minimumValueLabel: {
+                        Text("0%")
+                    } maximumValueLabel: {
+                        Text("300%")
+                    }
+                    .accessibilityValue("\(Int(mediaGain * 100)) percent")
+                    .accessibilityAdjustableAction { direction in
+                        adjustGainValue(&mediaGain, direction: direction)
+                        updateRoomBackgroundPlaybackVolume()
+                    }
+                    .onChange(of: mediaGain) { _ in
+                        updateRoomBackgroundPlaybackVolume()
                     }
 
                     Toggle("Mute Media Playback", isOn: $mediaMuted)
@@ -1287,15 +1377,34 @@ struct RoomSessionView: View {
         player.automaticallyWaitsToMinimizeStalling = true
         roomBackgroundPlayer = player
         updateRoomBackgroundPlaybackVolume()
-        if !mediaMuted {
+        if !effectiveMediaMuted {
             player.play()
+        }
+    }
+
+    private func scheduleRoomBackgroundRetry() {
+        guard !effectiveMediaMuted else { return }
+        guard destination.mediaRetryEnabled else { return }
+        roomBackgroundRetryTask?.cancel()
+        roomBackgroundRetryCount += 1
+        let retryLimit = min(max(destination.mediaRetryAttempts, 1), 20)
+        let retryDelaySeconds = min(max(destination.mediaRetryDelaySeconds, 1), 300)
+        let cooldownSeconds = min(max(destination.mediaRetryCooldownSeconds, 5), 3600)
+        let delay = roomBackgroundRetryCount <= retryLimit ? retryDelaySeconds : cooldownSeconds
+        if roomBackgroundRetryCount > retryLimit {
+            roomBackgroundRetryCount = 0
+        }
+        roomBackgroundRetryTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+            guard !Task.isCancelled, !effectiveMediaMuted else { return }
+            startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
         }
     }
 
     private func syncRoomBackgroundPlaybackState() {
         guard let roomBackgroundPlayer else { return }
         updateRoomBackgroundPlaybackVolume()
-        if mediaMuted {
+        if effectiveMediaMuted {
             roomBackgroundPlayer.pause()
         } else {
             roomBackgroundPlayer.play()
@@ -1310,7 +1419,24 @@ struct RoomSessionView: View {
     private func updateRoomBackgroundPlaybackVolume() {
         let roomVolume = max(0, min(3, destination.backgroundStreamVolume / 100.0))
         let duckScale = whisperTarget == nil ? 1.0 : 0.25
-        roomBackgroundPlayer?.volume = mediaMuted ? 0 : Float(max(0, min(3, outputGain * roomVolume * duckScale)))
+        roomBackgroundPlayer?.volume = effectiveMediaMuted ? 0 : Float(max(0, min(3, outputGain * mediaGain * roomVolume * duckScale)))
+    }
+
+    private func synchronizeConfirmedSocketRoom() {
+        let confirmedRoomId = socketClient.joinedRoomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedIOSRoomIdentity(confirmedRoomId) == normalizedIOSRoomIdentity(destination.roomId) else {
+            return
+        }
+        roomState.synchronizeConfirmedRoom(
+            roomId: confirmedRoomId,
+            roomName: socketClient.joinedRoomName.isEmpty ? destination.roomName : socketClient.joinedRoomName,
+            displayName: destination.displayName,
+            users: socketClient.roomUsers
+        )
+    }
+
+    private var effectiveMediaMuted: Bool {
+        mediaMuted || (roomOutputMuted && roomOutputMuteScope == "all")
     }
 
     private func fadeRoomBackgroundVolume(to targetVolume: Float, durationSeconds: Double) {
@@ -1342,13 +1468,16 @@ struct RoomSessionView: View {
             socketClient.setPlaybackGain(restoredGain)
             updateRoomBackgroundPlaybackVolume()
             fadeRoomBackgroundVolume(
-                to: mediaMuted ? 0 : Float(max(0, min(3, outputGain * max(0, min(3, destination.backgroundStreamVolume / 100.0)) * (whisperTarget == nil ? 1.0 : 0.25)))),
+                to: effectiveMediaMuted ? 0 : Float(max(0, min(3, outputGain * mediaGain * max(0, min(3, destination.backgroundStreamVolume / 100.0)) * (whisperTarget == nil ? 1.0 : 0.25)))),
                 durationSeconds: 0.22
             )
         }
     }
 
     private func stopRoomBackgroundPlayback() {
+        roomBackgroundRetryTask?.cancel()
+        roomBackgroundRetryTask = nil
+        roomBackgroundRetryCount = 0
         roomBackgroundPlayer?.pause()
         roomBackgroundPlayer = nil
     }

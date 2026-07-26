@@ -88,6 +88,21 @@ struct AdminStreamsSection: View {
 
             ConfigToggle(label: "Auto-refresh stream playback", helpText: "When enabled, stream state is monitored and refreshed automatically.", isOn: $config.autoRefreshEnabled)
             ConfigToggle(label: "Auto-reconnect dropped streams", helpText: "If a playing stream drops, reconnect and continue playback automatically.", isOn: $config.autoReconnectDropped)
+            ConfigNumberField(label: "Retry attempts", helpText: "Server-owned number of quick retries before a cooldown. Room users cannot override this value.", value: Binding(
+                get: { config.retryAttempts },
+                set: { config.retryAttempts = min(max($0, 1), 20) }
+            ))
+            .disabled(!config.autoReconnectDropped)
+            ConfigNumberField(label: "Retry delay (seconds)", helpText: "Delay between quick automatic playback retries.", value: Binding(
+                get: { config.retryDelaySeconds },
+                set: { config.retryDelaySeconds = min(max($0, 1), 300) }
+            ))
+            .disabled(!config.autoReconnectDropped)
+            ConfigNumberField(label: "Retry cooldown (seconds)", helpText: "Pause after the quick retries are exhausted, then begin another automatic retry cycle.", value: Binding(
+                get: { config.retryCooldownSeconds },
+                set: { config.retryCooldownSeconds = min(max($0, 5), 3600) }
+            ))
+            .disabled(!config.autoReconnectDropped)
             ConfigNumberField(label: "Metadata refresh (seconds)", helpText: "Refresh interval for now-playing metadata while stream is active.", value: Binding(
                 get: { max(5, config.metadataRefreshIntervalSeconds) },
                 set: { config.metadataRefreshIntervalSeconds = min(max($0, 5), 600) }
