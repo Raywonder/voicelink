@@ -24603,6 +24603,107 @@ class VoiceLinkLocalServer {
         };
     }
 
+    getSocketBotModerationConfig() {
+        const config = deployConfig.get('bots') || {};
+        return {
+            enabled: config.enabled === true,
+            moderationEnabled: config.moderationEnabled === true,
+            watchGuestLogins: config.watchGuestLogins !== false,
+            watchRoomMessages: config.watchRoomMessages !== false,
+            watchDirectMessages: config.watchDirectMessages !== false,
+            watchFileOffers: config.watchFileOffers !== false,
+            notifyAdmins: config.notifyAdmins !== false,
+            notifySupportRooms: config.notifySupportRooms === true,
+            preferredBackends: Array.isArray(config.preferredBackends)
+                ? config.preferredBackends
+                : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
+            defaultDelegateBot: String(config.defaultDelegateBot || 'codex-bot').trim() || 'codex-bot'
+        };
+    }
+
+    summarizeSocketModerationText(value, maxLength = 140) {
+        const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!normalized) return '';
+        return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+    }
+
+    inspectSocketModerationMessage(value) {
+        const text = String(value || '').trim();
+        const reasons = [];
+        if (!text) return { flagged: false, severity: 'info', reasons, excerpt: '' };
+        if ((text.match(/https?:\/\//gi) || []).length >= 2) reasons.push('multiple-links');
+        if (/(.)\1{7,}/.test(text)) reasons.push('repeated-characters');
+        if (/([!?$#*_~-])\1{5,}/.test(text)) reasons.push('symbol-spam');
+        const uppercaseLetters = (text.match(/[A-Z]/g) || []).length;
+        const alphaLetters = (text.match(/[A-Za-z]/g) || []).length;
+        if (alphaLetters >= 12 && (uppercaseLetters / alphaLetters) >= 0.7) reasons.push('mostly-uppercase');
+        if (text.length >= 350) reasons.push('very-long-message');
+        return {
+            flagged: reasons.length > 0,
+            severity: reasons.length > 0 ? 'warning' : 'info',
+            reasons,
+            excerpt: this.summarizeSocketModerationText(text, 180)
+        };
+    }
+
+    emitSocketBotModerationEvent({
+        eventType,
+        actor = null,
+        room = null,
+        roomId = null,
+        targetUserId = null,
+        title = '',
+        message = '',
+        severity = 'info',
+        flagged = false,
+        reasons = [],
+        content = '',
+        metadata = {}
+    } = {}) {
+        const botConfig = this.getSocketBotModerationConfig();
+        if (!botConfig.enabled || !botConfig.moderationEnabled || !eventType) return;
+        const watchEnabled = (
+            (eventType === 'guest_login' && botConfig.watchGuestLogins) ||
+            (eventType === 'room_message' && botConfig.watchRoomMessages) ||
+            (eventType === 'direct_message' && botConfig.watchDirectMessages) ||
+            (eventType === 'file_offer' && botConfig.watchFileOffers)
+        );
+        if (!watchEnabled) return;
+        const effectiveRoom = room || (roomId ? this.rooms.get(roomId) : null);
+        const payload = {
+            id: uuidv4(),
+            type: 'bot_moderation_event',
+            eventType,
+            title: String(title || 'VoiceLink moderation event'),
+            message: String(message || ''),
+            severity: String(severity || 'info'),
+            flagged: flagged === true,
+            reasons: Array.isArray(reasons) ? reasons : [],
+            timestamp: new Date().toISOString(),
+            roomId: roomId || effectiveRoom?.id || null,
+            roomName: effectiveRoom?.name || null,
+            actorId: actor?.id || null,
+            actorName: actor?.name || actor?.username || null,
+            actorRole: this.normalizeUserRole(actor?.authInfo?.role || actor?.role),
+            actorEmail: actor?.authInfo?.email || actor?.email || null,
+            targetUserId: targetUserId || null,
+            excerpt: this.summarizeSocketModerationText(content, 180),
+            backends: botConfig.preferredBackends,
+            delegateBot: botConfig.defaultDelegateBot,
+            ...((metadata && typeof metadata === 'object') ? metadata : {})
+        };
+        this.io?.emit('bot-moderation-event', payload);
+        if (botConfig.notifyAdmins) {
+            this.emitAdminScopedNotification({
+                type: `bot_moderation_${eventType}`,
+                title: payload.title,
+                message: payload.message,
+                severity: payload.severity,
+                metadata: payload
+            });
+        }
+    }
+
     setupSocketHandlers() {
         this.io.on('connection', (socket) => {
             console.log(`User connected: ${socket.id}`);
@@ -25053,7 +25154,7 @@ class VoiceLinkLocalServer {
                 this.emitRoomListToClients();
 
                 if (!isAuthenticated) {
-                    emitBotModerationEvent({
+                    this.emitSocketBotModerationEvent({
                         eventType: 'guest_login',
                         actor: user,
                         room,
@@ -25320,8 +25421,8 @@ class VoiceLinkLocalServer {
                     this.io.to(user.roomId).emit('chat-message', sanitizedResult.notice);
                 }
 
-                const roomModeration = inspectModerationMessage(sanitizedMessage.message || sanitizedMessage.content || '');
-                emitBotModerationEvent({
+                const roomModeration = this.inspectSocketModerationMessage(sanitizedMessage.message || sanitizedMessage.content || '');
+                this.emitSocketBotModerationEvent({
                     eventType: 'room_message',
                     actor: user,
                     room,
@@ -25342,7 +25443,7 @@ class VoiceLinkLocalServer {
                 });
 
                 if (sanitizedMessage.attachmentName || sanitizedMessage.attachmentURL) {
-                    emitBotModerationEvent({
+                    this.emitSocketBotModerationEvent({
                         eventType: 'file_offer',
                         actor: user,
                         room,
@@ -25555,8 +25656,8 @@ class VoiceLinkLocalServer {
                         socket.emit('direct-message', sanitizedResult.notice);
                     }
 
-                    const dmModeration = inspectModerationMessage(message.message || message.content || '');
-                    emitBotModerationEvent({
+                    const dmModeration = this.inspectSocketModerationMessage(message.message || message.content || '');
+                    this.emitSocketBotModerationEvent({
                         eventType: 'direct_message',
                         actor: user,
                         targetUserId,
@@ -25576,7 +25677,7 @@ class VoiceLinkLocalServer {
                     });
 
                     if (message.attachmentName || message.attachmentURL) {
-                        emitBotModerationEvent({
+                        this.emitSocketBotModerationEvent({
                             eventType: 'file_offer',
                             actor: user,
                             targetUserId,
