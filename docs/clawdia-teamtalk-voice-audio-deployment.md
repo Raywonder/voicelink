@@ -27,17 +27,25 @@ The shared internal bearer token is stored separately for each owning account:
 Both files are mode `0600`. Never copy their values into Git, tickets, logs, or
 chat.
 
-No external TTS or STT provider is enabled. ElevenLabs, OpenAI, and a future
-local adapter are ordered candidates only. Provider account email, cost, 2FA,
-and business verification are therefore not applicable yet. Provider-specific
-credentials must not be added until the provider and owning account are
-approved and the adapter passes readiness tests.
+The first enabled provider is the account-local Piper TTS helper:
+
+- provider: `local`
+- executable: `/usr/local/libexec/voicelink-audio-helper`
+- voice runtime: `/usr/local/bin/piper`
+- output: 48 kHz mono signed 16-bit PCM, optionally wrapped as WAV
+- cost and external account: none
+
+No external TTS or STT provider is enabled. ElevenLabs and OpenAI remain
+disabled candidates. Provider-specific credentials must not be added until the
+provider and owning account are approved and the adapter passes readiness
+tests.
 
 ## Safe fallback and verification
 
-Authenticated health must return HTTP 200 with `textFallback: true`. Until a
-validated adapter exists, health reports `degraded` and both operations report
-`ready: false`. The bridge discovery probe then returns `textOnly: true`.
+Authenticated health must return HTTP 200 with `textFallback: true`. With the
+local helper installed, health reports `ready`, TTS reports provider `local`,
+and STT remains unavailable through this API. If Piper or its helper fails,
+TTS returns HTTP 503 with `textFallback: true`.
 
 An unauthenticated health request must return HTTP 401.
 
@@ -63,7 +71,30 @@ To roll back, restore `local-server.js` from that directory, remove the
 restart only `voicelinkapp.app-main`. Do not restart the TeamTalk bridge merely
 because VoiceLink Audio is degraded.
 
-The next manual prerequisite is approval and implementation of one real audio
-adapter, including its provider ownership, credential storage, audio format,
-timeouts, retries, and failure tests. Until then, text-only behavior is the
-supported API outcome.
+## Active runtimes
+
+The module and local TTS adapter are deployed to:
+
+- main: `voicelinkapp.app-main`, port `3010`
+- community: `community.voicelinkapp.app-community`, port `3110`
+- dev: `voicelink.dev-dev`, port `3210`
+
+The July 26 TTS rollout backups are under each runtime's `.backups` directory
+as `voice-audio-tts-20260726T124728Z`.
+
+Each runtime passed authenticated health, real WAV generation, unauthorized
+health rejection, and module tests. A two-client Socket.IO test also confirmed
+live message delivery, room-history retrieval, and the iOS message payload on
+all three runtimes.
+
+## iOS validation
+
+Commit `8cb769b` built and launched on the already-booted `VoiceLink Dev iPhone`
+simulator on `admin-s-mac-mini.tailnet.raywonderis.me`. The simulator initially
+retained the obsolete `https://dev.voicelinkapp.app` preference; changing that
+test-only preference to `https://voicelinkapp.app` restored server-directory
+loading.
+
+The remaining manual prerequisite is a physical iPhone or iPad check that
+joins a room, sends and receives a message, verifies history after reconnect,
+and confirms VoiceOver announcements and focus order.
