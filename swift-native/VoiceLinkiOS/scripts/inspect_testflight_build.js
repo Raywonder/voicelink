@@ -68,6 +68,46 @@ async function main() {
   const locale = process.env.ASC_LOCALE || 'en-US';
   if (!keyId || !issuerId || !privateKeyPem) throw new Error('Missing ASC credentials');
   const token = makeJwt({ keyId, issuerId, privateKeyPem });
+  if (process.env.ASC_AUDIT_ALL === '1') {
+    const appsJson = await apiRequest(token, '/apps', {
+      'fields[apps]': 'name,bundleId',
+      limit: 200
+    });
+    const auditedApps = [];
+    for (const app of appsJson.data || []) {
+      const latestJson = await apiRequest(token, '/builds', {
+        'filter[app]': app.id,
+        include: 'betaGroups,preReleaseVersion',
+        sort: '-uploadedDate',
+        limit: 1
+      });
+      const latest = latestJson.data?.[0] || null;
+      const groups = (latestJson.included || [])
+        .filter((item) => item.type === 'betaGroups')
+        .map((item) => ({
+          id: item.id,
+          name: item.attributes?.name || item.id,
+          isInternalGroup: item.attributes?.isInternalGroup === true,
+          publicLinkEnabled: item.attributes?.publicLinkEnabled === true,
+          publicLink: item.attributes?.publicLink || null
+        }));
+      auditedApps.push({
+        id: app.id,
+        name: app.attributes?.name || app.id,
+        bundleId: app.attributes?.bundleId || null,
+        latestBuild: latest ? {
+          id: latest.id,
+          buildNumber: latest.attributes?.version || null,
+          uploadedDate: latest.attributes?.uploadedDate || null,
+          processingState: latest.attributes?.processingState || null,
+          expired: latest.attributes?.expired === true,
+          betaGroups: groups
+        } : null
+      });
+    }
+    console.log(JSON.stringify({ apps: auditedApps }, null, 2));
+    return;
+  }
   const appJson = await apiRequest(token, '/apps', { 'filter[bundleId]': bundleId, limit: 1 });
   const appId = appJson.data?.[0]?.id;
   if (!appId) throw new Error(`App not found for ${bundleId}`);
@@ -82,7 +122,15 @@ async function main() {
   if (!build) throw new Error(`Build ${version} (${buildNumber}) not found`);
   const included = buildsJson.included || [];
   const review = included.find((item) => item.type === 'betaAppReviewSubmissions') || null;
-  const groups = included.filter((item) => item.type === 'betaGroups').map((item) => item.attributes?.name || item.id);
+  const groups = included
+    .filter((item) => item.type === 'betaGroups')
+    .map((item) => ({
+      id: item.id,
+      name: item.attributes?.name || item.id,
+      isInternalGroup: item.attributes?.isInternalGroup === true,
+      publicLinkEnabled: item.attributes?.publicLinkEnabled === true,
+      publicLink: item.attributes?.publicLink || null
+    }));
   const localizationsJson = await apiRequest(token, '/betaBuildLocalizations', {
     'filter[build]': build.id,
     'filter[locale]': locale,

@@ -8,7 +8,7 @@ const API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 const DEFAULT_LOCALE = 'en-US';
 const DEFAULT_WAIT_SECONDS = 20;
 const DEFAULT_WAIT_ATTEMPTS = 30;
-const DEFAULT_BETA_GROUP_NAME = 'Pioneers';
+const DEFAULT_BETA_GROUP_NAME = 'DVC_VCL';
 
 function parseArgs(argv) {
   const args = {};
@@ -259,11 +259,30 @@ async function attachBuildToBetaGroup(token, { buildId, groupId }) {
     return 'attached';
   } catch (error) {
     const message = String(error?.message || error || '');
-    if (message.includes('409') || message.toLowerCase().includes('already')) {
+    if (
+      message.includes('409')
+      || message.toLowerCase().includes('already')
+      || message.includes('Cannot add internal group to a build')
+    ) {
       return 'already-attached';
     }
     throw error;
   }
+}
+
+async function detachBuildFromBetaGroup(token, { buildId, groupId }) {
+  await apiRequest(token, `/betaGroups/${groupId}/relationships/builds`, {
+    method: 'DELETE',
+    body: {
+      data: [
+        {
+          type: 'builds',
+          id: buildId
+        }
+      ]
+    }
+  });
+  return 'detached';
 }
 
 async function ensureExternalBetaReviewSubmission(token, { buildId }) {
@@ -310,6 +329,8 @@ async function main() {
   const waitAttempts = Number(args['wait-attempts'] || process.env.ASC_WAIT_ATTEMPTS || DEFAULT_WAIT_ATTEMPTS);
   const waitSeconds = Number(args['wait-seconds'] || process.env.ASC_WAIT_SECONDS || DEFAULT_WAIT_SECONDS);
   const betaGroupName = args['beta-group-name'] || process.env.ASC_BETA_GROUP_NAME || DEFAULT_BETA_GROUP_NAME;
+  const removeBetaGroupName = args['remove-beta-group-name'] || process.env.ASC_REMOVE_BETA_GROUP_NAME || '';
+  const releaseExternal = args['release-external'] === true || process.env.ASC_RELEASE_EXTERNAL === '1';
 
   const pbxproj = readFileRequired(pbxprojPath, 'Xcode project');
   const bundleId = args['bundle-id'] || process.env.ASC_APP_BUNDLE_ID || extractPbxprojValue(pbxproj, 'PRODUCT_BUNDLE_IDENTIFIER');
@@ -344,13 +365,36 @@ async function main() {
     if (!betaGroup?.id) {
       throw new Error(`Beta group ${betaGroupName} not found for ${bundleId}`);
     }
+    const isInternalGroup = betaGroup.attributes?.isInternalGroup === true;
+    if (!isInternalGroup && !releaseExternal) {
+      throw new Error(
+        `Beta group ${betaGroupName} is external. Pass --release-external only after internal testing is verified.`
+      );
+    }
     const attachState = await attachBuildToBetaGroup(token, {
       buildId: build.id,
       groupId: betaGroup.id
     });
     console.log(`Build ${version} (${buildNumber}) ${attachState} to beta group ${betaGroupName}`);
-    const reviewState = await ensureExternalBetaReviewSubmission(token, { buildId: build.id });
-    console.log(`External beta review ${reviewState} for build ${version} (${buildNumber})`);
+    if (!isInternalGroup) {
+      const reviewState = await ensureExternalBetaReviewSubmission(token, { buildId: build.id });
+      console.log(`External beta review ${reviewState} for build ${version} (${buildNumber})`);
+    }
+  }
+
+  if (removeBetaGroupName) {
+    const removeGroup = await findBetaGroupByName(token, {
+      appId,
+      betaGroupName: removeBetaGroupName
+    });
+    if (!removeGroup?.id) {
+      throw new Error(`Beta group ${removeBetaGroupName} not found for ${bundleId}`);
+    }
+    const detachState = await detachBuildFromBetaGroup(token, {
+      buildId: build.id,
+      groupId: removeGroup.id
+    });
+    console.log(`Build ${version} (${buildNumber}) ${detachState} from beta group ${removeBetaGroupName}`);
   }
 }
 
