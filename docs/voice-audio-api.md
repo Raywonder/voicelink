@@ -4,9 +4,14 @@ VoiceLink Audio is a shared server-side interface for speech output (TTS) and sp
 
 ## Current state
 
-The authenticated API is enabled by default. No TTS or STT adapter has been installed in VoiceLink yet. Its ordered candidates are ElevenLabs, OpenAI, and a future local VoiceLink engine for both TTS and STT. A configured candidate name is not treated as available: health reports no_validated_adapter and requests return a clear 503 with textFallback true.
+The authenticated API is enabled by default. The first supported TTS adapter
+is the account-local Piper helper. Readiness requires an executable
+`VOICELINK_AUDIO_LOCAL_HELPER`; a configured provider name alone is never
+treated as available. STT remains unavailable through this API.
 
-This is deliberate. The TeamTalk bridge must continue with text-only output rather than claim that voice was produced.
+If the helper is absent, fails, or returns empty or oversized output, requests
+return a clear 503 with `textFallback: true`. The TeamTalk bridge must then
+continue with text-only output rather than claim that voice was produced.
 
 ## Configuration
 
