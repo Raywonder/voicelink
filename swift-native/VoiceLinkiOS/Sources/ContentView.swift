@@ -1445,6 +1445,7 @@ private struct HomeTab: View {
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
     @State private var activeServer: HomeServerSummary?
+    @State private var activeServerGroup: HomeServerGroupSummary?
     @State private var activeSupportContext: IOSSupportContext?
     @State private var pendingGuestJoinRoom: RoomSummary?
     @State private var pendingServerPolicyJoinRoom: RoomSummary?
@@ -1625,28 +1626,20 @@ private struct HomeTab: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
-                            Section(group.owner) {
-                                ForEach(group.servers) { server in
-                                    Button {
-                                        activeServer = server
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text(server.name)
-                                                .font(.headline)
-                                            Text(displayOptionalDescription(server.description))
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                            Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .padding(.vertical, 4)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("\(server.ownerGroup), \(server.name), \(server.roomCount) rooms, \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
-                                    .accessibilityHint("Double tap to open this server screen.")
+                            Button {
+                                activeServerGroup = HomeServerGroupSummary(owner: group.owner, servers: group.servers)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(group.owner)
+                                        .font(.headline)
+                                    Text("\(group.servers.count) server\(group.servers.count == 1 ? "" : "s")")
+                                        .foregroundStyle(.secondary)
                                 }
+                                .padding(.vertical, 4)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(group.owner), \(group.servers.count) server\(group.servers.count == 1 ? "" : "s")")
+                            .accessibilityHint("Double tap to open this server group screen.")
                         }
                     }
                 }
@@ -1722,6 +1715,14 @@ private struct HomeTab: View {
                         activeSupportContext = context
                     }
                 )
+            }
+            .sheet(item: $activeServerGroup) { group in
+                HomeServerGroupView(group: group) { server in
+                    activeServerGroup = nil
+                    DispatchQueue.main.async {
+                        activeServer = server
+                    }
+                }
             }
             .sheet(item: $activeSupportContext) { context in
                 IOSSupportTicketSheet(context: context)
@@ -2023,6 +2024,58 @@ private struct HomeServerSummary: Identifiable, Hashable {
     let rooms: [RoomSummary]
 }
 
+private struct HomeServerGroupSummary: Identifiable {
+    let owner: String
+    let servers: [HomeServerSummary]
+
+    var id: String { owner }
+}
+
+private struct HomeServerGroupView: View {
+    @Environment(\.dismiss) private var dismiss
+    let group: HomeServerGroupSummary
+    let onOpenServer: (HomeServerSummary) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Server Group") {
+                    LabeledContent("Owner", value: group.owner)
+                    LabeledContent("Servers", value: "\(group.servers.count)")
+                }
+                Section("Servers") {
+                    ForEach(group.servers) { server in
+                        Button {
+                            dismiss()
+                            onOpenServer(server)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(server.name)
+                                    .font(.headline)
+                                Text(displayOptionalDescription(server.description))
+                                    .foregroundStyle(.secondary)
+                                Text("\(server.roomCount) room\(server.roomCount == 1 ? "" : "s") • \(occupancySummary(users: server.totalUsers, bots: server.totalBots, totalVisible: server.totalVisible))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Double tap to open this server screen.")
+                    }
+                }
+            }
+            .navigationTitle(group.owner)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 private struct HomeServerRoomsView: View {
     @Environment(\.dismiss) private var dismiss
     let server: HomeServerSummary
@@ -2071,6 +2124,12 @@ private struct HomeServerRoomsView: View {
 
                 if showsServerActions {
                     Section("Server Actions") {
+                        Button("Administration Settings") {
+                            dismiss()
+                            onOpenServerAdmin()
+                        }
+                        .accessibilityHint("Opens administration settings for this selected server.")
+
                         Button("Create Room") {
                             dismiss()
                             onOpenServerAdmin()
