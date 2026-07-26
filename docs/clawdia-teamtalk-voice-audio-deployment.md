@@ -98,3 +98,10 @@ loading.
 The remaining manual prerequisite is a physical iPhone or iPad check that
 joins a room, sends and receives a message, verifies history after reconnect,
 and confirms VoiceOver announcements and focus order.
+
+Build 102 additionally repairs the half-joined iOS state when an already-active
+room session is reopened, loads all configured iOS servers in parallel, and
+opens administration for the selected server after checking that server's
+permissions. The physical-device prerequisite is now to install build 102 and
+confirm the current user and other participants appear before testing speech
+and room audio.

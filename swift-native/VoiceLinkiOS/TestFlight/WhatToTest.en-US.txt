@@ -1,8 +1,11 @@
-Build 101 repairs the iOS room activation path and includes the room-media and guest-audio work from build 100.
+Build 102 repairs iOS room presence, multi-server discovery, and selected-server administration, and includes the room-media and guest-audio work from build 101.
 
 What changed:
+- Rejoining or reopening an already-connected room now re-announces the active room and current user to the app state, so the People list and audio controls no longer remain in a half-joined state.
+- The Servers tab loads every configured iOS server in parallel instead of stopping after the first reachable server.
+- Administration actions are checked against and opened for the server selected in the directory, rather than the previously preferred server.
 - iOS now completes its room-join activation from the server acknowledgement, rather than waiting only for a later realtime event. The app records activation stages and makes acknowledgement failures retryable instead of silently leaving the room half-joined.
-- The Servers tab now loads the selected server directly instead of waiting for a federation crawl. Room-directory failures show an error and can be retried.
+- Room-directory failures show an error and can be retried.
 - Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
 - The panel includes Play, Retry, media mute, and a source label. Room media plays locally and does not replace room conversation audio.
 - Guest users can join a room and use basic microphone and output controls. Administrative actions remain server-authorized.
@@ -13,6 +16,8 @@ What changed:
 - VoiceLink server bot defaults prefer Codex/OpenClaw before local fallback models, with existing role boundaries preserved.
 
 Please test:
+- Confirm the Servers tab shows main, community, development, and the configured Devine Creations servers without a long federation wait.
+- Select a server where your account can manage rooms and confirm Create Room and Edit Rooms open administration for that selected server.
 - Join a room and confirm the participant list shows you, your role, and any room bots; confirm messages appear immediately.
 - With VoiceOver enabled, confirm join, leave, system, and error announcements are spoken and that room controls have useful labels.
 - Confirm microphone controls become available after join. If microphone permission is denied, the app should say that rather than asking you to join again.

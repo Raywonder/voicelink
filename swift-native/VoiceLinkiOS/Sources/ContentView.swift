@@ -1404,6 +1404,7 @@ private struct HomeTab: View {
     @State private var isAdmin = false
     @State private var canManageRooms = false
     @State private var showAdmin = false
+    @State private var adminServerURL = ""
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
@@ -1632,6 +1633,7 @@ private struct HomeTab: View {
                 if isAdmin || canManageRooms {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            adminServerURL = normalizedBaseURL
                             showAdmin = true
                         } label: {
                             Label("Admin", systemImage: "gearshape.2.fill")
@@ -1678,13 +1680,16 @@ private struct HomeTab: View {
                 HomeServerRoomsView(
                     server: server,
                     clientVisibleOnIOS: clientVisibility.ios,
-                    canManageRooms: isAdmin || canManageRooms,
+                    canManageRooms: canonicalServerIdentity(baseURL: server.baseURL, room: nil)
+                        == canonicalServerIdentity(baseURL: normalizedBaseURL, room: nil)
+                        && (isAdmin || canManageRooms),
                     onJoinRoom: { room in
                         activeServer = nil
                         openRoom(room, action: "join")
                     },
                     onShareRoom: { room in shareRoom(room) },
                     onOpenServerAdmin: {
+                        adminServerURL = normalizeBaseURL(server.baseURL)
                         activeServer = nil
                         showAdmin = true
                     },
@@ -1730,7 +1735,12 @@ private struct HomeTab: View {
                 )
             }
             .sheet(isPresented: $showAdmin) {
-                AdminTabView(serverURL: $serverURL)
+                AdminTabView(
+                    serverURL: Binding(
+                        get: { adminServerURL.isEmpty ? normalizedBaseURL : adminServerURL },
+                        set: { adminServerURL = normalizeBaseURL($0) }
+                    )
+                )
             }
             .sheet(isPresented: $showNativeAccountSignIn) {
                 IOSAccountSignInView(serverURL: authRequiredServerURL.isEmpty ? normalizedBaseURL : normalizeBaseURL(authRequiredServerURL))
@@ -1822,13 +1832,17 @@ private struct HomeTab: View {
         defer { isLoading = false }
         errorMessage = ""
         do {
-            let (localRooms, resolvedBase) = try await fetchRoomsWithFallback(
-                sortMode: roomSortMode,
-                preferredBase: normalizedBaseURL
+            // Keep the primary directory fast and predictable. The Federated Rooms tab
+            // performs deeper discovery; this screen loads every configured app server
+            // in parallel instead of waiting for sequential federation probes.
+            let bases = iOSMainAPIBaseCandidates(preferredBase: normalizedBaseURL)
+            let localRooms = try await fetchRoomsAcrossVisibleServers(
+                bases: bases,
+                sortMode: roomSortMode
             )
             rooms = deduplicateHomeRooms(
                 localRooms,
-                fallbackBase: resolvedBase
+                fallbackBase: normalizedBaseURL
             )
         } catch let error as IOSRoomsAuthenticationRequired {
             rooms = []
@@ -1997,6 +2011,11 @@ private struct HomeServerRoomsView: View {
     let onContactSupport: (IOSSupportContext) -> Void
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
+    @State private var serverCanManageRooms = false
+
+    private var showsServerActions: Bool {
+        canManageRooms || serverCanManageRooms
+    }
 
     var body: some View {
         NavigationStack {
@@ -2015,7 +2034,7 @@ private struct HomeServerRoomsView: View {
                     .accessibilityHint("Opens a private support ticket for this server.")
                 }
 
-                if canManageRooms {
+                if showsServerActions {
                     Section("Server Actions") {
                         Button("Create Room") {
                             dismiss()
@@ -2072,6 +2091,9 @@ private struct HomeServerRoomsView: View {
             }
             .sheet(item: $activeDetails) { details in
                 RoomDetailsView(destination: details)
+            }
+            .task(id: server.baseURL) {
+                serverCanManageRooms = await fetchAdminRoomManagementAccess(baseURL: server.baseURL)
             }
             .navigationTitle(server.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -4601,6 +4623,32 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
             throw IOSRoomsAuthenticationRequired(baseURL: firstAuthRequiredBase)
         }
         return rooms
+    }
+}
+
+private func fetchAdminRoomManagementAccess(baseURL: String) async -> Bool {
+    let normalizedBase = normalizeBaseURL(baseURL)
+    guard let url = URL(string: "\(normalizedBase)/api/admin/status") else {
+        return false
+    }
+    do {
+        var request = iosServerPresenceRequest(url: url, timeout: 12)
+        let token = (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(token, forHTTPHeaderField: "x-session-token")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            return false
+        }
+        let json = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let isAdmin = (json["isAdmin"] as? Bool) ?? false
+        let permissions = json["permissions"] as? [String: Bool]
+        return isAdmin || ((json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] ?? false))
+    } catch {
+        return false
     }
 }
 

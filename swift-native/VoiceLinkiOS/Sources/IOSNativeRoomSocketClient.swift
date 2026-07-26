@@ -324,6 +324,42 @@ final class IOSNativeRoomSocketClient: ObservableObject {
             if !roomId.isEmpty, self.joinedRoomId == roomId {
                 let users = Self.socketUsersValue(payload)
                 self.updateRoomUsers(Self.socketUserDictionaries(users), fallbackRoomId: roomId)
+                let fallbackJoinedUser = joinedUser ?? self.pendingSession.map { session in
+                    [
+                        "id": "local:\(session.displayName.lowercased())",
+                        "userId": "local:\(session.displayName.lowercased())",
+                        "name": session.displayName,
+                        "userName": session.displayName,
+                        "displayName": session.displayName,
+                        "deviceName": UIDevice.current.name,
+                        "deviceType": "ios"
+                    ]
+                } ?? [:]
+                if !fallbackJoinedUser.isEmpty {
+                    self.mergeRoomUser(fallbackJoinedUser, fallbackRoomId: roomId)
+                }
+                let announcedUsers: [Any] = users.isEmpty && !fallbackJoinedUser.isEmpty
+                    ? [fallbackJoinedUser]
+                    : users
+                NotificationCenter.default.post(
+                    name: .iosRoomJoined,
+                    object: nil,
+                    userInfo: [
+                        "roomId": roomId,
+                        "roomName": roomName,
+                        "users": announcedUsers,
+                        "user": fallbackJoinedUser,
+                        "displayName": self.pendingSession?.displayName ?? "",
+                        "messages": seededMessages
+                    ]
+                )
+                if !announcedUsers.isEmpty {
+                    NotificationCenter.default.post(
+                        name: .iosRoomUsersUpdated,
+                        object: nil,
+                        userInfo: ["roomId": roomId, "users": announcedUsers]
+                    )
+                }
                 for message in seededMessages {
                     self.postRoomMessage(message, fallbackRoomId: roomId)
                 }
