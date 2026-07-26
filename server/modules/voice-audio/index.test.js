@@ -29,6 +29,18 @@ const service = new VoiceAudioModule({
 }, silentLogger);
 
 let res = response();
+service.handleHealth(request({ caller: 'clawdia-teamtalk' }), res);
+assert.strictEqual(res.statusCode, 401);
+assert.strictEqual(res.body.textFallback, true);
+
+res = response();
+service.handleHealth(request({ token: 'unit-test-token', caller: 'clawdia-teamtalk' }), res);
+assert.strictEqual(res.statusCode, 200);
+assert.strictEqual(res.body.status, 'degraded');
+assert.strictEqual(res.body.textFallback, true);
+assert.strictEqual(res.body.operations.tts.ready, false);
+
+res = response();
 service.handleTts(request({ caller: 'clawdia-teamtalk', body: { text: 'hello' } }), res);
 assert.strictEqual(res.statusCode, 401);
 assert.strictEqual(res.body.error, 'unauthorized');

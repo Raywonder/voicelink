@@ -61,7 +61,7 @@ class VoiceAudioModule {
 
     install(app) {
         const express = require('express');
-        app.get(API_PREFIX + '/health', (req, res) => res.status(200).json(this.health()));
+        app.get(API_PREFIX + '/health', (req, res) => this.handleHealth(req, res));
         app.post(API_PREFIX + '/tts', express.json({ type: 'application/json', limit: '64kb' }), (req, res) => this.handleTts(req, res));
         app.post(API_PREFIX + '/stt', express.raw({
             type: ['audio/wav', 'audio/pcm', 'application/octet-stream'],
@@ -122,6 +122,13 @@ class VoiceAudioModule {
         const state = this.providerState(operation);
         this.safeLog('voice_audio.provider.unavailable', { requestId: id, operation, caller, state: state.state });
         this.failure(res, id, operation, 503, 'audio_provider_unavailable');
+    }
+
+    handleHealth(req, res) {
+        const id = requestId();
+        const authorization = this.authorize(req, 'health', id);
+        if (!authorization.ok) return this.failure(res, id, 'health', authorization.status, authorization.code);
+        return res.status(200).json(this.health());
     }
 
     handleTts(req, res) {
