@@ -83,7 +83,73 @@ private enum IOSDiagnosticsSubmissionMessage {
 final class IOSDiagnosticsManager {
     static let shared = IOSDiagnosticsManager()
 
+    private let defaults = UserDefaults.standard
+    private let automaticDiagnosticsLastAttemptKey = "voicelink.ios.automaticDiagnostics.lastAttemptAt"
+    private let automaticDiagnosticsFirstLaunchBuildKey = "voicelink.ios.automaticDiagnostics.firstLaunchBuild"
+    private var automaticSubmissionInFlight = false
+
     private init() {}
+
+    func submitAutomaticDiagnosticsIfDue(
+        serverURL: String,
+        reason: String,
+        minimumInterval: TimeInterval,
+        force: Bool = false
+    ) {
+        guard defaults.object(forKey: "voicelink.autoSendDiagnostics") as? Bool ?? true else {
+            IOSDiagnosticsSubmissionLogger.log("automatic diagnostics skipped because auto-send is disabled")
+            return
+        }
+        guard !automaticSubmissionInFlight else { return }
+
+        let now = Date()
+        if !force {
+            let lastAttempt = defaults.double(forKey: automaticDiagnosticsLastAttemptKey)
+            if lastAttempt > 0, now.timeIntervalSince1970 - lastAttempt < minimumInterval {
+                return
+            }
+        }
+
+        defaults.set(now.timeIntervalSince1970, forKey: automaticDiagnosticsLastAttemptKey)
+        automaticSubmissionInFlight = true
+        let displayName = defaults.string(forKey: "voicelink.displayName") ?? ""
+        let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "scheduled" : reason
+        submitBugReport(
+            serverURL: serverURL,
+            title: "iOS automatic diagnostics",
+            description: "Automatic \(normalizedReason) diagnostics submitted by the iOS beta build.",
+            category: "diagnostics",
+            severity: "low",
+            anonymous: false,
+            currentRoom: nil,
+            sessionStatus: "automatic:\(normalizedReason)",
+            displayName: displayName
+        ) { [weak self] result in
+            Task { @MainActor [weak self] in
+                self?.automaticSubmissionInFlight = false
+                switch result {
+                case .success:
+                    IOSDiagnosticsSubmissionLogger.log("automatic diagnostics submitted for \(normalizedReason)")
+                case .failure(let error):
+                    IOSDiagnosticsSubmissionLogger.log("automatic diagnostics failed for \(normalizedReason): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func submitFirstLaunchDiagnosticsIfNeeded(serverURL: String) {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        guard defaults.string(forKey: automaticDiagnosticsFirstLaunchBuildKey) != build else {
+            return
+        }
+        defaults.set(build, forKey: automaticDiagnosticsFirstLaunchBuildKey)
+        submitAutomaticDiagnosticsIfDue(
+            serverURL: serverURL,
+            reason: "first-launch-build-\(build)",
+            minimumInterval: 0,
+            force: true
+        )
+    }
 
     func submitBugReport(
         serverURL: String,

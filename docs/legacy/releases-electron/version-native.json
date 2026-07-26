@@ -4,7 +4,7 @@
   "releaseDate": "2026-01-13",
   "platform": "macos",
   "minimumOS": "13.0",
-  "downloadURL": "https://voicelink.devinecreations.net/releases/mac-native/VoiceLink-1.0.0-macos.zip",
+  "downloadURL": "https://voicelinkapp.app/downloads/voicelink/VoiceLinkMacOS.zip",
   "releaseNotes": "VoiceLink Native v1.0.0 - Official Release\n\nNew Features:\n- Native macOS app built with Swift and SwiftUI\n- Permanent rooms with device rotation\n- Guest rooms (10-30 min, 15 users max)\n- OpenLink visitor room support\n- Mastodon/Email authentication\n- Trust score system\n- eCrypto wallet integration\n- Escort Me safety feature\n- Auto-updater\n- Membership levels (Newbie, Regular, Outstanding)\n- Server room capacity (50-5000)\n- Recording Manager with multi-track support\n- VST Streaming Engine for audio effects\n- Jellyfin media server integration\n- Text-to-Speech announcements\n- Full accessibility/VoiceOver support\n- Spatial audio engine\n- Multi-channel audio support\n\nRequirements:\n- macOS 13.0 or later\n- Internet connection for voice chat",
   "sha256": "6341ac066a6e4fc13ab7266062d4d196b847e6d381c3f948742a9de6a6a15920",
   "fileSize": 150642866,

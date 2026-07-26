@@ -1133,13 +1133,13 @@ class VoiceLinkLocalServer {
                 id: 'windows_wx_setup',
                 label: 'VoiceLink Windows wxPython Installer',
                 platform: 'Windows',
-                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-windows-setup.exe'
+                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.6-windows-setup.exe'
             },
             windows_wx_portable: {
                 id: 'windows_wx_portable',
                 label: 'VoiceLink Windows wxPython Portable ZIP',
                 platform: 'Windows',
-                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.4-win-x64-portable.zip'
+                url: 'https://voicelinkapp.app/downloads/voicelink/windows/VoiceLinkWX-0.1.0.6-win-x64-portable.zip'
             },
             server_targz: {
                 id: 'server_targz',
@@ -10154,14 +10154,14 @@ class VoiceLinkLocalServer {
                 return fs.existsSync(path.join(resolvedDownloadRoot, filename));
             };
 
-            // Fallback versions used only when canonical manifests are unavailable.
+            // Latest versions for each platform
             const latestVersions = {
                 macos: {
-                    version: '1.0.0.96',
+                    version: '1.0.0',
                     buildNumber: 96,
-                    downloadURL: `${downloadBase}/VoiceLinkMacOS.zip`,
+                    downloadURL: `${downloadBase}/VoiceLink-1.0.0-macos.pkg`,
                     smartTarget: 'macos',
-                    releaseNotes: 'VoiceLink build 96 keeps the server browser, room list, audio, presence, messages, and update metadata aligned with the canonical download channel.'
+                    releaseNotes: 'Latest macOS build adds the server browser split, guest room-creation gating, and direct in-room server sign-in that returns users to the room after authentication.'
                 },
                 windows: {
                     version: '1.0.4',
@@ -10393,9 +10393,10 @@ class VoiceLinkLocalServer {
             if (code) nativeParams.set('code', code);
             if (state) nativeParams.set('state', state);
             if (error) nativeParams.set('error', error);
-            const nativeRedirect = `voicelink://oauth/callback?${nativeParams.toString()}`;
+            const nativeRedirect = `vcl://oauth/callback?${nativeParams.toString()}`;
+            const legacyNativeRedirect = `voicelink://oauth/callback?${nativeParams.toString()}`;
             const userAgent = String(req.get('user-agent') || '').toLowerCase();
-            const wantsNative = ['ios', 'iphone', 'ipad', 'testflight', 'voicelink'].some((needle) => userAgent.includes(needle))
+            const wantsNative = ['testflight', 'voicelink'].some((needle) => userAgent.includes(needle))
                 || String(req.query.client || '').toLowerCase() === 'ios'
                 || String(req.query.native || '').toLowerCase() === '1';
 
@@ -10410,14 +10411,18 @@ class VoiceLinkLocalServer {
   <meta charset="utf-8">
   <title>Return to VoiceLink</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0;url=${nativeRedirect.replace(/"/g, '&quot;')}">
 </head>
 <body>
   <h1>Return to VoiceLink</h1>
-  <p>Your Mastodon sign-in returned to VoiceLink. If the app does not open automatically, use this link:</p>
+  <p>Your Mastodon sign-in returned to VoiceLink. If the app does not open automatically, use one of these links:</p>
   <p><a href="${nativeRedirect.replace(/"/g, '&quot;')}">Open VoiceLink</a></p>
+  <p><a href="${legacyNativeRedirect.replace(/"/g, '&quot;')}">Open VoiceLink using legacy link</a></p>
   ${code ? `<p>Authorization code: <code>${code.replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char]))}</code></p>` : ''}
-  <script>window.location.replace(${JSON.stringify(nativeRedirect)});</script>
+  <script>
+    setTimeout(function () {
+      window.location.href = ${JSON.stringify(nativeRedirect)};
+    }, 250);
+  </script>
 </body>
 </html>`);
         };
@@ -19463,8 +19468,10 @@ class VoiceLinkLocalServer {
                 notifyAdmins: config.notifyAdmins !== false,
                 notifySupportRooms: config.notifySupportRooms === true,
                 allowFileRelay: config.allowFileRelay !== false,
-                preferredBackends: Array.isArray(config.preferredBackends) ? config.preferredBackends : [],
-                defaultDelegateBot: String(config.defaultDelegateBot || '').trim() || null
+                preferredBackends: Array.isArray(config.preferredBackends)
+                    ? config.preferredBackends
+                    : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
+                defaultDelegateBot: String(config.defaultDelegateBot || 'codex-bot').trim() || 'codex-bot'
             };
         };
         const summarizeModerationText = (value, maxLength = 140) => {
@@ -22447,7 +22454,7 @@ class VoiceLinkLocalServer {
                 botNotifySupportRooms: botConfig.notifySupportRooms === true,
                 botAllowFileRelay: botConfig.allowFileRelay !== false,
                 botDefaultDelegateBot: botConfig.defaultDelegateBot || 'codex-bot',
-                botPreferredBackends: Array.isArray(botConfig.preferredBackends) ? botConfig.preferredBackends : ['ollama', 'codex', 'opencode', 'openclaw', 'claude'],
+                botPreferredBackends: Array.isArray(botConfig.preferredBackends) ? botConfig.preferredBackends : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
                 botTempDirectory: botConfig.tempDirectory || null,
                 botMaxRelayFileSize: Number(botConfig.maxRelayFileSize || 10485760)
             });
@@ -22517,7 +22524,7 @@ class VoiceLinkLocalServer {
                     defaultDelegateBot: body.botDefaultDelegateBot ? String(body.botDefaultDelegateBot).trim() : 'codex-bot',
                     preferredBackends: Array.isArray(body.botPreferredBackends)
                         ? body.botPreferredBackends.slice(0, 8).map((item) => String(item || '').trim()).filter(Boolean)
-                        : ['ollama', 'codex', 'opencode', 'openclaw', 'claude'],
+                        : ['codex', 'openclaw', 'opencode', 'claude', 'ollama'],
                     tempDirectory: body.botTempDirectory ? String(body.botTempDirectory).trim() : null,
                     maxRelayFileSize: Math.max(1024, Number(body.botMaxRelayFileSize) || 10485760)
                 });
@@ -23272,9 +23279,8 @@ class VoiceLinkLocalServer {
             });
         });
 
-        // Federated server list (all known servers). Keep /api/servers as a
-        // compatibility alias for older desktop and TestFlight builds.
-        this.app.get(['/api/discovery/servers', '/api/servers'], (req, res) => {
+        // Federated server list (all known servers)
+        this.app.get('/api/discovery/servers', (req, res) => {
             const servers = [];
             const seen = new Set();
             const revealQuery = String(req.query?.reveal || req.query?.code || req.query?.q || req.query?.search || '')

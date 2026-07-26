@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import SwiftUI
 
 struct RoomSessionDestination: Identifiable, Hashable {
@@ -67,6 +68,22 @@ final class IOSRoomPreviewPlayer {
     }
 }
 
+private enum RoomJoinMutePreference: String, CaseIterable, Identifiable {
+    case roomDefault
+    case muted
+    case unmuted
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .roomDefault: return "Use Room Default"
+        case .muted: return "Always Join Muted"
+        case .unmuted: return "Always Join Unmuted"
+        }
+    }
+}
+
 struct RoomSessionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -76,11 +93,13 @@ struct RoomSessionView: View {
     @AppStorage("voicelink.audio.mediaMuted") private var mediaMuted = false
     @AppStorage("voicelink.audio.mediaGain") private var mediaGain: Double = 1.0
     @AppStorage("voicelink.audio.inputMuted") private var inputMuted = false
+    @AppStorage("voicelink.audio.joinMutePreference") private var joinMutePreference = RoomJoinMutePreference.roomDefault.rawValue
     @AppStorage("voicelink.audio.roomOutputMuted") private var roomOutputMuted = false
     @AppStorage("voicelink.audio.roomOutputMuteScope") private var roomOutputMuteScope = "all"
     @AppStorage("voicelink.audio.mode") private var audioMode = IOSVoiceLinkAudioMode.original.rawValue
     @AppStorage("voicelink.audio.noiseReductionEnabled") private var noiseReductionEnabled = false
     @AppStorage("voicelink.audio.echoCancellationEnabled") private var echoCancellationEnabled = false
+    @AppStorage(IOSVoiceLinkAudioFeatureFlags.advancedRoomAudioEnabledKey) private var advancedRoomAudioEnabled = false
     @AppStorage("voicelink.ios.showRoomRelayDebugDetails") private var showRoomRelayDebugDetails = false
     @AppStorage("voicelink.authProvider") private var authProvider = ""
     @AppStorage("voicelink.authUserJSON") private var authUserJSON = ""
@@ -107,6 +126,8 @@ struct RoomSessionView: View {
     @State private var joinSoundTask: Task<Void, Never>?
     @State private var memberRefreshTask: Task<Void, Never>?
     @State private var roomBackgroundPlayer: AVPlayer?
+    @State private var roomBackgroundContainsVideo = false
+    @State private var roomMediaExpanded = false
     @State private var roomBackgroundFadeTask: Task<Void, Never>?
     @State private var roomBackgroundRetryTask: Task<Void, Never>?
     @State private var roomBackgroundRetryCount = 0
@@ -122,8 +143,9 @@ struct RoomSessionView: View {
         _canManageRooms = State(initialValue: destination.canManageRooms)
     }
 
-    private var isSignedIn: Bool {
-        !authToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var canUseRoomAudioControls: Bool {
+        normalizedIOSRoomIdentity(socketClient.joinedRoomId) == normalizedIOSRoomIdentity(destination.roomId)
+            && roomState.isInRoom
     }
 
     private var roomMessages: [IOSRoomMessageItem] {
@@ -181,6 +203,7 @@ struct RoomSessionView: View {
         NavigationStack {
             List {
                 connectionSection
+                roomMediaSection
                 peopleSection
                 roomAudioSection
                 roomChatSection
@@ -204,8 +227,8 @@ struct RoomSessionView: View {
         }
         .onAppear {
             IOSAudioSessionManager.shared.activate(for: .room)
+            applyJoinMutePreference()
             socketClient.setPlaybackGain(Float(outputGain))
-            syncRoomAudioState()
             socketClient.startSession(
                 baseURL: destination.baseURL,
                 roomId: destination.roomId,
@@ -294,6 +317,54 @@ struct RoomSessionView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var roomMediaSection: some View {
+        let streamURL = destination.backgroundStream.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !streamURL.isEmpty {
+            Section("Room Media") {
+                DisclosureGroup("\(roomBackgroundSourceLabel(streamURL)) media", isExpanded: $roomMediaExpanded) {
+                    LabeledContent("Status", value: mediaMuted ? "Muted" : "Available")
+                    Text("This room media plays locally on your device and does not replace room voices.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if roomBackgroundContainsVideo, !mediaMuted, let roomBackgroundPlayer {
+                        VideoPlayer(player: roomBackgroundPlayer)
+                            .frame(minHeight: 180)
+                            .accessibilityLabel("Room video from \(roomBackgroundSourceLabel(streamURL))")
+                    }
+                    Button("Play Background Media") {
+                        mediaMuted = false
+                        startRoomBackgroundPlaybackIfNeeded()
+                        IOSActionSoundPlayer.playConfirm()
+                    }
+                    .accessibilityHint("Starts the room media on this device.")
+                    Button("Retry Background Media") {
+                        mediaMuted = false
+                        startRoomBackgroundPlaybackIfNeeded(forceRestart: true)
+                        IOSActionSoundPlayer.playConfirm()
+                    }
+                    .accessibilityHint("Reloads the room media if it did not begin playing.")
+                    Toggle("Mute Background Media", isOn: $mediaMuted)
+                        .onChange(of: mediaMuted) { _ in
+                            syncRoomBackgroundPlaybackState()
+                            IOSActionSoundPlayer.playToggle()
+                        }
+                }
+                .accessibilityHint(roomBackgroundContainsVideo ? "Expands room media controls and the active video player." : "Expands room media controls.")
+            }
+        }
+    }
+
+    private func roomBackgroundSourceLabel(_ streamURL: String) -> String {
+        guard let host = URL(string: streamURL)?.host?.lowercased() else {
+            return "Room background stream"
+        }
+        if host.contains("aaastreamer.devinecreations.net") {
+            return "TappedIn.fm"
+        }
+        return host
     }
 
     @ViewBuilder
@@ -407,10 +478,17 @@ struct RoomSessionView: View {
     private var roomAudioSection: some View {
         if showAudioControls {
             Section("Audio Settings") {
-                LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
+                if canUseRoomAudioControls {
+                    LabeledContent("Microphone", value: inputMuted ? "Muted" : "On")
+                } else {
+                    Text("Join this room to use microphone controls.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Microphone controls are available after joining this room.")
+                }
                 LabeledContent("Room Output", value: roomOutputMuted ? "Muted" : "On")
                 LabeledContent("Media Playback", value: effectiveMediaMuted ? "Muted" : "\(Int(mediaGain * 100)) percent")
                 LabeledContent("Audio Mode", value: roomAudioModeLabel)
+                LabeledContent("Advanced Audio", value: advancedRoomAudioEnabled ? "On" : "Off")
                 if showRoomRelayDebugDetails {
                     LabeledContent("Relay", value: socketClient.audioRelayStatus)
                 }
@@ -419,10 +497,12 @@ struct RoomSessionView: View {
                     IOSActionSoundPlayer.playConfirm()
                 }
                 .accessibilityHint("Opens the room audio settings subtab with microphone, output, media, and processing controls.")
-                Button(inputMuted ? "Unmute Microphone" : "Mute Microphone") {
-                    inputMuted.toggle()
-                    syncRoomAudioState()
-                    IOSActionSoundPlayer.playToggle()
+                if canUseRoomAudioControls {
+                    Button(inputMuted ? "Unmute Microphone" : "Mute Microphone") {
+                        inputMuted.toggle()
+                        syncRoomAudioState()
+                        IOSActionSoundPlayer.playToggle()
+                    }
                 }
                 Button(roomOutputMuted ? "Unmute Room Output" : "Mute Room Output") {
                     roomOutputMuted.toggle()
@@ -553,11 +633,37 @@ struct RoomSessionView: View {
                 }
 
                 Section("Audio Settings") {
-                    Toggle("Mute Microphone", isOn: $inputMuted)
-                        .onChange(of: inputMuted) { _ in
-                            syncRoomAudioState()
-                            IOSActionSoundPlayer.playToggle()
+                    Picker("When Joining a Room", selection: $joinMutePreference) {
+                        ForEach(RoomJoinMutePreference.allCases) { preference in
+                            Text(preference.title).tag(preference.rawValue)
                         }
+                    }
+                    .onChange(of: joinMutePreference) { _ in
+                        IOSActionSoundPlayer.playToggle()
+                    }
+                    .accessibilityHint("Choose whether to use the room default, always join muted, or always join unmuted.")
+                    if canUseRoomAudioControls {
+                        Toggle("Mute Microphone", isOn: $inputMuted)
+                            .onChange(of: inputMuted) { _ in
+                                syncRoomAudioState()
+                                IOSActionSoundPlayer.playToggle()
+                            }
+                        Slider(value: $inputGain, in: 0...3) {
+                            Text("Mic Level")
+                        } minimumValueLabel: {
+                            Text("0%")
+                        } maximumValueLabel: {
+                            Text("300%")
+                        }
+                        .accessibilityValue("\(Int(inputGain * 100)) percent")
+                        .accessibilityAdjustableAction { direction in
+                            adjustGainValue(&inputGain, direction: direction)
+                        }
+                    } else {
+                        Text("Join this room to enable microphone input.")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Microphone input is unavailable until you join this room.")
+                    }
                     Toggle("Mute Room Output", isOn: $roomOutputMuted)
                         .onChange(of: roomOutputMuted) { _ in
                             syncRoomAudioState()
@@ -571,17 +677,6 @@ struct RoomSessionView: View {
                     .onChange(of: roomOutputMuteScope) { _ in
                         syncRoomBackgroundPlaybackState()
                         IOSActionSoundPlayer.playToggle()
-                    }
-                    Slider(value: $inputGain, in: 0...3) {
-                        Text("Mic Level")
-                    } minimumValueLabel: {
-                        Text("0%")
-                    } maximumValueLabel: {
-                        Text("300%")
-                    }
-                    .accessibilityValue("\(Int(inputGain * 100)) percent")
-                    .accessibilityAdjustableAction { direction in
-                        adjustGainValue(&inputGain, direction: direction)
                     }
 
                     Slider(value: $outputGain, in: 0...3) {
@@ -638,7 +733,13 @@ struct RoomSessionView: View {
                             IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
                             IOSActionSoundPlayer.playToggle()
                         }
-                    Text("Original Audio is the default. Voice processing is enabled only when the selected mode or toggles request it.")
+                    Toggle("Advanced Room Audio", isOn: $advancedRoomAudioEnabled)
+                        .onChange(of: advancedRoomAudioEnabled) { _ in
+                            syncRoomAudioState()
+                            IOSAudioSessionManager.shared.refreshActiveSessionConfiguration()
+                            IOSActionSoundPlayer.playToggle()
+                        }
+                    Text("Original Audio and the normal iOS audio path are the defaults. Advanced room audio is optional and can stay off for normal testing.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button(whisperTarget == nil ? "No Whisper Target" : "Clear Whisper Target") {
@@ -1289,7 +1390,9 @@ struct RoomSessionView: View {
         keepRoomAliveResetTask = nil
         keepRoomAliveDuringInterfaceChange = false
         IOSAudioSessionManager.shared.activate(for: .room)
-        syncRoomAudioState()
+        if canUseRoomAudioControls {
+            syncRoomAudioState()
+        }
         socketClient.setPlaybackGain(Float(outputGain))
         updateRoomBackgroundPlaybackVolume()
         socketClient.requestRoomUsersIfDue(minimumInterval: 1.0)
@@ -1376,6 +1479,7 @@ struct RoomSessionView: View {
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
         roomBackgroundPlayer = player
+        detectRoomBackgroundVideo(at: url)
         updateRoomBackgroundPlaybackVolume()
         if !effectiveMediaMuted {
             player.play()
@@ -1401,6 +1505,16 @@ struct RoomSessionView: View {
         }
     }
 
+    private func detectRoomBackgroundVideo(at url: URL) {
+        roomBackgroundContainsVideo = false
+        Task { @MainActor in
+            let asset = AVURLAsset(url: url)
+            let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+            guard !Task.isCancelled else { return }
+            roomBackgroundContainsVideo = !videoTracks.isEmpty
+        }
+    }
+
     private func syncRoomBackgroundPlaybackState() {
         guard let roomBackgroundPlayer else { return }
         updateRoomBackgroundPlaybackVolume()
@@ -1412,8 +1526,23 @@ struct RoomSessionView: View {
     }
 
     private func syncRoomAudioState() {
+        guard canUseRoomAudioControls else {
+            socketClient.setOutputMuted(roomOutputMuted)
+            return
+        }
         socketClient.setInputMuted(inputMuted)
         socketClient.setOutputMuted(roomOutputMuted)
+    }
+
+    private func applyJoinMutePreference() {
+        switch RoomJoinMutePreference(rawValue: joinMutePreference) ?? .roomDefault {
+        case .roomDefault:
+            break
+        case .muted:
+            inputMuted = true
+        case .unmuted:
+            inputMuted = false
+        }
     }
 
     private func updateRoomBackgroundPlaybackVolume() {
@@ -1480,6 +1609,7 @@ struct RoomSessionView: View {
         roomBackgroundRetryCount = 0
         roomBackgroundPlayer?.pause()
         roomBackgroundPlayer = nil
+        roomBackgroundContainsVideo = false
     }
 
     private func roomAudioStatusLabel(for target: IOSDirectMessageTarget) -> String {
@@ -1679,6 +1809,7 @@ struct RoomPreviewView: View {
 }
 
 extension Notification.Name {
+    static let iosRefreshPublicDirectory = Notification.Name("iosRefreshPublicDirectory")
     static let iosOpenMessagesTab = Notification.Name("iosOpenMessagesTab")
     static let iosShowUserProfile = Notification.Name("iosShowUserProfile")
     static let iosPlayTestSound = Notification.Name("iosPlayTestSound")

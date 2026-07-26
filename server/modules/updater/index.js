@@ -20,7 +20,7 @@ class UpdaterModule {
         this.server = options.server;
 
         // Main hub URL for updates
-        this.hubUrl = this.config.hubUrl || 'https://voicelink.dev';
+        this.hubUrl = this.config.hubUrl || 'https://voicelinkapp.app';
 
         // Current version
         this.currentVersion = this.config.version || '1.0.1';
@@ -79,9 +79,12 @@ class UpdaterModule {
 
         // User preferences for updates
         this.updatePreferences = {
-            autoUpdate: false,
+            autoUpdate: true,
             enabledCategories: ['core', 'rooms', 'audio'], // Default enabled
             notifyOnUpdate: true,
+            autoDownload: true,
+            autoInstall: true,
+            allowPostpone: true,
             updateChannel: 'stable' // 'stable', 'beta', 'dev'
         };
 
@@ -176,8 +179,14 @@ class UpdaterModule {
             req.on('error', reject);
             req.write(JSON.stringify({
                 currentVersion: this.currentVersion,
+                serverVersion: this.currentVersion,
+                platform: 'server',
+                installId: this.config.installId || this.config.serverId || process.env.VOICELINK_INSTALL_ID || null,
                 enabledCategories: this.updatePreferences.enabledCategories,
-                channel: this.updatePreferences.updateChannel
+                channel: this.updatePreferences.updateChannel,
+                autoUpdate: this.updatePreferences.autoUpdate,
+                autoDownload: this.updatePreferences.autoDownload,
+                autoInstall: this.updatePreferences.autoInstall
             }));
             req.end();
         });
@@ -361,6 +370,15 @@ class UpdaterModule {
         if (updates.autoUpdate !== undefined) {
             this.updatePreferences.autoUpdate = updates.autoUpdate;
         }
+        if (updates.autoDownload !== undefined) {
+            this.updatePreferences.autoDownload = updates.autoDownload;
+        }
+        if (updates.autoInstall !== undefined) {
+            this.updatePreferences.autoInstall = updates.autoInstall;
+        }
+        if (updates.allowPostpone !== undefined) {
+            this.updatePreferences.allowPostpone = updates.allowPostpone;
+        }
         if (updates.notifyOnUpdate !== undefined) {
             this.updatePreferences.notifyOnUpdate = updates.notifyOnUpdate;
         }
@@ -386,6 +404,9 @@ class UpdaterModule {
             version: this.currentVersion,
             channel: this.updatePreferences.updateChannel,
             autoUpdate: this.updatePreferences.autoUpdate,
+            autoDownload: this.updatePreferences.autoDownload,
+            autoInstall: this.updatePreferences.autoInstall,
+            allowPostpone: this.updatePreferences.allowPostpone,
             enabledCategories: this.updatePreferences.enabledCategories,
             activeConnections: this.connections.size,
             pendingAlerts: this.adminAlerts.filter(a => !a.acknowledged).length

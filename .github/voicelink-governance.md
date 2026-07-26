@@ -112,6 +112,21 @@ Documentation governance for VoiceLink:
   - bugtracker/status pages
   - admin docs
 - Live docs should only be replaced from reviewed, current source copies.
+
+TestFlight release governance:
+
+- New VoiceLink builds default to the internal `DVC_VCL` group.
+- Internal device, accessibility, room join/presence, messaging, and audio
+  verification is required before attachment to `Pioneers` or another external
+  group.
+- External group attachment and external beta review require an explicit
+  post-verification release action; upload automation must not perform either
+  by default.
+- Public-test fallback is active while neither `d.stansberry@me.com` nor
+  `d.stansberry@icloud.com` can be used as an App Store Connect internal
+  tester. During that condition, keep builds available through `Pioneers`
+  rather than blocking beta testing, and recheck the two accounts before
+  changing the policy back to internal-first.
 - Public builds should not be published against stale docs when the feature set changed.
 
 Governance rule for this state:

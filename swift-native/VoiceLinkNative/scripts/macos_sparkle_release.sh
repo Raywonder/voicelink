@@ -131,6 +131,20 @@ fi
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 codesign --remove-signature "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 
+SWIFTPM_RESOURCE_BUNDLE=""
+for arch in "${ARCH_ARRAY[@]}"; do
+  candidate="$BUILD_PATH/$arch/$BUILD_CONFIG/${PRODUCT_NAME}_${PRODUCT_NAME}.bundle"
+  if [[ -d "$candidate" ]]; then
+    SWIFTPM_RESOURCE_BUNDLE="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$SWIFTPM_RESOURCE_BUNDLE" ]]; then
+  echo "ERROR: SwiftPM resource bundle was not produced. The app would launch without bundled sounds/docs." >&2
+  exit 1
+fi
+
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
@@ -167,9 +181,12 @@ chmod -R a+rX "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 if [[ -d "$ROOT_DIR/Resources/docs" ]]; then
   cp -R "$ROOT_DIR/Resources/docs" "$APP_BUNDLE/Contents/Resources/docs"
 fi
-if [[ -d "$ROOT_DIR/Resources/Sounds" ]]; then
-  cp -R "$ROOT_DIR/Resources/Sounds" "$APP_BUNDLE/Contents/Resources/Sounds"
+if [[ -d "$ROOT_DIR/Resources/sounds" ]]; then
+  cp -R "$ROOT_DIR/Resources/sounds" "$APP_BUNDLE/Contents/Resources/sounds"
+elif [[ -d "$ROOT_DIR/Resources/Sounds" ]]; then
+  cp -R "$ROOT_DIR/Resources/Sounds" "$APP_BUNDLE/Contents/Resources/sounds"
 fi
+cp -R "$SWIFTPM_RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
 
 cat > "$DIST_DIR/entitlements.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import subprocess
 import threading
 import webbrowser
 from dataclasses import dataclass
@@ -13,8 +16,8 @@ import wx
 
 
 APP_NAME = "VoiceLinkWX"
-APP_VERSION = "0.1.0.6"
-APP_BUILD = 6
+APP_VERSION = "0.1.0.7"
+APP_BUILD = 7
 DEFAULT_SERVER = "https://voicelinkapp.app"
 WHATSAPP_GROUP_URL = "https://chat.whatsapp.com/HesAnbKsTTN5neH11BxzSz?mode=gi_t"
 LEGACY_DEFAULT_SERVERS = {
@@ -23,6 +26,8 @@ LEGACY_DEFAULT_SERVERS = {
 }
 CONFIG_DIR = Path.home() / "AppData" / "Roaming" / "VoiceLinkWX"
 CONFIG_PATH = CONFIG_DIR / "settings.json"
+UPDATE_DIR = CONFIG_DIR / "updates"
+UPDATE_PENDING_PATH = UPDATE_DIR / "pending-update-success.json"
 
 
 def normalize_base_url(value: str) -> str:
@@ -563,6 +568,7 @@ class MainFrame(wx.Frame):
         self._build_menu()
         self._bind_events()
         self._load_settings()
+        self._consume_pending_update_marker()
         self.Centre()
 
     def _build_menu(self) -> None:
@@ -634,6 +640,16 @@ class MainFrame(wx.Frame):
         }
         CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def _consume_pending_update_marker(self) -> None:
+        try:
+            marker = json.loads(UPDATE_PENDING_PATH.read_text(encoding="utf-8"))
+            UPDATE_PENDING_PATH.unlink(missing_ok=True)
+        except Exception:
+            return
+        version = display_value(marker.get("version") or APP_VERSION)
+        build = display_value(marker.get("buildNumber") or APP_BUILD)
+        self.set_status(f"VoiceLink update installed. Current version {version}, build {build}.")
+
     def _on_close(self, event: wx.CloseEvent) -> None:
         self._save_settings()
         event.Skip()
@@ -691,6 +707,8 @@ class MainFrame(wx.Frame):
         elif action == "messages":
             self.details.SetValue(self._format_records("Room messages", payload))
             self.set_status("Room messages loaded.")
+        elif action == "update_downloaded":
+            self._start_installer_after_exit(payload)
         elif action == "updates":
             self._show_update_result(payload)
 
@@ -794,19 +812,119 @@ class MainFrame(wx.Frame):
         if payload.get("updateAvailable"):
             version = display_value(payload.get("version") or "new version")
             notes = display_value(payload.get("releaseNotes") or "No release notes were provided.")
-            url = display_value(payload.get("downloadURL") or payload.get("smartDownloadURL") or "")
+            url = self._extract_update_url(payload)
             message = f"VoiceLink {version} is available.\n\n{notes}"
             if url:
-                message += f"\n\nOpen the installer download now?"
+                message += "\n\nDownload and install this update now? VoiceLink will close and restart when the installer finishes."
             response = wx.MessageBox(message, "VoiceLink update available", wx.YES_NO | wx.ICON_INFORMATION)
             if response == wx.YES and url:
-                webbrowser.open(url)
+                self.run_background("Downloading VoiceLink update.", lambda: ("update_downloaded", self._download_update_installer(payload)))
             self.set_status(f"Update available: {version}.")
             return
 
         message = display_value(payload.get("message") or f"You are running the latest VoiceLink for Windows build, version {APP_VERSION}.")
         wx.MessageBox(message, "VoiceLink updates", wx.OK | wx.ICON_INFORMATION)
         self.set_status("No VoiceLink update is available.")
+
+    def _extract_update_url(self, payload: dict[str, Any]) -> str:
+        client_updates = payload.get("clientUpdates") if isinstance(payload.get("clientUpdates"), dict) else {}
+        raw_url = display_value(
+            payload.get("downloadURL")
+            or client_updates.get("downloadURL")
+            or payload.get("smartDownloadURL")
+            or client_updates.get("smartDownloadURL")
+            or ""
+        )
+        if raw_url.startswith("/"):
+            return f"{normalize_base_url(self.server_url.GetValue())}{raw_url}"
+        return raw_url
+
+    def _extract_update_checksum(self, payload: dict[str, Any]) -> str:
+        client_updates = payload.get("clientUpdates") if isinstance(payload.get("clientUpdates"), dict) else {}
+        return display_value(
+            payload.get("checksum")
+            or payload.get("checksum_sha256")
+            or payload.get("installer_checksum_sha256")
+            or client_updates.get("checksum")
+            or client_updates.get("checksum_sha256")
+            or client_updates.get("installer_checksum_sha256")
+            or ""
+        ).lower()
+
+    def _download_update_installer(self, payload: dict[str, Any]) -> dict[str, Any]:
+        url = self._extract_update_url(payload)
+        if not url:
+            raise RuntimeError("The update did not include an installer URL.")
+        if not url.lower().endswith(".exe"):
+            raise RuntimeError("The update URL is not a Windows installer. Please use the Windows installer update channel.")
+
+        UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+        filename = Path(url.split("?", 1)[0]).name or "VoiceLinkWX-update.exe"
+        download_path = UPDATE_DIR / filename
+        partial_path = download_path.with_suffix(download_path.suffix + ".download")
+        checksum = self._extract_update_checksum(payload)
+        sha256 = hashlib.sha256()
+
+        with self.api.session.get(url, stream=True, timeout=60) as response:
+            response.raise_for_status()
+            with partial_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 256):
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    sha256.update(chunk)
+
+        digest = sha256.hexdigest().lower()
+        if checksum and len(checksum) == 64 and digest != checksum:
+            partial_path.unlink(missing_ok=True)
+            raise RuntimeError("The downloaded update did not match the published checksum.")
+
+        partial_path.replace(download_path)
+        return {
+            "installer": str(download_path),
+            "version": payload.get("version") or APP_VERSION,
+            "buildNumber": payload.get("buildNumber") or APP_BUILD,
+            "sha256": digest,
+        }
+
+    def _start_installer_after_exit(self, update_info: dict[str, Any]) -> None:
+        installer = Path(display_value(update_info.get("installer")))
+        if not installer.exists():
+            raise RuntimeError("Downloaded installer is missing.")
+
+        UPDATE_DIR.mkdir(parents=True, exist_ok=True)
+        UPDATE_PENDING_PATH.write_text(json.dumps({
+            "version": update_info.get("version") or APP_VERSION,
+            "buildNumber": update_info.get("buildNumber") or APP_BUILD,
+            "installer": str(installer),
+        }, indent=2), encoding="utf-8")
+
+        pid = os.getpid()
+        ps_path = UPDATE_DIR / "run-update-after-exit.ps1"
+        ps_path.write_text(
+            "$ErrorActionPreference = 'Stop'\n"
+            f"$pidToWait = {pid}\n"
+            f"$installer = {json.dumps(str(installer))}\n"
+            "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+            "Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS' -WindowStyle Hidden\n",
+            encoding="utf-8",
+        )
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                str(ps_path),
+            ],
+            close_fds=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        self.set_status("VoiceLink update downloaded. Closing to install.")
+        self.Close()
 
     def refresh_rooms(self) -> None:
         self.api.configure(self.server_url.GetValue(), self.api.token)

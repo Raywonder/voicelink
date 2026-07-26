@@ -2,6 +2,12 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import AVFoundation
+import OSLog
+
+private let roomDirectoryLogger = Logger(
+    subsystem: "com.devinecreations.voicelink",
+    category: "RoomDirectory"
+)
 
 struct ContentView: View {
     @Binding var serverURL: String
@@ -1447,6 +1453,7 @@ private struct HomeTab: View {
     @State private var isAdmin = false
     @State private var canManageRooms = false
     @State private var showAdmin = false
+    @State private var adminServerURL = ""
     @State private var roomSortMode: RoomSortMode = .activity
     @State private var clientVisibility: ClientVisibilitySettings = .allVisible
     @State private var searchText = ""
@@ -1546,7 +1553,7 @@ private struct HomeTab: View {
                             .buttonStyle(.bordered)
                         }
                     } else {
-                        Text("Tap a room to join.")
+                        Text("Choose a room to join.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1577,7 +1584,7 @@ private struct HomeTab: View {
                 }
 
                 Section("Servers") {
-                    Text("Tap a server to browse only that server’s rooms. Use Federated Rooms for one combined room browser across all trusted servers.")
+                    Text("Choose a server to browse that server’s rooms. Use Federated Rooms for one combined room browser across trusted servers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -1614,7 +1621,7 @@ private struct HomeTab: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else if filteredServerSummaries.isEmpty {
-                        Text("No servers found yet.")
+                        Text("No servers found yet. VoiceLink refreshes the public directory when the app opens and when this screen appears.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(filteredServerSummaryGroups, id: \.owner) { group in
@@ -1650,6 +1657,7 @@ private struct HomeTab: View {
                 if isAdmin || canManageRooms {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            adminServerURL = normalizedBaseURL
                             showAdmin = true
                         } label: {
                             Label("Admin", systemImage: "gearshape.2.fill")
@@ -1670,6 +1678,13 @@ private struct HomeTab: View {
             .onChange(of: roomSortMode) { _ in
                 Task { await refreshRooms() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRefreshPublicDirectory)) { _ in
+                guard !roomState.isInRoom else { return }
+                Task {
+                    await refreshRooms()
+                    await refreshAdminAccess()
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .iosRoomJoined)) { _ in
                 Task { await refreshRooms() }
             }
@@ -1689,13 +1704,16 @@ private struct HomeTab: View {
                 HomeServerRoomsView(
                     server: server,
                     clientVisibleOnIOS: clientVisibility.ios,
-                    canManageRooms: isAdmin || canManageRooms,
+                    canManageRooms: canonicalServerIdentity(baseURL: server.baseURL, room: nil)
+                        == canonicalServerIdentity(baseURL: normalizedBaseURL, room: nil)
+                        && (isAdmin || canManageRooms),
                     onJoinRoom: { room in
                         activeServer = nil
                         openRoom(room, action: "join")
                     },
                     onShareRoom: { room in shareRoom(room) },
                     onOpenServerAdmin: {
+                        adminServerURL = normalizeBaseURL(server.baseURL)
                         activeServer = nil
                         showAdmin = true
                     },
@@ -1741,7 +1759,12 @@ private struct HomeTab: View {
                 )
             }
             .sheet(isPresented: $showAdmin) {
-                AdminTabView(serverURL: $serverURL)
+                AdminTabView(
+                    serverURL: Binding(
+                        get: { adminServerURL.isEmpty ? normalizedBaseURL : adminServerURL },
+                        set: { adminServerURL = normalizeBaseURL($0) }
+                    )
+                )
             }
             .sheet(isPresented: $showNativeAccountSignIn) {
                 IOSAccountSignInView(serverURL: authRequiredServerURL.isEmpty ? normalizedBaseURL : normalizeBaseURL(authRequiredServerURL))
@@ -1828,14 +1851,20 @@ private struct HomeTab: View {
             return
         }
 
-        if !isLoading {
-            isLoading = true
-        }
+        isLoading = true
+        defer { isLoading = false }
         errorMessage = ""
         do {
-            let bases = await fetchVisibleFederationBases(preferredBase: normalizedBaseURL)
+            // Keep the primary directory fast and predictable. The Federated Rooms tab
+            // performs deeper discovery; this screen loads every configured app server
+            // in parallel instead of waiting for sequential federation probes.
+            let bases = iOSMainAPIBaseCandidates(preferredBase: normalizedBaseURL)
+            let localRooms = try await fetchRoomsAcrossVisibleServers(
+                bases: bases,
+                sortMode: roomSortMode
+            )
             rooms = deduplicateHomeRooms(
-                try await fetchRoomsAcrossVisibleServers(bases: bases, sortMode: roomSortMode),
+                localRooms,
                 fallbackBase: normalizedBaseURL
             )
         } catch let error as IOSRoomsAuthenticationRequired {
@@ -1845,9 +1874,9 @@ private struct HomeTab: View {
             showNativeAccountSignIn = true
         } catch {
             rooms = []
-            errorMessage = "Could not load rooms. Check server URL and network."
+            roomDirectoryLogger.error("room.directory.failed base=\(normalizedBaseURL, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            errorMessage = "Could not load rooms: \(error.localizedDescription)"
         }
-        isLoading = false
     }
 
     private func deduplicateHomeRooms(_ allRooms: [RoomSummary], fallbackBase: String) -> [RoomSummary] {
@@ -1977,7 +2006,7 @@ private struct RoomRow: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(room.name), \(occupancySummary(room)), \(displayRoomLockLabel(room.locked)), \(displayVisibilityLabel(room.visibility)), \(displayAccessTypeLabel(room.accessType))\(liveBroadcastLabel.map { ", \($0)" } ?? "")")
-        .accessibilityHint("Double tap for room details. Swipe down for preview, join, and share actions.")
+        .accessibilityHint("Activate for room details. Use available actions for preview, join, and sharing.")
     }
 }
 
@@ -2005,6 +2034,11 @@ private struct HomeServerRoomsView: View {
     let onContactSupport: (IOSSupportContext) -> Void
     @State private var activePreview: RoomPreviewDestination?
     @State private var activeDetails: RoomDetailsDestination?
+    @State private var serverCanManageRooms = false
+
+    private var showsServerActions: Bool {
+        canManageRooms || serverCanManageRooms
+    }
 
     var body: some View {
         NavigationStack {
@@ -2035,7 +2069,7 @@ private struct HomeServerRoomsView: View {
                     .accessibilityHint("Opens a private support ticket for this server.")
                 }
 
-                if canManageRooms {
+                if showsServerActions {
                     Section("Server Actions") {
                         Button("Create Room") {
                             dismiss()
@@ -2092,6 +2126,9 @@ private struct HomeServerRoomsView: View {
             }
             .sheet(item: $activeDetails) { details in
                 RoomDetailsView(destination: details)
+            }
+            .task(id: server.baseURL) {
+                serverCanManageRooms = await fetchAdminRoomManagementAccess(baseURL: server.baseURL)
             }
             .navigationTitle(server.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -2546,7 +2583,7 @@ private struct FederationTab: View {
                                 }
                                 .accessibilityElement(children: .combine)
                                 .accessibilityLabel("\(group.displayName), \(occupancySummary(users: group.totalUsers, bots: group.totalBots, totalVisible: group.totalVisible)) across \(group.choices.count) servers")
-                                .accessibilityHint("Double tap to choose which server copy of this room to open.")
+                                .accessibilityHint("Activate to choose which server copy of this room to open.")
                                 .accessibilityAction(named: Text("Choose Server")) { activeGroup = group }
                                 .accessibilityAction(named: Text("Preview Room")) { openGroupedRoom(group, action: "preview") }
                                 .accessibilityAction(named: Text("Join Room")) { openGroupedRoom(group, action: "join") }
@@ -2567,6 +2604,9 @@ private struct FederationTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { Task { await refreshRooms() } }
             .refreshable { await refreshRooms() }
+            .onReceive(NotificationCenter.default.publisher(for: .iosRefreshPublicDirectory)) { _ in
+                Task { await refreshRooms() }
+            }
             .sheet(item: $activeSession) { session in
                 RoomSessionView(destination: session, roomState: roomState)
             }
@@ -2780,7 +2820,7 @@ private struct FederationRoomChoicesView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(group.displayName) on \(choice.serverLabel), \(occupancySummary(choice.room))")
-                    .accessibilityHint("Double tap for room details. Swipe down for preview and join actions.")
+                    .accessibilityHint("Activate for room details. Extra actions are available for preview and join.")
                     .accessibilityAction(named: Text("Room Details")) { onOpen(choice, "details") }
                     .accessibilityAction(named: Text("Join Room")) { onOpen(choice, "join") }
                     .accessibilityAction(named: Text("Preview Room")) { onOpen(choice, "preview") }
@@ -2882,7 +2922,7 @@ private struct MessagesTab: View {
                             .buttonStyle(.plain)
                             .accessibilityElement(children: .combine)
                             .accessibilityAddTraits(roomState.selectedDirectTarget?.id == target.id ? .isSelected : [])
-                            .accessibilityHint("Double tap to select this user. Use the direct message field below to send a private message.")
+                            .accessibilityHint("Activate to select this user. Use the direct message field below to send a private message.")
                         }
                     }
 
@@ -3903,8 +3943,11 @@ struct SettingsTab: View {
                 }
 
                 Section("Diagnostics") {
-                    Toggle("Auto-send diagnostics with bug reports", isOn: $autoSendDiagnostics)
+                    Toggle("Automatically send beta diagnostics", isOn: $autoSendDiagnostics)
                     Toggle("Include recent crash/session reports", isOn: $shareCrashReports)
+                    Text("When enabled, the beta sends a diagnostics snapshot on first launch of each build and about every 15 minutes while the app is active.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Button(submittingDiagnostics ? "Sending…" : "Send Diagnostics Report") {
                         submitDiagnosticsReport()
                     }
@@ -4397,7 +4440,7 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
         }
         if let url = URL(string: normalized),
            let host = url.host?.lowercased(),
-           ["node2.voicelink.devinecreations.net", "voicelink.dev"].contains(host) {
+           host == "node2.voicelink.devinecreations.net" {
             return "https://community.voicelinkapp.app"
         }
         if let url = URL(string: normalized),
@@ -4410,6 +4453,7 @@ private func normalizeBaseURL(_ rawURL: String) -> String {
            [
                "voicelinkapp.app",
                "community.voicelinkapp.app",
+               "voicelink.dev",
                "tappedin.fm"
            ].contains(host) {
             return "https://\(host)"
@@ -4431,6 +4475,7 @@ private func iOSMainAPIBaseCandidates(preferredBase: String) -> [String] {
     }
     candidates.append("https://voicelinkapp.app")
     candidates.append("https://community.voicelinkapp.app")
+    candidates.append("https://voicelink.dev")
     candidates.append("https://devine-creations.com/voicelink")
     candidates.append("https://devinecreations.net")
 
@@ -4457,19 +4502,24 @@ private func fetchRoomsWithFallback(sortMode: RoomSortMode, preferredBase: Strin
         let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
         guard let url = URL(string: endpoint) else { continue }
         let request = iosServerPresenceRequest(url: url, timeout: 12)
+        let startedAt = Date()
+        roomDirectoryLogger.notice("room.directory.request base=\(normalizeBaseURL(base), privacy: .public) sort=\(sortMode.rawValue, privacy: .public)")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 if http.statusCode == 401 || http.statusCode == 403 {
                     lastError = IOSRoomsAuthenticationRequired(baseURL: normalizeBaseURL(base))
                 }
+                roomDirectoryLogger.error("room.directory.response base=\(normalizeBaseURL(base), privacy: .public) status=\(http.statusCode) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) result=http-error")
                 continue
             }
             let decodedRooms = try JSONDecoder().decode([RoomSummary].self, from: data)
                 .map { $0.normalizedForFetchedBase(base) }
+            roomDirectoryLogger.notice("room.directory.response base=\(normalizeBaseURL(base), privacy: .public) count=\(decodedRooms.count) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) result=success")
             return (decodedRooms, normalizeBaseURL(base))
         } catch {
             lastError = error
+            roomDirectoryLogger.error("room.directory.failed base=\(normalizeBaseURL(base), privacy: .public) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) error=\(error.localizedDescription, privacy: .public)")
         }
     }
     throw lastError ?? URLError(.cannotConnectToHost)
@@ -4567,22 +4617,26 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
     try await withThrowingTaskGroup(of: IOSRoomFetchBatch.self) { group in
         for base in bases {
             group.addTask {
-                let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
-                guard let url = URL(string: endpoint) else { return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil) }
-                let request = iosServerPresenceRequest(url: url, timeout: 12)
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
+                do {
+                    let endpoint = "\(normalizeBaseURL(base))/api/rooms?source=app&client=ios&sort=\(sortMode.rawValue)"
+                    guard let url = URL(string: endpoint) else { return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil) }
+                    let request = iosServerPresenceRequest(url: url, timeout: 12)
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
+                    }
+                    if http.statusCode == 401 || http.statusCode == 403 {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: normalizeBaseURL(base))
+                    }
+                    guard (200...299).contains(http.statusCode) else {
+                        return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
+                    }
+                    let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
+                        .map { $0.normalizedForFetchedBase(base) }
+                    return IOSRoomFetchBatch(rooms: rooms, authRequiredBase: nil)
+                } catch {
                     return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
                 }
-                if http.statusCode == 401 || http.statusCode == 403 {
-                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: normalizeBaseURL(base))
-                }
-                guard (200...299).contains(http.statusCode) else {
-                    return IOSRoomFetchBatch(rooms: [], authRequiredBase: nil)
-                }
-                let rooms = try JSONDecoder().decode([RoomSummary].self, from: data)
-                    .map { $0.normalizedForFetchedBase(base) }
-                return IOSRoomFetchBatch(rooms: rooms, authRequiredBase: nil)
             }
         }
 
@@ -4598,6 +4652,32 @@ private func fetchRoomsAcrossVisibleServers(bases: [String], sortMode: RoomSortM
             throw IOSRoomsAuthenticationRequired(baseURL: firstAuthRequiredBase)
         }
         return rooms
+    }
+}
+
+private func fetchAdminRoomManagementAccess(baseURL: String) async -> Bool {
+    let normalizedBase = normalizeBaseURL(baseURL)
+    guard let url = URL(string: "\(normalizedBase)/api/admin/status") else {
+        return false
+    }
+    do {
+        var request = iosServerPresenceRequest(url: url, timeout: 12)
+        let token = (UserDefaults.standard.string(forKey: "voicelink.authToken") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(token, forHTTPHeaderField: "x-session-token")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            return false
+        }
+        let json = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let isAdmin = (json["isAdmin"] as? Bool) ?? false
+        let permissions = json["permissions"] as? [String: Bool]
+        return isAdmin || ((json["canManageRooms"] as? Bool) ?? (permissions?["rooms"] ?? false))
+    } catch {
+        return false
     }
 }
 
@@ -4637,6 +4717,13 @@ private func configuredServerPresentation(baseURL: String) -> ConfiguredServerPr
             ownerGroup: "VoiceLink",
             domain: "community.voicelinkapp.app",
             description: "Community server for rooms, testing, and federation."
+        )
+    case "voicelink.dev", "www.voicelink.dev":
+        return ConfiguredServerPresentation(
+            name: "VoiceLink - Dev (voicelink.dev)",
+            ownerGroup: "VoiceLink",
+            domain: "voicelink.dev",
+            description: "VoiceLink beta and development server."
         )
     case "devine-creations.com", "www.devine-creations.com":
         guard path == "voicelink" || path.isEmpty else { return nil }
@@ -4772,6 +4859,9 @@ private func canonicalServerIdentity(baseURL: String, room: RoomSummary?) -> Str
     }
     if ["64.20.46.179", "community.voicelinkapp.app", "www.community.voicelinkapp.app"].contains(baseHost) {
         return "community.voicelinkapp.app"
+    }
+    if ["voicelink.dev", "www.voicelink.dev"].contains(baseHost) {
+        return "voicelink.dev"
     }
     if !baseHost.isEmpty, !isIPAddressValue(baseHost) {
         return baseIdentity.isEmpty ? baseHost : baseIdentity

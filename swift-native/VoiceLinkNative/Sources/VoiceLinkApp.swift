@@ -537,6 +537,7 @@ extension Notification.Name {
     static let openFileTransfers = Notification.Name("openFileTransfers")
     static let openDirectMessage = Notification.Name("openDirectMessage")
     static let openBugReport = Notification.Name("openBugReport")
+    static let refreshPublicDirectory = Notification.Name("refreshPublicDirectory")
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -579,6 +580,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.autoConnectOnLaunch()
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            NotificationCenter.default.post(name: .refreshPublicDirectory, object: "launch")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+            NotificationCenter.default.post(name: .refreshPublicDirectory, object: "launch-followup")
+        }
 
         // Show window on launch based on user preference.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -602,6 +609,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DocsManager.shared.startBackgroundSync(baseURL: ServerManager.shared.baseURL)
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        NotificationCenter.default.post(name: .refreshPublicDirectory, object: "became-active")
     }
 
     func autoConnectOnLaunch() {
@@ -890,7 +901,19 @@ class AppState: ObservableObject {
         setupAdminObservers()
         initializeLicensing()
         setupURLObservers()
+        setupPublicDirectoryRefreshObserver()
         refreshAdminCapabilities()
+    }
+
+    private func setupPublicDirectoryRefreshObserver() {
+        NotificationCenter.default.addObserver(forName: .refreshPublicDirectory, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                guard !self.hasActiveRoom else { return }
+                SettingsManager.shared.ensureManagedFederationDefaults()
+                self.refreshRooms()
+            }
+        }
     }
 
     private func setupURLObservers() {
@@ -984,10 +1007,15 @@ class AppState: ObservableObject {
 
     private func handleURLViewRoom(roomId: String) {
         print("[AppState] Viewing room from URL: \(roomId)")
-        // Show room details/preview - find in rooms list
+        // Focus the room for preview without marking it as joined.
         if let room = rooms.first(where: { $0.id == roomId }) {
-            currentRoom = room
-            // Stay on main menu to show preview
+            focusedRoomId = room.id
+            currentScreen = .mainMenu
+            errorMessage = "Selected \(room.name). Sign in and join the room to use audio."
+        } else {
+            focusedRoomId = roomId
+            currentScreen = .mainMenu
+            errorMessage = "Selected room \(roomId). Sign in and join the room to use audio."
         }
     }
 
@@ -1368,7 +1396,14 @@ class AppState: ObservableObject {
         // Refresh admin capabilities after Mastodon auth completes.
         NotificationCenter.default.addObserver(forName: .mastodonAccountLoaded, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshAdminCapabilities()
+                guard let self else { return }
+                if self.serverManager.isConnected {
+                    self.serverManager.syncAuthenticatedSession()
+                } else {
+                    self.connectToServer()
+                }
+                self.refreshAdminCapabilities()
+                self.refreshRooms()
             }
         }
 
@@ -4274,6 +4309,12 @@ struct VoiceChatView: View {
         authManager.authState == .authenticated && authManager.currentUser != nil
     }
 
+    private var canUseRoomAudioControls: Bool {
+        isAuthenticatedUser
+            && appState.currentRoom != nil
+            && appState.serverManager.activeRoomId != nil
+    }
+
     private var canOpenServerAdministration: Bool {
         let currentRole = authManager.currentUser?.role?.lowercased()
         return adminManager.isAdmin
@@ -4765,17 +4806,18 @@ struct VoiceChatView: View {
 
                 // Voice Controls
                 HStack(spacing: 30) {
-                    VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                                      label: isMuted ? "Unmute Microphone" : "Mute Microphone",
-                                      isActive: !isMuted) {
-                        isMuted.toggle()
-                        appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
-                        AppSoundManager.shared.playSound(isMuted ? .toggleOff : .toggleOn)
-                        // Announce state change
-                        AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
+                    if canUseRoomAudioControls {
+                        VoiceControlButton(icon: isMuted ? "mic.slash.fill" : "mic.fill",
+                                          label: isMuted ? "Unmute Microphone" : "Mute Microphone",
+                                          isActive: !isMuted) {
+                            isMuted.toggle()
+                            appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+                            AppSoundManager.shared.playSound(isMuted ? .toggleOff : .toggleOn)
+                            AccessibilityManager.shared.announceAudioStatus(isMuted ? "muted" : "unmuted")
+                        }
+                        .accessibilityLabel(isMuted ? "Unmute Microphone" : "Mute Microphone")
+                        .accessibilityHint("Toggle microphone input. Currently \(isMuted ? "muted" : "unmuted")")
                     }
-                    .accessibilityLabel(isMuted ? "Unmute Microphone" : "Mute Microphone")
-                    .accessibilityHint("Toggle microphone input. Currently \(isMuted ? "muted" : "unmuted")")
 
                     VoiceControlButton(icon: isDeafened ? "speaker.slash.fill" : "speaker.wave.2.fill",
                                       label: isDeafened ? "Unmute Output" : "Mute Output",
@@ -4801,14 +4843,21 @@ struct VoiceChatView: View {
                         showTranscripts.toggle()
                     }
 
-                    VoiceControlButton(icon: localMonitor.isMonitoring ? "ear.fill" : "ear",
-                                      label: localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring",
-                                      isActive: localMonitor.isMonitoring) {
-                        localMonitor.toggleMonitoring()
-                        AccessibilityManager.shared.announceAudioStatus(localMonitor.isMonitoring ? "local monitoring off" : "local monitoring on")
+                    if canUseRoomAudioControls {
+                        VoiceControlButton(icon: localMonitor.isMonitoring ? "ear.fill" : "ear",
+                                          label: localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring",
+                                          isActive: localMonitor.isMonitoring) {
+                            localMonitor.toggleMonitoring()
+                            AccessibilityManager.shared.announceAudioStatus(localMonitor.isMonitoring ? "local monitoring off" : "local monitoring on")
+                        }
+                        .accessibilityLabel(localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring")
+                        .accessibilityHint("Toggle hearing your own microphone while you are in this room. Latency and effects are configured in Audio Settings.")
+                    } else {
+                        Text("Sign in and join a room to use microphone controls.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .accessibilityLabel("Microphone controls are available after sign in and room join.")
                     }
-                    .accessibilityLabel(localMonitor.isMonitoring ? "Stop Local Monitoring" : "Start Local Monitoring")
-                    .accessibilityHint("Toggle hearing your own microphone while you are in this room. Latency and effects are configured in Audio Settings.")
                 }
                 .padding(.bottom, 20)
 
@@ -4858,8 +4907,9 @@ struct VoiceChatView: View {
             }
         }
         .onAppear {
-            // Ensure room audio path is active when chat view is visible.
-            appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            if canUseRoomAudioControls {
+                appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
+            }
             refreshRoomAdminCapabilities()
             syncRoomManagementState()
             setupEscapeMonitor()
@@ -4873,6 +4923,10 @@ struct VoiceChatView: View {
             tearDownEscapeMonitor()
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleMute)) { _ in
+            guard canUseRoomAudioControls else {
+                AccessibilityManager.shared.announceAudioStatus("Sign in and join a room before using the microphone.")
+                return
+            }
             isMuted.toggle()
             appState.serverManager.sendAudioState(isMuted: isMuted, isDeafened: isDeafened)
             AppSoundManager.shared.playSound(isMuted ? .toggleOff : .toggleOn)
@@ -6197,6 +6251,11 @@ class SettingsManager: ObservableObject {
             description: "Community rooms, testing, and federation peer."
         ),
         ManagedFederationServer(
+            url: APIEndpointResolver.devChannelBase,
+            name: "VoiceLink - Dev (voicelink.dev)",
+            description: "VoiceLink beta and development channel peer."
+        ),
+        ManagedFederationServer(
             url: APIEndpointResolver.devineCreationsComBase,
             name: "Devine Creations - devine-creations.com",
             description: "Domain-owned VoiceLink server linked to Devine Creations client account login."
@@ -6544,6 +6603,27 @@ class SettingsManager: ObservableObject {
 
     var visibleManagedFederationServers: [ManagedFederationServer] {
         managedFederationServers.filter { !$0.isHidden }
+    }
+
+    func ensureManagedFederationDefaults() {
+        let defaults = Self.defaultManagedFederationServers
+        var existingURLs = Set(managedFederationServers.map(\.url))
+        var didAppend = false
+
+        for fallback in defaults where !existingURLs.contains(fallback.url) {
+            managedFederationServers.append(fallback)
+            existingURLs.insert(fallback.url)
+            didAppend = true
+        }
+
+        if managedFederationServers.isEmpty {
+            managedFederationServers = defaults
+            didAppend = true
+        }
+
+        if didAppend {
+            saveManagedFederationServers()
+        }
     }
 
     func moveManagedFederationServer(_ server: ManagedFederationServer, offset: Int) {

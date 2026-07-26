@@ -19,9 +19,9 @@ AppId={{C5F4D4CF-4A2F-4B39-ACDF-E367B8F3D3E0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppPublisherURL=https://voicelink.dev/
-AppSupportURL=https://voicelink.dev/
-AppUpdatesURL=https://voicelink.dev/
+AppPublisherURL=https://voicelinkapp.app/
+AppSupportURL=https://voicelinkapp.app/support
+AppUpdatesURL=https://voicelinkapp.app/downloads/voicelink/windows/voicelink-wxpython-update.json
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -37,6 +37,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 SetupLogging=yes
 CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
@@ -79,3 +80,4 @@ Root: HKCU; Subkey: "Software\DevineCreations\VoiceLink"; ValueType: string; Val
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: postinstall skipifsilent shellexec nowait
+Filename: "{app}\{#MyAppExeName}"; Flags: skipifnotsilent shellexec nowait

@@ -967,6 +967,11 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
 
     // MARK: - Persistence (UserDefaults first, Keychain best-effort/no-UI)
 
+    private func logKeychainFailure(_ action: String, status: OSStatus) {
+        guard status != errSecSuccess && status != errSecItemNotFound else { return }
+        print("[Auth] Keychain \(action) skipped with status \(status). Continuing with UserDefaults session fallback.")
+    }
+
     private func saveAuth(user: AuthenticatedUser) {
         guard let data = try? JSONEncoder().encode(user) else { return }
 
@@ -983,8 +988,10 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]) { _, new in new }
 
-        SecItemDelete(baseQuery as CFDictionary)
-        _ = SecItemAdd(addQuery as CFDictionary, nil)
+        let deleteStatus = SecItemDelete(baseQuery as CFDictionary)
+        logKeychainFailure("delete", status: deleteStatus)
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        logKeychainFailure("add", status: addStatus)
     }
 
     private func decodeStoredUser(_ data: Data) -> AuthenticatedUser? {
@@ -1022,7 +1029,9 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
         ]
 
         var result: AnyObject?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        let copyStatus = SecItemCopyMatching(query as CFDictionary, &result)
+        logKeychainFailure("read", status: copyStatus)
+        if copyStatus == errSecSuccess,
            let data = result as? Data,
            let user = decodeStoredUser(data) {
             if isLegacyEmailSession(user) {
@@ -1131,7 +1140,8 @@ class AuthenticationManager: NSObject, ObservableObject, ASWebAuthenticationPres
             kSecAttrAccount as String: "authUser",
             kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail
         ]
-        SecItemDelete(query as CFDictionary)
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        logKeychainFailure("clear", status: deleteStatus)
     }
 
     func getClientId() -> String {

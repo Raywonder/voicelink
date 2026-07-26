@@ -1,22 +1,32 @@
-Build 94 focuses on keeping iOS room actions inside the active room and reducing join-time audio buffering.
+Build 102 repairs iOS room presence, multi-server discovery, and selected-server administration, and includes the room-media and guest-audio work from build 101.
 
 What changed:
-- Showing a user's profile on iOS now opens an in-room details sheet instead of switching away from the room.
-- VoiceOver actions for people and bot rows stay in the active room when showing profile details, direct messages, monitoring, whisper, or audio controls.
-- The user details sheet now shows room state, transmit state, mute/output state, speaking state, bot type, role, authentication provider, and device/client details when available.
-- The current signed-in user row still allows monitoring and audio controls, but does not expose Whisper.
-- Other people expose Whisper only when they have audio available.
-- Text-only bots expose text actions such as profile and direct message without audio controls.
-- Audio-capable bots can expose both text and audio-related actions.
-- iOS room audio now uses a slightly larger room I/O buffer and a larger relay packet queue to reduce join-time buffering while keeping latency low.
+- Rejoining or reopening an already-connected room now re-announces the active room and current user to the app state, so the People list and audio controls no longer remain in a half-joined state.
+- The Servers tab loads every configured iOS server in parallel instead of stopping after the first reachable server.
+- Administration actions are checked against and opened for the server selected in the directory, rather than the previously preferred server.
+- iOS now completes its room-join activation from the server acknowledgement, rather than waiting only for a later realtime event. The app records activation stages and makes acknowledgement failures retryable instead of silently leaving the room half-joined.
+- Room-directory failures show an error and can be retried.
+- Rooms can display a compact, expandable media panel. Audio streams show a small status display; video appears only when the room source contains video.
+- The panel includes Play, Retry, media mute, and a source label. Room media plays locally and does not replace room conversation audio.
+- Guest users can join a room and use basic microphone and output controls. Administrative actions remain server-authorized.
+- Audio Settings adds a join preference: use the room default, always join muted, or always join unmuted.
+- Mastodon-authenticated sessions refresh rooms after sign-in and do not silently downgrade a failed signed-in join to guest mode.
+- Room transcript events continue into Live Transcripts when the server provides them.
+- The beta can automatically send diagnostics on first launch and periodically while active; Settings also includes Send Diagnostics Report.
+- VoiceLink server bot defaults prefer Codex/OpenClaw before local fallback models, with existing role boundaries preserved.
 
 Please test:
-- Join a room on iOS with VoiceOver enabled.
-- Focus your own user row and confirm Monitoring or Audio Controls are available, but Whisper is not.
-- Use the View Profile action and confirm the user details sheet opens without leaving the room or disconnecting.
-- Open and close audio controls from your own row and another user's row and confirm the room remains active.
-- Focus another person with audio and confirm Whisper and audio actions are available.
-- Focus a text-only bot and confirm only text-related actions are offered.
-- Focus an audio-capable bot and confirm both text and audio actions are offered.
-- Join a room and confirm audio starts with less buffering and no new distortion, clipping, or repeated join sounds.
-- Leave the details sheet, People in Room sheet, and audio controls and confirm room messages and users remain visible.
+- Confirm the Servers tab shows main, community, development, and the configured Devine Creations servers without a long federation wait.
+- Select a server where your account can manage rooms and confirm Create Room and Edit Rooms open administration for that selected server.
+- Join a room and confirm the participant list shows you, your role, and any room bots; confirm messages appear immediately.
+- With VoiceOver enabled, confirm join, leave, system, and error announcements are spoken and that room controls have useful labels.
+- Confirm microphone controls become available after join. If microphone permission is denied, the app should say that rather than asking you to join again.
+- Leave and rejoin the same room; confirm there are no duplicate users and the room recovers after a reconnect.
+- Join a room as a guest and confirm microphone and room-output controls appear after the room join completes.
+- Join while signed in and confirm the same basic audio controls work, while management controls follow your server role.
+- Change the join preference, leave and rejoin, and confirm the microphone starts in the selected state.
+- Join a room with an audio-only background stream and confirm the expandable Room Media panel plays it.
+- Join a room with a video source and confirm video appears only for that source.
+- Confirm the Play or Retry control recovers media if the stream was not ready on the first attempt.
+- Confirm room messages, people, room details, and audio settings sheets do not disconnect the room.
+- Reproduce a Mastodon or audio issue and confirm Send Diagnostics Report is available if support asks for it.
