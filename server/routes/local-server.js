@@ -46,6 +46,7 @@ try {
 } catch (error) {
     console.warn('[Modules] Optional deployment manager unavailable:', error.message);
 }
+const { VoiceAudioModule } = require('../modules/voice-audio');
 let InternalScheduler = null;
 try {
     ({ InternalScheduler } = require('../modules/internal-scheduler'));
@@ -138,6 +139,7 @@ class VoiceLinkLocalServer {
     constructor() {
         this.app = express();
         this.server = http.createServer(this.app);
+        this.voiceAudio = new VoiceAudioModule();
         this.io = socketIo(this.server, {
             cors: {
                 origin: "*",
@@ -5447,6 +5449,7 @@ class VoiceLinkLocalServer {
 
     setupMiddleware() {
         this.app.use(cors());
+        this.voiceAudio.install(this.app);
         this.app.use(express.json());
         this.app.use('/uploads', express.static(this.getClientUploadRoot()));
         this.app.use(express.static(path.join(__dirname, '..', '..', 'client')));
